@@ -6,6 +6,7 @@ import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
 import { Menu, X } from "lucide-react";
 import { Role } from "@prisma/client";
+import { ToastProvider } from "@/components/ui/Toast";
 
 type Props = {
   role: Role;
@@ -34,6 +35,7 @@ export function DashboardShell({ role, userName, userEmail, userRole, children }
   }, []);
 
   return (
+    <ToastProvider>
     <div className="flex h-screen overflow-hidden bg-white">
       {/* Mobile overlay */}
       {sidebarOpen && (
@@ -71,5 +73,6 @@ export function DashboardShell({ role, userName, userEmail, userRole, children }
         </main>
       </div>
     </div>
+    </ToastProvider>
   );
 }

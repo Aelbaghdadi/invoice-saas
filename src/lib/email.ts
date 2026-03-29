@@ -214,6 +214,40 @@ export async function notifyClientInvoiceValidated(params: {
 }
 
 /**
+ * Send password reset email
+ */
+export async function sendPasswordResetEmail(params: {
+  to: string;
+  resetUrl: string;
+}) {
+  const body = `
+    <p style="margin:0 0 16px;font-size:15px;color:#475569;line-height:1.7">
+      Hemos recibido una solicitud para restablecer la contraseña de tu cuenta en FacturOCR.
+    </p>
+    <p style="margin:0 0 8px;font-size:15px;color:#475569;line-height:1.7">
+      Haz clic en el botón de abajo para crear una nueva contraseña. Este enlace expirará en <strong style="color:#0f172a">1 hora</strong>.
+    </p>
+    <p style="margin:16px 0 0;font-size:13px;color:#94a3b8;line-height:1.6">
+      Si no solicitaste este cambio, puedes ignorar este email. Tu contraseña seguirá siendo la misma.
+    </p>`;
+
+  await send(
+    params.to,
+    "Restablecer contraseña - FacturOCR",
+    wrap({
+      preheader: "Restablece tu contraseña de FacturOCR. El enlace expira en 1 hora.",
+      heroIcon: "&#128274;",
+      heroColor: "#2563eb",
+      heroBg: "#eff6ff",
+      title: "Restablecer contraseña",
+      body,
+      ctaText: "Restablecer contraseña",
+      ctaUrl: params.resetUrl,
+    }),
+  );
+}
+
+/**
  * Notify assigned workers when a client uploads new invoices
  */
 export async function notifyWorkersNewUpload(params: {

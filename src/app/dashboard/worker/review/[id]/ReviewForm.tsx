@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition, useEffect, useCallback } from "react";
+import { useToast } from "@/components/ui/Toast";
 import {
   CheckCircle2, AlertTriangle, Save, ChevronLeft, ChevronRight,
   Loader2, AlertCircle, ExternalLink, FileText, Image as ImageIcon,
@@ -30,6 +31,7 @@ function fmtDate(d: Date | null | undefined) {
 }
 
 export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, backHref }: Props) {
+  const { success, error } = useToast();
   const isImage = invoice.fileType.startsWith("image/");
   const isXml   = invoice.fileType.includes("xml");
 
@@ -91,6 +93,11 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
     startSave(async () => {
       const res = await saveInvoiceFields(null, buildFormData());
       setSaveState(res);
+      if (res?.error) {
+        error("Error al guardar");
+      } else {
+        success("Cambios guardados");
+      }
     });
   };
 
@@ -98,6 +105,11 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
     startValidate(async () => {
       const res = await validateInvoice(null, buildFormData({ nextId: nextId ?? "" }));
       setValidateState(res);
+      if (res?.error) {
+        error("Error al guardar");
+      } else {
+        success("Factura validada correctamente");
+      }
     });
   };
 

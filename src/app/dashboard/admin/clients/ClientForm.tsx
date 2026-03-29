@@ -1,15 +1,26 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect } from "react";
 import { createClient } from "./actions";
 import { Loader2, AlertCircle, Info } from "lucide-react";
+import { useToast } from "@/components/ui/Toast";
 
 type State = { error?: string; errors?: Record<string, string[]> } | undefined;
 
 const PROGRAMS = ["Sage 50", "Contasol", "a3con", "ContaPlus", "Holded", "Otro"];
 
 export function ClientForm() {
+  const { success, error: toastError } = useToast();
   const [state, action, pending] = useActionState<State, FormData>(createClient, undefined);
+
+  useEffect(() => {
+    if (!state) return;
+    if (state.error) {
+      toastError("Error al crear cliente");
+    } else if (!state.errors) {
+      success("Cliente creado correctamente");
+    }
+  }, [state]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <form action={action} className="space-y-4">

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition, useRef, useCallback } from "react";
+import { useToast } from "@/components/ui/Toast";
 import {
   Upload,
   FileText,
@@ -38,6 +39,7 @@ function formatSize(bytes: number) {
 }
 
 export function UploadForm() {
+  const { success, error: toastError } = useToast();
   const now = new Date();
   const [files, setFiles] = useState<File[]>([]);
   const [month, setMonth] = useState(now.getMonth() + 1);
@@ -103,7 +105,12 @@ export function UploadForm() {
     startTransition(async () => {
       const res = await uploadInvoicesAction(null, fd);
       setResult(res);
-      if (res?.success) setFiles([]);
+      if (res?.success) {
+        setFiles([]);
+        success("Facturas subidas correctamente");
+      } else if (res?.error) {
+        toastError("Error al subir facturas");
+      }
     });
   };
 

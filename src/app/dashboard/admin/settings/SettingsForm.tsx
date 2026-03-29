@@ -9,6 +9,7 @@ import {
   updateFirm, changePassword, updateProfile,
   type ActionState,
 } from "./actions";
+import { useToast } from "@/components/ui/Toast";
 
 type FirmData = { name: string; cif: string };
 type ProfileData = { name: string; email: string };
@@ -97,6 +98,7 @@ export function SettingsForm({ firm, profile, team }: Props) {
 // ─── Firm tab ───────────────────────────────────────────────────────────────
 
 function FirmTab({ firm }: { firm: FirmData }) {
+  const { success, error: toastError } = useToast();
   const [state, setState] = useState<ActionState>(null);
   const [pending, start]  = useTransition();
 
@@ -106,6 +108,11 @@ function FirmTab({ firm }: { firm: FirmData }) {
       const fd = new FormData(e.currentTarget);
       const res = await updateFirm(null, fd);
       setState(res);
+      if (res?.success) {
+        success("Ajustes guardados");
+      } else if (res?.error) {
+        toastError("Error al guardar ajustes");
+      }
     });
   };
 
@@ -150,6 +157,7 @@ function FirmTab({ firm }: { firm: FirmData }) {
 // ─── Profile tab ────────────────────────────────────────────────────────────
 
 function ProfileTab({ profile }: { profile: ProfileData }) {
+  const { success, error: toastError } = useToast();
   const [state, setState] = useState<ActionState>(null);
   const [pending, start]  = useTransition();
 
@@ -159,6 +167,11 @@ function ProfileTab({ profile }: { profile: ProfileData }) {
       const fd = new FormData(e.currentTarget);
       const res = await updateProfile(null, fd);
       setState(res);
+      if (res?.success) {
+        success("Ajustes guardados");
+      } else if (res?.error) {
+        toastError("Error al guardar ajustes");
+      }
     });
   };
 
@@ -203,6 +216,7 @@ function ProfileTab({ profile }: { profile: ProfileData }) {
 // ─── Password tab ───────────────────────────────────────────────────────────
 
 function PasswordTab() {
+  const { success, error: toastError } = useToast();
   const [state, setState] = useState<ActionState>(null);
   const [pending, start]  = useTransition();
 
@@ -212,7 +226,12 @@ function PasswordTab() {
       const fd = new FormData(e.currentTarget);
       const res = await changePassword(null, fd);
       setState(res);
-      if (res?.success) (e.target as HTMLFormElement).reset();
+      if (res?.success) {
+        (e.target as HTMLFormElement).reset();
+        success("Ajustes guardados");
+      } else if (res?.error) {
+        toastError("Error al guardar ajustes");
+      }
     });
   };
 
