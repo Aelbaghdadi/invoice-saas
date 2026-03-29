@@ -1,15 +1,7 @@
 import { LoginForm } from "./LoginForm";
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
-import {
-  Receipt,
-  ScanLine,
-  ShieldCheck,
-  FileOutput,
-  Clock,
-  CheckCircle2,
-  TrendingUp,
-} from "lucide-react";
+import { Receipt } from "lucide-react";
 
 export default async function LoginPage() {
   const session = await auth();
@@ -23,101 +15,62 @@ export default async function LoginPage() {
   return (
     <div className="flex min-h-screen bg-white">
       {/* ── Left panel ── */}
-      <div className="hidden w-1/2 flex-col bg-slate-900 p-12 lg:flex">
-        {/* Logo */}
-        <div className="flex items-center gap-2.5">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600">
-            <Receipt className="h-4 w-4 text-white" />
+      <div className="hidden w-1/2 flex-col justify-center lg:flex relative overflow-hidden"
+           style={{ background: "linear-gradient(135deg, #eff6ff 0%, #e0eafc 40%, #ddd6fe 100%)" }}>
+        {/* Decorative blurred circles */}
+        <div className="absolute -top-20 -left-20 h-72 w-72 rounded-full bg-blue-300/30 blur-3xl" />
+        <div className="absolute bottom-10 right-10 h-60 w-60 rounded-full bg-violet-300/25 blur-3xl" />
+        <div className="absolute top-1/2 left-1/3 h-40 w-40 rounded-full bg-blue-200/30 blur-2xl" />
+
+        {/* Fixed logo top-left */}
+        <div className="absolute top-10 left-12 z-10 flex items-center gap-2.5">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600 shadow-md shadow-blue-200">
+            <Receipt className="h-4.5 w-4.5 text-white" />
           </div>
-          <span className="text-[15px] font-semibold text-white">FacturOCR</span>
+          <span className="text-[17px] font-bold text-slate-800">FacturOCR</span>
         </div>
 
-        {/* Hero copy */}
-        <div className="mt-16">
-          <p className="text-xs font-semibold uppercase tracking-widest text-blue-400">
-            Para asesorías contables
-          </p>
-          <h2 className="mt-3 text-3xl font-bold leading-tight text-white">
-            De la factura al asiento<br />en menos de 2 minutos.
+        <div className="relative z-10 px-12">
+          {/* Headline */}
+          <h2 className="text-4xl font-extrabold leading-tight text-slate-800">
+            Creado para la<br />
+            nueva era de la{" "}
+            <span className="text-blue-600">contabilidad.</span>
           </h2>
-          <p className="mt-4 text-[15px] leading-relaxed text-slate-400">
-            Extrae, valida y exporta datos de facturas con OCR e inteligencia
-            artificial. Sin errores manuales, sin perder tiempo.
+          <p className="mt-5 max-w-md text-[15px] leading-relaxed text-slate-500">
+            Automatiza la gestion de facturas de tu asesoria con OCR
+            e inteligencia artificial. Sin errores manuales, sin perder tiempo.
           </p>
-        </div>
 
-        {/* Feature list */}
-        <div className="mt-10 space-y-4">
-          {[
-            {
-              icon: ScanLine,
-              color: "text-blue-400",
-              bg: "bg-blue-900/40",
-              title: "OCR + IA de alta precisión",
-              desc: "Extrae CIF, fecha, base, IVA e IRPF automáticamente.",
-            },
-            {
-              icon: ShieldCheck,
-              color: "text-emerald-400",
-              bg: "bg-emerald-900/40",
-              title: "Validación matemática instantánea",
-              desc: "Detecta errores antes de que lleguen a la contabilidad.",
-            },
-            {
-              icon: FileOutput,
-              color: "text-violet-400",
-              bg: "bg-violet-900/40",
-              title: "Exportación con un clic",
-              desc: "CSV listo para importar en Sage, Contasol, a3 y más.",
-            },
-          ].map(({ icon: Icon, color, bg, title, desc }) => (
-            <div key={title} className="flex items-start gap-3.5">
-              <div className={`mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg ${bg}`}>
-                <Icon className={`h-4 w-4 ${color}`} />
-              </div>
-              <div>
-                <p className="text-[13px] font-semibold text-slate-200">{title}</p>
-                <p className="mt-0.5 text-[12px] text-slate-500">{desc}</p>
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Stats */}
-        <div className="mt-10 grid grid-cols-3 gap-4 border-t border-slate-800 pt-8">
-          {[
-            { icon: Clock,        color: "text-blue-400",   value: "< 2 min",  label: "Por factura" },
-            { icon: TrendingUp,   color: "text-emerald-400",value: "+99%",     label: "Precisión OCR" },
-            { icon: CheckCircle2, color: "text-violet-400", value: "0 €",      label: "Para empezar" },
-          ].map(({ icon: Icon, color, value, label }) => (
-            <div key={label} className="rounded-xl bg-slate-800/60 px-4 py-3">
-              <Icon className={`mb-2 h-4 w-4 ${color}`} />
-              <p className="text-xl font-bold text-white">{value}</p>
-              <p className="mt-0.5 text-[11px] text-slate-500">{label}</p>
-            </div>
-          ))}
-        </div>
-
-        {/* Testimonial */}
-        <div className="mt-8 rounded-xl border border-slate-800 bg-slate-800/40 p-5">
-          <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-blue-600 text-[12px] font-bold text-white">
-              ML
-            </div>
-            <div>
-              <p className="text-[13px] font-semibold text-slate-200">María López</p>
-              <p className="text-[11px] text-slate-500">Socia · Asesoría López & Asociados</p>
-            </div>
+          {/* Feature pills */}
+          <div className="mt-8 flex flex-wrap gap-2.5">
+            {[
+              "OCR con IA",
+              "Validacion automatica",
+              "Exportacion CSV",
+              "Multi-cliente",
+              "Auditorias",
+            ].map((f) => (
+              <span
+                key={f}
+                className="rounded-full border border-blue-200/60 bg-white/60 px-4 py-1.5 text-[12px] font-medium text-slate-600 backdrop-blur-sm shadow-sm"
+              >
+                {f}
+              </span>
+            ))}
           </div>
-          <p className="mt-3 text-[13px] leading-relaxed text-slate-400">
-            "Lo que antes tardábamos días ahora lo resolvemos en horas.
-            FacturOCR es indispensable en nuestra asesoría."
-          </p>
-          <div className="mt-2 flex gap-0.5">
-            {Array.from({ length: 5 }).map((_, i) => (
-              <svg key={i} className="h-3.5 w-3.5 text-yellow-400" fill="currentColor" viewBox="0 0 20 20">
-                <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
-              </svg>
+
+          {/* Stats */}
+          <div className="mt-10 grid grid-cols-3 gap-4">
+            {[
+              { value: "< 2 min", label: "Por factura" },
+              { value: "99.5%",   label: "Precision OCR" },
+              { value: "0 \u20AC",       label: "Para empezar" },
+            ].map(({ value, label }) => (
+              <div key={label} className="rounded-xl bg-white/50 px-4 py-3.5 backdrop-blur-sm border border-white/60 shadow-sm">
+                <p className="text-xl font-bold text-slate-800">{value}</p>
+                <p className="mt-0.5 text-[11px] font-medium text-slate-400">{label}</p>
+              </div>
             ))}
           </div>
         </div>
@@ -134,7 +87,7 @@ export default async function LoginPage() {
             <span className="text-[15px] font-semibold text-slate-900">FacturOCR</span>
           </div>
 
-          <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900">
             Bienvenido de nuevo
           </h1>
           <p className="mt-2 text-sm text-slate-500">
