@@ -3,8 +3,9 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   Download, FileDown, CheckCircle2, AlertCircle,
-  Loader2, ChevronDown,
+  Loader2,
 } from "lucide-react";
+import { Select } from "@/components/ui/Select";
 
 type ClientOption = { id: string; name: string; cif: string };
 
@@ -33,8 +34,6 @@ const now = new Date();
 const THIS_YEAR  = now.getFullYear();
 const YEARS      = Array.from({ length: 5 }, (_, i) => THIS_YEAR - i);
 
-const selectClass =
-  "w-full appearance-none rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-[13px] text-slate-700 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 pr-9";
 
 export function ExportForm({ clients }: Props) {
   const [clientId, setClientId] = useState(clients[0]?.id ?? "");
@@ -99,20 +98,11 @@ export function ExportForm({ clients }: Props) {
           <p className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
             Cliente
           </p>
-          <div className="relative">
-            <select
-              value={clientId}
-              onChange={(e) => setClientId(e.target.value)}
-              className={selectClass}
-            >
-              {clients.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name} — {c.cif}
-                </option>
-              ))}
-            </select>
-            <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-          </div>
+          <Select
+            value={clientId}
+            onChange={setClientId}
+            options={clients.map((c) => ({ value: c.id, label: `${c.name} — ${c.cif}` }))}
+          />
         </div>
 
         {/* Period */}
@@ -121,30 +111,16 @@ export function ExportForm({ clients }: Props) {
             Período
           </p>
           <div className="grid grid-cols-2 gap-3">
-            <div className="relative">
-              <select
-                value={month}
-                onChange={(e) => setMonth(Number(e.target.value))}
-                className={selectClass}
-              >
-                {MONTHS.map((m) => (
-                  <option key={m.v} value={m.v}>{m.l}</option>
-                ))}
-              </select>
-              <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            </div>
-            <div className="relative">
-              <select
-                value={year}
-                onChange={(e) => setYear(Number(e.target.value))}
-                className={selectClass}
-              >
-                {YEARS.map((y) => (
-                  <option key={y} value={y}>{y}</option>
-                ))}
-              </select>
-              <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-            </div>
+            <Select
+              value={String(month)}
+              onChange={(v) => setMonth(Number(v))}
+              options={MONTHS.map((m) => ({ value: String(m.v), label: m.l }))}
+            />
+            <Select
+              value={String(year)}
+              onChange={(v) => setYear(Number(v))}
+              options={YEARS.map((y) => ({ value: String(y), label: String(y) }))}
+            />
           </div>
         </div>
 

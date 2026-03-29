@@ -1,9 +1,10 @@
 "use client";
 
-import { useActionState, useEffect } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { createClient } from "./actions";
 import { Loader2, AlertCircle, Info } from "lucide-react";
 import { useToast } from "@/components/ui/Toast";
+import { Select } from "@/components/ui/Select";
 
 type State = { error?: string; errors?: Record<string, string[]> } | undefined;
 
@@ -12,6 +13,7 @@ const PROGRAMS = ["Sage 50", "Contasol", "a3con", "ContaPlus", "Holded", "Otro"]
 export function ClientForm() {
   const { success, error: toastError } = useToast();
   const [state, action, pending] = useActionState<State, FormData>(createClient, undefined);
+  const [program, setProgram] = useState("");
 
   useEffect(() => {
     if (!state) return;
@@ -96,14 +98,14 @@ export function ClientForm() {
           <label className="block text-[13px] font-medium text-slate-700">
             Software contable
           </label>
-          <select name="accountingProgram" className="input mt-1.5 w-full bg-white">
-            <option value="">— Seleccionar —</option>
-            {PROGRAMS.map((p) => (
-              <option key={p} value={p}>
-                {p}
-              </option>
-            ))}
-          </select>
+          <Select
+            name="accountingProgram"
+            value={program}
+            onChange={setProgram}
+            placeholder="— Seleccionar —"
+            className="mt-1.5"
+            options={PROGRAMS.map((p) => ({ value: p, label: p }))}
+          />
         </div>
       </div>
 

@@ -2,6 +2,7 @@
 
 import { useState, useTransition, useRef, useCallback } from "react";
 import { useToast } from "@/components/ui/Toast";
+import { Select } from "@/components/ui/Select";
 import {
   Upload,
   FileText,
@@ -127,35 +128,23 @@ export function UploadForm() {
             <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-400">
               Mes
             </label>
-            <select
-              value={month}
-              onChange={(e) => setMonth(Number(e.target.value))}
-              className="input w-full"
-            >
-              {MONTHS.map((m) => (
-                <option key={m.value} value={m.value}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
+            <Select
+              value={String(month)}
+              onChange={(v) => setMonth(Number(v))}
+              options={MONTHS.map((m) => ({ value: String(m.value), label: m.label }))}
+            />
           </div>
 
           {/* Year */}
           <div>
             <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-              Año
+              Ano
             </label>
-            <select
-              value={year}
-              onChange={(e) => setYear(Number(e.target.value))}
-              className="input w-full"
-            >
-              {YEARS.map((y) => (
-                <option key={y} value={y}>
-                  {y}
-                </option>
-              ))}
-            </select>
+            <Select
+              value={String(year)}
+              onChange={(v) => setYear(Number(v))}
+              options={YEARS.map((y) => ({ value: String(y), label: String(y) }))}
+            />
           </div>
 
           {/* Type */}
@@ -163,14 +152,14 @@ export function UploadForm() {
             <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-400">
               Tipo
             </label>
-            <select
+            <Select
               value={type}
-              onChange={(e) => setType(e.target.value as "PURCHASE" | "SALE")}
-              className="input w-full"
-            >
-              <option value="PURCHASE">Facturas recibidas</option>
-              <option value="SALE">Facturas emitidas</option>
-            </select>
+              onChange={(v) => setType(v as "PURCHASE" | "SALE")}
+              options={[
+                { value: "PURCHASE", label: "Facturas recibidas" },
+                { value: "SALE", label: "Facturas emitidas" },
+              ]}
+            />
           </div>
         </div>
       </div>

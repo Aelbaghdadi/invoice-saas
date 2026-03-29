@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useTransition } from "react";
 import { Badge } from "@/components/ui/Badge";
-import { FileText, Search, ArrowUpDown, ArrowUp, ArrowDown, CheckSquare, XSquare } from "lucide-react";
+import { FileText, Search, ArrowUpDown, ArrowUp, ArrowDown, ChevronLeft, ChevronRight } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { bulkValidateInvoices, bulkExportInvoices } from "./actions";
@@ -40,6 +40,8 @@ const STATUS_ORDER: Record<string, number> = {
   UPLOADED: 0, ANALYZING: 1, VALIDATED: 2, EXPORTED: 3,
 };
 
+const PAGE_SIZE = 20;
+
 export function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("date");
@@ -47,10 +49,12 @@ export function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [isPending, startTransition] = useTransition();
   const [toast, setToast] = useState<{ msg: string; type: "ok" | "err" } | null>(null);
+  const [page, setPage] = useState(0);
   const router = useRouter();
 
-  // Filter
+  // Filter (reset page on search change)
   const filtered = useMemo(() => {
+    setPage(0);
     if (!search.trim()) return invoices;
     const q = search.toLowerCase();
     return invoices.filter(
@@ -90,11 +94,15 @@ export function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
     }
   }
 
+  // Pagination
+  const totalPages = Math.max(1, Math.ceil(sorted.length / PAGE_SIZE));
+  const paginated = sorted.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+
   function toggleAll() {
-    if (selected.size === sorted.length) {
+    if (selected.size === paginated.length) {
       setSelected(new Set());
     } else {
-      setSelected(new Set(sorted.map((i) => i.id)));
+      setSelected(new Set(paginated.map((i) => i.id)));
     }
   }
 
@@ -214,7 +222,7 @@ export function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
                 <th className="w-10 px-3 py-3">
                   <input
                     type="checkbox"
-                    checked={sorted.length > 0 && selected.size === sorted.length}
+                    checked={paginated.length > 0 && paginated.every((i) => selected.has(i.id))}
                     onChange={toggleAll}
                     className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                   />
@@ -237,7 +245,7 @@ export function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
-              {sorted.map((inv) => {
+              {paginated.map((inv) => {
                 const s = STATUS_BADGE[inv.status] ?? STATUS_BADGE.UPLOADED;
                 const isChecked = selected.has(inv.id);
                 return (
@@ -291,7 +299,7 @@ export function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
                   </tr>
                 );
               })}
-              {sorted.length === 0 && (
+              {paginated.length === 0 && (
                 <tr>
                   <td colSpan={9} className="px-5 py-12 text-center text-[13px] text-slate-400">
                     {search ? "Sin resultados para esta busqueda" : "Sin facturas"}
@@ -301,6 +309,44 @@ export function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
             </tbody>
           </table>
         </div>
+
+        {/* Pagination */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between border-t border-slate-100 px-5 py-3">
+            <p className="text-[12px] text-slate-400">
+              {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, sorted.length)} de {sorted.length}
+            </p>
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                disabled={page === 0}
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              {Array.from({ length: totalPages }, (_, i) => (
+                <button
+                  key={i}
+                  onClick={() => setPage(i)}
+                  className={`flex h-8 w-8 items-center justify-center rounded-lg text-[12px] font-medium transition ${
+                    page === i
+                      ? "bg-blue-600 text-white"
+                      : "text-slate-500 hover:bg-slate-100"
+                  }`}
+                >
+                  {i + 1}
+                </button>
+              ))}
+              <button
+                onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                disabled={page === totalPages - 1}
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
