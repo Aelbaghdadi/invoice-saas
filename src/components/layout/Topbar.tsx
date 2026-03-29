@@ -105,7 +105,7 @@ export function Topbar({ userName, userRole, role, onMenuClick }: TopbarProps) {
       : "/dashboard/client";
 
   return (
-    <header className="flex h-14 items-center justify-between border-b border-slate-200/60 bg-white/80 px-3 sm:px-6 backdrop-blur-xl">
+    <header className="relative z-40 flex h-14 items-center justify-between border-b border-slate-200/60 bg-white/80 px-3 sm:px-6 backdrop-blur-xl">
       {/* Hamburger — mobile only */}
       <button
         onClick={onMenuClick}
