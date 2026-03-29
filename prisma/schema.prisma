@@ -87,12 +87,12 @@ model WorkerClientAssignment {
 }
 
 model Invoice {
-  id         String        @id @default(cuid())
-  filename   String
-  storageKey String
-  fileType   String
-  type       InvoiceType
-  status     InvoiceStatus @default(UPLOADED)
+  id          String        @id @default(cuid())
+  filename    String
+  storageKey  String
+  fileType    String
+  type        InvoiceType
+  status      InvoiceStatus @default(UPLOADED)
   periodMonth Int
   periodYear  Int
 
