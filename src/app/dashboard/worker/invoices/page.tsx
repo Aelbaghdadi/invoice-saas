@@ -10,7 +10,10 @@ import Link from "next/link";
 const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
   UPLOADED:  { label: "Subida",       variant: "blue" },
   ANALYZING: { label: "En análisis",  variant: "yellow" },
+  ANALYZED:  { label: "Analizada",    variant: "yellow" },
+  OCR_ERROR: { label: "Error OCR",    variant: "red" },
   VALIDATED: { label: "Validada",     variant: "green" },
+  REJECTED:  { label: "Rechazada",    variant: "red" },
   EXPORTED:  { label: "Exportada",    variant: "slate" },
 };
 
@@ -103,7 +106,7 @@ export default async function WorkerInvoicesPage({
                       {inv.createdAt.toISOString().slice(0, 10)}
                     </td>
                     <td className="px-5 py-3">
-                      {(inv.status === "ANALYZING" || inv.status === "UPLOADED") && (
+                      {(inv.status === "ANALYZED" || inv.status === "OCR_ERROR") && (
                         <Link
                           href={`/dashboard/worker/review/${inv.id}`}
                           className="flex items-center gap-1 rounded-lg bg-blue-50 px-2.5 py-1 text-[12px] font-medium text-blue-600 hover:bg-blue-100"

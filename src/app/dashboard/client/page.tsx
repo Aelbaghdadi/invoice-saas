@@ -8,7 +8,10 @@ import Link from "next/link";
 const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
   UPLOADED:  { label: "Subida",       variant: "blue" },
   ANALYZING: { label: "En análisis",  variant: "yellow" },
+  ANALYZED:  { label: "Analizada",    variant: "yellow" },
+  OCR_ERROR: { label: "Error OCR",    variant: "red" },
   VALIDATED: { label: "Validada",     variant: "green" },
+  REJECTED:  { label: "Rechazada",    variant: "red" },
   EXPORTED:  { label: "Exportada",    variant: "slate" },
 };
 
@@ -25,7 +28,7 @@ export default async function ClientDashboard() {
     .catch(() => null);
 
   const total     = client ? await prisma.invoice.count({ where: { clientId: client.id } }).catch(() => 0) : 0;
-  const pending   = client ? await prisma.invoice.count({ where: { clientId: client.id, status: { in: [InvoiceStatus.UPLOADED, InvoiceStatus.ANALYZING] } } }).catch(() => 0) : 0;
+  const pending   = client ? await prisma.invoice.count({ where: { clientId: client.id, status: { in: [InvoiceStatus.UPLOADED, InvoiceStatus.ANALYZING, InvoiceStatus.ANALYZED, InvoiceStatus.OCR_ERROR] } } }).catch(() => 0) : 0;
   const validated = client ? await prisma.invoice.count({ where: { clientId: client.id, status: InvoiceStatus.VALIDATED } }).catch(() => 0) : 0;
 
   const stats = [
@@ -100,6 +103,9 @@ export default async function ClientDashboard() {
                       {monthName} {invoice.periodYear} ·{" "}
                       {invoice.type === "PURCHASE" ? "Recibida" : "Emitida"}
                     </p>
+                    {invoice.status === "REJECTED" && invoice.rejectionReason && (
+                      <p className="text-[11px] text-red-500 mt-0.5">{invoice.rejectionReason}</p>
+                    )}
                   </div>
                   <Badge variant={s.variant}>{s.label}</Badge>
                 </li>

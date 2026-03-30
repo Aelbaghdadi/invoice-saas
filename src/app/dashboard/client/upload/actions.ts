@@ -1,6 +1,7 @@
 "use server";
 
 import { after } from "next/server";
+import { createHash } from "crypto";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { createServerSupabase } from "@/lib/supabase";
@@ -12,6 +13,7 @@ export type UploadState = {
   success?: boolean;
   count?: number;
   error?: string;
+  warning?: string;
 } | null;
 
 export async function uploadInvoicesAction(
@@ -40,6 +42,7 @@ export async function uploadInvoicesAction(
 
   const supabase = createServerSupabase();
   const created: string[] = [];
+  const duplicates: string[] = [];
 
   for (const file of files) {
     if (!file.size) continue;
@@ -47,10 +50,24 @@ export async function uploadInvoicesAction(
     const ext = file.name.split(".").pop()?.toLowerCase() ?? "pdf";
     const ALLOWED_EXTS = ["pdf", "xml", "jpg", "jpeg", "png", "webp", "heic"];
     if (!ALLOWED_EXTS.includes(ext)) continue;
+
+    // Calculate SHA-256 hash for duplicate detection
+    const bytes = await file.arrayBuffer();
+    const fileHash = createHash("sha256").update(Buffer.from(bytes)).digest("hex");
+
+    // Check for exact duplicate (same file content for same client)
+    const existingByHash = await prisma.invoice.findFirst({
+      where: { clientId: client.id, fileHash },
+      select: { filename: true },
+    });
+    if (existingByHash) {
+      duplicates.push(`${file.name} (duplicado de ${existingByHash.filename})`);
+      continue;
+    }
+
     const storageKey = `${client.id}/${periodYear}-${String(periodMonth).padStart(2, "0")}/${Date.now()}-${file.name}`;
 
     if (supabase) {
-      const bytes = await file.arrayBuffer();
       const { error: storageError } = await supabase.storage
         .from("invoices")
         .upload(storageKey, bytes, {
@@ -67,6 +84,7 @@ export async function uploadInvoicesAction(
         filename: file.name,
         storageKey: supabase ? storageKey : `pending/${file.name}`,
         fileType: file.type || ext,
+        fileHash,
         type,
         periodMonth,
         periodYear,
@@ -111,5 +129,13 @@ export async function uploadInvoicesAction(
     });
   }
 
-  return { success: true, count: created.length };
+  if (created.length === 0 && duplicates.length > 0) {
+    return { error: `Archivos duplicados: ${duplicates.join(", ")}` };
+  }
+
+  const warning = duplicates.length > 0
+    ? ` (${duplicates.length} duplicado(s) omitido(s))`
+    : "";
+
+  return { success: true, count: created.length, warning };
 }

@@ -12,9 +12,9 @@ const FIELD_LABELS: Record<string, string> = {
 };
 
 const VALUE_LABELS: Record<string, string> = {
-  UPLOADED: "Subida", ANALYZING: "En análisis",
-  VALIDATED: "Validada", EXPORTED: "Exportada",
-  PURCHASE: "Recibida", SALE: "Emitida",
+  UPLOADED: "Subida", ANALYZING: "En análisis", ANALYZED: "Analizada",
+  OCR_ERROR: "Error OCR", VALIDATED: "Validada", REJECTED: "Rechazada",
+  EXPORTED: "Exportada", PURCHASE: "Recibida", SALE: "Emitida",
 };
 
 function fmtVal(v: string | null): string {

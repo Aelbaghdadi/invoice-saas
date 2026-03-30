@@ -8,7 +8,10 @@ import { InvoicesTable } from "./InvoicesTable";
 const STATUS_BADGE: Record<string, { label: string }> = {
   UPLOADED:  { label: "Subidas" },
   ANALYZING: { label: "En analisis" },
+  ANALYZED:  { label: "Analizadas" },
+  OCR_ERROR: { label: "Error OCR" },
   VALIDATED: { label: "Validadas" },
+  REJECTED:  { label: "Rechazadas" },
   EXPORTED:  { label: "Exportadas" },
 };
 
@@ -27,7 +30,10 @@ export default async function InvoicesPage({
       ...(typeFilter ? { type: typeFilter as any } : {}),
     },
     orderBy: { createdAt: "desc" },
-    include: { client: true },
+    include: {
+      client: true,
+      auditLogs: { where: { field: "duplicate_warning" }, take: 1 },
+    },
   }).catch(() => []);
 
   const counts = await prisma.invoice.groupBy({
@@ -41,7 +47,10 @@ export default async function InvoicesPage({
     { label: "Todas", value: "", count: invoices.length },
     { label: "Subidas", value: "UPLOADED", count: countMap.UPLOADED ?? 0 },
     { label: "En analisis", value: "ANALYZING", count: countMap.ANALYZING ?? 0 },
+    { label: "Analizadas", value: "ANALYZED", count: countMap.ANALYZED ?? 0 },
+    { label: "Error OCR", value: "OCR_ERROR", count: countMap.OCR_ERROR ?? 0 },
     { label: "Validadas", value: "VALIDATED", count: countMap.VALIDATED ?? 0 },
+    { label: "Rechazadas", value: "REJECTED", count: countMap.REJECTED ?? 0 },
     { label: "Exportadas", value: "EXPORTED", count: countMap.EXPORTED ?? 0 },
   ];
 
@@ -56,6 +65,7 @@ export default async function InvoicesPage({
     createdAt: inv.createdAt.toISOString(),
     totalAmount: inv.totalAmount !== null ? Number(inv.totalAmount) : null,
     client: { name: inv.client.name, cif: inv.client.cif },
+    hasDuplicateWarning: (inv.auditLogs?.length ?? 0) > 0,
   }));
 
   return (

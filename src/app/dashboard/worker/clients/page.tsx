@@ -54,7 +54,7 @@ export default async function WorkerClientsPage() {
             <tbody className="divide-y divide-slate-50">
               {assignments.map(({ client }) => {
                 const pending = client.invoices.filter((i) =>
-                  ["UPLOADED", "ANALYZING"].includes(i.status)
+                  ["UPLOADED", "ANALYZING", "ANALYZED", "OCR_ERROR"].includes(i.status)
                 ).length;
                 return (
                   <tr key={client.id} className="hover:bg-slate-50/60">

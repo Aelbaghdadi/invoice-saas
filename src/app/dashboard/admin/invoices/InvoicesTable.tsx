@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useTransition } from "react";
 import { Badge } from "@/components/ui/Badge";
-import { FileText, Search, ArrowUpDown, ArrowUp, ArrowDown, ChevronLeft, ChevronRight } from "lucide-react";
+import { FileText, Search, ArrowUpDown, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { bulkValidateInvoices, bulkExportInvoices } from "./actions";
@@ -17,6 +17,7 @@ type Invoice = {
   createdAt: string;
   totalAmount: number | null;
   client: { name: string; cif: string };
+  hasDuplicateWarning: boolean;
 };
 
 type SortKey = "client" | "filename" | "period" | "type" | "status" | "date" | "total";
@@ -25,19 +26,25 @@ type SortDir = "asc" | "desc";
 const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
   UPLOADED:  { label: "Subida",      variant: "blue" },
   ANALYZING: { label: "En analisis", variant: "yellow" },
+  ANALYZED:  { label: "Analizada",   variant: "yellow" },
+  OCR_ERROR: { label: "Error OCR",   variant: "red" },
   VALIDATED: { label: "Validada",    variant: "green" },
+  REJECTED:  { label: "Rechazada",   variant: "red" },
   EXPORTED:  { label: "Exportada",   variant: "slate" },
 };
 
 const ACTION_LABEL: Record<string, string> = {
   UPLOADED:  "Revisar",
   ANALYZING: "Ver",
+  ANALYZED:  "Revisar",
+  OCR_ERROR: "Ver error",
   VALIDATED: "Exportar",
+  REJECTED:  "Ver",
   EXPORTED:  "Archivar",
 };
 
 const STATUS_ORDER: Record<string, number> = {
-  UPLOADED: 0, ANALYZING: 1, VALIDATED: 2, EXPORTED: 3,
+  UPLOADED: 0, ANALYZING: 1, ANALYZED: 2, OCR_ERROR: 3, VALIDATED: 4, REJECTED: 5, EXPORTED: 6,
 };
 
 const PAGE_SIZE = 20;
@@ -140,6 +147,21 @@ export function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
       setSelected(new Set());
       router.refresh();
     });
+  }
+
+  async function handleReprocess(invoiceId: string) {
+    try {
+      const res = await fetch(`/api/invoices/${invoiceId}/process`, { method: "POST" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        showToast(data.error ?? "Error al reprocesar la factura", "err");
+        return;
+      }
+      showToast("Factura enviada a reprocesar", "ok");
+      window.location.reload();
+    } catch {
+      showToast("Error de conexion al reprocesar", "err");
+    }
   }
 
   const columns: { key: SortKey; label: string }[] = [
@@ -269,6 +291,11 @@ export function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
                       <div className="flex items-center gap-2">
                         <FileText className="h-4 w-4 flex-shrink-0 text-slate-300" />
                         <span className="max-w-[140px] truncate text-[13px] text-slate-600">{inv.filename}</span>
+                        {inv.hasDuplicateWarning && (
+                          <span className="inline-flex items-center rounded-full bg-amber-50 border border-amber-200 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 whitespace-nowrap">
+                            Posible duplicado
+                          </span>
+                        )}
                       </div>
                     </td>
                     <td className="px-5 py-3.5 text-[13px] text-slate-500">
@@ -289,12 +316,32 @@ export function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
                       {inv.createdAt.slice(0, 10)}
                     </td>
                     <td className="px-5 py-3.5">
-                      <Link
-                        href={`/dashboard/admin/invoices/${inv.id}`}
-                        className="rounded-lg bg-blue-50 px-3 py-1 text-[12px] font-semibold text-blue-600 hover:bg-blue-100 transition-colors"
-                      >
-                        {ACTION_LABEL[inv.status] ?? "Ver"}
-                      </Link>
+                      <div className="flex items-center gap-1.5">
+                        {inv.status === "OCR_ERROR" ? (
+                          <>
+                            <button
+                              onClick={() => handleReprocess(inv.id)}
+                              className="inline-flex items-center gap-1 rounded-lg bg-orange-500 px-2.5 py-1 text-[12px] font-semibold text-white hover:bg-orange-600 transition-colors"
+                            >
+                              <RefreshCw className="h-3 w-3" />
+                              Reprocesar
+                            </button>
+                            <Link
+                              href={`/dashboard/admin/invoices/${inv.id}`}
+                              className="rounded-lg bg-red-50 px-2.5 py-1 text-[12px] font-semibold text-red-600 hover:bg-red-100 transition-colors"
+                            >
+                              Ver error
+                            </Link>
+                          </>
+                        ) : (
+                          <Link
+                            href={`/dashboard/admin/invoices/${inv.id}`}
+                            className="rounded-lg bg-blue-50 px-3 py-1 text-[12px] font-semibold text-blue-600 hover:bg-blue-100 transition-colors"
+                          >
+                            {ACTION_LABEL[inv.status] ?? "Ver"}
+                          </Link>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );

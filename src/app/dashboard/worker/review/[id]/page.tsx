@@ -26,7 +26,7 @@ export default async function ReviewPage({
       clientId:    invoice.clientId,
       periodMonth: invoice.periodMonth,
       periodYear:  invoice.periodYear,
-      status:      { in: ["UPLOADED", "ANALYZING", "VALIDATED"] },
+      status:      { in: ["UPLOADED", "ANALYZING", "ANALYZED", "OCR_ERROR", "VALIDATED"] },
     },
     orderBy: { createdAt: "asc" },
     select: { id: true },

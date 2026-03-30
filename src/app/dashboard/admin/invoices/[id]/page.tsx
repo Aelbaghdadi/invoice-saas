@@ -4,11 +4,25 @@ import { Badge } from "@/components/ui/Badge";
 import { ChevronLeft, Building2, Calendar, Hash, Euro, Percent, User } from "lucide-react";
 import Link from "next/link";
 import { AdminInvoiceViewer } from "./AdminInvoiceViewer";
+import { ReprocesarButton } from "./ReprocesarButton";
+
+const STATUS_LABELS: Record<string, string> = {
+  UPLOADED: "Subida",
+  ANALYZING: "En analisis",
+  ANALYZED: "Analizada",
+  OCR_ERROR: "Error OCR",
+  VALIDATED: "Validada",
+  REJECTED: "Rechazada",
+  EXPORTED: "Exportada",
+};
 
 const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
   UPLOADED:  { label: "Subida",      variant: "blue" },
   ANALYZING: { label: "En análisis", variant: "yellow" },
+  ANALYZED:  { label: "Analizada",   variant: "yellow" },
+  OCR_ERROR: { label: "Error OCR",   variant: "red" },
   VALIDATED: { label: "Validada",    variant: "green" },
+  REJECTED:  { label: "Rechazada",   variant: "red" },
   EXPORTED:  { label: "Exportada",   variant: "slate" },
 };
 
@@ -33,6 +47,7 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
     include: {
       client: true,
       auditLogs: { include: { user: true }, orderBy: { createdAt: "desc" } },
+      statusHistory: { orderBy: { createdAt: "desc" } },
     },
   });
   if (!invoice) notFound();
@@ -58,6 +73,16 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
         </div>
       </div>
 
+      {invoice.status === "OCR_ERROR" && invoice.lastOcrError && (
+        <div className="mb-6 rounded-xl bg-red-50 border border-red-200 p-4">
+          <p className="text-[13px] font-medium text-red-700">Error de procesamiento OCR</p>
+          <p className="text-[12px] text-red-500 mt-1">{invoice.lastOcrError}</p>
+          <div className="mt-3">
+            <ReprocesarButton invoiceId={invoice.id} />
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-3 gap-5">
         {/* File viewer + audit log */}
         <div className="col-span-2 flex flex-col gap-5">
@@ -68,6 +93,42 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
               filename={invoice.filename}
             />
           </div>
+
+          {/* Status history timeline */}
+          {invoice.statusHistory.length > 0 && (
+            <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
+              <div className="border-b border-slate-100 px-5 py-4">
+                <h2 className="text-[14px] font-semibold text-slate-800">Historial de estados</h2>
+              </div>
+              <div className="px-5 py-4">
+                <div className="relative space-y-0">
+                  {invoice.statusHistory.map((entry, i) => (
+                    <div key={entry.id} className="relative flex gap-3 pb-5 last:pb-0">
+                      {/* Vertical line */}
+                      {i < invoice.statusHistory.length - 1 && (
+                        <div className="absolute left-[7px] top-4 bottom-0 w-px bg-slate-200" />
+                      )}
+                      {/* Dot */}
+                      <div className="relative z-10 mt-1 h-[15px] w-[15px] flex-shrink-0 rounded-full border-2 border-slate-300 bg-white" />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[13px] font-medium text-slate-700">
+                          {entry.fromStatus
+                            ? `${STATUS_LABELS[entry.fromStatus] ?? entry.fromStatus} → ${STATUS_LABELS[entry.toStatus] ?? entry.toStatus}`
+                            : STATUS_LABELS[entry.toStatus] ?? entry.toStatus}
+                        </p>
+                        {entry.reason && (
+                          <p className="mt-0.5 text-[12px] text-slate-500">{entry.reason}</p>
+                        )}
+                        <p className="mt-0.5 text-[11px] text-slate-400">
+                          {entry.createdAt.toLocaleDateString("es-ES")}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Audit log */}
           {invoice.auditLogs.length > 0 && (

@@ -34,7 +34,10 @@ export default async function BatchPage() {
           {clientsWithInvoices.map((client) => {
             const uploaded  = client.invoices.filter(i => i.status === "UPLOADED").length;
             const analyzing = client.invoices.filter(i => i.status === "ANALYZING").length;
+            const analyzed  = client.invoices.filter(i => i.status === "ANALYZED").length;
+            const ocrError  = client.invoices.filter(i => i.status === "OCR_ERROR").length;
             const validated = client.invoices.filter(i => i.status === "VALIDATED").length;
+            const rejected  = client.invoices.filter(i => i.status === "REJECTED").length;
             const exported  = client.invoices.filter(i => i.status === "EXPORTED").length;
             const total     = client.invoices.length;
             const pct       = total > 0 ? Math.round((validated + exported) / total * 100) : 0;
@@ -66,11 +69,14 @@ export default async function BatchPage() {
                 </div>
 
                 {/* Status breakdown */}
-                <div className="mt-4 grid grid-cols-4 gap-3">
+                <div className="mt-4 grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-3">
                   {[
                     { label: "Subidas",     count: uploaded,  icon: FileText,     variant: "blue" as const },
                     { label: "En análisis", count: analyzing, icon: Clock,        variant: "yellow" as const },
+                    { label: "Analizadas",  count: analyzed,  icon: FileText,     variant: "yellow" as const },
+                    { label: "Error OCR",   count: ocrError,  icon: FileText,     variant: "red" as const },
                     { label: "Validadas",   count: validated, icon: CheckCircle2, variant: "green" as const },
+                    { label: "Rechazadas",  count: rejected,  icon: FileText,     variant: "red" as const },
                     { label: "Exportadas",  count: exported,  icon: Layers,       variant: "slate" as const },
                   ].map(({ label, count, icon: Icon, variant }) => (
                     <div key={label} className="flex items-center gap-2 rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">

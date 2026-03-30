@@ -28,7 +28,7 @@ export default async function WorkerDashboard() {
     (acc, a) =>
       acc +
       a.client.invoices.filter(
-        (i) => i.status === InvoiceStatus.UPLOADED || i.status === InvoiceStatus.ANALYZING
+        (i) => i.status === InvoiceStatus.UPLOADED || i.status === InvoiceStatus.ANALYZING || i.status === InvoiceStatus.ANALYZED || i.status === InvoiceStatus.OCR_ERROR
       ).length,
     0
   );
@@ -104,7 +104,7 @@ export default async function WorkerDashboard() {
             <ul className="divide-y divide-slate-50">
               {assignments.slice(0, 6).map((a) => {
                 const pending = a.client.invoices.filter(
-                  (i) => i.status === InvoiceStatus.UPLOADED || i.status === InvoiceStatus.ANALYZING
+                  (i) => i.status === InvoiceStatus.UPLOADED || i.status === InvoiceStatus.ANALYZING || i.status === InvoiceStatus.ANALYZED || i.status === InvoiceStatus.OCR_ERROR
                 ).length;
                 return (
                   <li key={a.clientId} className="flex items-center justify-between px-5 py-3">
@@ -148,12 +148,17 @@ export default async function WorkerDashboard() {
                 const statusColors: Record<string, string> = {
                   UPLOADED: "bg-blue-100 text-blue-700",
                   ANALYZING: "bg-yellow-100 text-yellow-700",
+                  ANALYZED: "bg-yellow-100 text-yellow-700",
+                  OCR_ERROR: "bg-red-100 text-red-700",
                   VALIDATED: "bg-green-100 text-green-700",
+                  REJECTED: "bg-red-100 text-red-700",
                   EXPORTED: "bg-slate-100 text-slate-700",
                 };
                 const statusLabels: Record<string, string> = {
                   UPLOADED: "Subida", ANALYZING: "Análisis",
-                  VALIDATED: "Validada", EXPORTED: "Exportada",
+                  ANALYZED: "Analizada", OCR_ERROR: "Error OCR",
+                  VALIDATED: "Validada", REJECTED: "Rechazada",
+                  EXPORTED: "Exportada",
                 };
                 return (
                   <li key={inv.id} className="flex items-center gap-3 px-5 py-3">

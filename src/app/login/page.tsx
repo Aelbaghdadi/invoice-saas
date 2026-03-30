@@ -63,9 +63,9 @@ export default async function LoginPage() {
           {/* Stats */}
           <div className="mt-10 grid grid-cols-3 gap-4">
             {[
-              { value: "< 2 min", label: "Por factura" },
-              { value: "99.5%",   label: "Precision OCR" },
-              { value: "0 \u20AC",       label: "Para empezar" },
+              { value: "IA + Humano", label: "Revision asistida" },
+              { value: "3 formatos", label: "Sage, Contasol, a3con" },
+              { value: "Multi-rol",  label: "Admin, Gestor, Cliente" },
             ].map(({ value, label }) => (
               <div key={label} className="rounded-xl bg-white/50 px-4 py-3.5 backdrop-blur-sm border border-white/60 shadow-sm">
                 <p className="text-xl font-bold text-slate-800">{value}</p>

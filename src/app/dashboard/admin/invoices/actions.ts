@@ -12,7 +12,7 @@ export async function bulkValidateInvoices(ids: string[]) {
   if (ids.length === 0) return { error: "No hay facturas seleccionadas" };
 
   const invoices = await prisma.invoice.findMany({
-    where: { id: { in: ids }, status: { in: ["UPLOADED", "ANALYZING"] } },
+    where: { id: { in: ids }, status: { in: ["UPLOADED", "ANALYZING", "ANALYZED", "OCR_ERROR"] } },
   });
 
   if (invoices.length === 0) {

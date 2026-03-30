@@ -15,7 +15,10 @@ import Link from "next/link";
 const STATUS_STYLES: Record<string, { label: string; className: string }> = {
   UPLOADED:   { label: "Subida",      className: "bg-blue-50 text-blue-700 border border-blue-200" },
   ANALYZING:  { label: "En análisis", className: "bg-yellow-50 text-yellow-700 border border-yellow-200" },
+  ANALYZED:   { label: "Analizada",   className: "bg-yellow-50 text-yellow-700 border border-yellow-200" },
+  OCR_ERROR:  { label: "Error OCR",   className: "bg-red-50 text-red-700 border border-red-200" },
   VALIDATED:  { label: "Validada",    className: "bg-green-50 text-green-700 border border-green-200" },
+  REJECTED:   { label: "Rechazada",   className: "bg-red-50 text-red-700 border border-red-200" },
   EXPORTED:   { label: "Exportada",   className: "bg-slate-100 text-slate-600 border border-slate-200" },
 };
 
@@ -61,7 +64,7 @@ export default async function AdminDashboard() {
     clientProgress,
   ] = await Promise.all([
     prisma.invoice.count(),
-    prisma.invoice.count({ where: { status: { in: ["UPLOADED", "ANALYZING"] } } }),
+    prisma.invoice.count({ where: { status: { in: ["UPLOADED", "ANALYZING", "ANALYZED", "OCR_ERROR"] } } }),
     prisma.invoice.count({ where: { status: "VALIDATED" } }),
     prisma.invoice.count({ where: { status: "EXPORTED" } }),
     prisma.client.count(),
@@ -141,16 +144,16 @@ export default async function AdminDashboard() {
   };
 
   const VALUE_LABELS: Record<string, string> = {
-    UPLOADED: "Subida", ANALYZING: "En análisis",
-    VALIDATED: "Validada", EXPORTED: "Exportada",
-    PURCHASE: "Recibida", SALE: "Emitida",
+    UPLOADED: "Subida", ANALYZING: "En análisis", ANALYZED: "Analizada",
+    OCR_ERROR: "Error OCR", VALIDATED: "Validada", REJECTED: "Rechazada",
+    EXPORTED: "Exportada", PURCHASE: "Recibida", SALE: "Emitida",
   };
 
   // ── Clients with pending invoices (for "progress" section) ────────────
   const clientsWithWork = (clientProgress as any[])
     .map((c: any) => {
       const total     = c.invoices.length;
-      const pending   = c.invoices.filter((i: any) => ["UPLOADED","ANALYZING"].includes(i.status)).length;
+      const pending   = c.invoices.filter((i: any) => ["UPLOADED","ANALYZING","ANALYZED","OCR_ERROR"].includes(i.status)).length;
       const validated = c.invoices.filter((i: any) => i.status === "VALIDATED").length;
       const exported  = c.invoices.filter((i: any) => i.status === "EXPORTED").length;
       const done      = validated + exported;

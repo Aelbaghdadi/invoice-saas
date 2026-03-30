@@ -10,7 +10,10 @@ import Link from "next/link";
 const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
   UPLOADED:  { label: "Subida",       variant: "blue" },
   ANALYZING: { label: "En análisis",  variant: "yellow" },
+  ANALYZED:  { label: "Analizada",    variant: "yellow" },
+  OCR_ERROR: { label: "Error OCR",    variant: "red" },
   VALIDATED: { label: "Validada",     variant: "green" },
+  REJECTED:  { label: "Rechazada",    variant: "red" },
   EXPORTED:  { label: "Exportada",    variant: "slate" },
 };
 
@@ -91,9 +94,14 @@ export default async function ClientInvoicesPage() {
                         <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-slate-100">
                           <FileText className="h-3.5 w-3.5 text-slate-400" />
                         </div>
-                        <span className="max-w-[200px] truncate text-[13px] font-medium text-slate-700">
-                          {inv.filename}
-                        </span>
+                        <div className="min-w-0">
+                          <span className="block max-w-[200px] truncate text-[13px] font-medium text-slate-700">
+                            {inv.filename}
+                          </span>
+                          {inv.status === "REJECTED" && inv.rejectionReason && (
+                            <p className="text-[11px] text-red-500 mt-0.5">{inv.rejectionReason}</p>
+                          )}
+                        </div>
                       </div>
                     </td>
                     <td className="px-5 py-3 text-[13px] capitalize text-slate-500">

@@ -4,7 +4,7 @@ import { after } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
-import { notifyClientInvoiceValidated } from "@/lib/email";
+import { notifyClientInvoiceValidated, notifyClientInvoiceRejected } from "@/lib/email";
 
 export type ReviewState = { error?: string } | null;
 
@@ -97,6 +97,15 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
 
   if (validate) {
     auditEntries.push({ field: "status", oldValue: invoice.status, newValue: "VALIDATED" });
+    // Record status transition
+    await prisma.invoiceStatusHistory.create({
+      data: {
+        invoiceId,
+        fromStatus: invoice.status,
+        toStatus: "VALIDATED",
+        changedBy: userId,
+      },
+    });
   }
 
   if (auditEntries.length > 0) {
@@ -159,6 +168,78 @@ export async function validateInvoice(
       }
     } catch (e) {
       console.error("[NOTIFY] Error notifying client:", e);
+    }
+  });
+
+  if (nextId) {
+    redirect(`/dashboard/worker/review/${nextId}`);
+  }
+  redirect("/dashboard/worker/invoices");
+}
+
+export async function rejectInvoice(
+  _prev: ReviewState,
+  formData: FormData
+): Promise<ReviewState> {
+  const session = await auth();
+  if (!session?.user || !["ADMIN", "WORKER"].includes(session.user.role)) {
+    return { error: "No autorizado" };
+  }
+
+  const id = formData.get("invoiceId") as string;
+  const reason = (formData.get("rejectionReason") as string)?.trim();
+  const nextId = formData.get("nextId") as string | null;
+
+  if (!reason) {
+    return { error: "Debes indicar el motivo del rechazo." };
+  }
+
+  const invoice = await prisma.invoice.findUnique({ where: { id } });
+  if (!invoice) return { error: "Factura no encontrada" };
+
+  await prisma.invoice.update({
+    where: { id },
+    data: { status: "REJECTED", rejectionReason: reason },
+  });
+
+  await prisma.invoiceStatusHistory.create({
+    data: {
+      invoiceId: id,
+      fromStatus: invoice.status,
+      toStatus: "REJECTED",
+      changedBy: session.user.id,
+      reason,
+    },
+  });
+
+  await prisma.auditLog.create({
+    data: {
+      invoiceId: id,
+      userId: session.user.id,
+      field: "status",
+      oldValue: invoice.status,
+      newValue: "REJECTED",
+    },
+  });
+
+  // Notify client about rejection
+  after(async () => {
+    try {
+      const inv = await prisma.invoice.findUnique({
+        where: { id },
+        include: { client: { include: { user: { select: { email: true } } } } },
+      });
+      if (inv?.client?.user?.email) {
+        await notifyClientInvoiceRejected({
+          clientEmail: inv.client.user.email,
+          clientName: inv.client.name,
+          invoiceNumber: inv.invoiceNumber ?? "",
+          filename: inv.filename,
+          reason,
+        });
+      }
+    } catch (e) {
+      console.error("[NOTIFY] Error notifying client rejection:", e);
     }
   });
 

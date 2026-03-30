@@ -2,16 +2,30 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
 import { ExportForm } from "./ExportForm";
-import { Download } from "lucide-react";
+import { Download, History } from "lucide-react";
+
+const FORMAT_LABELS: Record<string, string> = {
+  sage50: "Sage 50",
+  contasol: "Contasol",
+  a3con: "a3con",
+};
 
 export default async function ExportPage() {
   const session = await auth();
   if (!session?.user || session.user.role !== "ADMIN") redirect("/login");
 
-  const clients = await prisma.client.findMany({
-    orderBy: { name: "asc" },
-    select: { id: true, name: true, cif: true },
-  });
+  const [clients, exportHistory] = await Promise.all([
+    prisma.client.findMany({
+      orderBy: { name: "asc" },
+      select: { id: true, name: true, cif: true },
+    }),
+    prisma.exportBatch.findMany({
+      orderBy: { createdAt: "desc" },
+      take: 20,
+    }),
+  ]);
+
+  const clientMap = new Map(clients.map((c) => [c.id, c.name]));
 
   if (clients.length === 0) {
     return (
@@ -39,6 +53,44 @@ export default async function ExportPage() {
       </div>
 
       <ExportForm clients={clients} />
+
+      {/* Export history */}
+      {exportHistory.length > 0 && (
+        <div className="mt-8 rounded-xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex items-center gap-2 border-b border-slate-100 px-5 py-4">
+            <History className="h-4 w-4 text-slate-400" />
+            <h2 className="text-[14px] font-semibold text-slate-800">Historial de exportaciones</h2>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-[13px]">
+              <thead>
+                <tr className="border-b border-slate-100 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                  <th className="px-5 py-3">Fecha</th>
+                  <th className="px-5 py-3">Formato</th>
+                  <th className="px-5 py-3">Cliente</th>
+                  <th className="px-5 py-3">Periodo</th>
+                  <th className="px-5 py-3">Facturas</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {exportHistory.map((batch) => (
+                  <tr key={batch.id} className="text-slate-700">
+                    <td className="px-5 py-3">{batch.createdAt.toLocaleDateString("es-ES")}</td>
+                    <td className="px-5 py-3">{FORMAT_LABELS[batch.format] ?? batch.format}</td>
+                    <td className="px-5 py-3">{batch.clientId ? (clientMap.get(batch.clientId) ?? "—") : "Todos"}</td>
+                    <td className="px-5 py-3">
+                      {batch.periodMonth && batch.periodYear
+                        ? `${new Date(0, batch.periodMonth - 1).toLocaleString("es", { month: "long" })} ${batch.periodYear}`
+                        : "—"}
+                    </td>
+                    <td className="px-5 py-3">{batch.invoiceCount}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

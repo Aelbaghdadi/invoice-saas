@@ -8,7 +8,10 @@ import Link from "next/link";
 const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
   UPLOADED:  { label: "Subida",      variant: "blue" },
   ANALYZING: { label: "En análisis", variant: "yellow" },
+  ANALYZED:  { label: "Analizada",   variant: "yellow" },
+  OCR_ERROR: { label: "Error OCR",   variant: "red" },
   VALIDATED: { label: "Validada",    variant: "green" },
+  REJECTED:  { label: "Rechazada",   variant: "red" },
   EXPORTED:  { label: "Exportada",   variant: "slate" },
 };
 
@@ -26,7 +29,7 @@ export default async function ClientDetailPage({ params }: { params: Promise<{ i
   const stats = [
     { label: "Total facturas", value: client.invoices.length, icon: FileText },
     { label: "Gestores asignados", value: client.assignedWorkers.length, icon: Users },
-    { label: "Pendientes", value: client.invoices.filter(i => ["UPLOADED","ANALYZING"].includes(i.status)).length, icon: Building2 },
+    { label: "Pendientes", value: client.invoices.filter(i => ["UPLOADED","ANALYZING","ANALYZED","OCR_ERROR"].includes(i.status)).length, icon: Building2 },
   ];
 
   return (

@@ -1,19 +1,34 @@
 import { prisma } from "@/lib/prisma";
 import { createServerSupabase } from "@/lib/supabase";
+import type { InvoiceStatus } from "@prisma/client";
 import {
   extractInvoiceFromPdf,
   extractInvoiceFromImage,
   extractInvoiceFromXml,
 } from "@/lib/ocr";
 
+/** Transition status + record in history */
+async function transitionStatus(
+  invoiceId: string,
+  from: InvoiceStatus | null,
+  to: InvoiceStatus,
+  changedBy: string,
+  reason?: string,
+) {
+  await prisma.invoiceStatusHistory.create({
+    data: { invoiceId, fromStatus: from, toStatus: to, changedBy, reason },
+  });
+}
+
 export async function processInvoice(invoiceId: string, triggeredByUserId: string) {
   // Atomic status transition: only proceed if status is still UPLOADED
-  // This prevents double OCR processing if triggered concurrently
   const result = await prisma.invoice.updateMany({
     where: { id: invoiceId, status: "UPLOADED" },
-    data:  { status: "ANALYZING" },
+    data: { status: "ANALYZING", ocrAttempts: { increment: 1 } },
   });
-  if (result.count === 0) return; // Already processing or processed
+  if (result.count === 0) return;
+
+  await transitionStatus(invoiceId, "UPLOADED", "ANALYZING", triggeredByUserId);
 
   const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
   if (!invoice) return;
@@ -23,12 +38,17 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     if (!supabase) throw new Error("Storage not configured");
 
     let extracted;
+    let source: string;
+    let rawResponse: string | undefined;
     const ft = invoice.fileType;
 
     if (ft.includes("xml")) {
+      source = "xml_parse";
       const { data, error } = await supabase.storage.from("invoices").download(invoice.storageKey);
       if (error) throw new Error(error.message);
-      extracted = await extractInvoiceFromXml(await data.text());
+      const xmlText = await data.text();
+      rawResponse = xmlText;
+      extracted = await extractInvoiceFromXml(xmlText);
     } else {
       // Download file as base64
       const { data, error } = await supabase.storage.from("invoices").download(invoice.storageKey);
@@ -37,11 +57,13 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       const base64 = Buffer.from(buffer).toString("base64");
 
       if (ft === "application/pdf" || invoice.filename.endsWith(".pdf")) {
+        source = "gpt4o";
         extracted = await extractInvoiceFromPdf(base64);
       } else {
-        // image
+        source = "gpt4o";
         extracted = await extractInvoiceFromImage(base64, ft || "image/jpeg");
       }
+      rawResponse = JSON.stringify(extracted);
     }
 
     // Math validation
@@ -55,10 +77,36 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       isValid = diff <= 2;
     }
 
-    await prisma.invoice.update({
-      where: { id: invoiceId },
+    // Post-OCR duplicate check: same invoiceNumber + issuerCif for same client
+    if (extracted.invoiceNumber && extracted.issuerCif) {
+      const duplicate = await prisma.invoice.findFirst({
+        where: {
+          clientId: invoice.clientId,
+          invoiceNumber: extracted.invoiceNumber,
+          issuerCif: extracted.issuerCif,
+          id: { not: invoiceId },
+        },
+        select: { id: true, filename: true },
+      });
+      if (duplicate) {
+        await prisma.auditLog.create({
+          data: {
+            invoiceId,
+            userId: triggeredByUserId,
+            field: "duplicate_warning",
+            oldValue: null,
+            newValue: `Posible duplicado de ${duplicate.filename} (misma factura ${extracted.invoiceNumber} de ${extracted.issuerCif})`,
+          },
+        });
+      }
+    }
+
+    // Save extraction as separate record (datos brutos OCR)
+    await prisma.invoiceExtraction.create({
       data: {
-        status: "ANALYZING",
+        invoiceId,
+        source,
+        rawResponse,
         issuerName:    extracted.issuerName,
         issuerCif:     extracted.issuerCif,
         receiverName:  extracted.receiverName,
@@ -75,17 +123,46 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       },
     });
 
+    // Copy OCR data to Invoice (datos finales — gestor los editará)
+    await prisma.invoice.update({
+      where: { id: invoiceId },
+      data: {
+        status: "ANALYZED",
+        issuerName:    extracted.issuerName,
+        issuerCif:     extracted.issuerCif,
+        receiverName:  extracted.receiverName,
+        receiverCif:   extracted.receiverCif,
+        invoiceNumber: extracted.invoiceNumber,
+        invoiceDate:   extracted.invoiceDate ? new Date(extracted.invoiceDate) : null,
+        taxBase:       extracted.taxBase,
+        vatRate:       extracted.vatRate,
+        vatAmount:     extracted.vatAmount,
+        irpfRate:      extracted.irpfRate,
+        irpfAmount:    extracted.irpfAmount,
+        totalAmount:   extracted.totalAmount,
+        isValid,
+        lastOcrError:  null,
+      },
+    });
+
+    await transitionStatus(invoiceId, "ANALYZING", "ANALYZED", triggeredByUserId);
+
     await prisma.auditLog.create({
       data: {
         invoiceId,
         userId: triggeredByUserId,
         field: "status",
         oldValue: "UPLOADED",
-        newValue: "ANALYZING",
+        newValue: "ANALYZED",
       },
     });
   } catch (err) {
-    await prisma.invoice.update({ where: { id: invoiceId }, data: { status: "UPLOADED" } });
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    await prisma.invoice.update({
+      where: { id: invoiceId },
+      data: { status: "OCR_ERROR", lastOcrError: errorMsg },
+    });
+    await transitionStatus(invoiceId, "ANALYZING", "OCR_ERROR", triggeredByUserId, errorMsg);
     console.error("OCR error:", err);
   }
 }

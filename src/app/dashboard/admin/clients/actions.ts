@@ -3,8 +3,11 @@
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
+import { after } from "next/server";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
+import { randomBytes, randomUUID } from "crypto";
+import { sendClientInvitationEmail } from "@/lib/email";
 
 const schema = z.object({
   name: z.string().min(2, "Mínimo 2 caracteres"),
@@ -40,9 +43,12 @@ export async function createClient(_prev: State, formData: FormData): Promise<St
   });
   if (!firm) return { error: "Asesoría no encontrada" };
 
-  // Default portal password = last 6 chars of CIF + "!"
-  const defaultPassword = parsed.data.cif.slice(-6) + "!";
-  const passwordHash = await bcrypt.hash(defaultPassword, 10);
+  // Generate a secure random temporary password (user will set their own via invitation)
+  const tempPassword = randomBytes(16).toString("hex");
+  const passwordHash = await bcrypt.hash(tempPassword, 10);
+
+  let inviteToken: string | undefined;
+  let userEmail: string | undefined;
 
   try {
     await prisma.$transaction(async (tx) => {
@@ -68,9 +74,36 @@ export async function createClient(_prev: State, formData: FormData): Promise<St
           userId: user.id,
         },
       });
+
+      // Create password reset token for invitation (72h expiry)
+      const token = randomUUID();
+      await tx.passwordResetToken.create({
+        data: {
+          email: parsed.data.email,
+          token,
+          expiresAt: new Date(Date.now() + 72 * 60 * 60 * 1000),
+        },
+      });
+
+      inviteToken = token;
+      userEmail = parsed.data.email;
     });
   } catch {
     return { error: "Ya existe un cliente con ese CIF o email." };
+  }
+
+  // Send invitation email after the response is sent
+  if (inviteToken && userEmail) {
+    const appUrl = process.env.NEXTAUTH_URL ?? "http://localhost:3000";
+    const inviteUrl = `${appUrl}/auth/reset-password?token=${inviteToken}`;
+
+    after(() => {
+      sendClientInvitationEmail({
+        to: userEmail!,
+        clientName: parsed.data.contactName,
+        inviteUrl,
+      });
+    });
   }
 
   redirect("/dashboard/admin/clients");

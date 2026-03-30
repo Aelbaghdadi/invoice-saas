@@ -5,8 +5,9 @@ import { useToast } from "@/components/ui/Toast";
 import {
   CheckCircle2, AlertTriangle, Save, ChevronLeft, ChevronRight,
   Loader2, AlertCircle, ExternalLink, FileText, Image as ImageIcon,
+  XCircle, RefreshCw,
 } from "lucide-react";
-import { saveInvoiceFields, validateInvoice, type ReviewState } from "./actions";
+import { saveInvoiceFields, validateInvoice, rejectInvoice, type ReviewState } from "./actions";
 import type { Invoice } from "@prisma/client";
 import Link from "next/link";
 import PdfViewer from "@/components/ui/PdfViewerDynamic";
@@ -48,8 +49,13 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
 
   const [saveState, setSaveState]         = useState<ReviewState>(null);
   const [validateState, setValidateState] = useState<ReviewState>(null);
+  const [rejectState, setRejectState]     = useState<ReviewState>(null);
   const [isPendingSave, startSave]        = useTransition();
   const [isPendingValidate, startValidate]= useTransition();
+  const [isPendingReject, startReject]    = useTransition();
+  const [isPendingReprocess, startReprocess] = useTransition();
+  const [showRejectModal, setShowRejectModal] = useState(false);
+  const [rejectReason, setRejectReason]   = useState("");
 
   // Math semaphore
   const base       = parseFloat(taxBase)     || 0;
@@ -109,6 +115,41 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
         error("Error al guardar");
       } else {
         success("Factura validada correctamente");
+      }
+    });
+  };
+
+  const handleReject = () => {
+    if (!rejectReason.trim()) return;
+    startReject(async () => {
+      const fd = new FormData();
+      fd.set("invoiceId", invoice.id);
+      fd.set("rejectionReason", rejectReason);
+      fd.set("nextId", nextId ?? "");
+      const res = await rejectInvoice(null, fd);
+      setRejectState(res);
+      if (res?.error) {
+        error(res.error);
+      } else {
+        success("Factura rechazada");
+        setShowRejectModal(false);
+      }
+    });
+  };
+
+  const handleReprocess = () => {
+    startReprocess(async () => {
+      try {
+        const res = await fetch(`/api/invoices/${invoice.id}/process`, { method: "POST" });
+        if (res.ok) {
+          success("OCR relanzado — recarga en unos segundos");
+          setTimeout(() => window.location.reload(), 3000);
+        } else {
+          const data = await res.json();
+          error(data.error ?? "Error al reprocesar");
+        }
+      } catch {
+        error("Error de conexion al reprocesar");
       }
     });
   };
@@ -208,11 +249,35 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
               </div>
             )}
 
+            {/* OCR Error banner */}
+            {invoice.status === "OCR_ERROR" && (
+              <div className="flex items-center justify-between rounded-xl bg-red-50 px-4 py-3 text-red-700">
+                <div className="flex items-center gap-2.5">
+                  <AlertCircle className="h-4 w-4 flex-shrink-0" />
+                  <div>
+                    <p className="text-[12px] font-medium">Error en el procesamiento OCR</p>
+                    {invoice.lastOcrError && (
+                      <p className="text-[11px] text-red-500 mt-0.5">{invoice.lastOcrError}</p>
+                    )}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleReprocess}
+                  disabled={isPendingReprocess}
+                  className="flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                >
+                  {isPendingReprocess ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                  Reprocesar
+                </button>
+              </div>
+            )}
+
             {/* Errors */}
-            {(saveState?.error || validateState?.error) && (
+            {(saveState?.error || validateState?.error || rejectState?.error) && (
               <div className="flex items-center gap-2 rounded-lg bg-red-50 px-3 py-2.5 text-[12px] text-red-600">
                 <AlertCircle className="h-4 w-4 flex-shrink-0" />
-                {saveState?.error ?? validateState?.error}
+                {saveState?.error ?? validateState?.error ?? rejectState?.error}
               </div>
             )}
 
@@ -302,6 +367,14 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
             </button>
             <button
               type="button"
+              onClick={() => setShowRejectModal(true)}
+              className="flex items-center gap-1.5 rounded-lg border border-red-200 px-3.5 py-2 text-[13px] font-medium text-red-600 transition hover:bg-red-50 disabled:opacity-50"
+            >
+              <XCircle className="h-3.5 w-3.5" />
+              Rechazar
+            </button>
+            <button
+              type="button"
               onClick={handleValidate}
               disabled={isPendingValidate}
               className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-[13px] font-semibold text-white transition disabled:opacity-50 ${
@@ -316,6 +389,45 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
               {nextId && <ChevronRight className="h-4 w-4" />}
             </button>
           </div>
+
+          {/* Reject modal */}
+          {showRejectModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+              <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+                <h3 className="text-[15px] font-semibold text-slate-800 flex items-center gap-2">
+                  <XCircle className="h-5 w-5 text-red-500" />
+                  Rechazar factura
+                </h3>
+                <p className="mt-1.5 text-[12px] text-slate-500">
+                  Indica el motivo del rechazo. El cliente recibira una notificacion con este mensaje.
+                </p>
+                <textarea
+                  value={rejectReason}
+                  onChange={e => setRejectReason(e.target.value)}
+                  placeholder="Ej: La factura esta ilegible, falta la segunda pagina, el CIF no coincide..."
+                  className="mt-3 w-full rounded-lg border border-slate-200 px-3 py-2 text-[13px] text-slate-700 outline-none focus:border-red-300 focus:ring-2 focus:ring-red-100 resize-none"
+                  rows={3}
+                  autoFocus
+                />
+                <div className="mt-4 flex justify-end gap-2">
+                  <button
+                    onClick={() => { setShowRejectModal(false); setRejectReason(""); }}
+                    className="rounded-lg border border-slate-200 px-4 py-2 text-[13px] font-medium text-slate-600 hover:bg-slate-50"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    onClick={handleReject}
+                    disabled={!rejectReason.trim() || isPendingReject}
+                    className="flex items-center gap-1.5 rounded-lg bg-red-600 px-4 py-2 text-[13px] font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+                  >
+                    {isPendingReject ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <XCircle className="h-3.5 w-3.5" />}
+                    Confirmar rechazo
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

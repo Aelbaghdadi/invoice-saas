@@ -214,6 +214,50 @@ export async function notifyClientInvoiceValidated(params: {
 }
 
 /**
+ * Notify client when their invoice has been rejected
+ */
+export async function notifyClientInvoiceRejected(params: {
+  clientEmail: string;
+  clientName: string;
+  invoiceNumber: string;
+  filename: string;
+  reason: string;
+}) {
+  const invoiceRef = params.invoiceNumber || params.filename;
+
+  const body = `
+    <p style="margin:0 0 4px;font-size:15px;color:#475569;line-height:1.7">
+      Hola <strong style="color:#0f172a">${params.clientName}</strong>,
+    </p>
+    <p style="margin:0;font-size:15px;color:#475569;line-height:1.7">
+      Tu factura ha sido <strong style="color:#dc2626">rechazada</strong> y requiere tu atencion.
+    </p>
+    ${detailCard(
+      detailRow("Factura", invoiceRef) +
+      detailRow("Estado", "&#10007; Rechazada", "#dc2626") +
+      detailRow("Motivo", params.reason, "#dc2626")
+    )}
+    <p style="margin:0;font-size:13px;color:#94a3b8;line-height:1.6">
+      Por favor, revisa el motivo y vuelve a subir el documento corregido desde tu portal.
+    </p>`;
+
+  await send(
+    params.clientEmail,
+    `Factura rechazada: ${invoiceRef}`,
+    wrap({
+      preheader: `Tu factura ${invoiceRef} ha sido rechazada. Motivo: ${params.reason}`,
+      heroIcon: "&#10060;",
+      heroColor: "#dc2626",
+      heroBg: "#fef2f2",
+      title: "Factura rechazada",
+      body,
+      ctaText: "Ver en mi portal",
+      ctaUrl: `${APP_URL}/dashboard/client/invoices`,
+    }),
+  );
+}
+
+/**
  * Send password reset email
  */
 export async function sendPasswordResetEmail(params: {
@@ -243,6 +287,44 @@ export async function sendPasswordResetEmail(params: {
       body,
       ctaText: "Restablecer contraseña",
       ctaUrl: params.resetUrl,
+    }),
+  );
+}
+
+/**
+ * Send invitation email to a newly created client
+ */
+export async function sendClientInvitationEmail(params: {
+  to: string;
+  clientName: string;
+  inviteUrl: string;
+}) {
+  const body = `
+    <p style="margin:0 0 4px;font-size:15px;color:#475569;line-height:1.7">
+      Hola <strong style="color:#0f172a">${params.clientName}</strong>,
+    </p>
+    <p style="margin:0 0 16px;font-size:15px;color:#475569;line-height:1.7">
+      Te damos la bienvenida a <strong style="color:#0f172a">FacturOCR</strong>. Tu cuenta ha sido creada y está lista para usar.
+    </p>
+    <p style="margin:0 0 8px;font-size:15px;color:#475569;line-height:1.7">
+      Para acceder a tu portal, primero necesitas establecer tu contraseña haciendo clic en el botón de abajo. Este enlace expirará en <strong style="color:#0f172a">72 horas</strong>.
+    </p>
+    <p style="margin:16px 0 0;font-size:13px;color:#94a3b8;line-height:1.6">
+      Si no esperabas esta invitación, puedes ignorar este email.
+    </p>`;
+
+  await send(
+    params.to,
+    "Bienvenido a FacturOCR — Establece tu contraseña",
+    wrap({
+      preheader: "Tu cuenta en FacturOCR ha sido creada. Establece tu contraseña para acceder.",
+      heroIcon: "&#128273;",
+      heroColor: "#2563eb",
+      heroBg: "#eff6ff",
+      title: "Bienvenido a FacturOCR",
+      body,
+      ctaText: "Establecer contraseña",
+      ctaUrl: params.inviteUrl,
     }),
   );
 }

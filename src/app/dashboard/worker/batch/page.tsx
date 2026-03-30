@@ -43,7 +43,10 @@ export default async function WorkerBatchPage() {
           {clientsWithInvoices.map(({ client }) => {
             const uploaded  = client.invoices.filter((i) => i.status === "UPLOADED").length;
             const analyzing = client.invoices.filter((i) => i.status === "ANALYZING").length;
+            const analyzed  = client.invoices.filter((i) => i.status === "ANALYZED").length;
+            const ocrError  = client.invoices.filter((i) => i.status === "OCR_ERROR").length;
             const validated = client.invoices.filter((i) => i.status === "VALIDATED").length;
+            const rejected  = client.invoices.filter((i) => i.status === "REJECTED").length;
             const exported  = client.invoices.filter((i) => i.status === "EXPORTED").length;
             const total     = client.invoices.length;
             const pct       = total > 0 ? Math.round(((validated + exported) / total) * 100) : 0;
@@ -85,11 +88,14 @@ export default async function WorkerBatchPage() {
                   </div>
                 </div>
 
-                <div className="mt-4 grid grid-cols-4 gap-3">
+                <div className="mt-4 grid grid-cols-7 gap-3">
                   {[
                     { label: "Subidas",    count: uploaded,  icon: FileText,     },
-                    { label: "Análisis",   count: analyzing, icon: Clock,        },
+                    { label: "En OCR",     count: analyzing, icon: Clock,        },
+                    { label: "Analizadas", count: analyzed,  icon: Clock,        },
+                    { label: "Error OCR",  count: ocrError,  icon: FileText,     },
                     { label: "Validadas",  count: validated, icon: CheckCircle2, },
+                    { label: "Rechazadas", count: rejected,  icon: FileText,     },
                     { label: "Exportadas", count: exported,  icon: Layers,       },
                   ].map(({ label, count, icon: Icon }) => (
                     <div
