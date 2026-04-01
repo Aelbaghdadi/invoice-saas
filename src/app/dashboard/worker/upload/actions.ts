@@ -6,52 +6,56 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { createServerSupabase } from "@/lib/supabase";
 import { processInvoice } from "@/lib/processInvoice";
-import { notifyWorkersNewUpload } from "@/lib/email";
 import { InvoiceType } from "@prisma/client";
 
-export type UploadState = {
+export type WorkerUploadState = {
   success?: boolean;
   count?: number;
   error?: string;
   warning?: string;
 } | null;
 
-export async function uploadInvoicesAction(
-  _prev: UploadState,
+export async function workerUploadInvoicesAction(
+  _prev: WorkerUploadState,
   formData: FormData
-): Promise<UploadState> {
+): Promise<WorkerUploadState> {
   const session = await auth();
-  if (!session?.user || session.user.role !== "CLIENT") {
+  if (!session?.user || !["ADMIN", "WORKER"].includes(session.user.role)) {
     return { error: "No autorizado." };
   }
 
   const files = formData.getAll("files") as File[];
+  const clientId = formData.get("clientId") as string;
   const periodMonth = parseInt(formData.get("periodMonth") as string, 10);
   const periodYear = parseInt(formData.get("periodYear") as string, 10);
   const type = formData.get("type") as InvoiceType;
 
   if (!files.length) return { error: "Selecciona al menos un archivo." };
+  if (!clientId) return { error: "Selecciona un cliente." };
   if (!periodMonth || !periodYear) return { error: "Selecciona mes y año." };
   if (!type) return { error: "Selecciona el tipo de factura." };
 
-  const client = await prisma.client
-    .findUnique({ where: { userId: session.user.id } })
-    .catch(() => null);
-
-  if (!client) return { error: "Perfil de cliente no encontrado." };
+  // Verify client exists and worker is assigned to it (or is admin)
+  if (session.user.role === "WORKER") {
+    const assignment = await prisma.workerClientAssignment.findUnique({
+      where: {
+        workerId_clientId: {
+          workerId: session.user.id,
+          clientId,
+        },
+      },
+    });
+    if (!assignment) return { error: "No tienes acceso a este cliente." };
+  }
 
   // Check if the period is closed
   const closure = await prisma.periodClosure.findUnique({
     where: {
-      clientId_month_year: {
-        clientId: client.id,
-        month: periodMonth,
-        year: periodYear,
-      },
+      clientId_month_year: { clientId, month: periodMonth, year: periodYear },
     },
   });
   if (closure && !closure.reopenedAt) {
-    return { error: `El periodo ${periodMonth}/${periodYear} está cerrado. Contacta con tu asesoría.` };
+    return { error: `El periodo ${periodMonth}/${periodYear} está cerrado.` };
   }
 
   const supabase = createServerSupabase();
@@ -65,13 +69,11 @@ export async function uploadInvoicesAction(
     const ALLOWED_EXTS = ["pdf", "xml", "jpg", "jpeg", "png", "webp", "heic"];
     if (!ALLOWED_EXTS.includes(ext)) continue;
 
-    // Calculate SHA-256 hash for duplicate detection
     const bytes = await file.arrayBuffer();
     const fileHash = createHash("sha256").update(Buffer.from(bytes)).digest("hex");
 
-    // Check for exact duplicate (same file content for same client)
     const existingByHash = await prisma.invoice.findFirst({
-      where: { clientId: client.id, fileHash },
+      where: { clientId, fileHash },
       select: { filename: true },
     });
     if (existingByHash) {
@@ -79,7 +81,7 @@ export async function uploadInvoicesAction(
       continue;
     }
 
-    const storageKey = `${client.id}/${periodYear}-${String(periodMonth).padStart(2, "0")}/${Date.now()}-${file.name}`;
+    const storageKey = `${clientId}/${periodYear}-${String(periodMonth).padStart(2, "0")}/${Date.now()}-${file.name}`;
 
     if (supabase) {
       const { error: storageError } = await supabase.storage
@@ -102,45 +104,17 @@ export async function uploadInvoicesAction(
         type,
         periodMonth,
         periodYear,
-        clientId: client.id,
+        clientId,
       },
     });
 
-    // Trigger OCR after response is sent (Next.js after() — runs reliably post-response)
     const invoiceId = invoice.id;
-    const userId    = session.user.id;
+    const userId = session.user.id;
     after(async () => {
       await processInvoice(invoiceId, userId).catch(console.error);
     });
 
     created.push(file.name);
-  }
-
-  // Notify assigned workers (after response)
-  if (created.length > 0) {
-    const clientName  = client.name;
-    const clientId    = client.id;
-    const uploadCount = created.length;
-    after(async () => {
-      try {
-        const assignments = await prisma.workerClientAssignment.findMany({
-          where: { clientId },
-          include: { worker: { select: { email: true } } },
-        });
-        const emails = assignments.map((a) => a.worker.email);
-        if (emails.length) {
-          await notifyWorkersNewUpload({
-            workerEmails: emails,
-            clientName,
-            count: uploadCount,
-            periodMonth,
-            periodYear,
-          });
-        }
-      } catch (err) {
-        console.error("[NOTIFY] Error notifying workers:", err);
-      }
-    });
   }
 
   if (created.length === 0 && duplicates.length > 0) {

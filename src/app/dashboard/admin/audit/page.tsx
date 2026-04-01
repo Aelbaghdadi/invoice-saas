@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ClipboardList, ArrowRight } from "lucide-react";
+import { AuditFilters } from "./AuditFilters";
 
 const FIELD_LABELS: Record<string, string> = {
   status: "Estado", issuerName: "Emisor", issuerCif: "CIF emisor",
@@ -9,6 +10,7 @@ const FIELD_LABELS: Record<string, string> = {
   invoiceNumber: "Nº factura", invoiceDate: "Fecha",
   taxBase: "Base imponible", vatRate: "% IVA", vatAmount: "Cuota IVA",
   irpfRate: "% IRPF", irpfAmount: "Cuota IRPF", totalAmount: "Total",
+  export: "Exportación", duplicate_warning: "Duplicado",
 };
 
 const VALUE_LABELS: Record<string, string> = {
@@ -40,15 +42,63 @@ function avatarColor(name: string) {
   return colors[hash % colors.length];
 }
 
-export default async function AuditLogPage() {
-  const logs = await prisma.auditLog.findMany({
-    orderBy: { createdAt: "desc" },
-    take: 100,
-    include: {
-      user: true,
-      invoice: { include: { client: true } },
-    },
-  }).catch(() => []);
+type Props = {
+  searchParams: Promise<Record<string, string | undefined>>;
+};
+
+export default async function AuditLogPage({ searchParams }: Props) {
+  const params = await searchParams;
+  const q = params.q ?? "";
+  const userId = params.user ?? "";
+  const field = params.field ?? "";
+  const dateFrom = params.from ?? "";
+  const dateTo = params.to ?? "";
+
+  // Build where clause
+  const where: Record<string, unknown> = {};
+
+  if (userId) where.userId = userId;
+  if (field) where.field = field;
+
+  if (dateFrom || dateTo) {
+    where.createdAt = {
+      ...(dateFrom ? { gte: new Date(dateFrom) } : {}),
+      ...(dateTo ? { lte: new Date(dateTo + "T23:59:59.999Z") } : {}),
+    };
+  }
+
+  if (q) {
+    where.OR = [
+      { invoice: { filename: { contains: q, mode: "insensitive" } } },
+      { invoice: { client: { name: { contains: q, mode: "insensitive" } } } },
+      { field: { contains: q, mode: "insensitive" } },
+      { newValue: { contains: q, mode: "insensitive" } },
+    ];
+  }
+
+  const [logs, allUsers, distinctFields] = await Promise.all([
+    prisma.auditLog.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      take: 200,
+      include: {
+        user: true,
+        invoice: { include: { client: true } },
+      },
+    }).catch(() => []),
+    prisma.user.findMany({
+      where: { role: { in: ["ADMIN", "WORKER"] } },
+      select: { id: true, name: true },
+      orderBy: { name: "asc" },
+    }).catch(() => []),
+    prisma.auditLog.findMany({
+      distinct: ["field"],
+      select: { field: true },
+      orderBy: { field: "asc" },
+    }).catch(() => []),
+  ]);
+
+  const fields = distinctFields.map((d) => d.field);
 
   return (
     <div>
@@ -57,15 +107,22 @@ export default async function AuditLogPage() {
         description="Historial completo de cambios realizados en las facturas"
       />
 
+      <AuditFilters users={allUsers} fields={fields} />
+
       <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
         {logs.length === 0 ? (
           <EmptyState
             icon={ClipboardList}
             title="Sin registros"
-            description="Los cambios en las facturas se registrarán aquí automáticamente."
+            description={q || userId || field || dateFrom || dateTo
+              ? "No se encontraron registros con los filtros aplicados."
+              : "Los cambios en las facturas se registrarán aquí automáticamente."}
           />
         ) : (
           <div className="overflow-x-auto">
+            <div className="px-5 py-3 border-b border-slate-100">
+              <p className="text-[12px] text-slate-400">{logs.length} registro{logs.length !== 1 ? "s" : ""}</p>
+            </div>
             <table className="w-full">
               <thead>
                 <tr className="border-b border-slate-100 bg-slate-50/50">

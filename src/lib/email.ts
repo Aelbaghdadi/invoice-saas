@@ -330,6 +330,45 @@ export async function sendClientInvitationEmail(params: {
 }
 
 /**
+ * Send monthly closure reminder to a client
+ */
+export async function sendClosureReminder(params: {
+  clientEmail: string;
+  clientName: string;
+  month: number;
+  year: number;
+}) {
+  const period = `${MONTHS[params.month]} ${params.year}`;
+
+  const body = `
+    <p style="margin:0 0 4px;font-size:15px;color:#475569;line-height:1.7">
+      Hola <strong style="color:#0f172a">${params.clientName}</strong>,
+    </p>
+    <p style="margin:0 0 16px;font-size:15px;color:#475569;line-height:1.7">
+      Te recordamos que el periodo <strong style="color:#0f172a">${period}</strong> está pendiente de cierre.
+      Por favor, asegúrate de haber subido todas las facturas correspondientes a este periodo antes de que se proceda al cierre.
+    </p>
+    <p style="margin:0;font-size:13px;color:#94a3b8;line-height:1.6">
+      Si ya has subido todo, puedes ignorar este mensaje. Tu asesoría se encargará del cierre.
+    </p>`;
+
+  await send(
+    params.clientEmail,
+    `Recordatorio: cierre pendiente ${period}`,
+    wrap({
+      preheader: `Recuerda subir tus facturas de ${period} antes del cierre.`,
+      heroIcon: "&#128197;",
+      heroColor: "#f59e0b",
+      heroBg: "#fffbeb",
+      title: `Cierre pendiente: ${period}`,
+      body,
+      ctaText: "Subir facturas",
+      ctaUrl: `${APP_URL}/dashboard/client/upload`,
+    }),
+  );
+}
+
+/**
  * Notify assigned workers when a client uploads new invoices
  */
 export async function notifyWorkersNewUpload(params: {

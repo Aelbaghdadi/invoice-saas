@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { generateCsv, suggestFilename, type ExportFormat } from "@/lib/exportFormats";
-import type { InvoiceType } from "@prisma/client";
+import type { InvoiceType, InvoiceStatus } from "@prisma/client";
 
 export async function GET(req: NextRequest) {
   const session = await auth();
@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
   const preview  = sp.get("preview") === "1";
 
   const where = {
-    status: "VALIDATED" as const,
+    status: { in: ["VALIDATED", "EXPORTED"] as InvoiceStatus[] },
     ...(clientId    ? { clientId }              : {}),
     ...(month       ? { periodMonth: month }    : {}),
     ...(year        ? { periodYear:  year }     : {}),
@@ -70,24 +70,27 @@ export async function GET(req: NextRequest) {
     data: { status: "EXPORTED", exportBatchId: batch.id },
   });
 
-  // Record status history for each invoice
-  await prisma.invoiceStatusHistory.createMany({
-    data: invoiceIds.map((invoiceId) => ({
-      invoiceId,
-      fromStatus: "VALIDATED" as const,
-      toStatus: "EXPORTED" as const,
-      changedBy: session.user.id,
-    })),
-  });
+  // Record status history for newly exported invoices (not already EXPORTED)
+  const newlyExported = invoices.filter((i) => i.status !== "EXPORTED");
+  if (newlyExported.length > 0) {
+    await prisma.invoiceStatusHistory.createMany({
+      data: newlyExported.map((i) => ({
+        invoiceId: i.id,
+        fromStatus: i.status,
+        toStatus: "EXPORTED" as const,
+        changedBy: session.user.id,
+      })),
+    });
+  }
 
-  // Audit log for each invoice
+  // Audit log for all exported invoices (tracks re-exports too)
   await prisma.auditLog.createMany({
-    data: invoiceIds.map((invoiceId) => ({
-      invoiceId,
+    data: invoices.map((i) => ({
+      invoiceId: i.id,
       userId: session.user.id,
-      field: "status",
-      oldValue: "VALIDATED",
-      newValue: "EXPORTED",
+      field: "export",
+      oldValue: i.status,
+      newValue: `EXPORTED (batch: ${batch.id})`,
     })),
   });
 

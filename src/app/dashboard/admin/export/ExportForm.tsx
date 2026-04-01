@@ -206,7 +206,7 @@ export function ExportForm({ clients }: Props) {
             <div className={`mt-5 flex items-center justify-between rounded-xl px-4 py-3 ${
               count === 0 ? "bg-amber-50" : "bg-slate-50"
             }`}>
-              <span className="text-[12px] font-medium text-slate-500">Facturas validadas</span>
+              <span className="text-[12px] font-medium text-slate-500">Facturas exportables</span>
               {counting ? (
                 <Loader2 className="h-4 w-4 animate-spin text-slate-300" />
               ) : (
@@ -220,7 +220,7 @@ export function ExportForm({ clients }: Props) {
 
             {count === 0 && !counting && (
               <p className="mt-2 text-center text-[12px] text-amber-600">
-                No hay facturas validadas con estos filtros.
+                No hay facturas exportables con estos filtros.
               </p>
             )}
           </div>

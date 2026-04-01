@@ -24,8 +24,25 @@ type FieldData = {
 };
 
 async function parseAndSave(invoiceId: string, userId: string, data: FieldData, validate: boolean, expectedUpdatedAt?: string) {
-  const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
+  const invoice = await prisma.invoice.findUnique({
+    where: { id: invoiceId },
+    include: { client: true },
+  });
   if (!invoice) return { error: "Factura no encontrada" };
+
+  // Check if the period is closed
+  const closure = await prisma.periodClosure.findUnique({
+    where: {
+      clientId_month_year: {
+        clientId: invoice.clientId,
+        month: invoice.periodMonth,
+        year: invoice.periodYear,
+      },
+    },
+  });
+  if (closure && !closure.reopenedAt) {
+    return { error: `El periodo ${invoice.periodMonth}/${invoice.periodYear} está cerrado. No se pueden modificar facturas.` };
+  }
 
   // Optimistic locking: reject if another user modified the invoice
   if (expectedUpdatedAt) {

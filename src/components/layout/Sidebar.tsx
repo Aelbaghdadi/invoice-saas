@@ -15,6 +15,7 @@ import {
   Settings,
   Upload,
   LogOut,
+  CalendarCheck,
 } from "lucide-react";
 
 type NavItem = {
@@ -31,6 +32,7 @@ const NAV_ITEMS: Record<Role, NavItem[]> = {
     { href: "/dashboard/admin/invoices", label: "Facturas",          icon: FileText },
     { href: "/dashboard/admin/batch",    label: "Lotes",             icon: Layers },
     { href: "/dashboard/admin/export",   label: "Exportar",          icon: Download },
+    { href: "/dashboard/admin/closures", label: "Cierres",           icon: CalendarCheck },
     { href: "/dashboard/admin/audit",     label: "Auditoría",         icon: ClipboardList },
     { href: "/dashboard/admin/settings", label: "Ajustes",           icon: Settings },
   ],
@@ -38,6 +40,7 @@ const NAV_ITEMS: Record<Role, NavItem[]> = {
     { href: "/dashboard/worker", label: "Panel", icon: LayoutDashboard },
     { href: "/dashboard/worker/clients", label: "Clientes", icon: Building2 },
     { href: "/dashboard/worker/invoices", label: "Facturas", icon: FileText },
+    { href: "/dashboard/worker/upload", label: "Subir facturas", icon: Upload },
     { href: "/dashboard/worker/batch", label: "Lotes", icon: Layers },
   ],
   CLIENT: [

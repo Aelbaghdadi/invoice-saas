@@ -74,6 +74,7 @@ model Client {
 
   assignedWorkers WorkerClientAssignment[]
   invoices        Invoice[]
+  periodClosures  PeriodClosure[]
 }
 
 model WorkerClientAssignment {
@@ -198,6 +199,21 @@ model AuditLog {
 
   userId String
   user   User   @relation(fields: [userId], references: [id])
+}
+
+model PeriodClosure {
+  id          String   @id @default(cuid())
+  clientId    String
+  client      Client   @relation(fields: [clientId], references: [id])
+  month       Int
+  year        Int
+  closedBy    String
+  closedAt    DateTime @default(now())
+  reopenedAt  DateTime?
+  reopenedBy  String?
+  reminderSent Boolean @default(false)
+
+  @@unique([clientId, month, year])
 }
 
 model PasswordResetToken {
