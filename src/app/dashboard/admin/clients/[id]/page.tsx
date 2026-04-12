@@ -1,5 +1,6 @@
+import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Badge } from "@/components/ui/Badge";
 import { ChevronLeft, Mail, Building2, FileText, Users } from "lucide-react";
@@ -12,10 +13,16 @@ const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
   OCR_ERROR: { label: "Error OCR",   variant: "red" },
   VALIDATED: { label: "Validada",    variant: "green" },
   REJECTED:  { label: "Rechazada",   variant: "red" },
-  EXPORTED:  { label: "Exportada",   variant: "slate" },
+  EXPORTED:        { label: "Exportada",      variant: "slate" },
+  PENDING_REVIEW:  { label: "Pte. revisión",  variant: "blue" },
+  NEEDS_ATTENTION: { label: "Con incidencias", variant: "yellow" },
 };
 
 export default async function ClientDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const session = await auth();
+  if (!session?.user || session.user.role !== "ADMIN") redirect("/login");
+  const firmId = session.user.advisoryFirmId ?? undefined;
+
   const { id } = await params;
   const client = await prisma.client.findUnique({
     where: { id },
@@ -25,6 +32,7 @@ export default async function ClientDetailPage({ params }: { params: Promise<{ i
     },
   });
   if (!client) notFound();
+  if (client.advisoryFirmId !== firmId) notFound();
 
   const stats = [
     { label: "Total facturas", value: client.invoices.length, icon: FileText },

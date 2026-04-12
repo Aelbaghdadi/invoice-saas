@@ -1,4 +1,6 @@
+import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ClipboardList, ArrowRight } from "lucide-react";
@@ -16,7 +18,8 @@ const FIELD_LABELS: Record<string, string> = {
 const VALUE_LABELS: Record<string, string> = {
   UPLOADED: "Subida", ANALYZING: "En análisis", ANALYZED: "Analizada",
   OCR_ERROR: "Error OCR", VALIDATED: "Validada", REJECTED: "Rechazada",
-  EXPORTED: "Exportada", PURCHASE: "Recibida", SALE: "Emitida",
+  EXPORTED: "Exportada", PENDING_REVIEW: "Pte. revisión",
+  NEEDS_ATTENTION: "Con incidencias", PURCHASE: "Recibida", SALE: "Emitida",
 };
 
 function fmtVal(v: string | null): string {
@@ -47,6 +50,10 @@ type Props = {
 };
 
 export default async function AuditLogPage({ searchParams }: Props) {
+  const session = await auth();
+  if (!session?.user || session.user.role !== "ADMIN") redirect("/login");
+  const firmId = session.user.advisoryFirmId ?? undefined;
+
   const params = await searchParams;
   const q = params.q ?? "";
   const userId = params.user ?? "";
@@ -55,7 +62,9 @@ export default async function AuditLogPage({ searchParams }: Props) {
   const dateTo = params.to ?? "";
 
   // Build where clause
-  const where: Record<string, unknown> = {};
+  const where: Record<string, unknown> = {
+    invoice: { client: { advisoryFirmId: firmId } },
+  };
 
   if (userId) where.userId = userId;
   if (field) where.field = field;
@@ -87,11 +96,12 @@ export default async function AuditLogPage({ searchParams }: Props) {
       },
     }).catch(() => []),
     prisma.user.findMany({
-      where: { role: { in: ["ADMIN", "WORKER"] } },
+      where: { role: { in: ["ADMIN", "WORKER"] }, advisoryFirmId: firmId },
       select: { id: true, name: true },
       orderBy: { name: "asc" },
     }).catch(() => []),
     prisma.auditLog.findMany({
+      where: { invoice: { client: { advisoryFirmId: firmId } } },
       distinct: ["field"],
       select: { field: true },
       orderBy: { field: "asc" },

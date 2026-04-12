@@ -1,4 +1,6 @@
+import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Users, Plus, Search, MoreHorizontal, Building2, Shield } from "lucide-react";
@@ -19,8 +21,12 @@ function avatarColor(name: string) {
 }
 
 export default async function WorkersPage() {
+  const session = await auth();
+  if (!session?.user || session.user.role !== "ADMIN") redirect("/login");
+  const firmId = session.user.advisoryFirmId ?? undefined;
+
   const workers = await prisma.user.findMany({
-    where: { role: "WORKER" },
+    where: { role: "WORKER", advisoryFirmId: firmId },
     orderBy: { createdAt: "desc" },
     include: { _count: { select: { assignedClients: true } } },
   }).catch(() => []);

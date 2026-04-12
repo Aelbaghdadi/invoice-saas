@@ -45,7 +45,7 @@ export async function createClient(_prev: State, formData: FormData): Promise<St
 
   // Generate a secure random temporary password (user will set their own via invitation)
   const tempPassword = randomBytes(16).toString("hex");
-  const passwordHash = await bcrypt.hash(tempPassword, 10);
+  const passwordHash = await bcrypt.hash(tempPassword, 12);
 
   let inviteToken: string | undefined;
   let userEmail: string | undefined;
@@ -95,7 +95,7 @@ export async function createClient(_prev: State, formData: FormData): Promise<St
   // Send invitation email after the response is sent
   if (inviteToken && userEmail) {
     const appUrl = process.env.NEXTAUTH_URL ?? "http://localhost:3000";
-    const inviteUrl = `${appUrl}/auth/reset-password?token=${inviteToken}`;
+    const inviteUrl = `${appUrl}/login/reset-password?token=${inviteToken}`;
 
     after(() => {
       sendClientInvitationEmail({

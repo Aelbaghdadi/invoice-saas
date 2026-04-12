@@ -1,4 +1,6 @@
+import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Building2, Plus, Search, MoreHorizontal, Users } from "lucide-react";
@@ -24,7 +26,12 @@ function avatarColor(name: string) {
 }
 
 export default async function ClientsPage() {
+  const session = await auth();
+  if (!session?.user || session.user.role !== "ADMIN") redirect("/login");
+  const firmId = session.user.advisoryFirmId ?? undefined;
+
   const clients = await prisma.client.findMany({
+    where: { advisoryFirmId: firmId },
     orderBy: { createdAt: "desc" },
     include: {
       _count: { select: { invoices: true, assignedWorkers: true } },

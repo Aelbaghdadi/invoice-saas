@@ -30,7 +30,9 @@ const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
   OCR_ERROR: { label: "Error OCR",   variant: "red" },
   VALIDATED: { label: "Validada",    variant: "green" },
   REJECTED:  { label: "Rechazada",   variant: "red" },
-  EXPORTED:  { label: "Exportada",   variant: "slate" },
+  EXPORTED:        { label: "Exportada",      variant: "slate" },
+  PENDING_REVIEW:  { label: "Pte. revisión",  variant: "blue" },
+  NEEDS_ATTENTION: { label: "Con incidencias", variant: "yellow" },
 };
 
 const ACTION_LABEL: Record<string, string> = {
@@ -59,9 +61,8 @@ export function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
   const [page, setPage] = useState(0);
   const router = useRouter();
 
-  // Filter (reset page on search change)
+  // Filter
   const filtered = useMemo(() => {
-    setPage(0);
     if (!search.trim()) return invoices;
     const q = search.toLowerCase();
     return invoices.filter(
@@ -190,7 +191,7 @@ export function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
           <input
             type="text"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => { setSearch(e.target.value); setPage(0); }}
             placeholder="Buscar por cliente, CIF o factura..."
             className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-4 text-[13px] placeholder-slate-400 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
           />

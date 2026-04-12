@@ -1,4 +1,6 @@
+import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Badge } from "@/components/ui/Badge";
@@ -6,7 +8,12 @@ import { Layers, FileText, CheckCircle2, Clock, ArrowRight } from "lucide-react"
 import Link from "next/link";
 
 export default async function BatchPage() {
+  const session = await auth();
+  if (!session?.user || session.user.role !== "ADMIN") redirect("/login");
+  const firmId = session.user.advisoryFirmId ?? undefined;
+
   const clients = await prisma.client.findMany({
+    where: { advisoryFirmId: firmId },
     include: {
       invoices: {
         orderBy: { createdAt: "desc" },

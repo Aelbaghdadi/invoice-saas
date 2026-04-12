@@ -1,4 +1,6 @@
+import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { redirect } from "next/navigation";
 import {
   Upload,
   ClipboardCheck,
@@ -19,7 +21,9 @@ const STATUS_STYLES: Record<string, { label: string; className: string }> = {
   OCR_ERROR:  { label: "Error OCR",   className: "bg-red-50 text-red-700 border border-red-200" },
   VALIDATED:  { label: "Validada",    className: "bg-green-50 text-green-700 border border-green-200" },
   REJECTED:   { label: "Rechazada",   className: "bg-red-50 text-red-700 border border-red-200" },
-  EXPORTED:   { label: "Exportada",   className: "bg-slate-100 text-slate-600 border border-slate-200" },
+  EXPORTED:         { label: "Exportada",      className: "bg-slate-100 text-slate-600 border border-slate-200" },
+  PENDING_REVIEW:   { label: "Pte. revisión",  className: "bg-blue-50 text-blue-700 border border-blue-200" },
+  NEEDS_ATTENTION:  { label: "Con incidencias", className: "bg-yellow-50 text-yellow-700 border border-yellow-200" },
 };
 
 function initials(name: string) {
@@ -52,6 +56,10 @@ function timeAgo(date: Date): string {
 }
 
 export default async function AdminDashboard() {
+  const session = await auth();
+  if (!session?.user || session.user.role !== "ADMIN") redirect("/login");
+  const firmId = session.user.advisoryFirmId ?? undefined;
+
   // ── Fetch all real data ───────────────────────────────────────────────
   const [
     totalInvoices,
@@ -63,22 +71,25 @@ export default async function AdminDashboard() {
     recentLogs,
     clientProgress,
   ] = await Promise.all([
-    prisma.invoice.count(),
-    prisma.invoice.count({ where: { status: { in: ["UPLOADED", "ANALYZING", "ANALYZED", "OCR_ERROR"] } } }),
-    prisma.invoice.count({ where: { status: "VALIDATED" } }),
-    prisma.invoice.count({ where: { status: "EXPORTED" } }),
-    prisma.client.count(),
+    prisma.invoice.count({ where: { client: { advisoryFirmId: firmId } } }),
+    prisma.invoice.count({ where: { status: { in: ["UPLOADED", "ANALYZING", "ANALYZED", "OCR_ERROR"] }, client: { advisoryFirmId: firmId } } }),
+    prisma.invoice.count({ where: { status: "VALIDATED", client: { advisoryFirmId: firmId } } }),
+    prisma.invoice.count({ where: { status: "EXPORTED", client: { advisoryFirmId: firmId } } }),
+    prisma.client.count({ where: { advisoryFirmId: firmId } }),
     prisma.invoice.findMany({
+      where: { client: { advisoryFirmId: firmId } },
       take: 5,
       orderBy: { createdAt: "desc" },
       include: { client: true },
     }),
     prisma.auditLog.findMany({
+      where: { invoice: { client: { advisoryFirmId: firmId } } },
       take: 5,
       orderBy: { createdAt: "desc" },
       include: { user: true, invoice: { include: { client: true } } },
     }),
     prisma.client.findMany({
+      where: { advisoryFirmId: firmId },
       include: {
         invoices: { select: { status: true } },
       },
@@ -146,7 +157,8 @@ export default async function AdminDashboard() {
   const VALUE_LABELS: Record<string, string> = {
     UPLOADED: "Subida", ANALYZING: "En análisis", ANALYZED: "Analizada",
     OCR_ERROR: "Error OCR", VALIDATED: "Validada", REJECTED: "Rechazada",
-    EXPORTED: "Exportada", PURCHASE: "Recibida", SALE: "Emitida",
+    EXPORTED: "Exportada", PENDING_REVIEW: "Pte. revisión",
+    NEEDS_ATTENTION: "Con incidencias", PURCHASE: "Recibida", SALE: "Emitida",
   };
 
   // ── Clients with pending invoices (for "progress" section) ────────────

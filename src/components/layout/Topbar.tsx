@@ -9,7 +9,7 @@ import {
 
 type TopbarProps = {
   userName: string;
-  userRole: string;
+  userRole?: string;
   role: string;
   onMenuClick?: () => void;
 };
@@ -22,9 +22,8 @@ type SearchResult = {
   href: string;
 };
 
-export function Topbar({ userName, userRole, role, onMenuClick }: TopbarProps) {
+export function Topbar({ userName, role, onMenuClick }: TopbarProps) {
   const router = useRouter();
-  const firstName = userName.split(" ")[0];
   const initials = userName
     .split(" ")
     .map((n) => n[0])

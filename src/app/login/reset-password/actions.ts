@@ -20,8 +20,8 @@ export async function resetPasswordAction(
     return { error: "Token inválido. Solicita un nuevo enlace de restablecimiento." };
   }
 
-  if (!password || password.length < 6) {
-    return { error: "La contraseña debe tener al menos 6 caracteres." };
+  if (!password || password.length < 8) {
+    return { error: "La contraseña debe tener al menos 8 caracteres." };
   }
 
   if (password !== confirmPassword) {
@@ -29,41 +29,45 @@ export async function resetPasswordAction(
   }
 
   try {
-    const resetToken = await prisma.passwordResetToken.findUnique({
-      where: { token },
+    // Use a transaction for atomicity — prevents race conditions with concurrent requests
+    return await prisma.$transaction(async (tx) => {
+      const found = await tx.passwordResetToken.findUnique({
+        where: { token },
+      });
+
+      if (!found) {
+        return { error: "El enlace no es válido. Solicita uno nuevo." };
+      }
+
+      if (found.expiresAt < new Date()) {
+        await tx.passwordResetToken.delete({ where: { token } });
+        return { error: "El enlace ha expirado. Solicita uno nuevo." };
+      }
+
+      // Delete token immediately to prevent reuse
+      await tx.passwordResetToken.delete({ where: { token } });
+
+      const user = await tx.user.findUnique({
+        where: { email: found.email },
+      });
+
+      if (!user) {
+        return { error: "No se encontró ninguna cuenta asociada a este enlace." };
+      }
+
+      const passwordHash = await bcrypt.hash(password, 12);
+
+      await tx.user.update({
+        where: { id: user.id },
+        data: {
+          passwordHash,
+          failedAttempts: 0,
+          lockedUntil: null,
+        },
+      });
+
+      return { success: true };
     });
-
-    if (!resetToken) {
-      return { error: "El enlace de restablecimiento no es válido. Solicita uno nuevo." };
-    }
-
-    if (resetToken.expiresAt < new Date()) {
-      await prisma.passwordResetToken.delete({ where: { token } });
-      return { error: "El enlace ha expirado. Solicita un nuevo enlace de restablecimiento." };
-    }
-
-    const user = await prisma.user.findUnique({
-      where: { email: resetToken.email },
-    });
-
-    if (!user) {
-      return { error: "No se encontró ninguna cuenta asociada a este enlace." };
-    }
-
-    const passwordHash = await bcrypt.hash(password, 12);
-
-    await prisma.user.update({
-      where: { id: user.id },
-      data: {
-        passwordHash,
-        failedAttempts: 0,
-        lockedUntil: null,
-      },
-    });
-
-    await prisma.passwordResetToken.delete({ where: { token } });
-
-    return { success: true };
   } catch (err) {
     console.error("[RESET_PASSWORD] Error:", err);
     return { error: "Ha ocurrido un error. Por favor, inténtalo de nuevo." };

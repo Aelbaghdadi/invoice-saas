@@ -3,18 +3,28 @@ import type { Invoice, Client } from "@prisma/client";
 export type ExportFormat = "sage50" | "contasol" | "a3con";
 export type ExportInvoiceType = "ALL" | "PURCHASE" | "SALE";
 
+export type ExportConfig = {
+  encoding?: string;    // "utf-8" | "windows-1252"
+  delimiter?: string;   // ";" | "," | "\t"
+  dateFormat?: string;  // "DD/MM/YYYY" | "YYYY-MM-DD" | "MM/DD/YYYY"
+};
+
 export type InvoiceWithClient = Invoice & { client: Client };
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-function fmtDate(d: Date | null | undefined): string {
+function fmtDate(d: Date | null | undefined, dateFormat?: string): string {
   if (!d) return "";
   const dt = new Date(d);
-  return [
-    String(dt.getDate()).padStart(2, "0"),
-    String(dt.getMonth() + 1).padStart(2, "0"),
-    dt.getFullYear(),
-  ].join("/");
+  const dd = String(dt.getDate()).padStart(2, "0");
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const yyyy = dt.getFullYear();
+
+  switch (dateFormat) {
+    case "YYYY-MM-DD": return `${yyyy}-${mm}-${dd}`;
+    case "MM/DD/YYYY": return `${mm}/${dd}/${yyyy}`;
+    default:           return `${dd}/${mm}/${yyyy}`;
+  }
 }
 
 /** Convert Prisma Decimal / number / null → "1.234,56" (Spanish format) */
@@ -55,9 +65,9 @@ const HEADERS: Record<ExportFormat, string[]> = {
 
 // ─── row builder ─────────────────────────────────────────────────────────────
 
-function buildRow(inv: InvoiceWithClient, format: ExportFormat): string[] {
+function buildRow(inv: InvoiceWithClient, format: ExportFormat, config?: ExportConfig): string[] {
   const tipo      = typeCode(inv.type, format);
-  const fecha     = fmtDate(inv.invoiceDate);
+  const fecha     = fmtDate(inv.invoiceDate, config?.dateFormat);
   const numero    = inv.invoiceNumber ?? "";
   const nombre    = inv.issuerName ?? "";
   const cif       = inv.issuerCif ?? "";
@@ -84,10 +94,11 @@ function buildRow(inv: InvoiceWithClient, format: ExportFormat): string[] {
 export function generateCsv(
   invoices: InvoiceWithClient[],
   format: ExportFormat,
+  config?: ExportConfig,
 ): string {
-  const SEP = ";";
+  const SEP = config?.delimiter ?? ";";
   const header = HEADERS[format].join(SEP);
-  const rows   = invoices.map((inv) => buildRow(inv, format).join(SEP));
+  const rows   = invoices.map((inv) => buildRow(inv, format, config).join(SEP));
   // BOM so Excel opens with correct encoding
   return "\uFEFF" + [header, ...rows].join("\r\n");
 }

@@ -6,6 +6,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { Badge } from "@/components/ui/Badge";
 import { FileText, Upload } from "lucide-react";
 import Link from "next/link";
+import { ReuploadButton } from "./ReuploadButton";
 
 const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
   UPLOADED:  { label: "Subida",       variant: "blue" },
@@ -14,7 +15,9 @@ const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
   OCR_ERROR: { label: "Error OCR",    variant: "red" },
   VALIDATED: { label: "Validada",     variant: "green" },
   REJECTED:  { label: "Rechazada",    variant: "red" },
-  EXPORTED:  { label: "Exportada",    variant: "slate" },
+  EXPORTED:        { label: "Exportada",      variant: "slate" },
+  PENDING_REVIEW:  { label: "Pte. revisión",  variant: "blue" },
+  NEEDS_ATTENTION: { label: "Con incidencias", variant: "yellow" },
 };
 
 export default async function ClientInvoicesPage() {
@@ -100,6 +103,9 @@ export default async function ClientInvoicesPage() {
                           </span>
                           {inv.status === "REJECTED" && inv.rejectionReason && (
                             <p className="text-[11px] text-red-500 mt-0.5">{inv.rejectionReason}</p>
+                          )}
+                          {inv.status === "REJECTED" && (
+                            <ReuploadButton invoiceId={inv.id} />
                           )}
                         </div>
                       </div>

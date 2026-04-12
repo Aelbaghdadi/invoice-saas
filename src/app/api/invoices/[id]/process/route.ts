@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { processInvoice } from "@/lib/processInvoice";
+import type { InvoiceStatus } from "@prisma/client";
 
 /** Allowed statuses for (re)processing */
 const PROCESSABLE_STATUSES = ["UPLOADED", "OCR_ERROR", "ANALYZED"] as const;
@@ -21,6 +22,16 @@ export async function POST(
   const invoice = await prisma.invoice.findUnique({ where: { id } });
   if (!invoice) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  // Workers can only reprocess invoices of their assigned clients
+  if (session.user.role === "WORKER") {
+    const assignment = await prisma.workerClientAssignment.findUnique({
+      where: { workerId_clientId: { workerId: userId, clientId: invoice.clientId } },
+    });
+    if (!assignment) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
   }
 
   if (!PROCESSABLE_STATUSES.includes(invoice.status as typeof PROCESSABLE_STATUSES[number])) {
@@ -58,7 +69,7 @@ export async function POST(
     await prisma.invoiceStatusHistory.create({
       data: {
         invoiceId: id,
-        fromStatus: previousStatus as any,
+        fromStatus: previousStatus as InvoiceStatus,
         toStatus: "UPLOADED",
         changedBy: userId,
         reason: "Manual reprocess requested",

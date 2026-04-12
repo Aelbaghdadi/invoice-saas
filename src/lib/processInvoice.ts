@@ -6,6 +6,7 @@ import {
   extractInvoiceFromImage,
   extractInvoiceFromXml,
 } from "@/lib/ocr";
+import { detectIssues } from "@/lib/issueDetector";
 
 /** Transition status + record in history */
 async function transitionStatus(
@@ -57,10 +58,10 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       const base64 = Buffer.from(buffer).toString("base64");
 
       if (ft === "application/pdf" || invoice.filename.endsWith(".pdf")) {
-        source = "gpt4o";
+        source = "document_ai";
         extracted = await extractInvoiceFromPdf(base64);
       } else {
-        source = "gpt4o";
+        source = "document_ai";
         extracted = await extractInvoiceFromImage(base64, ft || "image/jpeg");
       }
       rawResponse = JSON.stringify(extracted);
@@ -77,36 +78,13 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       isValid = diff <= 2;
     }
 
-    // Post-OCR duplicate check: same invoiceNumber + issuerCif for same client
-    if (extracted.invoiceNumber && extracted.issuerCif) {
-      const duplicate = await prisma.invoice.findFirst({
-        where: {
-          clientId: invoice.clientId,
-          invoiceNumber: extracted.invoiceNumber,
-          issuerCif: extracted.issuerCif,
-          id: { not: invoiceId },
-        },
-        select: { id: true, filename: true },
-      });
-      if (duplicate) {
-        await prisma.auditLog.create({
-          data: {
-            invoiceId,
-            userId: triggeredByUserId,
-            field: "duplicate_warning",
-            oldValue: null,
-            newValue: `Posible duplicado de ${duplicate.filename} (misma factura ${extracted.invoiceNumber} de ${extracted.issuerCif})`,
-          },
-        });
-      }
-    }
-
     // Save extraction as separate record (datos brutos OCR)
     await prisma.invoiceExtraction.create({
       data: {
         invoiceId,
         source,
         rawResponse,
+        confidence: extracted.confidence ?? undefined,
         issuerName:    extracted.issuerName,
         issuerCif:     extracted.issuerCif,
         receiverName:  extracted.receiverName,
@@ -123,11 +101,15 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       },
     });
 
+    // Detect issues (duplicates, low confidence, math mismatch, etc.)
+    const issues = await detectIssues(invoiceId, extracted, invoice);
+    const targetStatus: InvoiceStatus = issues.length > 0 ? "NEEDS_ATTENTION" : "PENDING_REVIEW";
+
     // Copy OCR data to Invoice (datos finales — gestor los editará)
     await prisma.invoice.update({
       where: { id: invoiceId },
       data: {
-        status: "ANALYZED",
+        status: targetStatus,
         issuerName:    extracted.issuerName,
         issuerCif:     extracted.issuerCif,
         receiverName:  extracted.receiverName,
@@ -145,7 +127,7 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       },
     });
 
-    await transitionStatus(invoiceId, "ANALYZING", "ANALYZED", triggeredByUserId);
+    await transitionStatus(invoiceId, "ANALYZING", targetStatus, triggeredByUserId);
 
     await prisma.auditLog.create({
       data: {
@@ -153,7 +135,7 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
         userId: triggeredByUserId,
         field: "status",
         oldValue: "UPLOADED",
-        newValue: "ANALYZED",
+        newValue: targetStatus,
       },
     });
   } catch (err) {

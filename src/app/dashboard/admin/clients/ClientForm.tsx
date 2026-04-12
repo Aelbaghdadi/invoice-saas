@@ -3,6 +3,7 @@
 import { useActionState, useEffect, useState } from "react";
 import { createClient } from "./actions";
 import { Loader2, AlertCircle, Info } from "lucide-react";
+import Link from "next/link";
 import { useToast } from "@/components/ui/Toast";
 import { Select } from "@/components/ui/Select";
 
@@ -127,12 +128,12 @@ export function ClientForm() {
           {pending && <Loader2 className="h-4 w-4 animate-spin" />}
           {pending ? "Creando..." : "Crear cliente"}
         </button>
-        <a
+        <Link
           href="/dashboard/admin/clients"
           className="text-[13px] text-slate-500 hover:text-slate-700"
         >
           Cancelar
-        </a>
+        </Link>
       </div>
     </form>
   );

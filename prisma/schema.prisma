@@ -21,10 +21,34 @@ enum InvoiceStatus {
   UPLOADED
   ANALYZING
   ANALYZED
+  PENDING_REVIEW
+  NEEDS_ATTENTION
   OCR_ERROR
   VALIDATED
   REJECTED
   EXPORTED
+}
+
+enum RejectionCategory {
+  ILLEGIBLE
+  INCOMPLETE
+  WRONG_PERIOD
+  DUPLICATE
+  OTHER
+}
+
+enum IssueType {
+  OCR_FAILED
+  LOW_CONFIDENCE
+  POSSIBLE_DUPLICATE
+  MATH_MISMATCH
+  MANUAL
+}
+
+enum IssueStatus {
+  OPEN
+  RESOLVED
+  DISMISSED
 }
 
 model AdvisoryFirm {
@@ -63,6 +87,7 @@ model Client {
   cif               String   @unique
   email             String   @unique
   accountingProgram String?
+  exportConfig      Json?     // { encoding, delimiter, dateFormat, accountLength }
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -73,6 +98,7 @@ model Client {
   user   User?   @relation("ClientUser", fields: [userId], references: [id])
 
   assignedWorkers WorkerClientAssignment[]
+  documents       Document[]
   invoices        Invoice[]
   periodClosures  PeriodClosure[]
 }
@@ -88,6 +114,22 @@ model WorkerClientAssignment {
   client   Client @relation(fields: [clientId], references: [id])
 
   @@unique([workerId, clientId])
+}
+
+model Document {
+  id         String   @id @default(cuid())
+  filename   String
+  storageKey String
+  fileType   String
+  fileHash   String?
+  sizeBytes  Int?
+  uploadedBy String?
+  createdAt  DateTime @default(now())
+
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id])
+
+  invoices Invoice[]
 }
 
 model Invoice {
@@ -117,8 +159,18 @@ model Invoice {
   isValid       Boolean?
 
   // Gestion de estado avanzada
-  rejectionReason String?
-  reviewedBy      String?
+  rejectionReason   String?
+  rejectionCategory RejectionCategory?
+  reviewedBy        String?
+
+  // Re-subida: vincula con la factura rechazada original
+  replacesId String?  @unique
+  replaces   Invoice? @relation("ReplacedBy", fields: [replacesId], references: [id])
+  replacedBy Invoice? @relation("ReplacedBy")
+
+  // Periodo contable (puede diferir del periodo de subida)
+  accountingPeriodMonth Int?
+  accountingPeriodYear  Int?
   ocrAttempts     Int       @default(0)
   lastOcrError    String?
 
@@ -127,9 +179,15 @@ model Invoice {
 
   clientId      String
   client        Client     @relation(fields: [clientId], references: [id])
+
+  documentId    String?
+  document      Document?  @relation(fields: [documentId], references: [id])
+
   auditLogs     AuditLog[]
   extractions   InvoiceExtraction[]
   statusHistory InvoiceStatusHistory[]
+  issues        InvoiceIssue[]
+  exportBatchItems ExportBatchItem[]
 
   exportBatchId String?
   exportBatch   ExportBatch? @relation(fields: [exportBatchId], references: [id])
@@ -143,6 +201,7 @@ model InvoiceExtraction {
   // Datos brutos extraidos por OCR
   rawResponse   String?   // JSON completo de GPT
   source        String    // "gpt4o" | "xml_parse" | "manual"
+  confidence    Json?     // { campo: 0.0-1.0 } scores de confianza OCR
   issuerName    String?
   issuerCif     String?
   receiverName  String?
@@ -185,6 +244,32 @@ model ExportBatch {
   createdAt    DateTime @default(now())
 
   invoices Invoice[]
+  items    ExportBatchItem[]
+}
+
+model ExportBatchItem {
+  id            String      @id @default(cuid())
+  exportBatchId String
+  exportBatch   ExportBatch @relation(fields: [exportBatchId], references: [id])
+  invoiceId     String
+  invoice       Invoice     @relation(fields: [invoiceId], references: [id])
+  snapshot      String      // JSON snapshot de los datos de la factura al exportar
+  createdAt     DateTime    @default(now())
+
+  @@unique([exportBatchId, invoiceId])
+}
+
+model InvoiceIssue {
+  id          String      @id @default(cuid())
+  invoiceId   String
+  invoice     Invoice     @relation(fields: [invoiceId], references: [id])
+  type        IssueType
+  status      IssueStatus @default(OPEN)
+  description String
+  field       String?
+  resolvedBy  String?
+  resolvedAt  DateTime?
+  createdAt   DateTime    @default(now())
 }
 
 model AuditLog {

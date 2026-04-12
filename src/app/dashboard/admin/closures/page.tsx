@@ -14,13 +14,16 @@ const MONTHS = [
 export default async function ClosuresPage() {
   const session = await auth();
   if (!session?.user || session.user.role !== "ADMIN") redirect("/login");
+  const firmId = session.user.advisoryFirmId ?? undefined;
 
   const [clients, closures] = await Promise.all([
     prisma.client.findMany({
+      where: { advisoryFirmId: firmId },
       orderBy: { name: "asc" },
       select: { id: true, name: true, cif: true },
     }),
     prisma.periodClosure.findMany({
+      where: { client: { advisoryFirmId: firmId } },
       orderBy: [{ year: "desc" }, { month: "desc" }],
       include: { client: { select: { name: true, cif: true } } },
       take: 100,

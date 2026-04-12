@@ -1,14 +1,22 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { sendClosureReminder } from "@/lib/email";
+import { timingSafeEqual } from "crypto";
+
+function verifyCronSecret(header: string | null): boolean {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return false;
+  const expected = `Bearer ${secret}`;
+  if (!header || header.length !== expected.length) return false;
+  return timingSafeEqual(Buffer.from(header), Buffer.from(expected));
+}
 
 /**
  * Monthly cron: sends reminders to clients whose previous month is not yet closed.
  * Runs on the 5th of each month (configured in vercel.json).
  */
 export async function GET(req: Request) {
-  const authHeader = req.headers.get("authorization");
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+  if (!verifyCronSecret(req.headers.get("authorization"))) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

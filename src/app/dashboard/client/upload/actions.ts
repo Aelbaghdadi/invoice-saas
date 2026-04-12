@@ -58,8 +58,13 @@ export async function uploadInvoicesAction(
   const created: string[] = [];
   const duplicates: string[] = [];
 
+  const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
+
   for (const file of files) {
     if (!file.size) continue;
+    if (file.size > MAX_FILE_SIZE) {
+      return { error: `${file.name} supera el tamaño máximo de 20 MB.` };
+    }
 
     const ext = file.name.split(".").pop()?.toLowerCase() ?? "pdf";
     const ALLOWED_EXTS = ["pdf", "xml", "jpg", "jpeg", "png", "webp", "heic"];
@@ -93,6 +98,19 @@ export async function uploadInvoicesAction(
       }
     }
 
+    // Create Document record
+    const document = await prisma.document.create({
+      data: {
+        filename: file.name,
+        storageKey: supabase ? storageKey : `pending/${file.name}`,
+        fileType: file.type || ext,
+        fileHash,
+        sizeBytes: file.size,
+        uploadedBy: session.user.id,
+        clientId: client.id,
+      },
+    });
+
     const invoice = await prisma.invoice.create({
       data: {
         filename: file.name,
@@ -103,6 +121,7 @@ export async function uploadInvoicesAction(
         periodMonth,
         periodYear,
         clientId: client.id,
+        documentId: document.id,
       },
     });
 

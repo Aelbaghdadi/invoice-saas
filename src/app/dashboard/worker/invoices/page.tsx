@@ -14,7 +14,9 @@ const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
   OCR_ERROR: { label: "Error OCR",    variant: "red" },
   VALIDATED: { label: "Validada",     variant: "green" },
   REJECTED:  { label: "Rechazada",    variant: "red" },
-  EXPORTED:  { label: "Exportada",    variant: "slate" },
+  EXPORTED:        { label: "Exportada",      variant: "slate" },
+  PENDING_REVIEW:  { label: "Pte. revisión",  variant: "blue" },
+  NEEDS_ATTENTION: { label: "Con incidencias", variant: "yellow" },
 };
 
 export default async function WorkerInvoicesPage({
@@ -106,7 +108,7 @@ export default async function WorkerInvoicesPage({
                       {inv.createdAt.toISOString().slice(0, 10)}
                     </td>
                     <td className="px-5 py-3">
-                      {(inv.status === "ANALYZED" || inv.status === "OCR_ERROR") && (
+                      {["ANALYZED", "PENDING_REVIEW", "NEEDS_ATTENTION", "OCR_ERROR"].includes(inv.status) && (
                         <Link
                           href={`/dashboard/worker/review/${inv.id}`}
                           className="flex items-center gap-1 rounded-lg bg-blue-50 px-2.5 py-1 text-[12px] font-medium text-blue-600 hover:bg-blue-100"

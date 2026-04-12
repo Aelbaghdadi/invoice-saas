@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
 import { Role } from "@prisma/client";
 import {
@@ -16,6 +16,7 @@ import {
   Upload,
   LogOut,
   CalendarCheck,
+  AlertTriangle,
 } from "lucide-react";
 
 type NavItem = {
@@ -40,6 +41,7 @@ const NAV_ITEMS: Record<Role, NavItem[]> = {
     { href: "/dashboard/worker", label: "Panel", icon: LayoutDashboard },
     { href: "/dashboard/worker/clients", label: "Clientes", icon: Building2 },
     { href: "/dashboard/worker/invoices", label: "Facturas", icon: FileText },
+    { href: "/dashboard/worker/issues", label: "Incidencias", icon: AlertTriangle },
     { href: "/dashboard/worker/upload", label: "Subir facturas", icon: Upload },
     { href: "/dashboard/worker/batch", label: "Lotes", icon: Layers },
   ],

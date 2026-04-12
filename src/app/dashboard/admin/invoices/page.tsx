@@ -1,4 +1,6 @@
+import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { FileText } from "lucide-react";
@@ -12,7 +14,9 @@ const STATUS_BADGE: Record<string, { label: string }> = {
   OCR_ERROR: { label: "Error OCR" },
   VALIDATED: { label: "Validadas" },
   REJECTED:  { label: "Rechazadas" },
-  EXPORTED:  { label: "Exportadas" },
+  EXPORTED:        { label: "Exportadas" },
+  PENDING_REVIEW:  { label: "Pte. revisión" },
+  NEEDS_ATTENTION: { label: "Con incidencias" },
 };
 
 export default async function InvoicesPage({
@@ -20,12 +24,17 @@ export default async function InvoicesPage({
 }: {
   searchParams: Promise<{ status?: string; type?: string }>;
 }) {
+  const session = await auth();
+  if (!session?.user || session.user.role !== "ADMIN") redirect("/login");
+  const firmId = session.user.advisoryFirmId ?? undefined;
+
   const params = await searchParams;
   const statusFilter = params.status;
   const typeFilter = params.type;
 
   const invoices = await prisma.invoice.findMany({
     where: {
+      client: { advisoryFirmId: firmId },
       ...(statusFilter ? { status: statusFilter as any } : {}),
       ...(typeFilter ? { type: typeFilter as any } : {}),
     },
@@ -38,6 +47,7 @@ export default async function InvoicesPage({
 
   const counts = await prisma.invoice.groupBy({
     by: ["status"],
+    where: { client: { advisoryFirmId: firmId } },
     _count: true,
   }).catch(() => []);
 

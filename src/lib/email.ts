@@ -7,6 +7,15 @@ const resend = process.env.RESEND_API_KEY
 const FROM = process.env.EMAIL_FROM ?? "FacturOCR <noreply@facturocr.com>";
 const APP_URL = process.env.NEXTAUTH_URL ?? "http://localhost:3000";
 
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 async function send(to: string, subject: string, html: string) {
@@ -180,11 +189,11 @@ export async function notifyClientInvoiceValidated(params: {
   invoiceNumber: string;
   filename: string;
 }) {
-  const invoiceRef = params.invoiceNumber || params.filename;
+  const invoiceRef = escapeHtml(params.invoiceNumber || params.filename);
 
   const body = `
     <p style="margin:0 0 4px;font-size:15px;color:#475569;line-height:1.7">
-      Hola <strong style="color:#0f172a">${params.clientName}</strong>,
+      Hola <strong style="color:#0f172a">${escapeHtml(params.clientName)}</strong>,
     </p>
     <p style="margin:0;font-size:15px;color:#475569;line-height:1.7">
       Tu factura ha sido revisada y <strong style="color:#16a34a">validada</strong> por nuestro equipo.
@@ -223,11 +232,11 @@ export async function notifyClientInvoiceRejected(params: {
   filename: string;
   reason: string;
 }) {
-  const invoiceRef = params.invoiceNumber || params.filename;
+  const invoiceRef = escapeHtml(params.invoiceNumber || params.filename);
 
   const body = `
     <p style="margin:0 0 4px;font-size:15px;color:#475569;line-height:1.7">
-      Hola <strong style="color:#0f172a">${params.clientName}</strong>,
+      Hola <strong style="color:#0f172a">${escapeHtml(params.clientName)}</strong>,
     </p>
     <p style="margin:0;font-size:15px;color:#475569;line-height:1.7">
       Tu factura ha sido <strong style="color:#dc2626">rechazada</strong> y requiere tu atencion.
@@ -235,7 +244,7 @@ export async function notifyClientInvoiceRejected(params: {
     ${detailCard(
       detailRow("Factura", invoiceRef) +
       detailRow("Estado", "&#10007; Rechazada", "#dc2626") +
-      detailRow("Motivo", params.reason, "#dc2626")
+      detailRow("Motivo", escapeHtml(params.reason), "#dc2626")
     )}
     <p style="margin:0;font-size:13px;color:#94a3b8;line-height:1.6">
       Por favor, revisa el motivo y vuelve a subir el documento corregido desde tu portal.
@@ -245,7 +254,7 @@ export async function notifyClientInvoiceRejected(params: {
     params.clientEmail,
     `Factura rechazada: ${invoiceRef}`,
     wrap({
-      preheader: `Tu factura ${invoiceRef} ha sido rechazada. Motivo: ${params.reason}`,
+      preheader: `Tu factura ${invoiceRef} ha sido rechazada. Motivo: ${escapeHtml(params.reason)}`,
       heroIcon: "&#10060;",
       heroColor: "#dc2626",
       heroBg: "#fef2f2",
@@ -301,7 +310,7 @@ export async function sendClientInvitationEmail(params: {
 }) {
   const body = `
     <p style="margin:0 0 4px;font-size:15px;color:#475569;line-height:1.7">
-      Hola <strong style="color:#0f172a">${params.clientName}</strong>,
+      Hola <strong style="color:#0f172a">${escapeHtml(params.clientName)}</strong>,
     </p>
     <p style="margin:0 0 16px;font-size:15px;color:#475569;line-height:1.7">
       Te damos la bienvenida a <strong style="color:#0f172a">FacturOCR</strong>. Tu cuenta ha sido creada y está lista para usar.
@@ -342,7 +351,7 @@ export async function sendClosureReminder(params: {
 
   const body = `
     <p style="margin:0 0 4px;font-size:15px;color:#475569;line-height:1.7">
-      Hola <strong style="color:#0f172a">${params.clientName}</strong>,
+      Hola <strong style="color:#0f172a">${escapeHtml(params.clientName)}</strong>,
     </p>
     <p style="margin:0 0 16px;font-size:15px;color:#475569;line-height:1.7">
       Te recordamos que el periodo <strong style="color:#0f172a">${period}</strong> está pendiente de cierre.
@@ -385,7 +394,7 @@ export async function notifyWorkersNewUpload(params: {
       Se han subido <strong style="color:#0f172a">${params.count} factura${params.count > 1 ? "s" : ""}</strong> nuevas para revisar.
     </p>
     ${detailCard(
-      detailRow("Cliente", params.clientName) +
+      detailRow("Cliente", escapeHtml(params.clientName)) +
       detailRow("Periodo", period) +
       detailRow("Facturas subidas", String(params.count), "#2563eb")
     )}

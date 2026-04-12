@@ -4,7 +4,8 @@ import { useState, useEffect } from "react";
 import { usePathname } from "next/navigation";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
-import { Menu, X } from "lucide-react";
+import { LegalDisclaimer } from "./LegalDisclaimer";
+import { X } from "lucide-react";
 import { Role } from "@prisma/client";
 import { ToastProvider } from "@/components/ui/Toast";
 
@@ -20,8 +21,9 @@ export function DashboardShell({ role, userName, userEmail, userRole, children }
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const pathname = usePathname();
 
-  // Close sidebar on route change
+  // Close sidebar on route change (syncing with router — legitimate external system)
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing with external router state
     setSidebarOpen(false);
   }, [pathname]);
 
@@ -71,6 +73,7 @@ export function DashboardShell({ role, userName, userEmail, userRole, children }
         <main className="flex-1 overflow-y-auto overflow-x-hidden bg-slate-50/50 p-4 sm:p-6 shadow-[inset_0_2px_8px_0_rgba(15,23,42,0.04)]">
           {children}
         </main>
+        <LegalDisclaimer />
       </div>
     </div>
     </ToastProvider>

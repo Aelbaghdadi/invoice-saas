@@ -1,5 +1,6 @@
+import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { Badge } from "@/components/ui/Badge";
 import { ChevronLeft, Building2, Calendar, Hash, Euro, Percent, User } from "lucide-react";
 import Link from "next/link";
@@ -14,6 +15,8 @@ const STATUS_LABELS: Record<string, string> = {
   VALIDATED: "Validada",
   REJECTED: "Rechazada",
   EXPORTED: "Exportada",
+  PENDING_REVIEW: "Pte. revisión",
+  NEEDS_ATTENTION: "Con incidencias",
 };
 
 const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
@@ -23,7 +26,9 @@ const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
   OCR_ERROR: { label: "Error OCR",   variant: "red" },
   VALIDATED: { label: "Validada",    variant: "green" },
   REJECTED:  { label: "Rechazada",   variant: "red" },
-  EXPORTED:  { label: "Exportada",   variant: "slate" },
+  EXPORTED:        { label: "Exportada",      variant: "slate" },
+  PENDING_REVIEW:  { label: "Pte. revisión",  variant: "blue" },
+  NEEDS_ATTENTION: { label: "Con incidencias", variant: "yellow" },
 };
 
 function Field({ label, value, icon: Icon }: { label: string; value?: string | null; icon?: any }) {
@@ -41,6 +46,10 @@ function Field({ label, value, icon: Icon }: { label: string; value?: string | n
 }
 
 export default async function InvoiceDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const session = await auth();
+  if (!session?.user || session.user.role !== "ADMIN") redirect("/login");
+  const firmId = session.user.advisoryFirmId ?? undefined;
+
   const { id } = await params;
   const invoice = await prisma.invoice.findUnique({
     where: { id },
@@ -51,6 +60,7 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
     },
   });
   if (!invoice) notFound();
+  if (invoice.client.advisoryFirmId !== firmId) notFound();
 
   const s = STATUS_BADGE[invoice.status] ?? STATUS_BADGE.UPLOADED;
 

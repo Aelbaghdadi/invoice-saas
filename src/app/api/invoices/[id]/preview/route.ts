@@ -8,13 +8,36 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const session = await auth();
-  if (!session?.user || !["ADMIN", "WORKER"].includes(session.user.role)) {
+  if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const { id } = await params;
   const invoice = await prisma.invoice.findUnique({ where: { id } });
   if (!invoice) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  // Authorization: verify user has access to this invoice's client
+  if (session.user.role === "WORKER") {
+    const assignment = await prisma.workerClientAssignment.findUnique({
+      where: {
+        workerId_clientId: {
+          workerId: session.user.id,
+          clientId: invoice.clientId,
+        },
+      },
+    });
+    if (!assignment) return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+  } else if (session.user.role === "CLIENT") {
+    const client = await prisma.client.findUnique({
+      where: { userId: session.user.id },
+      select: { id: true },
+    });
+    if (!client || client.id !== invoice.clientId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+    }
+  } else if (session.user.role !== "ADMIN") {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+  }
 
   const supabase = createServerSupabase();
   if (!supabase) return NextResponse.json({ error: "Storage not configured" }, { status: 500 });

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { generateCsv, suggestFilename, type ExportFormat } from "@/lib/exportFormats";
+import { generateCsv, suggestFilename, type ExportFormat, type ExportConfig } from "@/lib/exportFormats";
 import type { InvoiceType, InvoiceStatus } from "@prisma/client";
 
 export async function GET(req: NextRequest) {
@@ -14,12 +14,25 @@ export async function GET(req: NextRequest) {
   const clientId = sp.get("clientId") || undefined;
   const month    = parseInt(sp.get("month") ?? "0", 10) || undefined;
   const year     = parseInt(sp.get("year")  ?? "0", 10) || undefined;
-  const format   = (sp.get("format") ?? "sage50") as ExportFormat;
+  const VALID_FORMATS = ["sage50", "contasol", "a3con"];
+  const VALID_TYPES = ["ALL", "PURCHASE", "SALE"];
+  const formatRaw = sp.get("format") ?? "sage50";
   const typeParam = sp.get("type") ?? "ALL";
+  if (!VALID_FORMATS.includes(formatRaw)) {
+    return new NextResponse("Formato no válido", { status: 400 });
+  }
+  if (!VALID_TYPES.includes(typeParam)) {
+    return new NextResponse("Tipo no válido", { status: 400 });
+  }
+  const format = formatRaw as ExportFormat;
   const preview  = sp.get("preview") === "1";
 
+  const firmId = session.user.advisoryFirmId;
+
+  // Export only VALIDATED invoices scoped to the admin's firm
   const where = {
-    status: { in: ["VALIDATED", "EXPORTED"] as InvoiceStatus[] },
+    status: "VALIDATED" as InvoiceStatus,
+    client: { advisoryFirmId: firmId ?? undefined },
     ...(clientId    ? { clientId }              : {}),
     ...(month       ? { periodMonth: month }    : {}),
     ...(year        ? { periodYear:  year }     : {}),
@@ -63,38 +76,62 @@ export async function GET(req: NextRequest) {
     },
   });
 
-  // Mark as EXPORTED and link to batch
+  // Create ExportBatchItem with snapshot for each invoice (no status change)
+  await prisma.exportBatchItem.createMany({
+    data: invoices.map((inv) => ({
+      exportBatchId: batch.id,
+      invoiceId: inv.id,
+      snapshot: JSON.stringify({
+        issuerName: inv.issuerName,
+        issuerCif: inv.issuerCif,
+        receiverName: inv.receiverName,
+        receiverCif: inv.receiverCif,
+        invoiceNumber: inv.invoiceNumber,
+        invoiceDate: inv.invoiceDate,
+        taxBase: inv.taxBase,
+        vatRate: inv.vatRate,
+        vatAmount: inv.vatAmount,
+        irpfRate: inv.irpfRate,
+        irpfAmount: inv.irpfAmount,
+        totalAmount: inv.totalAmount,
+        type: inv.type,
+        clientName: inv.client.name,
+        clientCif: inv.client.cif,
+      }),
+    })),
+  });
+
+  // Link invoices to batch (but do NOT change status)
   const invoiceIds = invoices.map((i) => i.id);
   await prisma.invoice.updateMany({
     where: { id: { in: invoiceIds } },
-    data: { status: "EXPORTED", exportBatchId: batch.id },
+    data: { exportBatchId: batch.id },
   });
 
-  // Record status history for newly exported invoices (not already EXPORTED)
-  const newlyExported = invoices.filter((i) => i.status !== "EXPORTED");
-  if (newlyExported.length > 0) {
-    await prisma.invoiceStatusHistory.createMany({
-      data: newlyExported.map((i) => ({
-        invoiceId: i.id,
-        fromStatus: i.status,
-        toStatus: "EXPORTED" as const,
-        changedBy: session.user.id,
-      })),
-    });
-  }
-
-  // Audit log for all exported invoices (tracks re-exports too)
+  // Audit log for exported invoices
   await prisma.auditLog.createMany({
     data: invoices.map((i) => ({
       invoiceId: i.id,
       userId: session.user.id,
       field: "export",
-      oldValue: i.status,
-      newValue: `EXPORTED (batch: ${batch.id})`,
+      oldValue: null,
+      newValue: `Exportada (batch: ${batch.id}, formato: ${format})`,
     })),
   });
 
-  const csv      = generateCsv(invoices, format);
+  // Read client export config if exporting for a single client
+  let exportConfig: ExportConfig | undefined;
+  if (clientId) {
+    const client = await prisma.client.findUnique({
+      where: { id: clientId },
+      select: { exportConfig: true },
+    });
+    if (client?.exportConfig && typeof client.exportConfig === "object") {
+      exportConfig = client.exportConfig as ExportConfig;
+    }
+  }
+
+  const csv      = generateCsv(invoices, format, exportConfig);
   const filename = suggestFilename(invoices, format, month ?? 0, year ?? 0);
 
   return new NextResponse(csv, {

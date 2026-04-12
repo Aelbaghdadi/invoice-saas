@@ -153,12 +153,16 @@ export default async function WorkerDashboard() {
                   VALIDATED: "bg-green-100 text-green-700",
                   REJECTED: "bg-red-100 text-red-700",
                   EXPORTED: "bg-slate-100 text-slate-700",
+                  PENDING_REVIEW: "bg-blue-100 text-blue-700",
+                  NEEDS_ATTENTION: "bg-yellow-100 text-yellow-700",
                 };
                 const statusLabels: Record<string, string> = {
                   UPLOADED: "Subida", ANALYZING: "Análisis",
                   ANALYZED: "Analizada", OCR_ERROR: "Error OCR",
                   VALIDATED: "Validada", REJECTED: "Rechazada",
                   EXPORTED: "Exportada",
+                  PENDING_REVIEW: "Pte. revisión",
+                  NEEDS_ATTENTION: "Con incidencias",
                 };
                 return (
                   <li key={inv.id} className="flex items-center gap-3 px-5 py-3">

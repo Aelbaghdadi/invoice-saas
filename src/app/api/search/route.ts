@@ -12,7 +12,6 @@ export async function GET(req: NextRequest) {
   if (q.length < 2) return NextResponse.json({ results: [] });
 
   const role = session.user.role;
-  const search = `%${q}%`;
 
   type Result = {
     type: "client" | "invoice";
@@ -24,10 +23,21 @@ export async function GET(req: NextRequest) {
 
   const results: Result[] = [];
 
+  // ── Get worker's assigned client IDs (if applicable) ─────────────────
+  let workerClientIds: string[] | undefined;
+  if (role === "WORKER") {
+    const assignments = await prisma.workerClientAssignment.findMany({
+      where: { workerId: session.user.id },
+      select: { clientId: true },
+    });
+    workerClientIds = assignments.map((a) => a.clientId);
+  }
+
   // ── Search clients ──────────────────────────────────────────────────────
   if (role === "ADMIN" || role === "WORKER") {
     const clients = await prisma.client.findMany({
       where: {
+        ...(workerClientIds ? { id: { in: workerClientIds } } : {}),
         OR: [
           { name: { contains: q, mode: "insensitive" } },
           { cif:  { contains: q, mode: "insensitive" } },
@@ -38,13 +48,14 @@ export async function GET(req: NextRequest) {
     });
 
     for (const c of clients) {
-      const base = role === "ADMIN" ? "/dashboard/admin/clients" : "/dashboard/worker/clients";
       results.push({
         type: "client",
         id: c.id,
         title: c.name,
         subtitle: c.cif,
-        href: `${base}/${c.id}`,
+        href: role === "ADMIN"
+          ? `/dashboard/admin/clients/${c.id}`
+          : `/dashboard/worker/clients`,
       });
     }
   }
@@ -53,6 +64,7 @@ export async function GET(req: NextRequest) {
   if (role === "ADMIN" || role === "WORKER") {
     const invoices = await prisma.invoice.findMany({
       where: {
+        ...(workerClientIds ? { clientId: { in: workerClientIds } } : {}),
         OR: [
           { filename:      { contains: q, mode: "insensitive" } },
           { invoiceNumber: { contains: q, mode: "insensitive" } },
@@ -65,13 +77,14 @@ export async function GET(req: NextRequest) {
     });
 
     for (const inv of invoices) {
-      const base = role === "ADMIN" ? "/dashboard/admin/invoices" : "/dashboard/worker/invoices";
       results.push({
         type: "invoice",
         id: inv.id,
         title: inv.invoiceNumber ?? inv.filename,
         subtitle: `${inv.client.name} — ${inv.status}`,
-        href: `${base}/${inv.id}`,
+        href: role === "ADMIN"
+          ? `/dashboard/admin/invoices/${inv.id}`
+          : `/dashboard/worker/review/${inv.id}`,
       });
     }
   }

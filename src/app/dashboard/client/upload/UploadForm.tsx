@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition, useRef, useCallback } from "react";
+import { useState, useTransition, useRef } from "react";
 import { useToast } from "@/components/ui/Toast";
 import { Select } from "@/components/ui/Select";
 import {
@@ -33,6 +33,17 @@ const MONTHS = [
 
 const YEARS = Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - i);
 
+const ACCEPTED_EXTS = new Set(["pdf", "xml", "jpg", "jpeg", "png", "webp", "heic"]);
+const ACCEPTED_MIME = new Set([
+  "application/pdf",
+  "text/xml",
+  "application/xml",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/heic",
+]);
+
 function formatSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -51,18 +62,7 @@ export function UploadForm() {
   const [isPending, startTransition] = useTransition();
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const ACCEPTED_EXTS = new Set(["pdf", "xml", "jpg", "jpeg", "png", "webp", "heic"]);
-  const ACCEPTED_MIME = new Set([
-    "application/pdf",
-    "text/xml",
-    "application/xml",
-    "image/jpeg",
-    "image/png",
-    "image/webp",
-    "image/heic",
-  ]);
-
-  const addFiles = useCallback((incoming: FileList | File[]) => {
+  const addFiles = (incoming: FileList | File[]) => {
     const valid = Array.from(incoming).filter((f) => {
       const ext = f.name.split(".").pop()?.toLowerCase() ?? "";
       return ACCEPTED_MIME.has(f.type) || ACCEPTED_EXTS.has(ext);
@@ -72,16 +72,13 @@ export function UploadForm() {
       return [...prev, ...valid.filter((f) => !existing.has(f.name))];
     });
     setResult(null);
-  }, []);
+  };
 
-  const handleDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault();
-      setIsDragging(false);
-      addFiles(e.dataTransfer.files);
-    },
-    [addFiles]
-  );
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    addFiles(e.dataTransfer.files);
+  };
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();

@@ -8,6 +8,15 @@ import { notifyClientInvoiceValidated, notifyClientInvoiceRejected } from "@/lib
 
 export type ReviewState = { error?: string } | null;
 
+async function assertWorkerAccess(userId: string, role: string, clientId: string): Promise<ReviewState> {
+  if (role !== "WORKER") return null;
+  const assignment = await prisma.workerClientAssignment.findUnique({
+    where: { workerId_clientId: { workerId: userId, clientId } },
+  });
+  if (!assignment) return { error: "No tienes acceso a esta factura." };
+  return null;
+}
+
 type FieldData = {
   issuerName:    string;
   issuerCif:     string;
@@ -21,27 +30,39 @@ type FieldData = {
   irpfRate:      string;
   irpfAmount:    string;
   totalAmount:   string;
+  accountingPeriodMonth: string;
+  accountingPeriodYear:  string;
 };
 
 async function parseAndSave(invoiceId: string, userId: string, data: FieldData, validate: boolean, expectedUpdatedAt?: string) {
+  const session = await auth();
+  if (!session?.user) return { error: "No autorizado" };
+
   const invoice = await prisma.invoice.findUnique({
     where: { id: invoiceId },
     include: { client: true },
   });
   if (!invoice) return { error: "Factura no encontrada" };
 
-  // Check if the period is closed
+  // Workers can only modify invoices of assigned clients
+  const accessErr = await assertWorkerAccess(session.user.id, session.user.role, invoice.clientId);
+  if (accessErr) return accessErr;
+
+  // Check if the period is closed (use accounting period when set, fallback to upload period)
+  const parseInt2 = (v: string) => { const n = parseInt(v, 10); return isNaN(n) ? null : n; };
+  const checkMonth = parseInt2(data.accountingPeriodMonth) ?? invoice.accountingPeriodMonth ?? invoice.periodMonth;
+  const checkYear  = parseInt2(data.accountingPeriodYear)  ?? invoice.accountingPeriodYear  ?? invoice.periodYear;
   const closure = await prisma.periodClosure.findUnique({
     where: {
       clientId_month_year: {
         clientId: invoice.clientId,
-        month: invoice.periodMonth,
-        year: invoice.periodYear,
+        month: checkMonth,
+        year: checkYear,
       },
     },
   });
   if (closure && !closure.reopenedAt) {
-    return { error: `El periodo ${invoice.periodMonth}/${invoice.periodYear} está cerrado. No se pueden modificar facturas.` };
+    return { error: `El periodo ${checkMonth}/${checkYear} está cerrado. No se pueden modificar facturas.` };
   }
 
   // Optimistic locking: reject if another user modified the invoice
@@ -69,6 +90,8 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     irpfRate:      parse(data.irpfRate),
     irpfAmount:    parse(data.irpfAmount),
     totalAmount:   parse(data.totalAmount),
+    accountingPeriodMonth: parseInt2(data.accountingPeriodMonth),
+    accountingPeriodYear:  parseInt2(data.accountingPeriodYear),
   };
 
   // Math validation
@@ -103,12 +126,18 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     // Allow validating with warning but don't block
   }
 
+  // When saving without validating, transition to PENDING_REVIEW if coming from initial states
+  const draftStatuses = ["ANALYZED", "NEEDS_ATTENTION", "PENDING_REVIEW"];
+  const saveStatus = !validate && draftStatuses.includes(invoice.status)
+    ? "PENDING_REVIEW"
+    : undefined;
+
   await prisma.invoice.update({
     where: { id: invoiceId },
     data: {
       ...newData,
       isValid,
-      ...(validate ? { status: "VALIDATED" } : {}),
+      ...(validate ? { status: "VALIDATED" } : saveStatus ? { status: saveStatus } : {}),
     },
   });
 
@@ -205,18 +234,32 @@ export async function rejectInvoice(
 
   const id = formData.get("invoiceId") as string;
   const reason = (formData.get("rejectionReason") as string)?.trim();
+  const category = formData.get("rejectionCategory") as string | null;
   const nextId = formData.get("nextId") as string | null;
 
   if (!reason) {
     return { error: "Debes indicar el motivo del rechazo." };
   }
 
+  const validCategories = ["ILLEGIBLE", "INCOMPLETE", "WRONG_PERIOD", "DUPLICATE", "OTHER"];
+  if (category && !validCategories.includes(category)) {
+    return { error: "Categoría de rechazo no válida." };
+  }
+
   const invoice = await prisma.invoice.findUnique({ where: { id } });
   if (!invoice) return { error: "Factura no encontrada" };
 
+  // Workers can only reject invoices of assigned clients
+  const accessErr = await assertWorkerAccess(session.user.id, session.user.role, invoice.clientId);
+  if (accessErr) return accessErr;
+
   await prisma.invoice.update({
     where: { id },
-    data: { status: "REJECTED", rejectionReason: reason },
+    data: {
+      status: "REJECTED",
+      rejectionReason: reason,
+      ...(category ? { rejectionCategory: category as "ILLEGIBLE" | "INCOMPLETE" | "WRONG_PERIOD" | "DUPLICATE" | "OTHER" } : {}),
+    },
   });
 
   await prisma.invoiceStatusHistory.create({
@@ -280,5 +323,7 @@ function extractFields(fd: FormData): FieldData {
     irpfRate:      fd.get("irpfRate")      as string ?? "",
     irpfAmount:    fd.get("irpfAmount")    as string ?? "",
     totalAmount:   fd.get("totalAmount")   as string ?? "",
+    accountingPeriodMonth: fd.get("accountingPeriodMonth") as string ?? "",
+    accountingPeriodYear:  fd.get("accountingPeriodYear")  as string ?? "",
   };
 }

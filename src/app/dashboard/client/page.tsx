@@ -12,7 +12,9 @@ const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
   OCR_ERROR: { label: "Error OCR",    variant: "red" },
   VALIDATED: { label: "Validada",     variant: "green" },
   REJECTED:  { label: "Rechazada",    variant: "red" },
-  EXPORTED:  { label: "Exportada",    variant: "slate" },
+  EXPORTED:        { label: "Exportada",      variant: "slate" },
+  PENDING_REVIEW:  { label: "Pte. revisión",  variant: "blue" },
+  NEEDS_ATTENTION: { label: "Con incidencias", variant: "yellow" },
 };
 
 export default async function ClientDashboard() {
