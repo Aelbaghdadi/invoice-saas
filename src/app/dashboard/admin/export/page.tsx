@@ -7,7 +7,8 @@ import { Download, History } from "lucide-react";
 const FORMAT_LABELS: Record<string, string> = {
   sage50: "Sage 50",
   contasol: "Contasol",
-  a3con: "a3con",
+  a3con: "a3con (CSV)",
+  a3excel: "A3 Excel",
 };
 
 export default async function ExportPage() {

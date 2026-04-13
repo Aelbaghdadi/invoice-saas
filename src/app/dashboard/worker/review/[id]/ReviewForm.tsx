@@ -40,6 +40,13 @@ type IssueData = {
   field: string | null;
 };
 
+type SuggestedAccount = {
+  supplierAccount: string;
+  expenseAccount: string;
+  defaultVatRate: number | null;
+  name: string;
+} | null;
+
 type Props = {
   invoice: Invoice;
   prevId: string | null;
@@ -49,6 +56,7 @@ type Props = {
   backHref: string;
   extraction: ExtractionData | null;
   issues: IssueData[];
+  suggestedAccount?: SuggestedAccount;
 };
 
 function fmt(v: unknown) {
@@ -61,7 +69,7 @@ function fmtDate(d: Date | null | undefined) {
   return new Date(d).toISOString().slice(0, 10);
 }
 
-export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, backHref, extraction, issues }: Props) {
+export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, backHref, extraction, issues, suggestedAccount }: Props) {
   const { success, error } = useToast();
   const isImage = invoice.fileType.startsWith("image/");
   const isXml   = invoice.fileType.includes("xml");
@@ -76,6 +84,8 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
   const [irpfRate,    setIrpfRate]    = useState(fmt(invoice.irpfRate));
   const [irpfAmount,  setIrpfAmount]  = useState(fmt(invoice.irpfAmount));
   const [totalAmount, setTotalAmount] = useState(fmt(invoice.totalAmount));
+  const [supplierAccountVal, setSupplierAccount] = useState(fmt(invoice.supplierAccount) || suggestedAccount?.supplierAccount || "");
+  const [expenseAccountVal, setExpenseAccount]   = useState(fmt(invoice.expenseAccount) || suggestedAccount?.expenseAccount || "");
 
   const [saveState, setSaveState]         = useState<ReviewState>(null);
   const [validateState, setValidateState] = useState<ReviewState>(null);
@@ -130,9 +140,11 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
     fd.set("totalAmount",totalAmount);
     fd.set("accountingPeriodMonth", (document.getElementById("accountingPeriodMonth") as HTMLSelectElement)?.value ?? "");
     fd.set("accountingPeriodYear",  (document.getElementById("accountingPeriodYear")  as HTMLSelectElement)?.value ?? "");
+    fd.set("supplierAccount", supplierAccountVal);
+    fd.set("expenseAccount",  expenseAccountVal);
     if (extra) Object.entries(extra).forEach(([k,v]) => fd.set(k,v));
     return fd;
-  }, [taxBase, vatRate, vatAmount, irpfRate, irpfAmount, totalAmount, invoice.id, invoice.updatedAt]);
+  }, [taxBase, vatRate, vatAmount, irpfRate, irpfAmount, totalAmount, supplierAccountVal, expenseAccountVal, invoice.id, invoice.updatedAt]);
 
   const handleSave = () => {
     startSave(async () => {
@@ -524,6 +536,45 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
                     {confidence?.totalAmount != null && <ConfidenceBadge score={confidence.totalAmount} />}
                   </label>
                   <input className={`${inputClass} font-semibold`} value={totalAmount} onChange={e => setTotalAmount(e.target.value)} placeholder="1060.00" />
+                </div>
+              </div>
+            </fieldset>
+
+            {/* Cuentas contables */}
+            <fieldset className="rounded-xl border border-slate-200 bg-white p-4">
+              <legend className="px-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                Cuentas Contables
+              </legend>
+              {suggestedAccount && !invoice.supplierAccount && (
+                <div className="mb-3 flex items-center gap-2 rounded-lg bg-green-50 px-3 py-2 text-[12px] text-green-700">
+                  <CheckCheck className="h-4 w-4" />
+                  Auto-asignada desde plan de cuentas ({suggestedAccount.name})
+                </div>
+              )}
+              {!suggestedAccount && invoice.issuerCif && (
+                <div className="mb-3 flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-700">
+                  <AlertTriangle className="h-3.5 w-3.5" />
+                  NIF {invoice.issuerCif} no registrado en el plan de cuentas
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-[11px] font-medium text-slate-500">Cuenta Proveedor (4xx)</label>
+                  <input
+                    className={inputClass}
+                    value={supplierAccountVal}
+                    onChange={(e) => setSupplierAccount(e.target.value)}
+                    placeholder="400.00001"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-[11px] font-medium text-slate-500">Cuenta Gasto (6xx/7xx)</label>
+                  <input
+                    className={inputClass}
+                    value={expenseAccountVal}
+                    onChange={(e) => setExpenseAccount(e.target.value)}
+                    placeholder="629.00000"
+                  />
                 </div>
               </div>
             </fieldset>

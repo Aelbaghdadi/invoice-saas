@@ -101,6 +101,7 @@ model Client {
   documents       Document[]
   invoices        Invoice[]
   periodClosures  PeriodClosure[]
+  accountEntries  AccountEntry[]
 }
 
 model WorkerClientAssignment {
@@ -157,6 +158,10 @@ model Invoice {
   irpfAmount    Decimal?  @db.Decimal(12, 2)
   totalAmount   Decimal?  @db.Decimal(12, 2)
   isValid       Boolean?
+
+  // Cuentas contables asignadas (del plan de cuentas)
+  supplierAccount String?   // Cuenta proveedor 400.xxxxx / 410.xxxxx
+  expenseAccount  String?   // Cuenta gasto/ingreso 6xx.xxxxx / 7xx.xxxxx
 
   // Gestion de estado avanzada
   rejectionReason   String?
@@ -307,4 +312,21 @@ model PasswordResetToken {
   token     String   @unique
   expiresAt DateTime
   createdAt DateTime @default(now())
+}
+
+model AccountEntry {
+  id              String   @id @default(cuid())
+  nif             String
+  name            String
+  supplierAccount String   // Cuenta proveedor 400.xxxxx / 410.xxxxx
+  expenseAccount  String   // Cuenta gasto/ingreso 6xx.xxxxx / 7xx.xxxxx
+  defaultVatRate  Decimal? @db.Decimal(5, 2)
+
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([clientId, nif])
 }

@@ -19,9 +19,10 @@ const MONTHS = [
 ];
 
 const FORMATS = [
+  { v: "a3excel",  l: "A3 Excel",  desc: "A3asesor — Excel con cuentas contables (.xlsx)" },
   { v: "sage50",   l: "Sage 50",   desc: "Sage 50 España — diario de facturas" },
   { v: "contasol", l: "Contasol",  desc: "Contasol — importación de IVA"       },
-  { v: "a3con",    l: "a3con",     desc: "a3 Software — facturas recibidas/emitidas" },
+  { v: "a3con",    l: "a3con (CSV)", desc: "a3 Software — CSV básico sin cuentas" },
 ];
 
 const TYPES = [
@@ -40,7 +41,7 @@ export function ExportForm({ clients }: Props) {
   const [month,    setMonth]    = useState(now.getMonth() + 1);
   const [year,     setYear]     = useState(THIS_YEAR);
   const [type,     setType]     = useState("ALL");
-  const [format,   setFormat]   = useState("sage50");
+  const [format,   setFormat]   = useState("a3excel");
 
   const [count,    setCount]    = useState<number | null>(null);
   const [counting, setCounting] = useState(false);

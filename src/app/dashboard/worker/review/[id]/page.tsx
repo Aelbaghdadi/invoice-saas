@@ -87,6 +87,22 @@ export default async function ReviewPage({
     createdAt: latestExtraction.createdAt.toISOString(),
   } : null;
 
+  // Look up accounting entry by issuer NIF for auto-assignment
+  const suggestedAccount = invoice.issuerCif
+    ? await prisma.accountEntry.findUnique({
+        where: { clientId_nif: { clientId: invoice.clientId, nif: invoice.issuerCif } },
+      })
+    : null;
+
+  const accountData = suggestedAccount
+    ? {
+        supplierAccount: suggestedAccount.supplierAccount,
+        expenseAccount: suggestedAccount.expenseAccount,
+        defaultVatRate: suggestedAccount.defaultVatRate ? Number(suggestedAccount.defaultVatRate) : null,
+        name: suggestedAccount.name,
+      }
+    : null;
+
   const issuesData = issues.map((i) => ({
     id: i.id,
     type: i.type,
@@ -106,6 +122,7 @@ export default async function ReviewPage({
         backHref={backHref}
         extraction={extractionData}
         issues={issuesData}
+        suggestedAccount={accountData}
       />
     </div>
   );

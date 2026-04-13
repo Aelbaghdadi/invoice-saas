@@ -32,6 +32,8 @@ type FieldData = {
   totalAmount:   string;
   accountingPeriodMonth: string;
   accountingPeriodYear:  string;
+  supplierAccount: string;
+  expenseAccount:  string;
 };
 
 async function parseAndSave(invoiceId: string, userId: string, data: FieldData, validate: boolean, expectedUpdatedAt?: string) {
@@ -92,6 +94,8 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     totalAmount:   parse(data.totalAmount),
     accountingPeriodMonth: parseInt2(data.accountingPeriodMonth),
     accountingPeriodYear:  parseInt2(data.accountingPeriodYear),
+    supplierAccount: data.supplierAccount || null,
+    expenseAccount:  data.expenseAccount  || null,
   };
 
   // Math validation
@@ -325,5 +329,7 @@ function extractFields(fd: FormData): FieldData {
     totalAmount:   fd.get("totalAmount")   as string ?? "",
     accountingPeriodMonth: fd.get("accountingPeriodMonth") as string ?? "",
     accountingPeriodYear:  fd.get("accountingPeriodYear")  as string ?? "",
+    supplierAccount: fd.get("supplierAccount") as string ?? "",
+    expenseAccount:  fd.get("expenseAccount")  as string ?? "",
   };
 }

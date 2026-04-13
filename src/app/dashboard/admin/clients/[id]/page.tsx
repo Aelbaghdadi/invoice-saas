@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { notFound, redirect } from "next/navigation";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Badge } from "@/components/ui/Badge";
-import { ChevronLeft, Mail, Building2, FileText, Users } from "lucide-react";
+import { ChevronLeft, Mail, Building2, FileText, Users, BookOpen } from "lucide-react";
 import Link from "next/link";
 
 const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
@@ -79,6 +79,14 @@ export default async function ClientDetailPage({ params }: { params: Promise<{ i
               {client.accountingProgram ?? <span className="italic text-slate-300">Sin programa</span>}
             </div>
           </div>
+
+          <Link
+            href={`/dashboard/admin/clients/${id}/accounts`}
+            className="mt-5 flex items-center gap-2 rounded-lg border border-slate-200 px-3.5 py-2.5 text-[13px] font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+          >
+            <BookOpen className="h-4 w-4 text-slate-400" />
+            Plan de Cuentas
+          </Link>
 
           <h3 className="mb-3 mt-6 text-[13px] font-semibold text-slate-700">Gestores asignados</h3>
           {client.assignedWorkers.length === 0 ? (

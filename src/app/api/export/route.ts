@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { generateCsv, suggestFilename, type ExportFormat, type ExportConfig } from "@/lib/exportFormats";
+import { generateCsv, generateA3Excel, suggestFilename, validateForA3Export, type ExportFormat, type ExportConfig } from "@/lib/exportFormats";
 import type { InvoiceType, InvoiceStatus } from "@prisma/client";
 
 export async function GET(req: NextRequest) {
@@ -14,7 +14,7 @@ export async function GET(req: NextRequest) {
   const clientId = sp.get("clientId") || undefined;
   const month    = parseInt(sp.get("month") ?? "0", 10) || undefined;
   const year     = parseInt(sp.get("year")  ?? "0", 10) || undefined;
-  const VALID_FORMATS = ["sage50", "contasol", "a3con"];
+  const VALID_FORMATS = ["sage50", "contasol", "a3con", "a3excel"];
   const VALID_TYPES = ["ALL", "PURCHASE", "SALE"];
   const formatRaw = sp.get("format") ?? "sage50";
   const typeParam = sp.get("type") ?? "ALL";
@@ -94,6 +94,8 @@ export async function GET(req: NextRequest) {
         irpfRate: inv.irpfRate,
         irpfAmount: inv.irpfAmount,
         totalAmount: inv.totalAmount,
+        supplierAccount: inv.supplierAccount,
+        expenseAccount: inv.expenseAccount,
         type: inv.type,
         clientName: inv.client.name,
         clientCif: inv.client.cif,
@@ -131,9 +133,20 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  const csv      = generateCsv(invoices, format, exportConfig);
   const filename = suggestFilename(invoices, format, month ?? 0, year ?? 0);
 
+  if (format === "a3excel") {
+    const xlsxData = generateA3Excel(invoices, exportConfig);
+    return new NextResponse(xlsxData.buffer as ArrayBuffer, {
+      status: 200,
+      headers: {
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Disposition": `attachment; filename="${filename}"`,
+      },
+    });
+  }
+
+  const csv = generateCsv(invoices, format, exportConfig);
   return new NextResponse(csv, {
     status: 200,
     headers: {
