@@ -90,12 +90,20 @@ export function AccountsTable({ entries, clientId }: Props) {
       )}
 
       {/* Table */}
+      <div className="overflow-x-auto">
       <table className="w-full">
         <thead>
           <tr className="border-b border-slate-100">
-            {["NIF", "Nombre / Razón Social", "Cuenta Proveedor", "Cuenta Gasto", "IVA %", ""].map((h) => (
-              <th key={h} className="px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-                {h}
+            {[
+              { label: "NIF", hide: false },
+              { label: "Nombre / Razón Social", hide: false },
+              { label: "Cuenta Proveedor", hide: false },
+              { label: "Cuenta Gasto", hide: true },
+              { label: "IVA %", hide: true },
+              { label: "", hide: false },
+            ].map((h) => (
+              <th key={h.label} className={`px-3 md:px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-400 ${h.hide ? "hidden md:table-cell" : ""}`}>
+                {h.label}
               </th>
             ))}
           </tr>
@@ -130,14 +138,14 @@ export function AccountsTable({ entries, clientId }: Props) {
                 />
               ) : (
                 <tr key={entry.id} className="hover:bg-slate-50/60">
-                  <td className="px-5 py-3 text-[13px] font-mono text-slate-700">{entry.nif}</td>
-                  <td className="px-5 py-3 text-[13px] text-slate-700">{entry.name}</td>
-                  <td className="px-5 py-3 text-[13px] font-mono text-slate-600">{entry.supplierAccount}</td>
-                  <td className="px-5 py-3 text-[13px] font-mono text-slate-600">{entry.expenseAccount}</td>
-                  <td className="px-5 py-3 text-[13px] text-slate-500">
+                  <td className="px-3 md:px-5 py-3 text-[13px] font-mono text-slate-700">{entry.nif}</td>
+                  <td className="px-3 md:px-5 py-3 text-[13px] text-slate-700">{entry.name}</td>
+                  <td className="px-3 md:px-5 py-3 text-[13px] font-mono text-slate-600">{entry.supplierAccount}</td>
+                  <td className="hidden md:table-cell px-3 md:px-5 py-3 text-[13px] font-mono text-slate-600">{entry.expenseAccount}</td>
+                  <td className="hidden md:table-cell px-3 md:px-5 py-3 text-[13px] text-slate-500">
                     {entry.defaultVatRate != null ? `${entry.defaultVatRate}%` : "—"}
                   </td>
-                  <td className="px-5 py-3">
+                  <td className="px-3 md:px-5 py-3">
                     <div className="flex items-center gap-1">
                       <button
                         type="button"
@@ -163,6 +171,7 @@ export function AccountsTable({ entries, clientId }: Props) {
           )}
         </tbody>
       </table>
+      </div>
 
       {entries.length > 0 && (
         <div className="border-t border-slate-100 px-5 py-3 text-[12px] text-slate-400">

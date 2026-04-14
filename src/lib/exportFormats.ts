@@ -60,7 +60,7 @@ const HEADERS: Record<ExportFormat, string[]> = {
   ],
   a3con: [
     "Tipo", "Fecha", "Numero Factura", "CIF", "Razon Social",
-    "Base Imponible", "Tipo IVA", "Cuota IVA", "Tipo IRPF", "Cuota IRPF", "Importe Total",
+    "Base Imponible", "Tipo IVA", "Cuota IVA", "Importe Total",
   ],
   a3excel: [], // A3 Excel uses its own headers in generateA3Excel()
 };
@@ -86,11 +86,11 @@ function buildRow(inv: InvoiceWithClient, format: ExportFormat, config?: ExportC
     case "contasol":
       return [tipo, fecha, numero, nombre, cif, base, pctIva, cuotaIva, pctIrpf, cuotaIrpf, total];
     case "a3con":
-      // a3con swaps nombre ↔ cif order
-      return [tipo, fecha, numero, cif, nombre, base, pctIva, cuotaIva, pctIrpf, cuotaIrpf, total];
+      // a3con: aligned with A3 template (no IRPF)
+      return [tipo, fecha, numero, cif, nombre, base, pctIva, cuotaIva, total];
     case "a3excel":
       // a3excel uses generateA3Excel(), not CSV row builder
-      return [tipo, fecha, numero, cif, nombre, base, pctIva, cuotaIva, pctIrpf, cuotaIrpf, total];
+      return [tipo, fecha, numero, cif, nombre, base, pctIva, cuotaIva, total];
   }
 }
 
@@ -181,10 +181,9 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
     if (inv.taxBase && inv.vatAmount && inv.totalAmount) {
       const base = Number(inv.taxBase);
       const vatAmt = Number(inv.vatAmount);
-      const irpfAmt = inv.irpfAmount ? Number(inv.irpfAmount) : 0;
       const total = Number(inv.totalAmount);
-      const diff = Math.abs(Math.round((base + vatAmt - irpfAmt) * 100) - Math.round(total * 100));
-      if (diff > 1) warnings.push(`Descuadre Base+IVA-IRPF vs Total: ${(diff / 100).toFixed(2)}`);
+      const diff = Math.abs(Math.round((base + vatAmt) * 100) - Math.round(total * 100));
+      if (diff > 1) warnings.push(`Descuadre Base+IVA vs Total: ${(diff / 100).toFixed(2)}`);
     }
 
     if (warnings.length > 0) {
@@ -199,7 +198,7 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
 export function generateA3Excel(
   invoices: InvoiceWithClient[],
   config?: ExportConfig,
-): Uint8Array {
+): Buffer {
   const wb = XLSX.utils.book_new();
 
   const purchases = invoices.filter((i) => i.type === "PURCHASE");
@@ -241,5 +240,5 @@ export function generateA3Excel(
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([A3_HEADERS]), "Facturas");
   }
 
-  return XLSX.write(wb, { type: "array", bookType: "xlsx" }) as Uint8Array;
+  return XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
 }

@@ -8,10 +8,13 @@ import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { randomBytes, randomUUID } from "crypto";
 import { sendClientInvitationEmail } from "@/lib/email";
+import { isValidNIF, formatNIF } from "@/lib/validators";
 
 const schema = z.object({
   name: z.string().min(2, "Mínimo 2 caracteres"),
-  cif: z.string().min(9, "El CIF debe tener 9 caracteres").max(9, "El CIF debe tener 9 caracteres"),
+  cif: z.string().min(9, "El CIF debe tener 9 caracteres").max(9, "El CIF debe tener 9 caracteres")
+    .transform(formatNIF)
+    .refine(isValidNIF, "CIF/NIF inválido — comprueba el formato y la letra de control"),
   email: z.string().email("Email inválido"),
   contactName: z.string().min(2, "Mínimo 2 caracteres"),
   accountingProgram: z.string().optional(),

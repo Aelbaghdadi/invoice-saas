@@ -65,8 +65,8 @@ type SidebarProps = {
 };
 
 const BATCH_LINKS: Record<Role, { href: string; label: string }> = {
-  ADMIN:  { href: "/dashboard/admin/batch",   label: "Nuevo lote" },
-  WORKER: { href: "/dashboard/worker/batch",  label: "Ver lotes" },
+  ADMIN:  { href: "/dashboard/worker/upload", label: "Nuevo lote" },
+  WORKER: { href: "/dashboard/worker/upload", label: "Nuevo lote" },
   CLIENT: { href: "/dashboard/client/upload", label: "Subir facturas" },
 };
 

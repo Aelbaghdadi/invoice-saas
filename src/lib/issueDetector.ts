@@ -67,13 +67,12 @@ export async function detectIssues(
     extraction.vatAmount != null &&
     extraction.totalAmount != null
   ) {
-    const irpf = extraction.irpfAmount ?? 0;
-    const expected = extraction.taxBase + extraction.vatAmount - irpf;
+    const expected = extraction.taxBase + extraction.vatAmount;
     const diff = Math.abs(Math.round(expected * 100) - Math.round(extraction.totalAmount * 100));
     if (diff > 2) {
       issues.push({
         type: "MATH_MISMATCH",
-        description: `El total (${extraction.totalAmount}) no coincide con base + IVA - IRPF (${expected.toFixed(2)}). Diferencia: ${(diff / 100).toFixed(2)}\u20AC.`,
+        description: `El total (${extraction.totalAmount}) no coincide con Base + IVA (${expected.toFixed(2)}). Diferencia: ${(diff / 100).toFixed(2)}\u20AC.`,
       });
     }
   }

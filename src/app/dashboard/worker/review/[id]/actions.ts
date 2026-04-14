@@ -98,12 +98,25 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     expenseAccount:  data.expenseAccount  || null,
   };
 
-  // Math validation
+  // Server-side bounds validation
+  if (newData.vatRate !== null && (newData.vatRate < 0 || newData.vatRate > 100)) {
+    return { error: "El % IVA debe estar entre 0 y 100" };
+  }
+  if (newData.taxBase !== null && newData.taxBase < 0) {
+    return { error: "La base imponible no puede ser negativa" };
+  }
+  if (newData.vatAmount !== null && newData.vatAmount < 0) {
+    return { error: "La cuota IVA no puede ser negativa" };
+  }
+  if (newData.totalAmount !== null && newData.totalAmount < 0) {
+    return { error: "El total no puede ser negativo" };
+  }
+
+  // Math validation: Base + IVA = Total
   let isValid: boolean | null = null;
   if (newData.taxBase !== null && newData.vatAmount !== null && newData.totalAmount !== null) {
-    const irpf = newData.irpfAmount ?? 0;
     const diff = Math.abs(
-      Math.round((newData.taxBase + newData.vatAmount - irpf) * 100) -
+      Math.round((newData.taxBase + newData.vatAmount) * 100) -
       Math.round(newData.totalAmount * 100)
     );
     isValid = diff <= 2;

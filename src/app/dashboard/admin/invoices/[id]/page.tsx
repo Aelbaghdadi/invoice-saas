@@ -202,7 +202,6 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
               <Field label="Base imponible" value={invoice.taxBase ? `€${invoice.taxBase}` : null} icon={Euro} />
               <Field label="% IVA" value={invoice.vatRate ? `${invoice.vatRate}%` : null} icon={Percent} />
               <Field label="Cuota IVA" value={invoice.vatAmount ? `€${invoice.vatAmount}` : null} icon={Euro} />
-              <Field label="% IRPF" value={invoice.irpfRate ? `${invoice.irpfRate}%` : null} icon={Percent} />
               <Field label="Total" value={invoice.totalAmount ? `€${invoice.totalAmount}` : null} icon={Euro} />
             </div>
 

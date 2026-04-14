@@ -10,6 +10,7 @@ import {
 import { saveInvoiceFields, validateInvoice, rejectInvoice, type ReviewState } from "./actions";
 import { resolveIssue, dismissIssue } from "@/app/dashboard/worker/issues/actions";
 import type { Invoice, IssueType, IssueStatus } from "@prisma/client";
+import { isValidNIF } from "@/lib/validators";
 import Link from "next/link";
 import PdfViewer from "@/components/ui/PdfViewerDynamic";
 import { ConfidenceBadge } from "@/components/ui/ConfidenceBadge";
@@ -81,8 +82,6 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
   const [taxBase,     setTaxBase]     = useState(fmt(invoice.taxBase));
   const [vatRate,     setVatRate]     = useState(fmt(invoice.vatRate));
   const [vatAmount,   setVatAmount]   = useState(fmt(invoice.vatAmount));
-  const [irpfRate,    setIrpfRate]    = useState(fmt(invoice.irpfRate));
-  const [irpfAmount,  setIrpfAmount]  = useState(fmt(invoice.irpfAmount));
   const [totalAmount, setTotalAmount] = useState(fmt(invoice.totalAmount));
   const [supplierAccountVal, setSupplierAccount] = useState(fmt(invoice.supplierAccount) || suggestedAccount?.supplierAccount || "");
   const [expenseAccountVal, setExpenseAccount]   = useState(fmt(invoice.expenseAccount) || suggestedAccount?.expenseAccount || "");
@@ -104,13 +103,12 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
   const confidence = extraction?.confidence ?? null;
   const openIssues = issues.filter((i) => i.status === "OPEN" && !dismissedIssues.has(i.id));
 
-  // Math semaphore
+  // Math semaphore: Base + IVA = Total
   const base       = parseFloat(taxBase)     || 0;
   const vat        = parseFloat(vatAmount)   || 0;
-  const irpf       = parseFloat(irpfAmount)  || 0;
   const totalNum   = parseFloat(totalAmount) || 0;
   const hasValues  = taxBase && vatAmount && totalAmount;
-  const calculated = Math.round((base + vat - irpf) * 100);
+  const calculated = Math.round((base + vat) * 100);
   const actual     = Math.round(totalNum * 100);
   const mathOk     = hasValues ? Math.abs(calculated - actual) <= 2 : null;
 
@@ -135,8 +133,6 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
     fd.set("taxBase",    taxBase);
     fd.set("vatRate",    vatRate);
     fd.set("vatAmount",  vatAmount);
-    fd.set("irpfRate",   irpfRate);
-    fd.set("irpfAmount", irpfAmount);
     fd.set("totalAmount",totalAmount);
     fd.set("accountingPeriodMonth", (document.getElementById("accountingPeriodMonth") as HTMLSelectElement)?.value ?? "");
     fd.set("accountingPeriodYear",  (document.getElementById("accountingPeriodYear")  as HTMLSelectElement)?.value ?? "");
@@ -144,7 +140,7 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
     fd.set("expenseAccount",  expenseAccountVal);
     if (extra) Object.entries(extra).forEach(([k,v]) => fd.set(k,v));
     return fd;
-  }, [taxBase, vatRate, vatAmount, irpfRate, irpfAmount, totalAmount, supplierAccountVal, expenseAccountVal, invoice.id, invoice.updatedAt]);
+  }, [taxBase, vatRate, vatAmount, totalAmount, supplierAccountVal, expenseAccountVal, invoice.id, invoice.updatedAt]);
 
   const handleSave = () => {
     startSave(async () => {
@@ -320,8 +316,8 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
                 }
                 <span className="text-[12px] font-medium">
                   {mathOk
-                    ? "Validación matemática correcta — Base + IVA − IRPF = Total"
-                    : `Error: ${(base + vat - irpf).toFixed(2)} ≠ ${totalNum.toFixed(2)} (diferencia: ${Math.abs(base + vat - irpf - totalNum).toFixed(2)} €)`
+                    ? "Validación matemática correcta — Base + IVA = Total"
+                    : `Error: ${(base + vat).toFixed(2)} ≠ ${totalNum.toFixed(2)} (diferencia: ${Math.abs(base + vat - totalNum).toFixed(2)} €)`
                   }
                 </span>
               </div>
@@ -419,6 +415,12 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
                   {confidence?.issuerCif != null && <ConfidenceBadge score={confidence.issuerCif} />}
                 </label>
                 <input id="issuerCif" className={inputClass} defaultValue={invoice.issuerCif ?? ""} placeholder="B12345678" />
+                {invoice.issuerCif && !isValidNIF(invoice.issuerCif) && (
+                  <p className="mt-1 flex items-center gap-1 text-[11px] text-orange-600">
+                    <AlertTriangle className="h-3 w-3" />
+                    CIF/NIF con formato inválido
+                  </p>
+                )}
               </div>
             </fieldset>
 
@@ -500,42 +502,28 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
                     Base imponible
                     {confidence?.taxBase != null && <ConfidenceBadge score={confidence.taxBase} />}
                   </label>
-                  <input className={inputClass} value={taxBase} onChange={e => setTaxBase(e.target.value)} placeholder="1000.00" />
+                  <input type="number" step="0.01" min="0" className={inputClass} value={taxBase} onChange={e => setTaxBase(e.target.value)} placeholder="1000.00" />
                 </div>
                 <div>
                   <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
                     % IVA
                     {confidence?.vatRate != null && <ConfidenceBadge score={confidence.vatRate} />}
                   </label>
-                  <input className={inputClass} value={vatRate} onChange={e => setVatRate(e.target.value)} placeholder="21" />
+                  <input type="number" step="0.01" min="0" max="100" className={inputClass} value={vatRate} onChange={e => setVatRate(e.target.value)} placeholder="21" />
                 </div>
                 <div>
                   <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
                     Cuota IVA
                     {confidence?.vatAmount != null && <ConfidenceBadge score={confidence.vatAmount} />}
                   </label>
-                  <input className={inputClass} value={vatAmount} onChange={e => setVatAmount(e.target.value)} placeholder="210.00" />
-                </div>
-                <div>
-                  <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
-                    % IRPF
-                    {confidence?.irpfRate != null && <ConfidenceBadge score={confidence.irpfRate} />}
-                  </label>
-                  <input className={inputClass} value={irpfRate} onChange={e => setIrpfRate(e.target.value)} placeholder="15" />
-                </div>
-                <div>
-                  <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
-                    Cuota IRPF
-                    {confidence?.irpfAmount != null && <ConfidenceBadge score={confidence.irpfAmount} />}
-                  </label>
-                  <input className={inputClass} value={irpfAmount} onChange={e => setIrpfAmount(e.target.value)} placeholder="150.00" />
+                  <input type="number" step="0.01" min="0" className={inputClass} value={vatAmount} onChange={e => setVatAmount(e.target.value)} placeholder="210.00" />
                 </div>
                 <div>
                   <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500 font-semibold">
                     Total factura
                     {confidence?.totalAmount != null && <ConfidenceBadge score={confidence.totalAmount} />}
                   </label>
-                  <input className={`${inputClass} font-semibold`} value={totalAmount} onChange={e => setTotalAmount(e.target.value)} placeholder="1060.00" />
+                  <input type="number" step="0.01" min="0" className={`${inputClass} font-semibold`} value={totalAmount} onChange={e => setTotalAmount(e.target.value)} placeholder="1060.00" />
                 </div>
               </div>
             </fieldset>
@@ -616,8 +604,6 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
                           ["taxBase", "Base", extraction.taxBase != null ? String(extraction.taxBase) : null, fmt(invoice.taxBase)],
                           ["vatRate", "% IVA", extraction.vatRate != null ? String(extraction.vatRate) : null, fmt(invoice.vatRate)],
                           ["vatAmount", "Cuota IVA", extraction.vatAmount != null ? String(extraction.vatAmount) : null, fmt(invoice.vatAmount)],
-                          ["irpfRate", "% IRPF", extraction.irpfRate != null ? String(extraction.irpfRate) : null, fmt(invoice.irpfRate)],
-                          ["irpfAmount", "Cuota IRPF", extraction.irpfAmount != null ? String(extraction.irpfAmount) : null, fmt(invoice.irpfAmount)],
                           ["totalAmount", "Total", extraction.totalAmount != null ? String(extraction.totalAmount) : null, fmt(invoice.totalAmount)],
                         ] as [string, string, string | null, string | null][]).map(([key, label, ocrVal, currentVal]) => {
                           const changed = (ocrVal ?? "") !== (currentVal ?? "");

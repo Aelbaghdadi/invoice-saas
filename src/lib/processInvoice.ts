@@ -67,13 +67,12 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       rawResponse = JSON.stringify(extracted);
     }
 
-    // Math validation
-    const { taxBase, vatAmount, irpfAmount, totalAmount } = extracted;
+    // Math validation: Base + IVA = Total
+    const { taxBase, vatAmount, totalAmount } = extracted;
     let isValid: boolean | null = null;
     if (taxBase !== null && vatAmount !== null && totalAmount !== null) {
-      const irpf = irpfAmount ?? 0;
       const diff = Math.abs(
-        Math.round((taxBase + vatAmount - irpf) * 100) - Math.round(totalAmount * 100)
+        Math.round((taxBase + vatAmount) * 100) - Math.round(totalAmount * 100)
       );
       isValid = diff <= 2;
     }

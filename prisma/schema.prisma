@@ -112,7 +112,7 @@ model WorkerClientAssignment {
   worker   User   @relation(fields: [workerId], references: [id])
 
   clientId String
-  client   Client @relation(fields: [clientId], references: [id])
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
   @@unique([workerId, clientId])
 }
@@ -128,7 +128,7 @@ model Document {
   createdAt  DateTime @default(now())
 
   clientId String
-  client   Client @relation(fields: [clientId], references: [id])
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
   invoices Invoice[]
 }
@@ -183,7 +183,7 @@ model Invoice {
   updatedAt DateTime @updatedAt
 
   clientId      String
-  client        Client     @relation(fields: [clientId], references: [id])
+  client        Client     @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
   documentId    String?
   document      Document?  @relation(fields: [documentId], references: [id])
@@ -196,12 +196,16 @@ model Invoice {
 
   exportBatchId String?
   exportBatch   ExportBatch? @relation(fields: [exportBatchId], references: [id])
+
+  @@index([clientId, status])
+  @@index([issuerCif])
+  @@index([periodMonth, periodYear])
 }
 
 model InvoiceExtraction {
   id        String @id @default(cuid())
   invoiceId String
-  invoice   Invoice @relation(fields: [invoiceId], references: [id])
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
   // Datos brutos extraidos por OCR
   rawResponse   String?   // JSON completo de GPT
@@ -227,7 +231,7 @@ model InvoiceExtraction {
 model InvoiceStatusHistory {
   id        String   @id @default(cuid())
   invoiceId String
-  invoice   Invoice  @relation(fields: [invoiceId], references: [id])
+  invoice   Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
   fromStatus InvoiceStatus?
   toStatus   InvoiceStatus
@@ -255,9 +259,9 @@ model ExportBatch {
 model ExportBatchItem {
   id            String      @id @default(cuid())
   exportBatchId String
-  exportBatch   ExportBatch @relation(fields: [exportBatchId], references: [id])
+  exportBatch   ExportBatch @relation(fields: [exportBatchId], references: [id], onDelete: Cascade)
   invoiceId     String
-  invoice       Invoice     @relation(fields: [invoiceId], references: [id])
+  invoice       Invoice     @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
   snapshot      String      // JSON snapshot de los datos de la factura al exportar
   createdAt     DateTime    @default(now())
 
@@ -267,7 +271,7 @@ model ExportBatchItem {
 model InvoiceIssue {
   id          String      @id @default(cuid())
   invoiceId   String
-  invoice     Invoice     @relation(fields: [invoiceId], references: [id])
+  invoice     Invoice     @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
   type        IssueType
   status      IssueStatus @default(OPEN)
   description String
@@ -285,7 +289,7 @@ model AuditLog {
   createdAt DateTime @default(now())
 
   invoiceId String
-  invoice   Invoice @relation(fields: [invoiceId], references: [id])
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
   userId String
   user   User   @relation(fields: [userId], references: [id])
@@ -294,7 +298,7 @@ model AuditLog {
 model PeriodClosure {
   id          String   @id @default(cuid())
   clientId    String
-  client      Client   @relation(fields: [clientId], references: [id])
+  client      Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
   month       Int
   year        Int
   closedBy    String
@@ -323,10 +327,11 @@ model AccountEntry {
   defaultVatRate  Decimal? @db.Decimal(5, 2)
 
   clientId String
-  client   Client @relation(fields: [clientId], references: [id])
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([clientId, nif])
+  @@index([clientId])
 }

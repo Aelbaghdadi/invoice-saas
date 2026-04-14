@@ -165,14 +165,14 @@ export function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
     }
   }
 
-  const columns: { key: SortKey; label: string }[] = [
+  const columns: { key: SortKey; label: string; hideMobile?: boolean }[] = [
     { key: "client", label: "Cliente" },
     { key: "filename", label: "Archivo" },
-    { key: "period", label: "Periodo" },
-    { key: "type", label: "Tipo" },
+    { key: "period", label: "Periodo", hideMobile: true },
+    { key: "type", label: "Tipo", hideMobile: true },
     { key: "status", label: "Estado" },
     { key: "total", label: "Total" },
-    { key: "date", label: "Fecha" },
+    { key: "date", label: "Fecha", hideMobile: true },
   ];
 
   function SortIcon({ col }: { col: SortKey }) {
@@ -254,7 +254,7 @@ export function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
                   <th
                     key={col.key}
                     onClick={() => toggleSort(col.key)}
-                    className="px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-400 cursor-pointer hover:text-slate-600 select-none"
+                    className={`px-3 md:px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-400 cursor-pointer hover:text-slate-600 select-none ${col.hideMobile ? "hidden md:table-cell" : ""}`}
                   >
                     <span className="inline-flex items-center gap-1">
                       {col.label}
@@ -284,11 +284,11 @@ export function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
                         className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
                       />
                     </td>
-                    <td className="px-5 py-3.5">
+                    <td className="px-3 md:px-5 py-3.5">
                       <p className="text-[13px] font-semibold text-slate-800">{inv.client.name}</p>
                       <p className="text-[11px] text-slate-400">{inv.client.cif}</p>
                     </td>
-                    <td className="px-5 py-3.5">
+                    <td className="px-3 md:px-5 py-3.5">
                       <div className="flex items-center gap-2">
                         <FileText className="h-4 w-4 flex-shrink-0 text-slate-300" />
                         <span className="max-w-[140px] truncate text-[13px] text-slate-600">{inv.filename}</span>
@@ -299,24 +299,24 @@ export function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
                         )}
                       </div>
                     </td>
-                    <td className="px-5 py-3.5 text-[13px] text-slate-500">
+                    <td className="hidden md:table-cell px-3 md:px-5 py-3.5 text-[13px] text-slate-500">
                       {new Date(0, inv.periodMonth - 1).toLocaleString("es", { month: "short" })} {inv.periodYear}
                     </td>
-                    <td className="px-5 py-3.5">
+                    <td className="hidden md:table-cell px-3 md:px-5 py-3.5">
                       <Badge variant={inv.type === "PURCHASE" ? "blue" : "purple"}>
                         {inv.type === "PURCHASE" ? "Recibida" : "Emitida"}
                       </Badge>
                     </td>
-                    <td className="px-5 py-3.5">
+                    <td className="px-3 md:px-5 py-3.5">
                       <Badge variant={s.variant}>{s.label}</Badge>
                     </td>
                     <td className="px-5 py-3.5 text-[13px] font-medium text-slate-700">
                       {inv.totalAmount !== null ? `${Number(inv.totalAmount).toLocaleString("es-ES", { minimumFractionDigits: 2 })} \u20AC` : "\u2014"}
                     </td>
-                    <td className="px-5 py-3.5 text-[13px] text-slate-400">
+                    <td className="hidden md:table-cell px-3 md:px-5 py-3.5 text-[13px] text-slate-400">
                       {inv.createdAt.slice(0, 10)}
                     </td>
-                    <td className="px-5 py-3.5">
+                    <td className="px-3 md:px-5 py-3.5">
                       <div className="flex items-center gap-1.5">
                         {inv.status === "OCR_ERROR" ? (
                           <>

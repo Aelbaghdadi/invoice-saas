@@ -137,7 +137,7 @@ export async function GET(req: NextRequest) {
 
   if (format === "a3excel") {
     const xlsxData = generateA3Excel(invoices, exportConfig);
-    return new NextResponse(xlsxData.buffer as ArrayBuffer, {
+    return new NextResponse(new Uint8Array(xlsxData), {
       status: 200,
       headers: {
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
