@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/Badge";
 import { FileText, Search, ArrowUpDown, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { bulkValidateInvoices, bulkExportInvoices } from "./actions";
+import { bulkValidateInvoices } from "./actions";
 
 type Invoice = {
   id: string;
@@ -139,17 +139,6 @@ export function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
     });
   }
 
-  function handleBulkExport() {
-    const ids = [...selected];
-    startTransition(async () => {
-      const res = await bulkExportInvoices(ids);
-      if (res.error) { showToast(res.error, "err"); return; }
-      showToast(`${res.count} factura(s) marcadas como exportadas`, "ok");
-      setSelected(new Set());
-      router.refresh();
-    });
-  }
-
   async function handleReprocess(invoiceId: string) {
     try {
       const res = await fetch(`/api/invoices/${invoiceId}/process`, { method: "POST" });
@@ -208,13 +197,6 @@ export function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
               className="rounded-lg bg-emerald-600 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-50 transition-colors"
             >
               Validar
-            </button>
-            <button
-              onClick={handleBulkExport}
-              disabled={isPending}
-              className="rounded-lg bg-blue-600 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
-            >
-              Exportar
             </button>
             <button
               onClick={() => setSelected(new Set())}

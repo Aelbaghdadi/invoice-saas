@@ -34,6 +34,8 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
   const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
   if (!invoice) return;
 
+  const ocrStartedAt = new Date();
+
   try {
     const supabase = createServerSupabase();
     if (!supabase) throw new Error("Storage not configured");
@@ -77,13 +79,21 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       isValid = diff <= 2;
     }
 
-    // Save extraction as separate record (datos brutos OCR)
+    // Save extraction as separate record (datos brutos OCR + job tracking)
+    const ocrFinishedAt = new Date();
+    const ocrDurationMs = ocrFinishedAt.getTime() - ocrStartedAt.getTime();
+    const isReprocess = invoice.ocrAttempts > 1;
+
     await prisma.invoiceExtraction.create({
       data: {
         invoiceId,
         source,
         rawResponse,
         confidence: extracted.confidence ?? undefined,
+        ocrStartedAt,
+        ocrFinishedAt,
+        ocrDurationMs,
+        isReprocess,
         issuerName:    extracted.issuerName,
         issuerCif:     extracted.issuerCif,
         receiverName:  extracted.receiverName,

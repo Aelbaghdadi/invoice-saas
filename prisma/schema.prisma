@@ -208,9 +208,15 @@ model InvoiceExtraction {
   invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
 
   // Datos brutos extraidos por OCR
-  rawResponse   String?   // JSON completo de GPT
-  source        String    // "gpt4o" | "xml_parse" | "manual"
+  rawResponse   String?   // JSON completo de respuesta OCR
+  source        String    // "document_ai" | "xml_parse" | "manual"
   confidence    Json?     // { campo: 0.0-1.0 } scores de confianza OCR
+
+  // OCR job tracking
+  ocrStartedAt  DateTime?  // Inicio del procesamiento OCR
+  ocrFinishedAt DateTime?  // Fin del procesamiento (exito o error)
+  ocrDurationMs Int?       // Duracion en milisegundos
+  isReprocess   Boolean    @default(false) // true si fue reproceso manual
   issuerName    String?
   issuerCif     String?
   receiverName  String?
@@ -231,7 +237,7 @@ model InvoiceExtraction {
 model InvoiceStatusHistory {
   id        String   @id @default(cuid())
   invoiceId String
-  invoice   Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  invoice   Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
 
   fromStatus InvoiceStatus?
   toStatus   InvoiceStatus
@@ -259,9 +265,9 @@ model ExportBatch {
 model ExportBatchItem {
   id            String      @id @default(cuid())
   exportBatchId String
-  exportBatch   ExportBatch @relation(fields: [exportBatchId], references: [id], onDelete: Cascade)
+  exportBatch   ExportBatch @relation(fields: [exportBatchId], references: [id], onDelete: Restrict)
   invoiceId     String
-  invoice       Invoice     @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  invoice       Invoice     @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
   snapshot      String      // JSON snapshot de los datos de la factura al exportar
   createdAt     DateTime    @default(now())
 
@@ -271,7 +277,7 @@ model ExportBatchItem {
 model InvoiceIssue {
   id          String      @id @default(cuid())
   invoiceId   String
-  invoice     Invoice     @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  invoice     Invoice     @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
   type        IssueType
   status      IssueStatus @default(OPEN)
   description String
@@ -289,7 +295,7 @@ model AuditLog {
   createdAt DateTime @default(now())
 
   invoiceId String
-  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
 
   userId String
   user   User   @relation(fields: [userId], references: [id])

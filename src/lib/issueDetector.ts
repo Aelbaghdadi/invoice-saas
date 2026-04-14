@@ -77,31 +77,52 @@ export async function detectIssues(
     }
   }
 
-  // 4. POSSIBLE_DUPLICATE — functional dedup by CIF + invoice number + date + total + type
-  if (extraction.invoiceNumber && extraction.issuerCif) {
-    const duplicateWhere: Record<string, unknown> = {
+  // 4. POSSIBLE_DUPLICATE — functional dedup (non-blocking alert)
+  // Strategy A: exact match by CIF + invoice number (strongest signal)
+  // Strategy B: fuzzy match by CIF + total + date (catches re-scans / different PDFs)
+  if (extraction.issuerCif) {
+    const baseWhere = {
       clientId: invoice.clientId,
       issuerCif: extraction.issuerCif,
-      invoiceNumber: extraction.invoiceNumber,
+      type: invoice.type,
       id: { not: invoiceId },
+      status: { notIn: ["REJECTED" as const] },
     };
-    if (extraction.totalAmount != null) {
-      duplicateWhere.totalAmount = extraction.totalAmount;
-    }
-    if (extraction.invoiceDate) {
-      duplicateWhere.invoiceDate = new Date(extraction.invoiceDate);
-    }
 
-    const duplicate = await prisma.invoice.findFirst({
-      where: duplicateWhere,
-      select: { id: true, filename: true },
-    });
-
-    if (duplicate) {
-      issues.push({
-        type: "POSSIBLE_DUPLICATE",
-        description: `Posible duplicado de "${duplicate.filename}" (misma factura ${extraction.invoiceNumber} de ${extraction.issuerCif}).`,
+    // Strategy A: CIF + invoice number
+    if (extraction.invoiceNumber) {
+      const dupByNumber = await prisma.invoice.findFirst({
+        where: { ...baseWhere, invoiceNumber: extraction.invoiceNumber },
+        select: { id: true, filename: true },
       });
+      if (dupByNumber) {
+        issues.push({
+          type: "POSSIBLE_DUPLICATE",
+          description: `Posible duplicado de "${dupByNumber.filename}" (misma factura ${extraction.invoiceNumber} de ${extraction.issuerCif}).`,
+        });
+      }
+    }
+
+    // Strategy B: CIF + total + date (only if Strategy A didn't match)
+    if (
+      !issues.some((i) => i.type === "POSSIBLE_DUPLICATE") &&
+      extraction.totalAmount != null &&
+      extraction.invoiceDate
+    ) {
+      const dupByFields = await prisma.invoice.findFirst({
+        where: {
+          ...baseWhere,
+          totalAmount: extraction.totalAmount,
+          invoiceDate: new Date(extraction.invoiceDate),
+        },
+        select: { id: true, filename: true },
+      });
+      if (dupByFields) {
+        issues.push({
+          type: "POSSIBLE_DUPLICATE",
+          description: `Posible duplicado de "${dupByFields.filename}" (mismo CIF ${extraction.issuerCif}, total ${extraction.totalAmount} y fecha).`,
+        });
+      }
     }
   }
 
