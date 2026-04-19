@@ -69,7 +69,8 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       rawResponse = JSON.stringify(extracted);
     }
 
-    // Math validation: Base + IVA = Total
+    // Math validation: Base + IVA = Total. Leave isValid=null if any field missing
+    // so the reviewer is forced to fill it in rather than seeing a false "valid".
     const { taxBase, vatAmount, totalAmount } = extracted;
     let isValid: boolean | null = null;
     if (taxBase !== null && vatAmount !== null && totalAmount !== null) {

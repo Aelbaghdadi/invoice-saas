@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { Building2, Plus, Search, MoreHorizontal, Users } from "lucide-react";
+import { Building2, Plus, Search, Users } from "lucide-react";
 import Link from "next/link";
 
 function clientInitials(name: string) {
@@ -127,17 +127,12 @@ export default async function ClientsPage() {
                     </div>
                   </td>
                   <td className="px-5 py-3.5">
-                    <div className="flex items-center gap-3">
-                      <Link
-                        href={`/dashboard/admin/clients/${client.id}`}
-                        className="text-[13px] font-medium text-blue-600 hover:text-blue-700"
-                      >
-                        Ver
-                      </Link>
-                      <button className="rounded p-1 text-slate-400 opacity-0 transition group-hover:opacity-100 hover:bg-slate-100">
-                        <MoreHorizontal className="h-4 w-4" />
-                      </button>
-                    </div>
+                    <Link
+                      href={`/dashboard/admin/clients/${client.id}`}
+                      className="text-[13px] font-medium text-blue-600 hover:text-blue-700"
+                    >
+                      Ver
+                    </Link>
                   </td>
                 </tr>
               ))}

@@ -18,7 +18,8 @@ export async function GET(req: Request) {
 
   const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
 
-  const stuckInvoices = await prisma.invoice.findMany({
+  // UPLOADED facturas que nunca arrancaron
+  const uploadedStuck = await prisma.invoice.findMany({
     where: {
       status: "UPLOADED",
       createdAt: { lt: fiveMinutesAgo },
@@ -27,9 +28,31 @@ export async function GET(req: Request) {
     select: { id: true },
   });
 
-  for (const invoice of stuckInvoices) {
+  // ANALYZING facturas atascadas (OCR cayó o timeout silencioso): resetear a UPLOADED
+  const analyzingStuck = await prisma.invoice.findMany({
+    where: {
+      status: "ANALYZING",
+      updatedAt: { lt: fiveMinutesAgo },
+      ocrAttempts: { lt: 3 },
+    },
+    select: { id: true },
+  });
+
+  if (analyzingStuck.length > 0) {
+    await prisma.invoice.updateMany({
+      where: { id: { in: analyzingStuck.map((i) => i.id) } },
+      data: { status: "UPLOADED", lastOcrError: "Reset por cron (atascada en ANALYZING)" },
+    });
+  }
+
+  const toRetry = [...uploadedStuck, ...analyzingStuck];
+  for (const invoice of toRetry) {
     await processInvoice(invoice.id, "system");
   }
 
-  return NextResponse.json({ retried: stuckInvoices.length });
+  return NextResponse.json({
+    retried: toRetry.length,
+    uploaded: uploadedStuck.length,
+    resetFromAnalyzing: analyzingStuck.length,
+  });
 }

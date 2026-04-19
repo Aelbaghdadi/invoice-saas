@@ -8,6 +8,8 @@ import {
   Layers, Eye, ArrowRight,
 } from "lucide-react";
 import Link from "next/link";
+import type { InvoiceType } from "@prisma/client";
+import { PENDING_WORK, completionPercent } from "@/lib/invoiceStatuses";
 
 type BatchGroup = {
   clientId: string;
@@ -15,6 +17,7 @@ type BatchGroup = {
   clientCif: string;
   periodMonth: number;
   periodYear: number;
+  type: InvoiceType;
   total: number;
   uploaded: number;
   analyzing: number;
@@ -62,10 +65,10 @@ export default async function WorkerBatchPage() {
 
   // Group by client + period
   const groupMap = new Map<string, BatchGroup>();
-  const pendingStatuses = new Set(["UPLOADED", "ANALYZED", "PENDING_REVIEW", "NEEDS_ATTENTION"]);
+  const pendingStatuses = new Set<string>(PENDING_WORK);
 
   for (const inv of invoices) {
-    const key = `${inv.clientId}-${inv.periodYear}-${inv.periodMonth}`;
+    const key = `${inv.clientId}-${inv.periodYear}-${inv.periodMonth}-${inv.type}`;
     let g = groupMap.get(key);
     if (!g) {
       g = {
@@ -74,6 +77,7 @@ export default async function WorkerBatchPage() {
         clientCif: inv.client.cif,
         periodMonth: inv.periodMonth,
         periodYear: inv.periodYear,
+        type: inv.type,
         total: 0,
         uploaded: 0,
         analyzing: 0,
@@ -126,15 +130,20 @@ export default async function WorkerBatchPage() {
       ) : (
         <div className="space-y-3">
           {groups.map((g) => {
-            const done = g.validated + g.exported;
-            const pct = g.total > 0 ? Math.round((done / g.total) * 100) : 0;
+            const done = g.validated + g.rejected + g.exported;
+            const pct = completionPercent({
+              total: g.total,
+              validated: g.validated,
+              rejected: g.rejected,
+              exported: g.exported,
+            });
             const pending = g.uploaded + g.analyzed + g.pendingReview + g.needsAttention;
             const allDone = done === g.total;
             const hasErrors = g.ocrError > 0;
 
             return (
               <div
-                key={`${g.clientId}-${g.periodYear}-${g.periodMonth}`}
+                key={`${g.clientId}-${g.periodYear}-${g.periodMonth}-${g.type}`}
                 className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
               >
                 {/* Header */}
@@ -144,6 +153,9 @@ export default async function WorkerBatchPage() {
                       <h2 className="text-[15px] font-semibold text-slate-900 truncate">
                         {g.clientName}
                       </h2>
+                      <Badge variant={g.type === "PURCHASE" ? "blue" : "purple"}>
+                        {g.type === "PURCHASE" ? "Recibidas" : "Emitidas"}
+                      </Badge>
                       <Badge variant={allDone ? "green" : pending > 0 ? "blue" : "slate"}>
                         {allDone ? "Completado" : pending > 0 ? "En proceso" : "Parcial"}
                       </Badge>
@@ -169,7 +181,7 @@ export default async function WorkerBatchPage() {
                       </Link>
                     )}
                     <Link
-                      href={`/dashboard/worker/invoices?clientId=${g.clientId}`}
+                      href={`/dashboard/worker/invoices?clientId=${g.clientId}&month=${g.periodMonth}&year=${g.periodYear}&type=${g.type}`}
                       className="flex items-center gap-1 text-[12px] font-medium text-slate-500 hover:text-slate-700"
                     >
                       Ver todas <ArrowRight className="h-3 w-3" />

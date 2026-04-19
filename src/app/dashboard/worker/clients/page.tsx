@@ -3,8 +3,9 @@ import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { Building2, ArrowRight, FileText } from "lucide-react";
+import { Building2, FileText } from "lucide-react";
 import Link from "next/link";
+import { PENDING_WORK } from "@/lib/invoiceStatuses";
 
 export default async function WorkerClientsPage() {
   const session = await auth();
@@ -41,7 +42,7 @@ export default async function WorkerClientsPage() {
           <table className="w-full">
             <thead>
               <tr className="border-b border-slate-100">
-                {["Cliente", "CIF", "Facturas", "Pendientes", ""].map((h) => (
+                {["Cliente", "CIF", "Facturas", "Pendientes", "Acciones"].map((h) => (
                   <th
                     key={h}
                     className="px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-400"
@@ -54,7 +55,7 @@ export default async function WorkerClientsPage() {
             <tbody className="divide-y divide-slate-50">
               {assignments.map(({ client }) => {
                 const pending = client.invoices.filter((i) =>
-                  ["UPLOADED", "ANALYZING", "ANALYZED", "OCR_ERROR"].includes(i.status)
+                  PENDING_WORK.includes(i.status)
                 ).length;
                 return (
                   <tr key={client.id} className="hover:bg-slate-50/60">
@@ -86,12 +87,12 @@ export default async function WorkerClientsPage() {
                         <span className="text-[12px] text-slate-300">—</span>
                       )}
                     </td>
-                    <td className="px-5 py-3 text-right">
+                    <td className="px-5 py-3">
                       <Link
-                        href={`/dashboard/worker/invoices?clientId=${client.id}`}
-                        className="flex items-center justify-end gap-1 text-[12px] font-medium text-blue-600 hover:text-blue-700"
+                        href={`/dashboard/worker/clients/${client.id}`}
+                        className="text-[13px] font-medium text-blue-600 hover:text-blue-700"
                       >
-                        Ver facturas <ArrowRight className="h-3.5 w-3.5" />
+                        Ver
                       </Link>
                     </td>
                   </tr>

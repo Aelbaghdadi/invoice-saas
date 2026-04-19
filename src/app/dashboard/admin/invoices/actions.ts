@@ -13,7 +13,7 @@ export async function bulkValidateInvoices(ids: string[]) {
 
   // Only allow bulk validation of invoices that have been reviewed
   const invoices = await prisma.invoice.findMany({
-    where: { id: { in: ids }, status: { in: ["PENDING_REVIEW", "NEEDS_ATTENTION", "ANALYZED"] } },
+    where: { id: { in: ids }, status: { in: ["PENDING_REVIEW", "NEEDS_ATTENTION"] } },
   });
 
   if (invoices.length === 0) {

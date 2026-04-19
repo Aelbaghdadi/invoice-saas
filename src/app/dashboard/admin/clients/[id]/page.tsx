@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { Badge } from "@/components/ui/Badge";
 import { ChevronLeft, Mail, Building2, FileText, Users, BookOpen } from "lucide-react";
 import Link from "next/link";
+import { PENDING_WORK } from "@/lib/invoiceStatuses";
 
 const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
   UPLOADED:  { label: "Subida",      variant: "blue" },
@@ -37,7 +38,7 @@ export default async function ClientDetailPage({ params }: { params: Promise<{ i
   const stats = [
     { label: "Total facturas", value: client.invoices.length, icon: FileText },
     { label: "Gestores asignados", value: client.assignedWorkers.length, icon: Users },
-    { label: "Pendientes", value: client.invoices.filter(i => ["UPLOADED","ANALYZING","ANALYZED","OCR_ERROR"].includes(i.status)).length, icon: Building2 },
+    { label: "Pendientes", value: client.invoices.filter(i => PENDING_WORK.includes(i.status)).length, icon: Building2 },
   ];
 
   return (

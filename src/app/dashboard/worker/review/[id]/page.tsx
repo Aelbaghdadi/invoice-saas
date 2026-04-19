@@ -45,13 +45,19 @@ export default async function ReviewPage({
     orderBy: { createdAt: "desc" },
   });
 
-  // Get all invoices in the same batch (same client + period), ordered by createdAt
+  // Get all invoices in the same batch (same client + period + type), ordered by createdAt.
+  // Only include invoices still pending review; always include the current one so the
+  // counter stays correct even if this invoice is already validated.
   const batchInvoices = await prisma.invoice.findMany({
     where: {
       clientId:    invoice.clientId,
       periodMonth: invoice.periodMonth,
       periodYear:  invoice.periodYear,
-      status:      { in: ["UPLOADED", "ANALYZING", "ANALYZED", "PENDING_REVIEW", "NEEDS_ATTENTION", "OCR_ERROR", "VALIDATED"] },
+      type:        invoice.type,
+      OR: [
+        { id: invoice.id },
+        { status: { in: ["PENDING_REVIEW", "NEEDS_ATTENTION", "OCR_ERROR"] } },
+      ],
     },
     orderBy: { createdAt: "asc" },
     select: { id: true },

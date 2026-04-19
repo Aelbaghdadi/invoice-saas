@@ -28,11 +28,14 @@ export async function GET(req: NextRequest) {
   const preview  = sp.get("preview") === "1";
 
   const firmId = session.user.advisoryFirmId;
+  if (!firmId) {
+    return new NextResponse("Forbidden: missing advisory firm", { status: 403 });
+  }
 
   // Export only VALIDATED invoices scoped to the admin's firm
   const where = {
     status: "VALIDATED" as InvoiceStatus,
-    client: { advisoryFirmId: firmId ?? undefined },
+    client: { advisoryFirmId: firmId },
     ...(clientId    ? { clientId }              : {}),
     ...(month       ? { periodMonth: month }    : {}),
     ...(year        ? { periodYear:  year }     : {}),

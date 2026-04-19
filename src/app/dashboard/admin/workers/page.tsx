@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { Users, Plus, Search, MoreHorizontal, Building2, Shield } from "lucide-react";
+import { Users, Plus, Building2, Shield } from "lucide-react";
 import Link from "next/link";
 
 const AVATAR_COLORS = [
@@ -46,17 +46,6 @@ export default async function WorkersPage() {
           </Link>
         }
       />
-
-      <div className="mb-4 flex items-center gap-3">
-        <div className="relative max-w-sm flex-1">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-          <input
-            type="text"
-            placeholder="Buscar gestores..."
-            className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-4 text-[13px] placeholder-slate-400 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-          />
-        </div>
-      </div>
 
       <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
         {workers.length === 0 ? (
@@ -110,14 +99,12 @@ export default async function WorkersPage() {
                     </div>
                   </td>
                   <td className="px-5 py-3.5">
-                    <div className="flex items-center gap-3">
-                      <button className="text-[13px] font-medium text-blue-600 hover:text-blue-700">
-                        Gestionar
-                      </button>
-                      <button className="rounded p-1 text-slate-400 opacity-0 transition group-hover:opacity-100 hover:bg-slate-100">
-                        <MoreHorizontal className="h-4 w-4" />
-                      </button>
-                    </div>
+                    <Link
+                      href={`/dashboard/admin/workers/${worker.id}`}
+                      className="text-[13px] font-medium text-blue-600 hover:text-blue-700"
+                    >
+                      Gestionar
+                    </Link>
                   </td>
                 </tr>
               ))}

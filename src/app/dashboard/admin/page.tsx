@@ -13,6 +13,7 @@ import {
   Clock,
 } from "lucide-react";
 import Link from "next/link";
+import { PENDING_WORK, completionPercent } from "@/lib/invoiceStatuses";
 
 const STATUS_STYLES: Record<string, { label: string; className: string }> = {
   UPLOADED:   { label: "Subida",      className: "bg-blue-50 text-blue-700 border border-blue-200" },
@@ -72,9 +73,9 @@ export default async function AdminDashboard() {
     clientProgress,
   ] = await Promise.all([
     prisma.invoice.count({ where: { client: { advisoryFirmId: firmId } } }),
-    prisma.invoice.count({ where: { status: { in: ["UPLOADED", "ANALYZING", "ANALYZED", "OCR_ERROR"] }, client: { advisoryFirmId: firmId } } }),
+    prisma.invoice.count({ where: { status: { in: PENDING_WORK }, client: { advisoryFirmId: firmId } } }),
     prisma.invoice.count({ where: { status: "VALIDATED", client: { advisoryFirmId: firmId } } }),
-    prisma.invoice.count({ where: { status: "EXPORTED", client: { advisoryFirmId: firmId } } }),
+    prisma.invoice.count({ where: { exportBatchId: { not: null }, client: { advisoryFirmId: firmId } } }),
     prisma.client.count({ where: { advisoryFirmId: firmId } }),
     prisma.invoice.findMany({
       where: { client: { advisoryFirmId: firmId } },
@@ -165,11 +166,12 @@ export default async function AdminDashboard() {
   const clientsWithWork = (clientProgress as any[])
     .map((c: any) => {
       const total     = c.invoices.length;
-      const pending   = c.invoices.filter((i: any) => ["UPLOADED","ANALYZING","ANALYZED","OCR_ERROR"].includes(i.status)).length;
+      const pending   = c.invoices.filter((i: any) => PENDING_WORK.includes(i.status)).length;
       const validated = c.invoices.filter((i: any) => i.status === "VALIDATED").length;
+      const rejected  = c.invoices.filter((i: any) => i.status === "REJECTED").length;
       const exported  = c.invoices.filter((i: any) => i.status === "EXPORTED").length;
-      const done      = validated + exported;
-      const pct       = total > 0 ? Math.round(done / total * 100) : 0;
+      const done      = validated + rejected + exported;
+      const pct       = completionPercent({ total, validated, rejected, exported });
       return { id: c.id, name: c.name, total, pending, done, pct };
     })
     .filter((c) => c.total > 0)

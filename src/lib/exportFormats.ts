@@ -148,8 +148,8 @@ function buildA3Row(inv: InvoiceWithClient, config?: ExportConfig): (string | nu
     (isPurchase ? inv.issuerCif : inv.receiverCif) ?? "",     // E: NIF
     (isPurchase ? inv.issuerName : inv.receiverName) ?? "",   // F: Nombre
     "",                                                        // G: Tipo operación (blank)
-    (inv as any).supplierAccount ?? "",                        // H: Cuenta proveedor
-    (inv as any).expenseAccount ?? "",                         // I: Cuenta gasto
+    inv.supplierAccount ?? "",                        // H: Cuenta proveedor
+    inv.expenseAccount ?? "",                         // I: Cuenta gasto
     inv.taxBase ? Number(inv.taxBase) : 0,                    // J: Base
     inv.vatRate ? Number(inv.vatRate) : 0,                    // K: % IVA
     inv.vatAmount ? Number(inv.vatAmount) : 0,                // L: Cuota IVA
@@ -174,8 +174,8 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
 
     if (!nif) warnings.push("NIF vacío");
     if (!inv.invoiceDate) warnings.push("Fecha vacía");
-    if (!(inv as any).supplierAccount) warnings.push("Sin cuenta proveedor");
-    if (!(inv as any).expenseAccount) warnings.push("Sin cuenta gasto");
+    if (!inv.supplierAccount) warnings.push("Sin cuenta proveedor");
+    if (!inv.expenseAccount) warnings.push("Sin cuenta gasto");
 
     // Base + IVA = Total check
     if (inv.taxBase && inv.vatAmount && inv.totalAmount) {

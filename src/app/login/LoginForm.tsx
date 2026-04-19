@@ -65,7 +65,9 @@ export function LoginForm() {
           <span>
             {state.error === "ACCOUNT_LOCKED"
               ? "Cuenta bloqueada por demasiados intentos. Inténtalo en 15 minutos."
-              : "Email o contraseña incorrectos."}
+              : state.error === "RATE_LIMITED"
+                ? "Demasiados intentos. Espera unos minutos antes de volver a probar."
+                : "Email o contraseña incorrectos."}
           </span>
         </div>
       )}

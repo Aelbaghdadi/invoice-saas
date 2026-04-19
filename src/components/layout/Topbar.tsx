@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
-  Search, Bell, Settings, Building2, FileText, Loader2, X, Menu,
+  Search, Settings, Building2, FileText, Loader2, X, Menu,
 } from "lucide-react";
 
 type TopbarProps = {
@@ -190,12 +190,6 @@ export function Topbar({ userName, role, onMenuClick }: TopbarProps) {
 
       {/* ── Right actions ─────────────────────────────────────────────── */}
       <div className="flex items-center gap-1.5 ml-4">
-        <button
-          className="relative rounded-lg p-2 text-slate-400 transition-all duration-150 hover:bg-slate-100 hover:text-slate-600"
-          title="Notificaciones"
-        >
-          <Bell className="h-[18px] w-[18px]" />
-        </button>
         <Link
           href={settingsHref}
           className="hidden sm:flex rounded-lg p-2 text-slate-400 transition-all duration-150 hover:bg-slate-100 hover:text-slate-600"

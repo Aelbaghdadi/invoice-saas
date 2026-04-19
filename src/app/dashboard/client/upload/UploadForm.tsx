@@ -195,7 +195,7 @@ export function UploadForm() {
           <span className="text-blue-600">selecciona archivos</span>
         </p>
         <p className="mt-1 text-[12px] text-slate-400">
-          PDF, XML, JPG, PNG, WEBP · Máximo 10 MB por archivo
+          PDF, XML, JPG, PNG, WEBP · Máximo 20 MB por archivo
         </p>
       </div>
 

@@ -14,7 +14,11 @@ const LOCK_ATTEMPTS = 3;
 const LOCK_DURATION_MS = 15 * 60 * 1000; // 15 minutes
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
-  session: { strategy: "jwt" },
+  session: {
+    strategy: "jwt",
+    maxAge: 8 * 60 * 60,       // 8h absolute
+    updateAge: 60 * 60,        // refresh every 1h of activity
+  },
   pages: {
     signIn: "/login",
   },

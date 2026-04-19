@@ -70,11 +70,21 @@ export async function workerUploadInvoicesAction(
       return { error: `${file.name} supera el tamaño máximo de 20 MB.` };
     }
 
-    const ext = file.name.split(".").pop()?.toLowerCase() ?? "pdf";
-    const ALLOWED_EXTS = ["pdf", "xml", "jpg", "jpeg", "png", "webp", "heic"];
-    if (!ALLOWED_EXTS.includes(ext)) continue;
-
     const bytes = await file.arrayBuffer();
+
+    // Magic-bytes validation: reject files whose real content does not match
+    // the claimed extension/MIME (protects against disguised executables, etc)
+    const { validateUploadedFile, canonicalMime } = await import("@/lib/fileValidation");
+    const check = validateUploadedFile({
+      buffer: bytes,
+      filename: file.name,
+      declaredMime: file.type,
+    });
+    if (!check.ok) {
+      return { error: `${file.name}: ${check.reason}` };
+    }
+    const realMime = canonicalMime(check.kind);
+
     const fileHash = createHash("sha256").update(Buffer.from(bytes)).digest("hex");
 
     const existingByHash = await prisma.invoice.findFirst({
@@ -92,7 +102,7 @@ export async function workerUploadInvoicesAction(
       const { error: storageError } = await supabase.storage
         .from("invoices")
         .upload(storageKey, bytes, {
-          contentType: file.type || "application/octet-stream",
+          contentType: realMime,
           upsert: false,
         });
       if (storageError) {
@@ -105,7 +115,7 @@ export async function workerUploadInvoicesAction(
       data: {
         filename: file.name,
         storageKey: supabase ? storageKey : `pending/${file.name}`,
-        fileType: file.type || ext,
+        fileType: realMime,
         fileHash,
         sizeBytes: file.size,
         uploadedBy: session.user.id,
@@ -117,7 +127,7 @@ export async function workerUploadInvoicesAction(
       data: {
         filename: file.name,
         storageKey: supabase ? storageKey : `pending/${file.name}`,
-        fileType: file.type || ext,
+        fileType: realMime,
         fileHash,
         type,
         periodMonth,

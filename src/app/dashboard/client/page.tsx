@@ -4,6 +4,7 @@ import { InvoiceStatus } from "@prisma/client";
 import { FileText, Clock, CheckCircle2, Upload, ArrowRight } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import Link from "next/link";
+import { PENDING_WORK } from "@/lib/invoiceStatuses";
 
 const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
   UPLOADED:  { label: "Subida",       variant: "blue" },
@@ -30,7 +31,7 @@ export default async function ClientDashboard() {
     .catch(() => null);
 
   const total     = client ? await prisma.invoice.count({ where: { clientId: client.id } }).catch(() => 0) : 0;
-  const pending   = client ? await prisma.invoice.count({ where: { clientId: client.id, status: { in: [InvoiceStatus.UPLOADED, InvoiceStatus.ANALYZING, InvoiceStatus.ANALYZED, InvoiceStatus.OCR_ERROR] } } }).catch(() => 0) : 0;
+  const pending   = client ? await prisma.invoice.count({ where: { clientId: client.id, status: { in: PENDING_WORK } } }).catch(() => 0) : 0;
   const validated = client ? await prisma.invoice.count({ where: { clientId: client.id, status: InvoiceStatus.VALIDATED } }).catch(() => 0) : 0;
 
   const stats = [

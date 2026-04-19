@@ -2,6 +2,8 @@
 
 import { prisma } from "@/lib/prisma";
 import { sendPasswordResetEmail } from "@/lib/email";
+import { headers } from "next/headers";
+import { resetPasswordRateLimit, getClientIp } from "@/lib/rateLimit";
 
 type ForgotPasswordState = {
   success?: boolean;
@@ -22,6 +24,13 @@ export async function forgotPasswordAction(
 
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return { error: "Por favor, introduce un email válido." };
+  }
+
+  // Rate limit por IP + email (previene spam de emails de reset)
+  const ip = getClientIp(await headers());
+  const rl = resetPasswordRateLimit.check(`reset:${ip}:${email}`);
+  if (!rl.allowed) {
+    return { error: "Demasiadas peticiones. Inténtalo de nuevo en una hora." };
   }
 
   try {

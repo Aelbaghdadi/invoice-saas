@@ -1,9 +1,9 @@
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { InvoiceStatus } from "@prisma/client";
 import { Building2, Clock, CheckCircle2, FileText, ArrowRight } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import Link from "next/link";
+import { PENDING_WORK } from "@/lib/invoiceStatuses";
 
 export default async function WorkerDashboard() {
   const session = await auth();
@@ -28,7 +28,7 @@ export default async function WorkerDashboard() {
     (acc, a) =>
       acc +
       a.client.invoices.filter(
-        (i) => i.status === InvoiceStatus.UPLOADED || i.status === InvoiceStatus.ANALYZING || i.status === InvoiceStatus.ANALYZED || i.status === InvoiceStatus.OCR_ERROR
+        (i) => PENDING_WORK.includes(i.status)
       ).length,
     0
   );
@@ -39,7 +39,7 @@ export default async function WorkerDashboard() {
       a.client.invoices.filter((i) => {
         const today = new Date().toISOString().slice(0, 10);
         return (
-          i.status === InvoiceStatus.VALIDATED &&
+          i.status === "VALIDATED" &&
           i.updatedAt.toISOString().slice(0, 10) === today
         );
       }).length,
@@ -104,7 +104,7 @@ export default async function WorkerDashboard() {
             <ul className="divide-y divide-slate-50">
               {assignments.slice(0, 6).map((a) => {
                 const pending = a.client.invoices.filter(
-                  (i) => i.status === InvoiceStatus.UPLOADED || i.status === InvoiceStatus.ANALYZING || i.status === InvoiceStatus.ANALYZED || i.status === InvoiceStatus.OCR_ERROR
+                  (i) => PENDING_WORK.includes(i.status)
                 ).length;
                 return (
                   <li key={a.clientId} className="flex items-center justify-between px-5 py-3">

@@ -4,8 +4,9 @@ import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Badge } from "@/components/ui/Badge";
-import { FileText, PenLine } from "lucide-react";
+import { FileText, PenLine, X } from "lucide-react";
 import Link from "next/link";
+import type { InvoiceType } from "@prisma/client";
 
 const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
   UPLOADED:  { label: "Subida",       variant: "blue" },
@@ -22,12 +23,21 @@ const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
 export default async function WorkerInvoicesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ clientId?: string }>;
+  searchParams: Promise<{
+    clientId?: string;
+    month?: string;
+    year?: string;
+    type?: string;
+  }>;
 }) {
   const session = await auth();
   if (!session?.user || session.user.role !== "WORKER") redirect("/login");
 
-  const { clientId } = await searchParams;
+  const params = await searchParams;
+  const clientId = params.clientId;
+  const monthFilter = params.month ? parseInt(params.month, 10) || undefined : undefined;
+  const yearFilter = params.year ? parseInt(params.year, 10) || undefined : undefined;
+  const typeFilter = params.type;
 
   // Get all client IDs assigned to this worker
   const assignments = await prisma.workerClientAssignment
@@ -35,18 +45,36 @@ export default async function WorkerInvoicesPage({
     .catch(() => []);
 
   const allowedClientIds = assignments.map((a) => a.clientId);
+  const scopedClientId = clientId && allowedClientIds.includes(clientId) ? clientId : null;
 
   const invoices = await prisma.invoice
     .findMany({
       where: {
-        clientId: clientId && allowedClientIds.includes(clientId)
-          ? clientId
-          : { in: allowedClientIds },
+        clientId: scopedClientId ?? { in: allowedClientIds },
+        ...(monthFilter ? { periodMonth: monthFilter } : {}),
+        ...(yearFilter ? { periodYear: yearFilter } : {}),
+        ...(typeFilter ? { type: typeFilter as InvoiceType } : {}),
       },
       include: { client: true },
       orderBy: { createdAt: "desc" },
     })
     .catch(() => []);
+
+  const filteredClient = scopedClientId
+    ? await prisma.client.findUnique({
+        where: { id: scopedClientId },
+        select: { name: true },
+      }).catch(() => null)
+    : null;
+
+  const monthName = (m: number) => new Date(2000, m - 1).toLocaleString("es-ES", { month: "long" });
+  const hasBatchFilter = !!(filteredClient || monthFilter || yearFilter || typeFilter);
+  const chipParts: string[] = [];
+  if (filteredClient) chipParts.push(filteredClient.name);
+  if (monthFilter && yearFilter) chipParts.push(`${monthName(monthFilter)} ${yearFilter}`);
+  else if (yearFilter) chipParts.push(String(yearFilter));
+  if (typeFilter === "PURCHASE") chipParts.push("Recibidas");
+  else if (typeFilter === "SALE") chipParts.push("Emitidas");
 
   return (
     <div>
@@ -54,6 +82,20 @@ export default async function WorkerInvoicesPage({
         title="Facturas"
         description={`${invoices.length} factura${invoices.length !== 1 ? "s" : ""}`}
       />
+
+      {hasBatchFilter && (
+        <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-[12px] font-medium text-blue-700">
+          <span className="text-blue-400">Filtrado por:</span>
+          <span className="capitalize">{chipParts.join(" \u00B7 ")}</span>
+          <Link
+            href="/dashboard/worker/invoices"
+            className="ml-1 flex h-5 w-5 items-center justify-center rounded-full text-blue-400 hover:bg-blue-100 hover:text-blue-600"
+            title="Quitar filtro"
+          >
+            <X className="h-3 w-3" />
+          </Link>
+        </div>
+      )}
 
       <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
         {invoices.length === 0 ? (

@@ -144,7 +144,8 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
   }
 
   // When saving without validating, transition to PENDING_REVIEW if coming from initial states
-  const draftStatuses = ["ANALYZED", "NEEDS_ATTENTION", "PENDING_REVIEW"];
+  // ANALYZED es legacy (pre-refactor); si aun existe en BD se acepta como draft.
+  const draftStatuses = ["ANALYZED", "NEEDS_ATTENTION", "PENDING_REVIEW", "OCR_ERROR"];
   const saveStatus = !validate && draftStatuses.includes(invoice.status)
     ? "PENDING_REVIEW"
     : undefined;
@@ -169,6 +170,31 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
         changedBy: userId,
       },
     });
+
+    // Aprender: si hay CIF emisor + cuentas contables, actualizar plan de cuentas
+    const learnNif = newData.issuerCif?.trim().toUpperCase();
+    const learnSupplier = newData.supplierAccount?.trim();
+    const learnExpense = newData.expenseAccount?.trim();
+    const learnName = newData.issuerName?.trim();
+    if (learnNif && (learnSupplier || learnExpense)) {
+      await prisma.accountEntry.upsert({
+        where: { clientId_nif: { clientId: invoice.clientId, nif: learnNif } },
+        create: {
+          clientId: invoice.clientId,
+          nif: learnNif,
+          name: learnName || learnNif,
+          supplierAccount: learnSupplier || "",
+          expenseAccount: learnExpense || "",
+          defaultVatRate: newData.vatRate != null ? (newData.vatRate as any) : null,
+        },
+        update: {
+          ...(learnName ? { name: learnName } : {}),
+          ...(learnSupplier ? { supplierAccount: learnSupplier } : {}),
+          ...(learnExpense ? { expenseAccount: learnExpense } : {}),
+          ...(newData.vatRate != null ? { defaultVatRate: newData.vatRate as any } : {}),
+        },
+      });
+    }
   }
 
   if (auditEntries.length > 0) {

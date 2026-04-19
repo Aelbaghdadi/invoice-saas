@@ -49,11 +49,18 @@ export async function reuploadInvoiceAction(
   const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
   if (file.size > MAX_FILE_SIZE) return { error: "El archivo supera el tamaño máximo de 20 MB." };
 
-  const ext = file.name.split(".").pop()?.toLowerCase() ?? "pdf";
-  const ALLOWED_EXTS = ["pdf", "xml", "jpg", "jpeg", "png", "webp", "heic"];
-  if (!ALLOWED_EXTS.includes(ext)) return { error: "Formato no permitido." };
-
   const bytes = await file.arrayBuffer();
+
+  // Magic-bytes validation
+  const { validateUploadedFile, canonicalMime } = await import("@/lib/fileValidation");
+  const check = validateUploadedFile({
+    buffer: bytes,
+    filename: file.name,
+    declaredMime: file.type,
+  });
+  if (!check.ok) return { error: check.reason };
+  const realMime = canonicalMime(check.kind);
+
   const fileHash = createHash("sha256").update(Buffer.from(bytes)).digest("hex");
 
   // Reject if hash equals the rejected file (same content)
@@ -68,7 +75,7 @@ export async function reuploadInvoiceAction(
     const { error: storageError } = await supabase.storage
       .from("invoices")
       .upload(storageKey, bytes, {
-        contentType: file.type || "application/octet-stream",
+        contentType: realMime,
         upsert: false,
       });
     if (storageError) return { error: `Error al subir: ${storageError.message}` };
@@ -78,7 +85,7 @@ export async function reuploadInvoiceAction(
     data: {
       filename: file.name,
       storageKey: supabase ? storageKey : `pending/${file.name}`,
-      fileType: file.type || ext,
+      fileType: realMime,
       fileHash,
       sizeBytes: file.size,
       uploadedBy: session.user.id,
@@ -90,7 +97,7 @@ export async function reuploadInvoiceAction(
     data: {
       filename: file.name,
       storageKey: supabase ? storageKey : `pending/${file.name}`,
-      fileType: file.type || ext,
+      fileType: realMime,
       fileHash,
       type: rejected.type,
       periodMonth: rejected.periodMonth,
