@@ -6,7 +6,8 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { Badge } from "@/components/ui/Badge";
 import { FileText, PenLine, X } from "lucide-react";
 import Link from "next/link";
-import type { InvoiceType } from "@prisma/client";
+import type { InvoiceType, InvoiceStatus } from "@prisma/client";
+import { PENDING_WORK } from "@/lib/invoiceStatuses";
 
 const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
   UPLOADED:  { label: "Subida",       variant: "blue" },
@@ -28,6 +29,7 @@ export default async function WorkerInvoicesPage({
     month?: string;
     year?: string;
     type?: string;
+    status?: string;
   }>;
 }) {
   const session = await auth();
@@ -38,6 +40,7 @@ export default async function WorkerInvoicesPage({
   const monthFilter = params.month ? parseInt(params.month, 10) || undefined : undefined;
   const yearFilter = params.year ? parseInt(params.year, 10) || undefined : undefined;
   const typeFilter = params.type;
+  const pendingOnly = params.status === "pending";
 
   // Get all client IDs assigned to this worker
   const assignments = await prisma.workerClientAssignment
@@ -54,6 +57,7 @@ export default async function WorkerInvoicesPage({
         ...(monthFilter ? { periodMonth: monthFilter } : {}),
         ...(yearFilter ? { periodYear: yearFilter } : {}),
         ...(typeFilter ? { type: typeFilter as InvoiceType } : {}),
+        ...(pendingOnly ? { status: { in: PENDING_WORK as InvoiceStatus[] } } : {}),
       },
       include: { client: true },
       orderBy: { createdAt: "desc" },
@@ -68,8 +72,9 @@ export default async function WorkerInvoicesPage({
     : null;
 
   const monthName = (m: number) => new Date(2000, m - 1).toLocaleString("es-ES", { month: "long" });
-  const hasBatchFilter = !!(filteredClient || monthFilter || yearFilter || typeFilter);
+  const hasBatchFilter = !!(filteredClient || monthFilter || yearFilter || typeFilter || pendingOnly);
   const chipParts: string[] = [];
+  if (pendingOnly) chipParts.push("Pendientes de revisión");
   if (filteredClient) chipParts.push(filteredClient.name);
   if (monthFilter && yearFilter) chipParts.push(`${monthName(monthFilter)} ${yearFilter}`);
   else if (yearFilter) chipParts.push(String(yearFilter));

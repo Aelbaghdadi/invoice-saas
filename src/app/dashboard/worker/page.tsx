@@ -1,6 +1,6 @@
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { Building2, Clock, CheckCircle2, FileText, ArrowRight } from "lucide-react";
+import { Building2, Clock, CheckCircle2, FileText, ArrowRight, PenLine } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import Link from "next/link";
 import { PENDING_WORK } from "@/lib/invoiceStatuses";
@@ -61,13 +61,24 @@ export default async function WorkerDashboard() {
 
   return (
     <div>
-      <div className="mb-6">
-        <h1 className="text-[22px] font-bold text-slate-900">
-          Bienvenido, {session?.user?.name}
-        </h1>
-        <p className="mt-0.5 text-[13px] text-slate-500">
-          Resumen de las facturas de tus clientes asignados.
-        </p>
+      <div className="mb-6 flex items-start justify-between">
+        <div>
+          <h1 className="text-[22px] font-bold text-slate-900">
+            Bienvenido, {session?.user?.name}
+          </h1>
+          <p className="mt-0.5 text-[13px] text-slate-500">
+            Resumen de las facturas de tus clientes asignados.
+          </p>
+        </div>
+        {pendingInvoices > 0 && (
+          <Link
+            href="/dashboard/worker/invoices?status=pending"
+            className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-[13px] font-semibold text-white shadow-sm hover:bg-blue-700"
+          >
+            <PenLine className="h-4 w-4" />
+            Revisar pendientes ({pendingInvoices})
+          </Link>
+        )}
       </div>
 
       {/* Stats */}
