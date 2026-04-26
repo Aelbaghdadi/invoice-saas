@@ -13,7 +13,9 @@ import type { Invoice, IssueType, IssueStatus } from "@prisma/client";
 import { isValidNIF } from "@/lib/validators";
 import Link from "next/link";
 import PdfViewer from "@/components/ui/PdfViewerDynamic";
-import { ConfidenceBadge } from "@/components/ui/ConfidenceBadge";
+import { fieldPropsFromConfidence, ConfidenceHint } from "@/components/ui/SmartField";
+import { useReviewShortcuts } from "@/hooks/useReviewShortcuts";
+import { useRouter } from "next/navigation";
 
 type ExtractionData = {
   issuerName: string | null;
@@ -48,6 +50,13 @@ type SuggestedAccount = {
   name: string;
 } | null;
 
+type SessionContext = {
+  clientName: string;
+  periodMonth: number;
+  periodYear: number;
+  type: "PURCHASE" | "SALE";
+};
+
 type Props = {
   invoice: Invoice;
   prevId: string | null;
@@ -58,6 +67,13 @@ type Props = {
   extraction: ExtractionData | null;
   issues: IssueData[];
   suggestedAccount?: SuggestedAccount;
+  /** Querystring ya formada ("?bucket=clean" o ""), a pegar a las URLs de nav. */
+  queueSuffix?: string;
+  /** Bucket actual de la cola; se envia al server para calcular el siguiente. */
+  bucket?: "clean" | "attention" | "all";
+  /** Contexto de la "sesion de trabajo": cliente + periodo + tipo. Se muestra
+   *  en cabecera para que el gestor sepa en que lote esta. */
+  sessionContext?: SessionContext;
 };
 
 function fmt(v: unknown) {
@@ -70,7 +86,7 @@ function fmtDate(d: Date | null | undefined) {
   return new Date(d).toISOString().slice(0, 10);
 }
 
-export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, backHref, extraction, issues, suggestedAccount }: Props) {
+export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, backHref, extraction, issues, suggestedAccount, queueSuffix = "", bucket = "all", sessionContext }: Props) {
   const { success, error } = useToast();
   const isImage = invoice.fileType.startsWith("image/");
   const isXml   = invoice.fileType.includes("xml");
@@ -99,6 +115,8 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
   const [rejectCategory, setRejectCategory] = useState("");
   const [showOcrComparison, setShowOcrComparison] = useState(false);
   const [dismissedIssues, setDismissedIssues] = useState<Set<string>>(new Set());
+  const [showHelp, setShowHelp] = useState(false);
+  const router = useRouter();
 
   const confidence = extraction?.confidence ?? null;
   const openIssues = issues.filter((i) => i.status === "OPEN" && !dismissedIssues.has(i.id));
@@ -120,6 +138,60 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
       .catch(() => setPreviewLoading(false));
   }, [invoice.id]);
 
+  // Auto-foco en el primer campo dudoso al cargar la factura. Si todo es
+  // de alta confianza, no robamos el foco (asi Enter valida directamente).
+  useEffect(() => {
+    if (!confidence) return;
+    const order = [
+      "issuerName", "issuerCif", "receiverName", "receiverCif",
+      "invoiceNumber", "invoiceDate", "taxBase", "vatRate", "vatAmount", "totalAmount",
+    ];
+    const firstDubious = order.find((f) => {
+      const s = confidence[f];
+      return s == null || s < 0.92;
+    });
+    if (!firstDubious) return;
+    // Pequeno delay para ganar al focus inicial del body.
+    const timer = setTimeout(() => {
+      const el = document.getElementById(firstDubious) as HTMLInputElement | null;
+      el?.focus();
+      el?.select?.();
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [invoice.id, confidence]);
+
+  // Prefetch de la siguiente factura: cuando ya estamos viendo la actual,
+  // pedimos la URL firmada de la siguiente y precargamos el archivo en
+  // background. Asi al validar y saltar, el visor aparece al instante.
+  useEffect(() => {
+    if (!nextId) return;
+    // Esperar a que la actual termine de cargar; no robar banda a la cosa
+    // que el usuario necesita ver ya.
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/invoices/${nextId}/preview`);
+        if (!res.ok) return;
+        const d = await res.json();
+        if (!d?.url) return;
+        // <link rel="prefetch"> dispara la descarga del binario al cache
+        // del navegador. Es seguro: si el usuario no llega a navegar, el
+        // navegador libera el recurso al cabo de un rato.
+        const link = document.createElement("link");
+        link.rel = "prefetch";
+        link.as = d.fileType?.startsWith("image/") ? "image" : "fetch";
+        link.href = d.url;
+        link.crossOrigin = "anonymous";
+        document.head.appendChild(link);
+        return () => {
+          document.head.removeChild(link);
+        };
+      } catch {
+        /* ignore — el prefetch es oportunista */
+      }
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [nextId]);
+
   const buildFormData = useCallback((extra?: Record<string,string>) => {
     const fd = new FormData();
     fd.set("invoiceId",    invoice.id);
@@ -138,9 +210,10 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
     fd.set("accountingPeriodYear",  (document.getElementById("accountingPeriodYear")  as HTMLSelectElement)?.value ?? "");
     fd.set("supplierAccount", supplierAccountVal);
     fd.set("expenseAccount",  expenseAccountVal);
+    fd.set("bucket", bucket);
     if (extra) Object.entries(extra).forEach(([k,v]) => fd.set(k,v));
     return fd;
-  }, [taxBase, vatRate, vatAmount, totalAmount, supplierAccountVal, expenseAccountVal, invoice.id, invoice.updatedAt]);
+  }, [taxBase, vatRate, vatAmount, totalAmount, supplierAccountVal, expenseAccountVal, invoice.id, invoice.updatedAt, bucket]);
 
   const handleSave = () => {
     startSave(async () => {
@@ -230,6 +303,44 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
 
   const inputClass = "w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[13px] text-slate-800 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100";
 
+  // Props de estilo + tabIndex en funcion de la confianza OCR de cada campo.
+  // Campos "seguros" (score alto) reciben tabIndex={-1} y color apagado:
+  // Tab los salta y el gestor va directo a los dudosos.
+  const fp = (field: string) => fieldPropsFromConfidence(confidence?.[field] ?? null);
+
+  // Atajos de teclado globales. Enter valida, R abre rechazo, D marca
+  // duplicado, Ctrl/Cmd+S guarda borrador, Alt+Arrow navega, "?" abre ayuda.
+  useReviewShortcuts({
+    onValidate: () => { if (!isPendingValidate) handleValidate(); },
+    onSave: () => { if (!isPendingSave) handleSave(); },
+    onReject: () => setShowRejectModal(true),
+    onMarkDuplicate: () => {
+      setRejectCategory("DUPLICATE");
+      setRejectReason((prev) => prev || "Factura duplicada");
+      setShowRejectModal(true);
+    },
+    onNext: () => { if (nextId) router.push(`/dashboard/worker/review/${nextId}${queueSuffix}`); },
+    onPrev: () => { if (prevId) router.push(`/dashboard/worker/review/${prevId}${queueSuffix}`); },
+    onToggleHelp: () => setShowHelp((s) => !s),
+    isBlocked: () => showRejectModal || showHelp,
+  });
+
+  // Etiqueta del bucket activo en la sesion. Ayuda al gestor a saber
+  // "estoy en la cola de incidencias" vs "la de validacion rapida".
+  const bucketLabel =
+    bucket === "attention" ? "Incidencias" :
+    bucket === "clean" ? "Listas para validar" :
+    null;
+
+  // Progreso de la sesion: en "attention" y "clean", la factura actual
+  // sigue en la cola hasta que se valida/rechaza, asi que "posicion/total"
+  // ya es el indicador natural. % = (position-1)/total procesado.
+  const progressPct = batchTotal > 0 ? Math.round(((position - 1) / batchTotal) * 100) : 0;
+
+  const monthLabel = sessionContext
+    ? new Date(2000, sessionContext.periodMonth - 1).toLocaleString("es-ES", { month: "long" })
+    : null;
+
   return (
     <div className="flex h-full flex-col overflow-hidden">
       {/* Header bar */}
@@ -245,9 +356,18 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
 
         {/* Navigation */}
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setShowHelp(true)}
+            title="Atajos de teclado (?)"
+            className="flex h-7 items-center gap-1 rounded-lg border border-slate-200 px-2 text-[11px] font-medium text-slate-500 hover:bg-slate-50"
+          >
+            <kbd className="rounded bg-slate-100 px-1 text-[10px] font-semibold">?</kbd>
+            atajos
+          </button>
           <span className="text-[12px] text-slate-400">{position} de {batchTotal}</span>
           {prevId ? (
-            <Link href={`/dashboard/worker/review/${prevId}`}
+            <Link href={`/dashboard/worker/review/${prevId}${queueSuffix}`} prefetch
               className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50">
               <ChevronLeft className="h-4 w-4" />
             </Link>
@@ -257,7 +377,7 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
             </button>
           )}
           {nextId ? (
-            <Link href={`/dashboard/worker/review/${nextId}`}
+            <Link href={`/dashboard/worker/review/${nextId}${queueSuffix}`} prefetch
               className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50">
               <ChevronRight className="h-4 w-4" />
             </Link>
@@ -268,6 +388,48 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
           )}
         </div>
       </div>
+
+      {/* Session strip: contexto del lote + progreso visual. Solo se renderiza
+          si venimos de un lote (sessionContext disponible) para no mostrar
+          nada en accesos directos. */}
+      {sessionContext && batchTotal > 0 && (
+        <div className="flex flex-shrink-0 items-center gap-3 border-b border-slate-100 bg-slate-50/60 px-5 py-2">
+          <div className="flex items-center gap-2 text-[12px] text-slate-600">
+            <span className="font-semibold text-slate-700">{sessionContext.clientName}</span>
+            <span className="text-slate-300">·</span>
+            <span className="capitalize">{monthLabel} {sessionContext.periodYear}</span>
+            <span className="text-slate-300">·</span>
+            <span>{sessionContext.type === "PURCHASE" ? "Recibidas" : "Emitidas"}</span>
+            {bucketLabel && (
+              <>
+                <span className="text-slate-300">·</span>
+                <span className={
+                  "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold " +
+                  (bucket === "attention"
+                    ? "bg-amber-100 text-amber-700"
+                    : "bg-blue-100 text-blue-700")
+                }>
+                  {bucketLabel}
+                </span>
+              </>
+            )}
+          </div>
+          <div className="flex flex-1 items-center gap-2">
+            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-200">
+              <div
+                className={
+                  "h-full transition-all " +
+                  (progressPct === 100 ? "bg-green-500" : "bg-blue-500")
+                }
+                style={{ width: `${progressPct}%` }}
+              />
+            </div>
+            <span className="text-[11px] font-medium text-slate-500 tabular-nums">
+              {position}/{batchTotal}
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Split panel */}
       <div className="flex flex-1 overflow-hidden">
@@ -405,16 +567,16 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
               <div>
                 <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
                   Nombre / Razon social
-                  {confidence?.issuerName != null && <ConfidenceBadge score={confidence.issuerName} />}
+                  <ConfidenceHint score={confidence?.issuerName ?? null} />
                 </label>
-                <input id="issuerName" className={inputClass} defaultValue={invoice.issuerName ?? ""} />
+                <input id="issuerName" {...fp("issuerName")} defaultValue={invoice.issuerName ?? ""} />
               </div>
               <div>
                 <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
                   CIF / NIF
-                  {confidence?.issuerCif != null && <ConfidenceBadge score={confidence.issuerCif} />}
+                  <ConfidenceHint score={confidence?.issuerCif ?? null} />
                 </label>
-                <input id="issuerCif" className={inputClass} defaultValue={invoice.issuerCif ?? ""} placeholder="B12345678" />
+                <input id="issuerCif" {...fp("issuerCif")} defaultValue={invoice.issuerCif ?? ""} placeholder="B12345678" />
                 {invoice.issuerCif && !isValidNIF(invoice.issuerCif) && (
                   <p className="mt-1 flex items-center gap-1 text-[11px] text-orange-600">
                     <AlertTriangle className="h-3 w-3" />
@@ -430,16 +592,16 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
               <div>
                 <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
                   Nombre / Razon social
-                  {confidence?.receiverName != null && <ConfidenceBadge score={confidence.receiverName} />}
+                  <ConfidenceHint score={confidence?.receiverName ?? null} />
                 </label>
-                <input id="receiverName" className={inputClass} defaultValue={invoice.receiverName ?? ""} />
+                <input id="receiverName" {...fp("receiverName")} defaultValue={invoice.receiverName ?? ""} />
               </div>
               <div>
                 <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
                   CIF / NIF
-                  {confidence?.receiverCif != null && <ConfidenceBadge score={confidence.receiverCif} />}
+                  <ConfidenceHint score={confidence?.receiverCif ?? null} />
                 </label>
-                <input id="receiverCif" className={inputClass} defaultValue={invoice.receiverCif ?? ""} placeholder="B12345678" />
+                <input id="receiverCif" {...fp("receiverCif")} defaultValue={invoice.receiverCif ?? ""} placeholder="B12345678" />
               </div>
             </fieldset>
 
@@ -450,16 +612,16 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
                 <div>
                   <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
                     N factura
-                    {confidence?.invoiceNumber != null && <ConfidenceBadge score={confidence.invoiceNumber} />}
+                    <ConfidenceHint score={confidence?.invoiceNumber ?? null} />
                   </label>
-                  <input id="invoiceNumber" className={inputClass} defaultValue={invoice.invoiceNumber ?? ""} />
+                  <input id="invoiceNumber" {...fp("invoiceNumber")} defaultValue={invoice.invoiceNumber ?? ""} />
                 </div>
                 <div>
                   <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
                     Fecha
-                    {confidence?.invoiceDate != null && <ConfidenceBadge score={confidence.invoiceDate} />}
+                    <ConfidenceHint score={confidence?.invoiceDate ?? null} />
                   </label>
-                  <input id="invoiceDate" type="date" className={inputClass} defaultValue={fmtDate(invoice.invoiceDate)} />
+                  <input id="invoiceDate" type="date" {...fp("invoiceDate")} defaultValue={fmtDate(invoice.invoiceDate)} />
                 </div>
               </div>
             </fieldset>
@@ -500,30 +662,45 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
                 <div>
                   <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
                     Base imponible
-                    {confidence?.taxBase != null && <ConfidenceBadge score={confidence.taxBase} />}
+                    <ConfidenceHint score={confidence?.taxBase ?? null} />
                   </label>
-                  <input type="number" step="0.01" min="0" className={inputClass} value={taxBase} onChange={e => setTaxBase(e.target.value)} placeholder="1000.00" />
+                  <input id="taxBase" type="number" step="0.01" min="0" {...fp("taxBase")} value={taxBase} onChange={e => setTaxBase(e.target.value)} placeholder="1000.00" />
                 </div>
                 <div>
                   <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
                     % IVA
-                    {confidence?.vatRate != null && <ConfidenceBadge score={confidence.vatRate} />}
+                    <ConfidenceHint score={confidence?.vatRate ?? null} />
                   </label>
-                  <input type="number" step="0.01" min="0" max="100" className={inputClass} value={vatRate} onChange={e => setVatRate(e.target.value)} placeholder="21" />
+                  <input id="vatRate" type="number" step="0.01" min="0" max="100" {...fp("vatRate")} value={vatRate} onChange={e => setVatRate(e.target.value)} placeholder="21" />
                 </div>
                 <div>
                   <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
                     Cuota IVA
-                    {confidence?.vatAmount != null && <ConfidenceBadge score={confidence.vatAmount} />}
+                    <ConfidenceHint score={confidence?.vatAmount ?? null} />
                   </label>
-                  <input type="number" step="0.01" min="0" className={inputClass} value={vatAmount} onChange={e => setVatAmount(e.target.value)} placeholder="210.00" />
+                  <input id="vatAmount" type="number" step="0.01" min="0" {...fp("vatAmount")} value={vatAmount} onChange={e => setVatAmount(e.target.value)} placeholder="210.00" />
                 </div>
                 <div>
                   <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500 font-semibold">
                     Total factura
-                    {confidence?.totalAmount != null && <ConfidenceBadge score={confidence.totalAmount} />}
+                    <ConfidenceHint score={confidence?.totalAmount ?? null} />
                   </label>
-                  <input type="number" step="0.01" min="0" className={`${inputClass} font-semibold`} value={totalAmount} onChange={e => setTotalAmount(e.target.value)} placeholder="1060.00" />
+                  {(() => {
+                    const props = fp("totalAmount");
+                    return (
+                      <input
+                        id="totalAmount"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        className={`${props.className} font-semibold`}
+                        tabIndex={props.tabIndex}
+                        value={totalAmount}
+                        onChange={e => setTotalAmount(e.target.value)}
+                        placeholder="1060.00"
+                      />
+                    );
+                  })()}
                 </div>
               </div>
             </fieldset>
@@ -632,23 +809,28 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
               type="button"
               onClick={handleSave}
               disabled={isPendingSave}
+              title="Guardar borrador (Ctrl+S)"
               className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3.5 py-2 text-[13px] font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
             >
               {isPendingSave ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
               Guardar
+              <kbd className="ml-1 rounded bg-slate-100 px-1 text-[10px] font-semibold text-slate-500">⌘S</kbd>
             </button>
             <button
               type="button"
               onClick={() => setShowRejectModal(true)}
+              title="Rechazar (R)"
               className="flex items-center gap-1.5 rounded-lg border border-red-200 px-3.5 py-2 text-[13px] font-medium text-red-600 transition hover:bg-red-50 disabled:opacity-50"
             >
               <XCircle className="h-3.5 w-3.5" />
               Rechazar
+              <kbd className="ml-1 rounded bg-red-50 px-1 text-[10px] font-semibold text-red-500">R</kbd>
             </button>
             <button
               type="button"
               onClick={handleValidate}
               disabled={isPendingValidate}
+              title="Validar y pasar a la siguiente (Enter)"
               className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-[13px] font-semibold text-white transition disabled:opacity-50 ${
                 mathOk === false ? "bg-orange-500 hover:bg-orange-600" : "bg-green-600 hover:bg-green-700"
               }`}
@@ -658,9 +840,58 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
                 : <CheckCircle2 className="h-4 w-4" />
               }
               {mathOk === false ? "Validar igualmente" : "Validar factura"}
+              <kbd className="ml-1 rounded bg-white/20 px-1 text-[10px] font-semibold text-white">Enter</kbd>
               {nextId && <ChevronRight className="h-4 w-4" />}
             </button>
           </div>
+
+          {/* Shortcuts help overlay */}
+          {showHelp && (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+              onClick={() => setShowHelp(false)}
+            >
+              <div
+                className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <h3 className="text-[15px] font-semibold text-slate-800">Atajos de teclado</h3>
+                <p className="mt-1 text-[12px] text-slate-500">
+                  Pensados para revisar rapido sin tocar el raton.
+                </p>
+                <ul className="mt-4 space-y-2 text-[13px] text-slate-700">
+                  {[
+                    ["Enter", "Validar la factura actual y pasar a la siguiente"],
+                    ["Ctrl / Cmd + S", "Guardar como borrador sin validar"],
+                    ["R", "Abrir dialogo de rechazo"],
+                    ["D", "Marcar como duplicada (abre rechazo prerellenado)"],
+                    ["Alt + Flecha derecha", "Siguiente factura sin validar"],
+                    ["Alt + Flecha izquierda", "Factura anterior sin validar"],
+                    ["Tab", "Saltar entre campos dudosos (omite los seguros)"],
+                    ["?", "Abrir / cerrar esta ayuda"],
+                  ].map(([k, desc]) => (
+                    <li key={k} className="flex items-start gap-3">
+                      <kbd className="flex-shrink-0 rounded border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-700 shadow-sm">
+                        {k}
+                      </kbd>
+                      <span className="text-slate-600">{desc}</span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-4 text-[11px] text-slate-400">
+                  Los atajos se ignoran mientras escribes en un campo. Los campos marcados en verde son "seguros" (alta confianza OCR) y Tab los salta.
+                </p>
+                <div className="mt-4 flex justify-end">
+                  <button
+                    onClick={() => setShowHelp(false)}
+                    className="rounded-lg bg-slate-800 px-4 py-2 text-[13px] font-medium text-white hover:bg-slate-700"
+                  >
+                    Cerrar
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Reject modal */}
           {showRejectModal && (

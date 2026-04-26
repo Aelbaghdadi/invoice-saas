@@ -2,17 +2,27 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { redirect, notFound } from "next/navigation";
 import { ReviewForm } from "./ReviewForm";
+import {
+  filterFromInvoice,
+  getQueuePosition,
+  parseBucket,
+  queueToSearchParams,
+} from "@/lib/reviewQueue";
 
 export default async function ReviewPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams?: Promise<{ bucket?: string }>;
 }) {
   const session = await auth();
   if (!session?.user || !["ADMIN", "WORKER"].includes(session.user.role))
     redirect("/login");
 
   const { id } = await params;
+  const sp = (await searchParams) ?? {};
+  const bucket = parseBucket(sp.bucket);
 
   const invoice = await prisma.invoice.findUnique({
     where: { id },
@@ -45,29 +55,16 @@ export default async function ReviewPage({
     orderBy: { createdAt: "desc" },
   });
 
-  // Get all invoices in the same batch (same client + period + type), ordered by createdAt.
-  // Only include invoices still pending review; always include the current one so the
-  // counter stays correct even if this invoice is already validated.
-  const batchInvoices = await prisma.invoice.findMany({
-    where: {
-      clientId:    invoice.clientId,
-      periodMonth: invoice.periodMonth,
-      periodYear:  invoice.periodYear,
-      type:        invoice.type,
-      OR: [
-        { id: invoice.id },
-        { status: { in: ["PENDING_REVIEW", "NEEDS_ATTENTION", "OCR_ERROR"] } },
-      ],
-    },
-    orderBy: { createdAt: "asc" },
-    select: { id: true },
-  });
-
-  const idx     = batchInvoices.findIndex((i) => i.id === id);
-  const prevId  = idx > 0 ? batchInvoices[idx - 1].id : null;
-  const nextId  = idx < batchInvoices.length - 1 ? batchInvoices[idx + 1].id : null;
-  const position = idx + 1;
-  const total    = batchInvoices.length;
+  // Cola de revision via helper centralizado. El "bucket" viene de la URL
+  // (?bucket=clean|attention|all) y lo preservamos al navegar entre facturas.
+  const queueFilter = filterFromInvoice(invoice, bucket);
+  const queue = await getQueuePosition(id, queueFilter);
+  const prevId = queue.prevId;
+  const nextId = queue.nextId;
+  const position = queue.index >= 0 ? queue.index + 1 : 1;
+  const total = queue.total;
+  const queueParams = queueToSearchParams(queueFilter).toString();
+  const queueSuffix = queueParams ? `?${queueParams}` : "";
 
   const backHref =
     session.user.role === "ADMIN"
@@ -129,6 +126,14 @@ export default async function ReviewPage({
         extraction={extractionData}
         issues={issuesData}
         suggestedAccount={accountData}
+        queueSuffix={queueSuffix}
+        bucket={bucket}
+        sessionContext={{
+          clientName: invoice.client.name,
+          periodMonth: invoice.periodMonth,
+          periodYear: invoice.periodYear,
+          type: invoice.type,
+        }}
       />
     </div>
   );

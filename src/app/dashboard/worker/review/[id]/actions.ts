@@ -5,6 +5,12 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
 import { notifyClientInvoiceValidated, notifyClientInvoiceRejected } from "@/lib/email";
+import {
+  filterFromInvoice,
+  getNextInQueue,
+  parseBucket,
+  queueToSearchParams,
+} from "@/lib/reviewQueue";
 
 export type ReviewState = { error?: string } | null;
 
@@ -235,7 +241,8 @@ export async function validateInvoice(
     return { error: "No autorizado" };
   }
   const id = formData.get("invoiceId") as string;
-  const nextId = formData.get("nextId") as string | null;
+  const fallbackNext = formData.get("nextId") as string | null;
+  const bucket = parseBucket(formData.get("bucket"));
   const expectedUpdatedAt = formData.get("updatedAt") as string | null;
   const err = await parseAndSave(id, session.user.id, extractFields(formData), true, expectedUpdatedAt ?? undefined);
   if (err) return err;
@@ -260,10 +267,39 @@ export async function validateInvoice(
     }
   });
 
+  // Recomputar el siguiente respetando el bucket actual (puede haber
+  // cambiado desde que cargo la pagina: otro gestor valido, etc).
+  const nextId = await resolveNextId(id, bucket, fallbackNext);
   if (nextId) {
-    redirect(`/dashboard/worker/review/${nextId}`);
+    const suffix = queueToSearchParams({ bucket }).toString();
+    redirect(`/dashboard/worker/review/${nextId}${suffix ? `?${suffix}` : ""}`);
   }
   redirect("/dashboard/worker/invoices");
+}
+
+/**
+ * Dado un invoiceId recien procesado, devuelve el siguiente id pendiente
+ * de la misma cola (mismo cliente + periodo + tipo + bucket). Si algo
+ * falla (factura no encontrada, etc) cae en el fallback que venia del
+ * formulario.
+ */
+async function resolveNextId(
+  currentId: string,
+  bucket: "clean" | "attention" | "all",
+  fallback: string | null,
+): Promise<string | null> {
+  try {
+    const inv = await prisma.invoice.findUnique({
+      where: { id: currentId },
+      select: { clientId: true, periodMonth: true, periodYear: true, type: true },
+    });
+    if (!inv) return fallback || null;
+    const filter = filterFromInvoice(inv, bucket);
+    const next = await getNextInQueue(currentId, filter);
+    return next ?? fallback ?? null;
+  } catch {
+    return fallback || null;
+  }
 }
 
 export async function rejectInvoice(
@@ -278,7 +314,8 @@ export async function rejectInvoice(
   const id = formData.get("invoiceId") as string;
   const reason = (formData.get("rejectionReason") as string)?.trim();
   const category = formData.get("rejectionCategory") as string | null;
-  const nextId = formData.get("nextId") as string | null;
+  const fallbackNext = formData.get("nextId") as string | null;
+  const bucket = parseBucket(formData.get("bucket"));
 
   if (!reason) {
     return { error: "Debes indicar el motivo del rechazo." };
@@ -346,8 +383,10 @@ export async function rejectInvoice(
     }
   });
 
+  const nextId = await resolveNextId(id, bucket, fallbackNext);
   if (nextId) {
-    redirect(`/dashboard/worker/review/${nextId}`);
+    const suffix = queueToSearchParams({ bucket }).toString();
+    redirect(`/dashboard/worker/review/${nextId}${suffix ? `?${suffix}` : ""}`);
   }
   redirect("/dashboard/worker/invoices");
 }
