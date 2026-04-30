@@ -40,9 +40,8 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     const supabase = createServerSupabase();
     if (!supabase) throw new Error("Storage not configured");
 
-    let extracted;
     let source: string;
-    let rawResponse: string | undefined;
+    let ocrResult;
     const ft = invoice.fileType;
 
     if (ft.includes("xml")) {
@@ -50,10 +49,8 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       const { data, error } = await supabase.storage.from("invoices").download(invoice.storageKey);
       if (error) throw new Error(error.message);
       const xmlText = await data.text();
-      rawResponse = xmlText;
-      extracted = await extractInvoiceFromXml(xmlText);
+      ocrResult = await extractInvoiceFromXml(xmlText);
     } else {
-      // Download file as base64
       const { data, error } = await supabase.storage.from("invoices").download(invoice.storageKey);
       if (error) throw new Error(error.message);
       const buffer = await data.arrayBuffer();
@@ -61,21 +58,27 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
 
       if (ft === "application/pdf" || invoice.filename.endsWith(".pdf")) {
         source = "document_ai";
-        extracted = await extractInvoiceFromPdf(base64);
+        ocrResult = await extractInvoiceFromPdf(base64);
       } else {
         source = "document_ai";
-        extracted = await extractInvoiceFromImage(base64, ft || "image/jpeg");
+        ocrResult = await extractInvoiceFromImage(base64, ft || "image/jpeg");
       }
-      rawResponse = JSON.stringify(extracted);
     }
 
-    // Math validation: Base + IVA = Total. Leave isValid=null if any field missing
-    // so the reviewer is forced to fill it in rather than seeing a false "valid".
-    const { taxBase, vatAmount, totalAmount } = extracted;
+    const extracted = ocrResult.extracted;
+    // rawResponse ahora es la respuesta CRUDA del proveedor (entities +
+    // text para Doc AI; XML literal para Facturae). Antes guardabamos el
+    // resultado ya mapeado, lo cual no servia para debugging.
+    const rawResponse = ocrResult.rawJson;
+
+    // Math validation: Σ(bases) + Σ(cuotas) - IRPF = Total. Leave isValid=null
+    // if total/lines incompletos asi el revisor se ve forzado a rellenar.
+    const { taxBase, vatAmount, totalAmount, irpfAmount, vatLines } = extracted;
     let isValid: boolean | null = null;
     if (taxBase !== null && vatAmount !== null && totalAmount !== null) {
+      const expected = taxBase + vatAmount - (irpfAmount ?? 0);
       const diff = Math.abs(
-        Math.round((taxBase + vatAmount) * 100) - Math.round(totalAmount * 100)
+        Math.round(expected * 100) - Math.round(totalAmount * 100)
       );
       isValid = diff <= 2;
     }
@@ -115,27 +118,46 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     const issues = await detectIssues(invoiceId, extracted, invoice);
     const targetStatus: InvoiceStatus = issues.length > 0 ? "NEEDS_ATTENTION" : "PENDING_REVIEW";
 
+    // vatRate denormalizado: solo significativo cuando hay una unica linea.
+    // Multi-IVA -> null (el desglose vive en InvoiceVatLine).
+    const denormVatRate = vatLines.length === 1 ? vatLines[0].vatRate : null;
+
     // Copy OCR data to Invoice (datos finales — gestor los editará)
-    await prisma.invoice.update({
-      where: { id: invoiceId },
-      data: {
-        status: targetStatus,
-        issuerName:    extracted.issuerName,
-        issuerCif:     extracted.issuerCif,
-        receiverName:  extracted.receiverName,
-        receiverCif:   extracted.receiverCif,
-        invoiceNumber: extracted.invoiceNumber,
-        invoiceDate:   extracted.invoiceDate ? new Date(extracted.invoiceDate) : null,
-        taxBase:       extracted.taxBase,
-        vatRate:       extracted.vatRate,
-        vatAmount:     extracted.vatAmount,
-        irpfRate:      extracted.irpfRate,
-        irpfAmount:    extracted.irpfAmount,
-        totalAmount:   extracted.totalAmount,
-        isValid,
-        lastOcrError:  null,
-      },
-    });
+    await prisma.$transaction([
+      // Reemplazar lineas previas (idempotente: si reproceso, borra y mete).
+      prisma.invoiceVatLine.deleteMany({ where: { invoiceId } }),
+      ...(vatLines.length > 0
+        ? [prisma.invoiceVatLine.createMany({
+            data: vatLines.map((l, i) => ({
+              invoiceId,
+              position:  i,
+              taxBase:   l.taxBase,
+              vatRate:   l.vatRate,
+              vatAmount: l.vatAmount,
+            })),
+          })]
+        : []),
+      prisma.invoice.update({
+        where: { id: invoiceId },
+        data: {
+          status: targetStatus,
+          issuerName:    extracted.issuerName,
+          issuerCif:     extracted.issuerCif,
+          receiverName:  extracted.receiverName,
+          receiverCif:   extracted.receiverCif,
+          invoiceNumber: extracted.invoiceNumber,
+          invoiceDate:   extracted.invoiceDate ? new Date(extracted.invoiceDate) : null,
+          taxBase:       extracted.taxBase,
+          vatRate:       extracted.vatRate ?? denormVatRate,
+          vatAmount:     extracted.vatAmount,
+          irpfRate:      extracted.irpfRate,
+          irpfAmount:    extracted.irpfAmount,
+          totalAmount:   extracted.totalAmount,
+          isValid,
+          lastOcrError:  null,
+        },
+      }),
+    ]);
 
     await transitionStatus(invoiceId, "ANALYZING", targetStatus, triggeredByUserId);
 

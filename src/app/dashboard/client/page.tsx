@@ -1,5 +1,6 @@
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { redirect } from "next/navigation";
 import { InvoiceStatus } from "@prisma/client";
 import { FileText, Clock, CheckCircle2, Upload, ArrowRight } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
@@ -20,6 +21,10 @@ const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
 
 export default async function ClientDashboard() {
   const session = await auth();
+
+  // ADMIN no tiene Client propio — le mandamos a su dashboard.
+  if (session?.user?.role === "ADMIN") redirect("/dashboard/admin");
+  if (session?.user?.role === "WORKER") redirect("/dashboard/worker");
 
   const client = await prisma.client
     .findUnique({

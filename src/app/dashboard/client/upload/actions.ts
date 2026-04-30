@@ -83,9 +83,10 @@ export async function uploadInvoicesAction(
     // Calculate SHA-256 hash for duplicate detection
     const fileHash = createHash("sha256").update(Buffer.from(bytes)).digest("hex");
 
-    // Check for exact duplicate (same file content for same client)
+    // Solo bloqueamos duplicados activos. Las facturas RECHAZADAS pueden
+    // re-subirse (el cliente arreglo el PDF y vuelve a mandar).
     const existingByHash = await prisma.invoice.findFirst({
-      where: { clientId: client.id, fileHash },
+      where: { clientId: client.id, fileHash, status: { not: "REJECTED" } },
       select: { filename: true },
     });
     if (existingByHash) {

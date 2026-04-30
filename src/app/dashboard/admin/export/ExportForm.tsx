@@ -20,9 +20,6 @@ const MONTHS = [
 
 const FORMATS = [
   { v: "a3excel",  l: "A3 Excel",  desc: "A3asesor — Excel con cuentas contables (.xlsx)" },
-  { v: "sage50",   l: "Sage 50",   desc: "Sage 50 España — diario de facturas" },
-  { v: "contasol", l: "Contasol",  desc: "Contasol — importación de IVA"       },
-  { v: "a3con",    l: "a3con (CSV)", desc: "a3 Software — CSV básico sin cuentas" },
 ];
 
 const TYPES = [
@@ -248,7 +245,7 @@ export function ExportForm({ clients }: Props) {
             className="flex w-full items-center justify-center gap-2.5 rounded-xl bg-blue-600 px-5 py-3.5 text-[14px] font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Download className="h-4 w-4" />
-            Descargar CSV
+            Descargar Excel
             {count != null && count > 0 && (
               <span className="rounded-full bg-blue-500 px-2 py-0.5 text-[11px]">
                 {count}

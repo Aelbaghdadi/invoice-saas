@@ -14,9 +14,9 @@ export async function GET(req: NextRequest) {
   const clientId = sp.get("clientId") || undefined;
   const month    = parseInt(sp.get("month") ?? "0", 10) || undefined;
   const year     = parseInt(sp.get("year")  ?? "0", 10) || undefined;
-  const VALID_FORMATS = ["sage50", "contasol", "a3con", "a3excel"];
+  const VALID_FORMATS = ["a3excel"];
   const VALID_TYPES = ["ALL", "PURCHASE", "SALE"];
-  const formatRaw = sp.get("format") ?? "sage50";
+  const formatRaw = sp.get("format") ?? "a3excel";
   const typeParam = sp.get("type") ?? "ALL";
   if (!VALID_FORMATS.includes(formatRaw)) {
     return new NextResponse("Formato no válido", { status: 400 });
@@ -48,10 +48,14 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ count });
   }
 
-  // Download mode
+  // Download mode — incluimos vatLines para que el exportador pueda emitir
+  // una fila por tipo de IVA en facturas con desglose multiple.
   const invoices = await prisma.invoice.findMany({
     where,
-    include: { client: true },
+    include: {
+      client: true,
+      vatLines: { orderBy: { position: "asc" } },
+    },
     orderBy: [
       { periodYear:  "asc" },
       { periodMonth: "asc" },
@@ -97,6 +101,12 @@ export async function GET(req: NextRequest) {
         irpfRate: inv.irpfRate,
         irpfAmount: inv.irpfAmount,
         totalAmount: inv.totalAmount,
+        vatLines: inv.vatLines.map((l) => ({
+          position:  l.position,
+          taxBase:   l.taxBase,
+          vatRate:   l.vatRate,
+          vatAmount: l.vatAmount,
+        })),
         supplierAccount: inv.supplierAccount,
         expenseAccount: inv.expenseAccount,
         type: inv.type,

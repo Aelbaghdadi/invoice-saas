@@ -19,7 +19,7 @@ export const metadata: Metadata = {
   },
   description:
     "Automatiza la extraccion, validacion y exportacion de facturas para asesorias contables con OCR e inteligencia artificial.",
-  keywords: ["facturacion", "OCR", "asesoria contable", "Sage 50", "Contasol", "a3con", "facturas"],
+  keywords: ["facturacion", "OCR", "asesoria contable", "A3 Asesor", "facturas"],
   openGraph: {
     title: "FacturOCR — Gestion inteligente de facturas",
     description:

@@ -1,11 +1,11 @@
 "use client";
 
-import { useState, useTransition, useEffect, useCallback } from "react";
+import { useState, useTransition, useEffect, useCallback, useMemo } from "react";
 import { useToast } from "@/components/ui/Toast";
 import {
   CheckCircle2, AlertTriangle, Save, ChevronLeft, ChevronRight,
   Loader2, AlertCircle, ExternalLink, FileText, Image as ImageIcon,
-  XCircle, RefreshCw, Eye, EyeOff, ShieldAlert, CheckCheck, X,
+  XCircle, RefreshCw, Eye, EyeOff, ShieldAlert, CheckCheck, X, Plus, Trash2,
 } from "lucide-react";
 import { saveInvoiceFields, validateInvoice, rejectInvoice, type ReviewState } from "./actions";
 import { resolveIssue, dismissIssue } from "@/app/dashboard/worker/issues/actions";
@@ -57,8 +57,20 @@ type SessionContext = {
   type: "PURCHASE" | "SALE";
 };
 
+/** Linea individual de IVA tal como la maneja el form (strings para
+ *  permitir input vacio mientras escribe el usuario). */
+type VatLineInput = {
+  taxBase: string;
+  vatRate: string;
+  vatAmount: string;
+};
+
 type Props = {
   invoice: Invoice;
+  /** Lineas de IVA iniciales (de InvoiceVatLine, o sintetizada desde los
+   *  campos planos de la factura para datos legacy). Vacio si nunca se
+   *  procesaron datos. */
+  initialVatLines: { taxBase: number; vatRate: number; vatAmount: number }[];
   prevId: string | null;
   nextId: string | null;
   position: number;
@@ -86,7 +98,7 @@ function fmtDate(d: Date | null | undefined) {
   return new Date(d).toISOString().slice(0, 10);
 }
 
-export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, backHref, extraction, issues, suggestedAccount, queueSuffix = "", bucket = "all", sessionContext }: Props) {
+export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position, batchTotal, backHref, extraction, issues, suggestedAccount, queueSuffix = "", bucket = "all", sessionContext }: Props) {
   const { success, error } = useToast();
   const isImage = invoice.fileType.startsWith("image/");
   const isXml   = invoice.fileType.includes("xml");
@@ -94,13 +106,45 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(true);
 
-  // Form state
-  const [taxBase,     setTaxBase]     = useState(fmt(invoice.taxBase));
-  const [vatRate,     setVatRate]     = useState(fmt(invoice.vatRate));
-  const [vatAmount,   setVatAmount]   = useState(fmt(invoice.vatAmount));
+  // Form state — lineas de IVA dinamicas. Si no hay nada, una linea vacia
+  // para que el gestor pueda empezar a teclear.
+  const [vatLines, setVatLines] = useState<VatLineInput[]>(() => {
+    if (initialVatLines.length === 0) {
+      return [{ taxBase: "", vatRate: "", vatAmount: "" }];
+    }
+    return initialVatLines.map((l) => ({
+      taxBase: String(l.taxBase),
+      vatRate: String(l.vatRate),
+      vatAmount: String(l.vatAmount),
+    }));
+  });
   const [totalAmount, setTotalAmount] = useState(fmt(invoice.totalAmount));
   const [supplierAccountVal, setSupplierAccount] = useState(fmt(invoice.supplierAccount) || suggestedAccount?.supplierAccount || "");
   const [expenseAccountVal, setExpenseAccount]   = useState(fmt(invoice.expenseAccount) || suggestedAccount?.expenseAccount || "");
+
+  const updateVatLine = (idx: number, field: keyof VatLineInput, value: string) => {
+    setVatLines((prev) => {
+      const copy = [...prev];
+      copy[idx] = { ...copy[idx], [field]: value };
+      // Auto-calculo de cuota cuando el usuario edita base o %.
+      if (field === "taxBase" || field === "vatRate") {
+        const b = parseFloat(field === "taxBase" ? value : copy[idx].taxBase);
+        const r = parseFloat(field === "vatRate" ? value : copy[idx].vatRate);
+        if (!isNaN(b) && !isNaN(r)) {
+          copy[idx].vatAmount = (Math.round(b * r) / 100).toFixed(2);
+        }
+      }
+      return copy;
+    });
+  };
+
+  const addVatLine = () => {
+    setVatLines((prev) => [...prev, { taxBase: "", vatRate: "", vatAmount: "" }]);
+  };
+
+  const removeVatLine = (idx: number) => {
+    setVatLines((prev) => prev.length === 1 ? prev : prev.filter((_, i) => i !== idx));
+  };
 
   const [saveState, setSaveState]         = useState<ReviewState>(null);
   const [validateState, setValidateState] = useState<ReviewState>(null);
@@ -121,12 +165,25 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
   const confidence = extraction?.confidence ?? null;
   const openIssues = issues.filter((i) => i.status === "OPEN" && !dismissedIssues.has(i.id));
 
-  // Math semaphore: Base + IVA = Total
-  const base       = parseFloat(taxBase)     || 0;
-  const vat        = parseFloat(vatAmount)   || 0;
+  // Sumas de las lineas de IVA. Cualquier linea con campos vacios cuenta
+  // como 0 para no romper el semaforo mientras el usuario teclea.
+  const vatTotals = useMemo(() => {
+    let sumBase = 0;
+    let sumAmount = 0;
+    let anyFilled = false;
+    for (const l of vatLines) {
+      const b = parseFloat(l.taxBase);
+      const a = parseFloat(l.vatAmount);
+      if (!isNaN(b)) { sumBase += b; anyFilled = true; }
+      if (!isNaN(a)) { sumAmount += a; anyFilled = true; }
+    }
+    return { sumBase, sumAmount, anyFilled };
+  }, [vatLines]);
+
+  // Math semaphore: Sigma(bases) + Sigma(cuotas) = Total
   const totalNum   = parseFloat(totalAmount) || 0;
-  const hasValues  = taxBase && vatAmount && totalAmount;
-  const calculated = Math.round((base + vat) * 100);
+  const hasValues  = vatTotals.anyFilled && totalAmount;
+  const calculated = Math.round((vatTotals.sumBase + vatTotals.sumAmount) * 100);
   const actual     = Math.round(totalNum * 100);
   const mathOk     = hasValues ? Math.abs(calculated - actual) <= 2 : null;
 
@@ -202,9 +259,9 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
     fd.set("receiverCif",  (document.getElementById("receiverCif")  as HTMLInputElement)?.value ?? "");
     fd.set("invoiceNumber",(document.getElementById("invoiceNumber")as HTMLInputElement)?.value ?? "");
     fd.set("invoiceDate",  (document.getElementById("invoiceDate")  as HTMLInputElement)?.value ?? "");
-    fd.set("taxBase",    taxBase);
-    fd.set("vatRate",    vatRate);
-    fd.set("vatAmount",  vatAmount);
+    // Lineas de IVA: serializadas como JSON. El server las reparte en
+    // InvoiceVatLine y recalcula los totales denormalizados de Invoice.
+    fd.set("vatLines", JSON.stringify(vatLines));
     fd.set("totalAmount",totalAmount);
     fd.set("accountingPeriodMonth", (document.getElementById("accountingPeriodMonth") as HTMLSelectElement)?.value ?? "");
     fd.set("accountingPeriodYear",  (document.getElementById("accountingPeriodYear")  as HTMLSelectElement)?.value ?? "");
@@ -213,7 +270,7 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
     fd.set("bucket", bucket);
     if (extra) Object.entries(extra).forEach(([k,v]) => fd.set(k,v));
     return fd;
-  }, [taxBase, vatRate, vatAmount, totalAmount, supplierAccountVal, expenseAccountVal, invoice.id, invoice.updatedAt, bucket]);
+  }, [vatLines, totalAmount, supplierAccountVal, expenseAccountVal, invoice.id, invoice.updatedAt, bucket]);
 
   const handleSave = () => {
     startSave(async () => {
@@ -478,8 +535,8 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
                 }
                 <span className="text-[12px] font-medium">
                   {mathOk
-                    ? "Validación matemática correcta — Base + IVA = Total"
-                    : `Error: ${(base + vat).toFixed(2)} ≠ ${totalNum.toFixed(2)} (diferencia: ${Math.abs(base + vat - totalNum).toFixed(2)} €)`
+                    ? "Validación matemática correcta — Σ Bases + Σ Cuotas = Total"
+                    : `Error: ${(vatTotals.sumBase + vatTotals.sumAmount).toFixed(2)} ≠ ${totalNum.toFixed(2)} (diferencia: ${Math.abs(vatTotals.sumBase + vatTotals.sumAmount - totalNum).toFixed(2)} €)`
                   }
                 </span>
               </div>
@@ -655,53 +712,108 @@ export function ReviewForm({ invoice, prevId, nextId, position, batchTotal, back
               </div>
             </fieldset>
 
-            {/* Importes */}
+            {/* Importes — desglose de IVA. Una linea por tipo impositivo.
+                Las facturas con varios tipos (4% + 10% + 21%) usan varias
+                lineas; al exportar se emite una fila por cada una. */}
             <fieldset className="rounded-xl border border-slate-100 p-4 space-y-3">
-              <legend className="px-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Importes</legend>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
-                    Base imponible
-                    <ConfidenceHint score={confidence?.taxBase ?? null} />
-                  </label>
-                  <input id="taxBase" type="number" step="0.01" min="0" {...fp("taxBase")} value={taxBase} onChange={e => setTaxBase(e.target.value)} placeholder="1000.00" />
+              <legend className="px-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                Desglose de IVA
+              </legend>
+
+              <div className="space-y-2">
+                {/* Cabecera */}
+                <div className="grid grid-cols-[1fr_80px_1fr_28px] gap-2 px-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                  <span>Base imponible</span>
+                  <span>% IVA</span>
+                  <span>Cuota IVA</span>
+                  <span></span>
                 </div>
-                <div>
-                  <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
-                    % IVA
-                    <ConfidenceHint score={confidence?.vatRate ?? null} />
-                  </label>
-                  <input id="vatRate" type="number" step="0.01" min="0" max="100" {...fp("vatRate")} value={vatRate} onChange={e => setVatRate(e.target.value)} placeholder="21" />
-                </div>
-                <div>
-                  <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
-                    Cuota IVA
-                    <ConfidenceHint score={confidence?.vatAmount ?? null} />
-                  </label>
-                  <input id="vatAmount" type="number" step="0.01" min="0" {...fp("vatAmount")} value={vatAmount} onChange={e => setVatAmount(e.target.value)} placeholder="210.00" />
-                </div>
-                <div>
-                  <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500 font-semibold">
-                    Total factura
-                    <ConfidenceHint score={confidence?.totalAmount ?? null} />
-                  </label>
-                  {(() => {
-                    const props = fp("totalAmount");
-                    return (
+
+                {vatLines.map((line, idx) => {
+                  return (
+                    <div key={idx} className="grid grid-cols-[1fr_80px_1fr_28px] gap-2 items-start">
                       <input
-                        id="totalAmount"
                         type="number"
                         step="0.01"
                         min="0"
-                        className={`${props.className} font-semibold`}
-                        tabIndex={props.tabIndex}
-                        value={totalAmount}
-                        onChange={e => setTotalAmount(e.target.value)}
-                        placeholder="1060.00"
+                        className={inputClass}
+                        value={line.taxBase}
+                        onChange={(e) => updateVatLine(idx, "taxBase", e.target.value)}
+                        placeholder="1000.00"
                       />
-                    );
-                  })()}
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max="100"
+                        className={inputClass}
+                        value={line.vatRate}
+                        onChange={(e) => updateVatLine(idx, "vatRate", e.target.value)}
+                        placeholder="21"
+                      />
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        className={inputClass}
+                        value={line.vatAmount}
+                        onChange={(e) => updateVatLine(idx, "vatAmount", e.target.value)}
+                        placeholder="210.00"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeVatLine(idx)}
+                        disabled={vatLines.length === 1}
+                        title="Eliminar linea"
+                        className="flex h-[34px] w-7 items-center justify-center rounded-md text-slate-400 hover:bg-red-50 hover:text-red-500 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-400"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  );
+                })}
+
+                {/* Totales calculados */}
+                <div className="grid grid-cols-[1fr_80px_1fr_28px] gap-2 border-t border-slate-100 pt-2 text-[12px] font-medium text-slate-600">
+                  <div className="px-3 py-1 tabular-nums">{vatTotals.sumBase.toFixed(2)}</div>
+                  <div className="px-1 py-1 text-[10px] uppercase text-slate-400">Suma</div>
+                  <div className="px-3 py-1 tabular-nums">{vatTotals.sumAmount.toFixed(2)}</div>
+                  <div></div>
                 </div>
+
+                <button
+                  type="button"
+                  onClick={addVatLine}
+                  className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-slate-200 py-1.5 text-[11px] font-medium text-slate-500 hover:bg-slate-50"
+                >
+                  <Plus className="h-3 w-3" />
+                  Anadir linea de IVA
+                </button>
+              </div>
+
+              {/* Total factura — campo separado, no es la suma automatica
+                  porque puede incluir IRPF u otros conceptos no desglosados. */}
+              <div className="border-t border-slate-100 pt-3">
+                <label className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold text-slate-600">
+                  Total factura
+                  <ConfidenceHint score={confidence?.totalAmount ?? null} />
+                </label>
+                {(() => {
+                  const props = fp("totalAmount");
+                  return (
+                    <input
+                      id="totalAmount"
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      className={`${props.className} font-semibold`}
+                      tabIndex={props.tabIndex}
+                      value={totalAmount}
+                      onChange={e => setTotalAmount(e.target.value)}
+                      placeholder="1060.00"
+                    />
+                  );
+                })()}
               </div>
             </fieldset>
 

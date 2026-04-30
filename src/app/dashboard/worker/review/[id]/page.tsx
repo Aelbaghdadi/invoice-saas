@@ -26,7 +26,10 @@ export default async function ReviewPage({
 
   const invoice = await prisma.invoice.findUnique({
     where: { id },
-    include: { client: true },
+    include: {
+      client: true,
+      vatLines: { orderBy: { position: "asc" } },
+    },
   });
   if (!invoice) notFound();
 
@@ -114,10 +117,31 @@ export default async function ReviewPage({
     field: i.field,
   }));
 
+  // Si la factura aun no tiene lineas de IVA pero si tiene base/cuota
+  // (datos legacy o pre-OCR), montamos una linea sintetica para la UI.
+  const initialVatLines = invoice.vatLines.length > 0
+    ? invoice.vatLines.map((l) => ({
+        taxBase: Number(l.taxBase),
+        vatRate: Number(l.vatRate),
+        vatAmount: Number(l.vatAmount),
+      }))
+    : (invoice.taxBase != null || invoice.vatAmount != null || invoice.vatRate != null)
+      ? [{
+          taxBase: invoice.taxBase ? Number(invoice.taxBase) : 0,
+          vatRate: invoice.vatRate ? Number(invoice.vatRate) : 0,
+          vatAmount: invoice.vatAmount ? Number(invoice.vatAmount) : 0,
+        }]
+      : [];
+
+  // El cliente recibe la factura sin las relaciones (el form ya tiene
+  // sus campos planos). Quitamos vatLines de invoice para no duplicar.
+  const { vatLines: _vl, client: _c, ...invoiceForForm } = invoice;
+
   return (
     <div className="-m-6 flex h-[calc(100vh-64px)] flex-col overflow-hidden">
       <ReviewForm
-        invoice={invoice}
+        invoice={invoiceForForm}
+        initialVatLines={initialVatLines}
         prevId={prevId}
         nextId={nextId}
         position={position}

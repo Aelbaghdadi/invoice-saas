@@ -9,26 +9,41 @@ import { PENDING_WORK } from "@/lib/invoiceStatuses";
 
 export default async function WorkerClientsPage() {
   const session = await auth();
-  if (!session?.user || session.user.role !== "WORKER") redirect("/login");
+  if (!session?.user || !["ADMIN", "WORKER"].includes(session.user.role)) redirect("/login");
 
-  const assignments = await prisma.workerClientAssignment
-    .findMany({
-      where: { workerId: session.user.id },
-      include: {
-        client: {
+  // ADMIN ve todos los clientes de su firma; WORKER solo los asignados.
+  // Empaquetamos como `{ client }` para no cambiar el render.
+  const assignments = session.user.role === "ADMIN"
+    ? await prisma.client
+        .findMany({
+          where: session.user.advisoryFirmId
+            ? { advisoryFirmId: session.user.advisoryFirmId }
+            : { id: { in: [] } },
+          include: { invoices: { orderBy: { createdAt: "desc" } } },
+          orderBy: { name: "asc" },
+        })
+        .then((cs) => cs.map((client) => ({ client })))
+        .catch(() => [])
+    : await prisma.workerClientAssignment
+        .findMany({
+          where: { workerId: session.user.id },
           include: {
-            invoices: { orderBy: { createdAt: "desc" } },
+            client: {
+              include: { invoices: { orderBy: { createdAt: "desc" } } },
+            },
           },
-        },
-      },
-    })
-    .catch(() => []);
+        })
+        .catch(() => []);
 
   return (
     <div>
       <PageHeader
-        title="Mis Clientes"
-        description={`${assignments.length} cliente${assignments.length !== 1 ? "s" : ""} asignado${assignments.length !== 1 ? "s" : ""}`}
+        title={session.user.role === "ADMIN" ? "Clientes" : "Mis Clientes"}
+        description={
+          session.user.role === "ADMIN"
+            ? `${assignments.length} cliente${assignments.length !== 1 ? "s" : ""} en la asesoria`
+            : `${assignments.length} cliente${assignments.length !== 1 ? "s" : ""} asignado${assignments.length !== 1 ? "s" : ""}`
+        }
       />
 
       <div className="rounded-xl border border-slate-200 bg-white shadow-sm">

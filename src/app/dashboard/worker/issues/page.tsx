@@ -40,9 +40,17 @@ export default async function WorkerIssuesPage({
   const filterType = sp.type ?? "ALL";
   const filterStatus = sp.status ?? "OPEN";
 
-  // Get worker's assigned client IDs
-  let clientIds: string[] | undefined;
-  if (session.user.role === "WORKER") {
+  // ADMIN ve issues de toda su firma; WORKER solo de sus clientes asignados.
+  let clientIds: string[];
+  if (session.user.role === "ADMIN") {
+    const firmClients = session.user.advisoryFirmId
+      ? await prisma.client.findMany({
+          where: { advisoryFirmId: session.user.advisoryFirmId },
+          select: { id: true },
+        })
+      : [];
+    clientIds = firmClients.map((c) => c.id);
+  } else {
     const assignments = await prisma.workerClientAssignment.findMany({
       where: { workerId: session.user.id },
       select: { clientId: true },
@@ -54,7 +62,7 @@ export default async function WorkerIssuesPage({
     where: {
       ...(filterStatus !== "ALL" ? { status: filterStatus as "OPEN" | "RESOLVED" | "DISMISSED" } : {}),
       ...(filterType !== "ALL" ? { type: filterType as "OCR_FAILED" | "LOW_CONFIDENCE" | "POSSIBLE_DUPLICATE" | "MATH_MISMATCH" | "MANUAL" } : {}),
-      invoice: clientIds ? { clientId: { in: clientIds } } : undefined,
+      invoice: { clientId: { in: clientIds } },
     },
     include: {
       invoice: {

@@ -9,7 +9,7 @@ import { Select } from "@/components/ui/Select";
 
 type State = { error?: string; errors?: Record<string, string[]> } | undefined;
 
-const PROGRAMS = ["Sage 50", "Contasol", "a3con", "ContaPlus", "Holded", "Otro"];
+const PROGRAMS = ["A3 Asesor", "Otro"];
 
 export function ClientForm() {
   const { success, error: toastError } = useToast();

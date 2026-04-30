@@ -87,8 +87,11 @@ export async function workerUploadInvoicesAction(
 
     const fileHash = createHash("sha256").update(Buffer.from(bytes)).digest("hex");
 
+    // Solo bloqueamos duplicados activos. Las facturas RECHAZADAS pueden
+    // re-subirse (caso tipico: el gestor rechazo por error o el cliente
+    // arreglo el PDF y vuelve a mandar el original).
     const existingByHash = await prisma.invoice.findFirst({
-      where: { clientId, fileHash },
+      where: { clientId, fileHash, status: { not: "REJECTED" } },
       select: { filename: true },
     });
     if (existingByHash) {

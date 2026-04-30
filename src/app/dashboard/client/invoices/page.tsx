@@ -22,7 +22,12 @@ const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
 
 export default async function ClientInvoicesPage() {
   const session = await auth();
-  if (!session?.user || session.user.role !== "CLIENT") redirect("/login");
+  if (!session?.user) redirect("/login");
+
+  // El listado de cliente esta scopeado a "su" Client.userId — admin no
+  // tiene client propio. Le mandamos al listado global del admin.
+  if (session.user.role === "ADMIN") redirect("/dashboard/admin/invoices");
+  if (session.user.role !== "CLIENT") redirect("/login");
 
   const client = await prisma.client
     .findUnique({

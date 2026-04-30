@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/Badge";
 import { ChevronLeft, Mail, Building2, FileText, Users } from "lucide-react";
 import Link from "next/link";
 import { PENDING_WORK } from "@/lib/invoiceStatuses";
+import { canAccessClient } from "@/lib/accessibleClients";
 
 const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
   UPLOADED:        { label: "Subida",          variant: "blue" },
@@ -21,14 +22,13 @@ const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
 
 export default async function WorkerClientDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const session = await auth();
-  if (!session?.user || session.user.role !== "WORKER") redirect("/login");
+  if (!session?.user || !["ADMIN", "WORKER"].includes(session.user.role)) redirect("/login");
 
   const { id } = await params;
 
-  const assignment = await prisma.workerClientAssignment.findUnique({
-    where: { workerId_clientId: { workerId: session.user.id, clientId: id } },
-  });
-  if (!assignment) notFound();
+  // ADMIN: cualquier cliente de su firma. WORKER: solo asignados.
+  const allowed = await canAccessClient(session, id);
+  if (!allowed) notFound();
 
   const client = await prisma.client.findUnique({
     where: { id },

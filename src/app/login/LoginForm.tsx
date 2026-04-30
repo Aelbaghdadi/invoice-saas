@@ -75,10 +75,10 @@ export function LoginForm() {
       <button
         type="submit"
         disabled={pending}
-        className="flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+        className="flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-3 text-[14px] font-semibold text-white shadow-sm shadow-blue-500/10 transition hover:bg-blue-700 hover:shadow-md hover:shadow-blue-500/25 active:translate-y-px disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:shadow-sm"
       >
         {pending && <Loader2 className="h-4 w-4 animate-spin" />}
-        {pending ? "Iniciando sesión..." : "Iniciar sesión"}
+        {pending ? "Accediendo..." : "Acceder al panel"}
       </button>
     </form>
   );

@@ -30,9 +30,8 @@ type FieldData = {
   receiverCif:   string;
   invoiceNumber: string;
   invoiceDate:   string;
-  taxBase:       string;
-  vatRate:       string;
-  vatAmount:     string;
+  /** JSON-encoded array de lineas: [{taxBase,vatRate,vatAmount}]. */
+  vatLines:      string;
   irpfRate:      string;
   irpfAmount:    string;
   totalAmount:   string;
@@ -41,6 +40,34 @@ type FieldData = {
   supplierAccount: string;
   expenseAccount:  string;
 };
+
+type ParsedVatLine = { taxBase: number; vatRate: number; vatAmount: number };
+
+/** Parsea el JSON de lineas, descarta las vacias y normaliza a numeros.
+ *  Devuelve [] si el JSON es invalido o no hay nada util. */
+function parseVatLines(raw: string): ParsedVatLine[] {
+  if (!raw) return [];
+  let arr: unknown;
+  try { arr = JSON.parse(raw); } catch { return []; }
+  if (!Array.isArray(arr)) return [];
+  const lines: ParsedVatLine[] = [];
+  for (const item of arr) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as Record<string, unknown>;
+    const tb = typeof o.taxBase === "string" ? o.taxBase.trim() : "";
+    const vr = typeof o.vatRate === "string" ? o.vatRate.trim() : "";
+    const va = typeof o.vatAmount === "string" ? o.vatAmount.trim() : "";
+    // Linea vacia: la ignoramos silenciosamente para que el form pueda
+    // tener una fila placeholder sin guardarla.
+    if (!tb && !vr && !va) continue;
+    const taxBase = parseFloat(tb.replace(",", "."));
+    const vatRate = parseFloat(vr.replace(",", "."));
+    const vatAmount = parseFloat(va.replace(",", "."));
+    if (isNaN(taxBase) || isNaN(vatRate) || isNaN(vatAmount)) continue;
+    lines.push({ taxBase, vatRate, vatAmount });
+  }
+  return lines;
+}
 
 async function parseAndSave(invoiceId: string, userId: string, data: FieldData, validate: boolean, expectedUpdatedAt?: string) {
   const session = await auth();
@@ -85,6 +112,27 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
   const parse = (v: string) => v.trim() === "" ? null : parseFloat(v.replace(",", "."));
   const parseDate = (v: string) => v.trim() === "" ? null : new Date(v);
 
+  const vatLines = parseVatLines(data.vatLines);
+
+  // Validacion de cada linea de IVA antes de calcular nada.
+  for (const line of vatLines) {
+    if (line.vatRate < 0 || line.vatRate > 100) {
+      return { error: "El % IVA debe estar entre 0 y 100 en todas las lineas" };
+    }
+    if (line.taxBase < 0) {
+      return { error: "La base imponible no puede ser negativa" };
+    }
+    if (line.vatAmount < 0) {
+      return { error: "La cuota IVA no puede ser negativa" };
+    }
+  }
+
+  // Totales denormalizados sobre Invoice. vatRate solo tiene sentido cuando
+  // hay una unica linea; multi-IVA -> null.
+  const sumBase   = vatLines.reduce((s, l) => s + l.taxBase, 0);
+  const sumAmount = vatLines.reduce((s, l) => s + l.vatAmount, 0);
+  const denormVatRate = vatLines.length === 1 ? vatLines[0].vatRate : null;
+
   const newData = {
     issuerName:    data.issuerName    || null,
     issuerCif:     data.issuerCif     || null,
@@ -92,9 +140,9 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     receiverCif:   data.receiverCif   || null,
     invoiceNumber: data.invoiceNumber || null,
     invoiceDate:   parseDate(data.invoiceDate),
-    taxBase:       parse(data.taxBase),
-    vatRate:       parse(data.vatRate),
-    vatAmount:     parse(data.vatAmount),
+    taxBase:       vatLines.length > 0 ? sumBase   : null,
+    vatRate:       denormVatRate,
+    vatAmount:     vatLines.length > 0 ? sumAmount : null,
     irpfRate:      parse(data.irpfRate),
     irpfAmount:    parse(data.irpfAmount),
     totalAmount:   parse(data.totalAmount),
@@ -104,26 +152,16 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     expenseAccount:  data.expenseAccount  || null,
   };
 
-  // Server-side bounds validation
-  if (newData.vatRate !== null && (newData.vatRate < 0 || newData.vatRate > 100)) {
-    return { error: "El % IVA debe estar entre 0 y 100" };
-  }
-  if (newData.taxBase !== null && newData.taxBase < 0) {
-    return { error: "La base imponible no puede ser negativa" };
-  }
-  if (newData.vatAmount !== null && newData.vatAmount < 0) {
-    return { error: "La cuota IVA no puede ser negativa" };
-  }
   if (newData.totalAmount !== null && newData.totalAmount < 0) {
     return { error: "El total no puede ser negativo" };
   }
 
-  // Math validation: Base + IVA = Total
+  // Math validation: Sigma(bases) + Sigma(cuotas) - IRPF = Total
   let isValid: boolean | null = null;
-  if (newData.taxBase !== null && newData.vatAmount !== null && newData.totalAmount !== null) {
+  if (vatLines.length > 0 && newData.totalAmount !== null) {
+    const expected = sumBase + sumAmount - (newData.irpfAmount ?? 0);
     const diff = Math.abs(
-      Math.round((newData.taxBase + newData.vatAmount) * 100) -
-      Math.round(newData.totalAmount * 100)
+      Math.round(expected * 100) - Math.round(newData.totalAmount * 100)
     );
     isValid = diff <= 2;
   }
@@ -156,14 +194,30 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     ? "PENDING_REVIEW"
     : undefined;
 
-  await prisma.invoice.update({
-    where: { id: invoiceId },
-    data: {
-      ...newData,
-      isValid,
-      ...(validate ? { status: "VALIDATED" } : saveStatus ? { status: saveStatus } : {}),
-    },
-  });
+  // Persistir factura + lineas en una transaccion. Borramos las lineas
+  // previas y reinsertamos: la UI envia el array completo.
+  await prisma.$transaction([
+    prisma.invoiceVatLine.deleteMany({ where: { invoiceId } }),
+    ...(vatLines.length > 0
+      ? [prisma.invoiceVatLine.createMany({
+          data: vatLines.map((l, i) => ({
+            invoiceId,
+            position:  i,
+            taxBase:   l.taxBase,
+            vatRate:   l.vatRate,
+            vatAmount: l.vatAmount,
+          })),
+        })]
+      : []),
+    prisma.invoice.update({
+      where: { id: invoiceId },
+      data: {
+        ...newData,
+        isValid,
+        ...(validate ? { status: "VALIDATED" as const } : saveStatus ? { status: saveStatus as "PENDING_REVIEW" } : {}),
+      },
+    }),
+  ]);
 
   if (validate) {
     auditEntries.push({ field: "status", oldValue: invoice.status, newValue: "VALIDATED" });
@@ -182,6 +236,9 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     const learnSupplier = newData.supplierAccount?.trim();
     const learnExpense = newData.expenseAccount?.trim();
     const learnName = newData.issuerName?.trim();
+    // defaultVatRate solo lo aprendemos cuando hay un unico tipo (multi-IVA
+    // no tiene un "tipo por defecto" significativo).
+    const learnVatRate = vatLines.length === 1 ? vatLines[0].vatRate : null;
     if (learnNif && (learnSupplier || learnExpense)) {
       await prisma.accountEntry.upsert({
         where: { clientId_nif: { clientId: invoice.clientId, nif: learnNif } },
@@ -191,13 +248,13 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
           name: learnName || learnNif,
           supplierAccount: learnSupplier || "",
           expenseAccount: learnExpense || "",
-          defaultVatRate: newData.vatRate != null ? (newData.vatRate as any) : null,
+          defaultVatRate: learnVatRate != null ? (learnVatRate as any) : null,
         },
         update: {
           ...(learnName ? { name: learnName } : {}),
           ...(learnSupplier ? { supplierAccount: learnSupplier } : {}),
           ...(learnExpense ? { expenseAccount: learnExpense } : {}),
-          ...(newData.vatRate != null ? { defaultVatRate: newData.vatRate as any } : {}),
+          ...(learnVatRate != null ? { defaultVatRate: learnVatRate as any } : {}),
         },
       });
     }
@@ -399,9 +456,7 @@ function extractFields(fd: FormData): FieldData {
     receiverCif:   fd.get("receiverCif")   as string ?? "",
     invoiceNumber: fd.get("invoiceNumber") as string ?? "",
     invoiceDate:   fd.get("invoiceDate")   as string ?? "",
-    taxBase:       fd.get("taxBase")       as string ?? "",
-    vatRate:       fd.get("vatRate")       as string ?? "",
-    vatAmount:     fd.get("vatAmount")     as string ?? "",
+    vatLines:      fd.get("vatLines")      as string ?? "",
     irpfRate:      fd.get("irpfRate")      as string ?? "",
     irpfAmount:    fd.get("irpfAmount")    as string ?? "",
     totalAmount:   fd.get("totalAmount")   as string ?? "",

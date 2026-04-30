@@ -11,6 +11,7 @@ import Link from "next/link";
 import type { InvoiceType } from "@prisma/client";
 import { completionPercent } from "@/lib/invoiceStatuses";
 import { BatchActions } from "./BatchActions";
+import { getAccessibleClientIds } from "@/lib/accessibleClients";
 
 type BatchGroup = {
   clientId: string;
@@ -34,13 +35,10 @@ type BatchGroup = {
 
 export default async function WorkerBatchPage() {
   const session = await auth();
-  if (!session?.user || session.user.role !== "WORKER") redirect("/login");
+  if (!session?.user || !["ADMIN", "WORKER"].includes(session.user.role)) redirect("/login");
 
-  const assignments = await prisma.workerClientAssignment.findMany({
-    where: { workerId: session.user.id },
-    select: { clientId: true },
-  });
-  const clientIds = assignments.map((a) => a.clientId);
+  // ADMIN ve los lotes de toda su firma; WORKER solo los de sus clientes.
+  const clientIds = await getAccessibleClientIds(session).catch(() => [] as string[]);
 
   if (clientIds.length === 0) {
     return (
@@ -356,14 +354,13 @@ export default async function WorkerBatchPage() {
                   )}
                 </div>
 
-                {/* Acciones masivas: auto-validar listas + cerrar periodo */}
-                {!closed && (g.cleanCount > 0 || readyToClose) && (
+                {/* Accion: cerrar periodo cuando todo esta validado. */}
+                {!closed && readyToClose && (
                   <BatchActions
                     clientId={g.clientId}
                     month={g.periodMonth}
                     year={g.periodYear}
                     type={g.type}
-                    cleanCount={g.cleanCount}
                     readyToClose={readyToClose}
                     alreadyClosed={closed}
                   />

@@ -1,0 +1,41 @@
+{
+  "emisor": {
+    "nombre": "Mercadona S.A.",
+    "cif": "A46103834",
+    "direccion": "C/ Valencia 5",
+    "cp_ciudad": "46016 Tavernes Blanques (Valencia)"
+  },
+  "receptor": {
+    "nombre": "Cafeteria El Rincon S.L.",
+    "cif": "B87654321",
+    "direccion": "Avda. de la Constitucion 12",
+    "cp_ciudad": "28013 Madrid"
+  },
+  "numero": "T-9821-2604",
+  "fecha_emision": "26/04/2026",
+  "conceptos": [
+    ["Pan de barra (productos basicos)", "30 ud.", "0,55 EUR", "16,50 EUR"],
+    ["Leche entera 1L (productos basicos)", "24 ud.", "0,98 EUR", "23,52 EUR"],
+    ["Huevos M docena", "10 ud.", "1,85 EUR", "18,50 EUR"],
+    ["Cafe molido natural 250g", "8 ud.", "2,90 EUR", "23,20 EUR"],
+    ["Galletas surtidas 500g", "6 ud.", "3,15 EUR", "18,90 EUR"],
+    ["Refrescos lata 33cl", "48 ud.", "0,65 EUR", "31,20 EUR"],
+    ["Detergente lavavajillas 3L", "4 ud.", "8,75 EUR", "35,00 EUR"],
+    ["Servilletas papel 100ud.", "12 paq.", "1,40 EUR", "16,80 EUR"],
+    ["Bolsas basura 50L", "8 paq.", "2,15 EUR", "17,20 EUR"]
+  ],
+  "iva_lines": [
+    {"base": 58.52, "rate": 4,  "cuota": 2.34},
+    {"base": 73.30, "rate": 10, "cuota": 7.33},
+    {"base": 69.00, "rate": 21, "cuota": 14.49}
+  ],
+  "base": 200.82,
+  "total": 224.98,
+  "logo_texto": "MERCADONA",
+  "titulo_cabecera": "TICKET FACTURA",
+  "subtitulo_izq": "Compra de hosteleria",
+  "subtitulo_der": "Documento con validez fiscal",
+  "color_primary": "#009739",
+  "color_accent": "#FFC72C",
+  "forma_pago": "Tarjeta de credito 4556 **** **** 3421"
+}

@@ -1,4 +1,4 @@
-import type { Invoice, Client } from "@prisma/client";
+import type { Invoice, Client, InvoiceVatLine } from "@prisma/client";
 import * as XLSX from "xlsx";
 
 export type ExportFormat = "sage50" | "contasol" | "a3con" | "a3excel";
@@ -10,7 +10,34 @@ export type ExportConfig = {
   dateFormat?: string;  // "DD/MM/YYYY" | "YYYY-MM-DD" | "MM/DD/YYYY"
 };
 
-export type InvoiceWithClient = Invoice & { client: Client };
+export type InvoiceWithClient = Invoice & {
+  client: Client;
+  /** Desglose por tipo de IVA. Cuando esta presente y tiene >0 elementos,
+   *  los exportadores emiten una fila por linea (a3 asesor "repetir fila
+   *  cambiando %IVA y cuota"). Cuando esta vacio se cae a los campos
+   *  planos de Invoice como linea unica. */
+  vatLines?: InvoiceVatLine[];
+};
+
+/** Devuelve las lineas a exportar para una factura. Si la factura ya tiene
+ *  desglose lo usa; si no, sintetiza una linea unica con los campos planos
+ *  (compatibilidad con datos legacy y con los tests). */
+type ExportVatLine = { taxBase: number; vatRate: number; vatAmount: number };
+
+function getExportLines(inv: InvoiceWithClient): ExportVatLine[] {
+  if (inv.vatLines && inv.vatLines.length > 0) {
+    return inv.vatLines.map((l) => ({
+      taxBase:   Number(l.taxBase),
+      vatRate:   Number(l.vatRate),
+      vatAmount: Number(l.vatAmount),
+    }));
+  }
+  return [{
+    taxBase:   inv.taxBase   ? Number(inv.taxBase)   : 0,
+    vatRate:   inv.vatRate   ? Number(inv.vatRate)   : 0,
+    vatAmount: inv.vatAmount ? Number(inv.vatAmount) : 0,
+  }];
+}
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -67,18 +94,28 @@ const HEADERS: Record<ExportFormat, string[]> = {
 
 // ─── row builder ─────────────────────────────────────────────────────────────
 
-function buildRow(inv: InvoiceWithClient, format: ExportFormat, config?: ExportConfig): string[] {
+/** Construye una fila CSV para una linea de IVA concreta. Multi-IVA:
+ *  llamamos varias veces con la misma factura cambiando solo la linea. */
+function buildRow(
+  inv: InvoiceWithClient,
+  line: ExportVatLine,
+  isFirstLine: boolean,
+  format: ExportFormat,
+  config?: ExportConfig,
+): string[] {
   const tipo      = typeCode(inv.type, format);
   const fecha     = fmtDate(inv.invoiceDate, config?.dateFormat);
   const numero    = inv.invoiceNumber ?? "";
   const nombre    = inv.issuerName ?? "";
   const cif       = inv.issuerCif ?? "";
-  const base      = fmtAmt(inv.taxBase);
-  const pctIva    = fmtPct(inv.vatRate);
-  const cuotaIva  = fmtAmt(inv.vatAmount);
-  const pctIrpf   = fmtPct(inv.irpfRate);
-  const cuotaIrpf = fmtAmt(inv.irpfAmount);
-  const total     = fmtAmt(inv.totalAmount);
+  const base      = fmtAmt(line.taxBase);
+  const pctIva    = fmtPct(line.vatRate);
+  const cuotaIva  = fmtAmt(line.vatAmount);
+  // IRPF y total solo en la primera linea para que la suma cuadre
+  // (a3 asesor importa el total una sola vez).
+  const pctIrpf   = isFirstLine ? fmtPct(inv.irpfRate)    : "0,00";
+  const cuotaIrpf = isFirstLine ? fmtAmt(inv.irpfAmount)  : "0,00";
+  const total     = isFirstLine ? fmtAmt(inv.totalAmount) : "0,00";
 
   switch (format) {
     case "sage50":
@@ -103,7 +140,13 @@ export function generateCsv(
 ): string {
   const SEP = config?.delimiter ?? ";";
   const header = HEADERS[format].join(SEP);
-  const rows   = invoices.map((inv) => buildRow(inv, format, config).join(SEP));
+  const rows: string[] = [];
+  for (const inv of invoices) {
+    const lines = getExportLines(inv);
+    lines.forEach((line, i) => {
+      rows.push(buildRow(inv, line, i === 0, format, config).join(SEP));
+    });
+  }
   // BOM so Excel opens with correct encoding
   return "\uFEFF" + [header, ...rows].join("\r\n");
 }
@@ -138,7 +181,11 @@ const A3_HEADERS = [
   "Enlace de la Factura",
 ];
 
-function buildA3Row(inv: InvoiceWithClient, config?: ExportConfig): (string | number | null)[] {
+function buildA3Row(
+  inv: InvoiceWithClient,
+  line: ExportVatLine,
+  config?: ExportConfig,
+): (string | number | null)[] {
   const isPurchase = inv.type === "PURCHASE";
   return [
     fmtDate(inv.invoiceDate, config?.dateFormat),             // A: Fecha expedición
@@ -148,11 +195,11 @@ function buildA3Row(inv: InvoiceWithClient, config?: ExportConfig): (string | nu
     (isPurchase ? inv.issuerCif : inv.receiverCif) ?? "",     // E: NIF
     (isPurchase ? inv.issuerName : inv.receiverName) ?? "",   // F: Nombre
     "",                                                        // G: Tipo operación (blank)
-    inv.supplierAccount ?? "",                        // H: Cuenta proveedor
-    inv.expenseAccount ?? "",                         // I: Cuenta gasto
-    inv.taxBase ? Number(inv.taxBase) : 0,                    // J: Base
-    inv.vatRate ? Number(inv.vatRate) : 0,                    // K: % IVA
-    inv.vatAmount ? Number(inv.vatAmount) : 0,                // L: Cuota IVA
+    inv.supplierAccount ?? "",                                 // H: Cuenta proveedor
+    inv.expenseAccount ?? "",                                  // I: Cuenta gasto
+    line.taxBase,                                              // J: Base
+    line.vatRate,                                              // K: % IVA
+    line.vatAmount,                                            // L: Cuota IVA
     "",                                                        // M: Enlace factura
   ];
 }
@@ -177,13 +224,18 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
     if (!inv.supplierAccount) warnings.push("Sin cuenta proveedor");
     if (!inv.expenseAccount) warnings.push("Sin cuenta gasto");
 
-    // Base + IVA = Total check
-    if (inv.taxBase && inv.vatAmount && inv.totalAmount) {
-      const base = Number(inv.taxBase);
-      const vatAmt = Number(inv.vatAmount);
-      const total = Number(inv.totalAmount);
-      const diff = Math.abs(Math.round((base + vatAmt) * 100) - Math.round(total * 100));
-      if (diff > 1) warnings.push(`Descuadre Base+IVA vs Total: ${(diff / 100).toFixed(2)}`);
+    // Base + IVA - IRPF = Total. Suma sobre las lineas si las hay.
+    if (inv.totalAmount) {
+      const lines = getExportLines(inv);
+      const sumBase = lines.reduce((s, l) => s + l.taxBase, 0);
+      const sumAmt  = lines.reduce((s, l) => s + l.vatAmount, 0);
+      const irpf    = inv.irpfAmount ? Number(inv.irpfAmount) : 0;
+      const total   = Number(inv.totalAmount);
+      const expected = sumBase + sumAmt - irpf;
+      if (sumBase > 0 || sumAmt > 0) {
+        const diff = Math.abs(Math.round(expected * 100) - Math.round(total * 100));
+        if (diff > 1) warnings.push(`Descuadre Base+IVA vs Total: ${(diff / 100).toFixed(2)}`);
+      }
     }
 
     if (warnings.length > 0) {
@@ -205,7 +257,14 @@ export function generateA3Excel(
   const sales = invoices.filter((i) => i.type === "SALE");
 
   const makeSheet = (items: InvoiceWithClient[]) => {
-    const rows = items.map((inv) => buildA3Row(inv, config));
+    // A3: una fila por linea de IVA. Para multi-IVA, todo se repite igual
+    // (NIF, fecha, num factura...) excepto Base/%IVA/Cuota.
+    const rows: (string | number | null)[][] = [];
+    for (const inv of items) {
+      for (const line of getExportLines(inv)) {
+        rows.push(buildA3Row(inv, line, config));
+      }
+    }
     const ws = XLSX.utils.aoa_to_sheet([A3_HEADERS, ...rows]);
 
     // Set column widths

@@ -8,6 +8,7 @@ import { FileText, PenLine, X, AlertTriangle } from "lucide-react";
 import Link from "next/link";
 import type { InvoiceType, Prisma } from "@prisma/client";
 import { DuplicateRowActions } from "./DuplicateRowActions";
+import { getAccessibleClientIds } from "@/lib/accessibleClients";
 
 const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
   UPLOADED:  { label: "Subida",       variant: "blue" },
@@ -74,7 +75,7 @@ export default async function WorkerInvoicesPage({
   }>;
 }) {
   const session = await auth();
-  if (!session?.user || session.user.role !== "WORKER") redirect("/login");
+  if (!session?.user || !["ADMIN", "WORKER"].includes(session.user.role)) redirect("/login");
 
   const params = await searchParams;
   const clientId = params.clientId;
@@ -83,12 +84,8 @@ export default async function WorkerInvoicesPage({
   const typeFilter = params.type;
   const bucket = parseBucket(params.bucket);
 
-  // Get all client IDs assigned to this worker
-  const assignments = await prisma.workerClientAssignment
-    .findMany({ where: { workerId: session.user.id }, select: { clientId: true } })
-    .catch(() => []);
-
-  const allowedClientIds = assignments.map((a) => a.clientId);
+  // ADMIN ve todos los clientes de su firma; WORKER solo los asignados.
+  const allowedClientIds = await getAccessibleClientIds(session).catch(() => [] as string[]);
   const scopedClientId = clientId && allowedClientIds.includes(clientId) ? clientId : null;
 
   const baseWhere: Prisma.InvoiceWhereInput = {

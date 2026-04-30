@@ -171,23 +171,57 @@ def build(cfg: dict, out_path: str):
     story.append(items_tbl)
     story.append(Spacer(1, 6 * mm))
 
-    iva_rate = cfg.get("iva_rate", 21)
-    totals = Table([
-        ["Base imponible:", fmt_eur(cfg["base"])],
-        [f"IVA ({iva_rate}%):", fmt_eur(cfg["iva"])],
-        ["TOTAL A PAGAR:", fmt_eur(cfg["total"])],
-    ], colWidths=[40 * mm, 35 * mm], hAlign="RIGHT")
-    totals.setStyle(TableStyle([
-        ("FONT", (0, 0), (-1, 1), "Helvetica", 9),
-        ("FONT", (0, 2), (-1, 2), "Helvetica-Bold", 11),
-        ("TEXTCOLOR", (0, 0), (-1, 1), DARK),
-        ("TEXTCOLOR", (0, 2), (-1, 2), PRIMARY),
-        ("ALIGN", (1, 0), (1, -1), "RIGHT"),
-        ("ALIGN", (0, 0), (0, -1), "LEFT"),
-        ("LINEABOVE", (0, 2), (-1, 2), 1, PRIMARY),
-        ("TOPPADDING", (0, 2), (-1, 2), 8),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-    ]))
+    # Soporte multi-IVA: si la config trae "iva_lines" renderizamos una
+    # linea de "Base XX%" + "IVA XX%" por cada tipo. Si no, una linea unica
+    # con iva_rate/iva (compatibilidad con configs antiguas).
+    iva_lines = cfg.get("iva_lines")
+    if iva_lines:
+        rows = []
+        total_base = 0.0
+        total_cuota = 0.0
+        for line in iva_lines:
+            base = float(line["base"])
+            rate = float(line["rate"])
+            cuota = float(line["cuota"])
+            total_base += base
+            total_cuota += cuota
+            rows.append([f"Base {rate:g}%:", fmt_eur(base)])
+            rows.append([f"Cuota IVA {rate:g}%:", fmt_eur(cuota)])
+        rows.append(["Base imponible total:", fmt_eur(total_base)])
+        rows.append(["Cuota IVA total:", fmt_eur(total_cuota)])
+        rows.append(["TOTAL A PAGAR:", fmt_eur(cfg["total"])])
+        last_idx = len(rows) - 1
+        totals = Table(rows, colWidths=[55 * mm, 35 * mm], hAlign="RIGHT")
+        totals.setStyle(TableStyle([
+            ("FONT", (0, 0), (-1, last_idx - 1), "Helvetica", 9),
+            ("FONT", (0, last_idx), (-1, last_idx), "Helvetica-Bold", 11),
+            ("TEXTCOLOR", (0, 0), (-1, last_idx - 1), DARK),
+            ("TEXTCOLOR", (0, last_idx), (-1, last_idx), PRIMARY),
+            ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+            ("ALIGN", (0, 0), (0, -1), "LEFT"),
+            ("LINEABOVE", (0, last_idx - 2), (-1, last_idx - 2), 0.25, GRAY),
+            ("LINEABOVE", (0, last_idx), (-1, last_idx), 1, PRIMARY),
+            ("TOPPADDING", (0, last_idx), (-1, last_idx), 8),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))
+    else:
+        iva_rate = cfg.get("iva_rate", 21)
+        totals = Table([
+            ["Base imponible:", fmt_eur(cfg["base"])],
+            [f"IVA ({iva_rate}%):", fmt_eur(cfg["iva"])],
+            ["TOTAL A PAGAR:", fmt_eur(cfg["total"])],
+        ], colWidths=[40 * mm, 35 * mm], hAlign="RIGHT")
+        totals.setStyle(TableStyle([
+            ("FONT", (0, 0), (-1, 1), "Helvetica", 9),
+            ("FONT", (0, 2), (-1, 2), "Helvetica-Bold", 11),
+            ("TEXTCOLOR", (0, 0), (-1, 1), DARK),
+            ("TEXTCOLOR", (0, 2), (-1, 2), PRIMARY),
+            ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+            ("ALIGN", (0, 0), (0, -1), "LEFT"),
+            ("LINEABOVE", (0, 2), (-1, 2), 1, PRIMARY),
+            ("TOPPADDING", (0, 2), (-1, 2), 8),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))
     story.append(totals)
     story.append(Spacer(1, 12 * mm))
 

@@ -27,15 +27,19 @@ type NavItem = {
 
 const NAV_ITEMS: Record<Role, NavItem[]> = {
   ADMIN: [
-    { href: "/dashboard/admin",          label: "Panel",             icon: LayoutDashboard },
-    { href: "/dashboard/admin/clients",  label: "Clientes",          icon: Building2 },
-    { href: "/dashboard/admin/workers",  label: "Gestores",          icon: Users },
-    { href: "/dashboard/admin/invoices", label: "Facturas",          icon: FileText },
-    { href: "/dashboard/admin/batch",    label: "Lotes",             icon: Layers },
-    { href: "/dashboard/admin/export",   label: "Exportar",          icon: Download },
-    { href: "/dashboard/admin/closures", label: "Cierres",           icon: CalendarCheck },
-    { href: "/dashboard/admin/audit",     label: "Auditoría",         icon: ClipboardList },
-    { href: "/dashboard/admin/settings", label: "Ajustes",           icon: Settings },
+    { href: "/dashboard/admin",            label: "Panel",            icon: LayoutDashboard },
+    { href: "/dashboard/admin/clients",    label: "Clientes",         icon: Building2 },
+    { href: "/dashboard/admin/workers",    label: "Gestores",         icon: Users },
+    { href: "/dashboard/admin/invoices",   label: "Facturas",         icon: FileText },
+    // Vistas operativas (heredadas del rol gestor) — el admin tambien
+    // puede subir, revisar incidencias y operar sobre lotes en revision.
+    { href: "/dashboard/worker/upload",    label: "Subir facturas",   icon: Upload },
+    { href: "/dashboard/worker/issues",    label: "Incidencias",      icon: AlertTriangle },
+    { href: "/dashboard/admin/batch",      label: "Lotes",            icon: Layers },
+    { href: "/dashboard/admin/export",     label: "Exportar",         icon: Download },
+    { href: "/dashboard/admin/closures",   label: "Cierres",          icon: CalendarCheck },
+    { href: "/dashboard/admin/audit",      label: "Auditoría",        icon: ClipboardList },
+    { href: "/dashboard/admin/settings",   label: "Ajustes",          icon: Settings },
   ],
   WORKER: [
     { href: "/dashboard/worker", label: "Panel", icon: LayoutDashboard },

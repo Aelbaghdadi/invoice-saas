@@ -6,7 +6,12 @@ import { UploadForm } from "./UploadForm";
 
 export default async function ClientUploadPage() {
   const session = await auth();
-  if (!session?.user || session.user.role !== "CLIENT") redirect("/login");
+  if (!session?.user) redirect("/login");
+
+  // ADMIN no tiene "su" cliente — le mandamos al upload del gestor que ya
+  // permite elegir cliente de la firma.
+  if (session.user.role === "ADMIN") redirect("/dashboard/worker/upload");
+  if (session.user.role !== "CLIENT") redirect("/login");
 
   const client = await prisma.client
     .findUnique({ where: { userId: session.user.id } })

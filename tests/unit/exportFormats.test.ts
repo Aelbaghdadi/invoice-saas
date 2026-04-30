@@ -90,6 +90,40 @@ describe("generateCsv", () => {
     expect(header.split(";").length).toBe(9);
     expect(row.split(";").length).toBe(9);
   });
+
+  // Multi-IVA: una factura con varios tipos genera N filas (una por tipo).
+  // Tu cliente A3 espera "repetir fila con todo igual cambiando %IVA y cuota".
+  it("emits one row per VAT line for multi-VAT invoices", () => {
+    const inv = mkInvoice({
+      taxBase: 100 as any,
+      vatAmount: 20 as any,
+      totalAmount: 120 as any,
+      vatLines: [
+        { id: "v1", invoiceId: "inv-1", position: 0, taxBase: 50 as any, vatRate: 4 as any, vatAmount: 2 as any, createdAt: new Date() },
+        { id: "v2", invoiceId: "inv-1", position: 1, taxBase: 30 as any, vatRate: 10 as any, vatAmount: 3 as any, createdAt: new Date() },
+        { id: "v3", invoiceId: "inv-1", position: 2, taxBase: 20 as any, vatRate: 21 as any, vatAmount: 4.20 as any, createdAt: new Date() },
+      ] as any,
+    });
+    const csv = generateCsv([inv], "sage50");
+    const dataRows = csv.slice(1).split("\r\n").slice(1);
+    expect(dataRows).toHaveLength(3);
+    // Tipo, fecha, num, nombre, cif iguales en todas; base/%/cuota varian.
+    const cols = (r: string) => r.split(";");
+    expect(cols(dataRows[0])[6]).toBe("4,00");   // %IVA primera
+    expect(cols(dataRows[1])[6]).toBe("10,00");
+    expect(cols(dataRows[2])[6]).toBe("21,00");
+    // Total solo en la primera fila para que no se duplique al sumar.
+    expect(cols(dataRows[0])[10]).toBe("120,00");
+    expect(cols(dataRows[1])[10]).toBe("0,00");
+    expect(cols(dataRows[2])[10]).toBe("0,00");
+  });
+
+  it("falls back to flat fields when no vatLines", () => {
+    const csv = generateCsv([mkInvoice()], "a3con");
+    const dataRows = csv.slice(1).split("\r\n").slice(1);
+    expect(dataRows).toHaveLength(1);
+    expect(dataRows[0].split(";")[6]).toBe("21,00");
+  });
 });
 
 describe("suggestFilename", () => {
@@ -151,5 +185,23 @@ describe("validateForA3Export", () => {
       mkInvoice({ type: "SALE", issuerCif: null, receiverCif: "B87654321" }),
     ]);
     expect(res).toEqual([]);
+  });
+
+  it("validates math against sum of vatLines, not flat fields", () => {
+    // Suma de bases (50+30+20=100) + cuotas (2+3+4.20=9.20) = 109.20
+    // El total declarado coincide -> sin warnings.
+    const res = validateForA3Export([
+      mkInvoice({
+        taxBase: null,
+        vatAmount: null,
+        totalAmount: 109.20 as any,
+        vatLines: [
+          { id: "v1", invoiceId: "inv-1", position: 0, taxBase: 50 as any, vatRate: 4 as any, vatAmount: 2 as any, createdAt: new Date() },
+          { id: "v2", invoiceId: "inv-1", position: 1, taxBase: 30 as any, vatRate: 10 as any, vatAmount: 3 as any, createdAt: new Date() },
+          { id: "v3", invoiceId: "inv-1", position: 2, taxBase: 20 as any, vatRate: 21 as any, vatAmount: 4.20 as any, createdAt: new Date() },
+        ] as any,
+      }),
+    ]);
+    expect(res.flatMap((r) => r.warnings).filter((w) => w.includes("Descuadre"))).toEqual([]);
   });
 });

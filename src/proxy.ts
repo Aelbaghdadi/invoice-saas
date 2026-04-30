@@ -1,9 +1,11 @@
 import { auth } from "@/lib/auth";
 import { NextResponse } from "next/server";
 
-// Role-based route prefixes
+// Role-based route prefixes. ADMIN tiene acceso universal (todas las
+// secciones de worker y client) — los gestores y clientes siguen acotados
+// a sus zonas respectivas.
 const ROLE_ROUTES: Record<string, string[]> = {
-  ADMIN: ["/dashboard/admin", "/dashboard"],
+  ADMIN: ["/dashboard"],
   WORKER: ["/dashboard/worker", "/dashboard"],
   CLIENT: ["/dashboard/client", "/dashboard"],
 };
