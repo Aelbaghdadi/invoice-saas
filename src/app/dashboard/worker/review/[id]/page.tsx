@@ -9,6 +9,11 @@ import {
   queueToSearchParams,
 } from "@/lib/reviewQueue";
 
+// La cola se calcula en cada render — el conteo cambia segun otro
+// gestor valide/rechace facturas. Forzamos dinamico para que el "X de N"
+// no quede stale tras un revalidate diferido de Next.
+export const dynamic = "force-dynamic";
+
 export default async function ReviewPage({
   params,
   searchParams,
