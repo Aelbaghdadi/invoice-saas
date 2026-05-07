@@ -25,6 +25,12 @@ const nextConfig: NextConfig = {
       bodySizeLimit: "25mb",
     },
   },
+  // Incluir los PDFs pre-construidos del seed de demo en el bundle de
+  // funciones serverless de Vercel. Sin esto, scripts/seed-pdfs/ no se
+  // empaqueta y el endpoint /api/admin/reset-demo falla con ENOENT.
+  outputFileTracingIncludes: {
+    "/api/admin/reset-demo": ["scripts/seed-pdfs/**/*"],
+  },
   async headers() {
     const base = [
       { key: "X-Frame-Options", value: "DENY" },

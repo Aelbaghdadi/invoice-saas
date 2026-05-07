@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 import {
   Building2, Lock, User, CheckCircle2, AlertCircle, Loader2,
-  Mail, Shield, Users,
+  Mail, Shield, Users, RefreshCw, AlertTriangle, Database,
 } from "lucide-react";
 import {
   updateFirm, changePassword, updateProfile,
@@ -26,6 +26,7 @@ const TABS = [
   { id: "profile",  label: "Mi perfil",    icon: User },
   { id: "password", label: "Contraseña",   icon: Lock },
   { id: "team",     label: "Equipo",       icon: Users },
+  { id: "demo",     label: "Demo",         icon: Database },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -90,7 +91,199 @@ export function SettingsForm({ firm, profile, team }: Props) {
         {tab === "profile"  && <ProfileTab profile={profile} />}
         {tab === "password" && <PasswordTab />}
         {tab === "team"     && <TeamTab team={team} />}
+        {tab === "demo"     && <DemoTab />}
       </div>
+    </div>
+  );
+}
+
+// ─── Demo tab ───────────────────────────────────────────────────────────────
+
+function DemoTab() {
+  const { success, error: toastError } = useToast();
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [confirmText, setConfirmText] = useState("");
+  const [pending, start] = useTransition();
+  const [lastResult, setLastResult] = useState<
+    | { ok: true; invoicesCreated: number; workersCreated: number; clientsCreated: number }
+    | { ok: false; error: string }
+    | null
+  >(null);
+
+  const handleReset = () => {
+    start(async () => {
+      try {
+        const res = await fetch("/api/admin/reset-demo", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ confirm: "RESET" }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setLastResult({ ok: false, error: data.error ?? "Error desconocido" });
+          toastError(data.error ?? "Error al reiniciar la demo");
+          return;
+        }
+        setLastResult({
+          ok: true,
+          invoicesCreated: data.invoicesCreated,
+          workersCreated: data.workersCreated,
+          clientsCreated: data.clientsCreated,
+        });
+        success("Demo reiniciada correctamente");
+        setShowConfirm(false);
+        setConfirmText("");
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setLastResult({ ok: false, error: msg });
+        toastError("Error de red al reiniciar la demo");
+      }
+    });
+  };
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="mb-5 flex items-center gap-3">
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50">
+          <Database className="h-5 w-5 text-amber-600" />
+        </div>
+        <div>
+          <h2 className="text-[15px] font-semibold text-slate-800">Reiniciar datos de demo</h2>
+          <p className="text-[12px] text-slate-400">
+            Restaura el estado original de la base de datos
+          </p>
+        </div>
+      </div>
+
+      <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50/60 px-4 py-3">
+        <div className="flex items-start gap-2.5">
+          <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600" />
+          <div className="text-[12px] text-amber-800 leading-relaxed">
+            <p className="font-semibold">Operación destructiva</p>
+            <p className="mt-1">
+              Esta acción <strong>borra</strong> todos los gestores, clientes,
+              facturas, incidencias, lotes y cierres de tu asesoría, y los
+              reemplaza con el dataset de demostración (2 gestores, 2 clientes,
+              6 facturas con PDFs reales). <strong>Tu cuenta de admin se preserva.</strong>
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="mb-5 grid grid-cols-2 gap-3 text-[12px]">
+        <div className="rounded-xl bg-slate-50 px-4 py-3">
+          <p className="text-[11px] uppercase tracking-wider text-slate-400">Gestores demo</p>
+          <p className="mt-1 font-semibold text-slate-700">Ana, Pedro</p>
+          <p className="mt-0.5 font-mono text-[11px] text-slate-400">Demo1234!</p>
+        </div>
+        <div className="rounded-xl bg-slate-50 px-4 py-3">
+          <p className="text-[11px] uppercase tracking-wider text-slate-400">Clientes demo</p>
+          <p className="mt-1 font-semibold text-slate-700">Panadería, Taller</p>
+          <p className="mt-0.5 font-mono text-[11px] text-slate-400">Demo1234!</p>
+        </div>
+      </div>
+
+      {lastResult && (
+        <div
+          className={`mb-5 rounded-xl px-4 py-3 text-[13px] ${
+            lastResult.ok
+              ? "bg-green-50 text-green-700"
+              : "bg-red-50 text-red-600"
+          }`}
+        >
+          {lastResult.ok ? (
+            <div className="flex items-start gap-2.5">
+              <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0" />
+              <div>
+                <p className="font-semibold">Demo reiniciada</p>
+                <p className="mt-0.5 text-[12px]">
+                  {lastResult.workersCreated} gestores · {lastResult.clientsCreated} clientes ·{" "}
+                  {lastResult.invoicesCreated} facturas con PDFs subidos.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-start gap-2.5">
+              <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+              <span>{lastResult.error}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={() => setShowConfirm(true)}
+        className="flex items-center gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-2.5 text-[13px] font-semibold text-red-700 transition hover:bg-red-100"
+      >
+        <RefreshCw className="h-4 w-4" />
+        Reiniciar demo
+      </button>
+
+      {/* Confirm modal — escribir RESET para confirmar evita clicks accidentales */}
+      {showConfirm && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm"
+          onClick={() => !pending && setShowConfirm(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center gap-2.5">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-red-50">
+                <AlertTriangle className="h-5 w-5 text-red-500" />
+              </div>
+              <h3 className="text-[16px] font-bold text-slate-900">¿Reiniciar la demo?</h3>
+            </div>
+            <p className="text-[13px] text-slate-600 leading-relaxed">
+              Vas a borrar <strong>todos los datos no-admin</strong> de tu asesoría
+              y reemplazarlos con el dataset de demostración. Esta acción
+              <strong> no se puede deshacer</strong>.
+            </p>
+            <p className="mt-4 text-[12px] text-slate-500">
+              Para continuar, escribe <code className="rounded bg-slate-100 px-1.5 py-0.5 text-[12px] font-mono font-semibold text-slate-800">RESET</code> en el campo:
+            </p>
+            <input
+              type="text"
+              value={confirmText}
+              onChange={(e) => setConfirmText(e.target.value)}
+              autoFocus
+              disabled={pending}
+              className="mt-2 w-full rounded-xl border border-slate-200 px-4 py-2.5 text-[13px] font-mono outline-none focus:border-red-300 focus:ring-2 focus:ring-red-100"
+              placeholder="RESET"
+            />
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() => { setShowConfirm(false); setConfirmText(""); }}
+                className="rounded-xl border border-slate-200 px-4 py-2.5 text-[13px] font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={pending || confirmText !== "RESET"}
+                onClick={handleReset}
+                className="flex items-center gap-2 rounded-xl bg-red-600 px-4 py-2.5 text-[13px] font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {pending ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Reiniciando…
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="h-4 w-4" />
+                    Confirmar reset
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
