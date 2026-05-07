@@ -8,6 +8,7 @@ import {
 } from "@/lib/ocr";
 import { detectIssues } from "@/lib/issueDetector";
 import { appendAuditLogs } from "@/lib/auditLog";
+import { parseTaxId } from "@/lib/validators";
 
 /** Transition status + record in history */
 async function transitionStatus(
@@ -123,6 +124,14 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     // Multi-IVA -> null (el desglose vive en InvoiceVatLine).
     const denormVatRate = vatLines.length === 1 ? vatLines[0].vatRate : null;
 
+    // Normalizacion de NIFs y deteccion de pais a partir del prefijo:
+    // - Quita "B-12345678" -> "B12345678"
+    // - "DE123456789" -> clean: "123456789", country: DE, scope: INTRACOM
+    // El parser vive en validators.ts (no en ocr.ts) para no pisar la
+    // zona del compañero que trabaja en OCR.
+    const issuerParsed   = parseTaxId(extracted.issuerCif);
+    const receiverParsed = parseTaxId(extracted.receiverCif);
+
     // Copy OCR data to Invoice (datos finales — gestor los editará)
     await prisma.$transaction([
       // Reemplazar lineas previas (idempotente: si reproceso, borra y mete).
@@ -143,11 +152,11 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
         data: {
           status: targetStatus,
           issuerName:    extracted.issuerName,
-          issuerCif:     extracted.issuerCif,
-          issuerCountry: extracted.issuerCountry,
-          scope:         extracted.scope,
+          issuerCif:     issuerParsed.clean || null,
+          issuerCountry: issuerParsed.countryCode,
+          scope:         issuerParsed.scope,
           receiverName:  extracted.receiverName,
-          receiverCif:   extracted.receiverCif,
+          receiverCif:   receiverParsed.clean || null,
           invoiceNumber: extracted.invoiceNumber,
           invoiceDate:   extracted.invoiceDate ? new Date(extracted.invoiceDate) : null,
           taxBase:       extracted.taxBase,

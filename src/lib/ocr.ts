@@ -1,6 +1,5 @@
 import { GoogleAuth } from "google-auth-library";
 import { XMLParser } from "fast-xml-parser";
-import { parseTaxId } from "@/lib/validators";
 
 /** Una linea del desglose de IVA. Una factura con varios tipos
  *  (4% + 10% + 21%) tiene varias lineas. Cuando la factura tiene un
@@ -13,8 +12,6 @@ export type ExtractedVatLine = {
 
 export type ExtractedInvoice = {
   issuerName:    string | null;
-  /** NIF/CIF del emisor LIMPIO: sin prefijo de pais ni caracteres
-   *  especiales. El prefijo (si existia) se guarda en issuerCountry. */
   issuerCif:     string | null;
   receiverName:  string | null;
   receiverCif:   string | null;
@@ -31,13 +28,6 @@ export type ExtractedInvoice = {
   totalAmount:   number | null;
   /** Desglose de IVA. Vacio si no se pudo extraer. */
   vatLines:      ExtractedVatLine[];
-  /** Codigo ISO de pais del emisor detectado por prefijo (ES, DE...).
-   *  null si no habia prefijo (asumimos espanol). */
-  issuerCountry: string | null;
-  /** NATIONAL si emisor espanol o sin prefijo, INTRACOM si UE no-ES,
-   *  INTERNATIONAL para resto. Lo usa el revisor para asentar bien la
-   *  inversion del sujeto pasivo. */
-  scope:         "NATIONAL" | "INTRACOM" | "INTERNATIONAL";
   confidence:    Record<string, number> | null;
 };
 
@@ -240,15 +230,11 @@ function mapEntities(entities: any[]): ExtractedInvoice {
   // para que la UI sepa que el desglose tiene la verdad).
   const denormVatRate = vatLines.length === 1 ? vatLines[0].vatRate : null;
 
-  // Parseo de tax IDs: separar prefijo de pais y normalizar.
-  const issuerParsed   = parseTaxId(text("supplier_tax_id"));
-  const receiverParsed = parseTaxId(text("receiver_tax_id"));
-
   return {
     issuerName:    text("supplier_name"),
-    issuerCif:     issuerParsed.clean || null,
+    issuerCif:     text("supplier_tax_id")?.replace(/\s/g, "") ?? null,
     receiverName:  text("receiver_name"),
-    receiverCif:   receiverParsed.clean || null,
+    receiverCif:   text("receiver_tax_id")?.replace(/\s/g, "") ?? null,
     invoiceNumber: text("invoice_id"),
     invoiceDate:   getDate(byType("invoice_date")),
     taxBase:       sumBases,
@@ -258,8 +244,6 @@ function mapEntities(entities: any[]): ExtractedInvoice {
     irpfAmount:    null,
     totalAmount:   getMoney(byType("total_amount")),
     vatLines,
-    issuerCountry: issuerParsed.countryCode,
-    scope:         issuerParsed.scope,
     confidence,
   };
 }
@@ -495,18 +479,13 @@ async function parseFacturaeXml(xml: string): Promise<ExtractedInvoice> {
     ? vatLines.reduce((s, l) => s + l.vatAmount, 0)
     : null;
 
-  // Parseo de tax IDs: en Facturae el TaxIdentificationNumber suele
-  // venir con prefijo de pais (ES B12345678).
-  const sellerParsed = parseTaxId(safeStr(sellerTax?.TaxIdentificationNumber ?? sellerTax?.taxIdentificationNumber));
-  const buyerParsed  = parseTaxId(safeStr(buyerTax?.TaxIdentificationNumber  ?? buyerTax?.taxIdentificationNumber));
-
   return {
     issuerName:    safeStr(sellerEntity?.CorporateName ?? sellerEntity?.corporateName
                      ?? sellerEntity?.Name ?? sellerEntity?.name),
-    issuerCif:     sellerParsed.clean || null,
+    issuerCif:     safeStr(sellerTax?.TaxIdentificationNumber ?? sellerTax?.taxIdentificationNumber),
     receiverName:  safeStr(buyerEntity?.CorporateName ?? buyerEntity?.corporateName
                      ?? buyerEntity?.Name ?? buyerEntity?.name),
-    receiverCif:   buyerParsed.clean || null,
+    receiverCif:   safeStr(buyerTax?.TaxIdentificationNumber ?? buyerTax?.taxIdentificationNumber),
     invoiceNumber: safeStr(header?.InvoiceNumber ?? header?.invoiceNumber
                      ?? header?.InvoiceSeriesCode ?? header?.invoiceSeriesCode),
     invoiceDate:   safeStr(header?.IssueDate ?? header?.issueDate),
@@ -519,8 +498,6 @@ async function parseFacturaeXml(xml: string): Promise<ExtractedInvoice> {
                      ?? totals?.TotalTaxesWithheld ?? totals?.totalTaxesWithheld),
     totalAmount:   safeNum(totals?.InvoiceTotal ?? totals?.invoiceTotal),
     vatLines,
-    issuerCountry: sellerParsed.countryCode,
-    scope:         sellerParsed.scope,
     confidence,
   };
 }
