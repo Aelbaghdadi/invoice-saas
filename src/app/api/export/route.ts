@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { generateCsv, generateA3Excel, suggestFilename, validateForA3Export, type ExportFormat, type ExportConfig } from "@/lib/exportFormats";
+import { appendAuditLogs } from "@/lib/auditLog";
 import type { InvoiceType, InvoiceStatus } from "@prisma/client";
 
 export async function GET(req: NextRequest) {
@@ -123,16 +124,16 @@ export async function GET(req: NextRequest) {
     data: { exportBatchId: batch.id },
   });
 
-  // Audit log for exported invoices
-  await prisma.auditLog.createMany({
-    data: invoices.map((i) => ({
+  // Audit log for exported invoices (cadena de hash via appendAuditLogs)
+  await appendAuditLogs(
+    invoices.map((i) => ({
       invoiceId: i.id,
       userId: session.user.id,
       field: "export",
       oldValue: null,
       newValue: `Exportada (batch: ${batch.id}, formato: ${format})`,
     })),
-  });
+  );
 
   // Read client export config if exporting for a single client
   let exportConfig: ExportConfig | undefined;

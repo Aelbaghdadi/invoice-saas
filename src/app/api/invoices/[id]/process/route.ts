@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { processInvoice } from "@/lib/processInvoice";
+import { appendAuditLogs } from "@/lib/auditLog";
 import type { InvoiceStatus } from "@prisma/client";
 
 /** Allowed statuses for (re)processing */
@@ -54,16 +55,14 @@ export async function POST(
       data: { status: "UPLOADED", lastOcrError: null },
     });
 
-    // Audit log for the reprocess action
-    await prisma.auditLog.create({
-      data: {
-        invoiceId: id,
-        userId,
-        field: "status",
-        oldValue: previousStatus,
-        newValue: "UPLOADED (reprocess)",
-      },
-    });
+    // Audit log for the reprocess action (cadena de hash)
+    await appendAuditLogs([{
+      invoiceId: id,
+      userId,
+      field: "status",
+      oldValue: previousStatus,
+      newValue: "UPLOADED (reprocess)",
+    }]);
 
     // Status history for the reset
     await prisma.invoiceStatusHistory.create({

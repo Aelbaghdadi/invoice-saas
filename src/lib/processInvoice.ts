@@ -7,6 +7,7 @@ import {
   extractInvoiceFromXml,
 } from "@/lib/ocr";
 import { detectIssues } from "@/lib/issueDetector";
+import { appendAuditLogs } from "@/lib/auditLog";
 
 /** Transition status + record in history */
 async function transitionStatus(
@@ -143,6 +144,8 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
           status: targetStatus,
           issuerName:    extracted.issuerName,
           issuerCif:     extracted.issuerCif,
+          issuerCountry: extracted.issuerCountry,
+          scope:         extracted.scope,
           receiverName:  extracted.receiverName,
           receiverCif:   extracted.receiverCif,
           invoiceNumber: extracted.invoiceNumber,
@@ -161,15 +164,13 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
 
     await transitionStatus(invoiceId, "ANALYZING", targetStatus, triggeredByUserId);
 
-    await prisma.auditLog.create({
-      data: {
-        invoiceId,
-        userId: triggeredByUserId,
-        field: "status",
-        oldValue: "UPLOADED",
-        newValue: targetStatus,
-      },
-    });
+    await appendAuditLogs([{
+      invoiceId,
+      userId: triggeredByUserId,
+      field: "status",
+      oldValue: "UPLOADED",
+      newValue: targetStatus,
+    }]);
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
     await prisma.invoice.update({

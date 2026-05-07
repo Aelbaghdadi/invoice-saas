@@ -17,6 +17,20 @@ enum InvoiceType {
   SALE
 }
 
+/// Ambito fiscal de la factura. Se detecta automaticamente del prefijo
+/// del NIF del emisor (ES/sin prefijo -> NATIONAL, UE no-ES -> INTRACOM,
+/// resto -> INTERNATIONAL). El gestor puede cambiarlo en revision.
+///
+/// Importante para A3 Asesor: las INTRACOM e INTERNATIONAL llevan IVA 0
+/// pero generan asientos con inversion del sujeto pasivo (IVA fictio
+/// soportado + repercutido que se anulan). En el export Excel cada
+/// scope va a un modelo distinto (303, 349 para intracom).
+enum InvoiceScope {
+  NATIONAL
+  INTRACOM
+  INTERNATIONAL
+}
+
 enum InvoiceStatus {
   UPLOADED
   ANALYZING
@@ -141,6 +155,13 @@ model Invoice {
   fileHash    String?
   type        InvoiceType
   status      InvoiceStatus @default(UPLOADED)
+  /// Ambito fiscal: nacional / intracomunitaria / internacional. Por
+  /// defecto NATIONAL hasta que el OCR detecte un emisor con prefijo
+  /// de pais distinto a ES.
+  scope       InvoiceScope  @default(NATIONAL)
+  /// Codigo ISO del pais del emisor ("ES", "DE", "FR"...) o null si
+  /// no se detecto prefijo y se asume nacional.
+  issuerCountry String?     @db.Char(2)
   periodMonth Int
   periodYear  Int
 
@@ -307,6 +328,16 @@ model InvoiceIssue {
   createdAt   DateTime    @default(now())
 }
 
+/// Registro de cambios append-only con cadena de hash.
+///
+/// Cada registro contiene el hash del anterior (`prevHash`) y su propio
+/// hash (`hash`). Si alguien borra o modifica una fila — incluso desde
+/// la consola de Supabase — la cadena se rompe y `verifyAuditChain()`
+/// lo detecta inmediatamente.
+///
+/// Ademas hay un trigger PostgreSQL que bloquea UPDATE/DELETE a nivel
+/// BD (ver migracion). Por eso los desarrolladores tampoco pueden
+/// alterar el historial.
 model AuditLog {
   id        String   @id @default(cuid())
   field     String
@@ -319,6 +350,17 @@ model AuditLog {
 
   userId String
   user   User   @relation(fields: [userId], references: [id])
+
+  /// id del registro anterior en la cadena. NULL solo para el primero
+  /// de cada factura ("genesis" del chain por factura).
+  prevId    String?
+  /// Hash del registro anterior. "GENESIS" para el primero.
+  prevHash  String   @default("GENESIS")
+  /// Hash de este registro (sha256 hex de los campos + prevHash).
+  hash      String
+
+  @@index([invoiceId, createdAt])
+  @@index([prevId])
 }
 
 model PeriodClosure {

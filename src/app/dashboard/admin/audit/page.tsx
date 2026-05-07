@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ClipboardList, ArrowRight } from "lucide-react";
 import { AuditFilters } from "./AuditFilters";
+import { IntegrityCheck } from "./IntegrityCheck";
 
 const FIELD_LABELS: Record<string, string> = {
   status: "Estado", issuerName: "Emisor", issuerCif: "CIF emisor",
@@ -116,6 +117,8 @@ export default async function AuditLogPage({ searchParams }: Props) {
         title="Registro de auditoría"
         description="Historial completo de cambios realizados en las facturas"
       />
+
+      <IntegrityCheck />
 
       <AuditFilters users={allUsers} fields={fields} />
 

@@ -68,7 +68,85 @@ export function isValidNIF(value: string): boolean {
   return isValidDNI(cleaned) || isValidNIE(cleaned) || isValidCIF(cleaned);
 }
 
-/** Clean and normalize a NIF/CIF/NIE: uppercase, remove spaces/dashes */
+/** Clean and normalize a NIF/CIF/NIE: uppercase, remove spaces/dashes/dots */
 export function formatNIF(value: string): string {
   return value.toUpperCase().replace(/[\s\-\.]/g, "");
+}
+
+// ─── Codigos VAT/pais para deteccion internacional ─────────────────────
+
+/** Codigos VAT de los 27 estados miembros UE (2026). Grecia usa EL, no GR. */
+const EU_VAT_PREFIXES = new Set([
+  "AT", "BE", "BG", "CY", "CZ", "DE", "DK", "EE", "ES", "FI",
+  "FR", "EL", "HR", "HU", "IE", "IT", "LT", "LU", "LV", "MT",
+  "NL", "PL", "PT", "RO", "SE", "SI", "SK",
+]);
+
+/** Codigos ISO 3166-1 alpha-2 que asumimos como prefijo VAT extra-UE
+ *  (los mas comunes en facturacion B2B internacional). */
+const NON_EU_COMMON = new Set([
+  "GB", "CH", "NO", "US", "MX", "AR", "BR", "CL", "CO", "MA",
+  "TR", "JP", "CN", "KR", "AU", "NZ", "CA", "IN", "SG",
+]);
+
+/** Resultado del parser de NIF/VAT: el numero limpio (sin prefijo y sin
+ *  caracteres especiales) y el codigo de pais detectado (si lo hay). */
+export type ParsedTaxId = {
+  /** NIF/CIF normalizado y SIN prefijo de pais. Lo que guardamos en BD. */
+  clean: string;
+  /** Codigo ISO de pais si se detecto uno (ES, DE, FR...). null si no. */
+  countryCode: string | null;
+  /** "NATIONAL" si es ES o sin prefijo, "INTRACOM" si UE no-ES,
+   *  "INTERNATIONAL" para resto. */
+  scope: "NATIONAL" | "INTRACOM" | "INTERNATIONAL";
+};
+
+/**
+ * Parsea un NIF/CIF/VAT que puede venir con prefijo de pais.
+ *
+ * Ejemplos:
+ *   "B-12345678"         -> { clean: "B12345678", countryCode: null, scope: NATIONAL }
+ *   "ES B12345678"       -> { clean: "B12345678", countryCode: "ES", scope: NATIONAL }
+ *   "DE123456789"        -> { clean: "123456789", countryCode: "DE", scope: INTRACOM }
+ *   "FR 12 345678901"    -> { clean: "12345678901", countryCode: "FR", scope: INTRACOM }
+ *   "GB123456789"        -> { clean: "123456789", countryCode: "GB", scope: INTERNATIONAL }
+ *
+ * El "clean" es lo que se guarda en BD: nunca con prefijo de pais. El
+ * pais se detecta por el prefijo o, si falta, queda null y asumimos
+ * NATIONAL (caso de personas fisicas con DNI sin prefijo).
+ */
+export function parseTaxId(raw: string | null | undefined): ParsedTaxId {
+  if (!raw) return { clean: "", countryCode: null, scope: "NATIONAL" };
+
+  // Normalizar: mayusculas, sin espacios/guiones/puntos.
+  const normalized = formatNIF(raw);
+
+  // Detectar prefijo de pais: 2 letras al inicio que coincidan con la
+  // tabla. Para evitar falsos positivos solo eliminamos prefijo si
+  // queda al menos 5 caracteres alfanumericos despues.
+  if (normalized.length >= 7) {
+    const prefix = normalized.slice(0, 2);
+    const rest   = normalized.slice(2);
+
+    if (EU_VAT_PREFIXES.has(prefix)) {
+      const scope = prefix === "ES" ? "NATIONAL" : "INTRACOM";
+      return { clean: rest, countryCode: prefix, scope };
+    }
+    if (NON_EU_COMMON.has(prefix)) {
+      return { clean: rest, countryCode: prefix, scope: "INTERNATIONAL" };
+    }
+  }
+
+  // Sin prefijo identificable: asumimos nacional (DNI/CIF/NIE espanol).
+  return { clean: normalized, countryCode: null, scope: "NATIONAL" };
+}
+
+/** Helper rapido: solo el "clean" (lo que va a BD). */
+export function cleanTaxId(raw: string | null | undefined): string {
+  return parseTaxId(raw).clean;
+}
+
+/** Helper rapido: el scope detectado a partir del NIF del emisor. */
+export function detectScope(issuerCif: string | null | undefined): ParsedTaxId["scope"] {
+  return parseTaxId(issuerCif).scope;
 }

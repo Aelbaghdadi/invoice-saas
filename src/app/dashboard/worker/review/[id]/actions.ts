@@ -11,6 +11,7 @@ import {
   parseBucket,
   queueToSearchParams,
 } from "@/lib/reviewQueue";
+import { appendAuditLogs } from "@/lib/auditLog";
 
 export type ReviewState = { error?: string } | null;
 
@@ -261,15 +262,15 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
   }
 
   if (auditEntries.length > 0) {
-    await prisma.auditLog.createMany({
-      data: auditEntries.map((e) => ({
+    await appendAuditLogs(
+      auditEntries.map((e) => ({
         invoiceId,
         userId,
         field: e.field,
         oldValue: e.oldValue,
         newValue: e.newValue,
       })),
-    });
+    );
   }
 
   return null; // no error
@@ -409,15 +410,13 @@ export async function rejectInvoice(
     },
   });
 
-  await prisma.auditLog.create({
-    data: {
-      invoiceId: id,
-      userId: session.user.id,
-      field: "status",
-      oldValue: invoice.status,
-      newValue: "REJECTED",
-    },
-  });
+  await appendAuditLogs([{
+    invoiceId: id,
+    userId: session.user.id,
+    field: "status",
+    oldValue: invoice.status,
+    newValue: "REJECTED",
+  }]);
 
   // Notify client about rejection
   after(async () => {

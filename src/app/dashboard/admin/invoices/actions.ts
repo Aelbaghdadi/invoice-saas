@@ -3,6 +3,7 @@
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
+import { appendAuditLogs } from "@/lib/auditLog";
 
 export async function bulkValidateInvoices(ids: string[]) {
   const session = await auth();
@@ -39,15 +40,13 @@ export async function bulkValidateInvoices(ids: string[]) {
       },
     });
 
-    await prisma.auditLog.create({
-      data: {
-        invoiceId: inv.id,
-        userId,
-        field: "status",
-        oldValue: inv.status,
-        newValue: "VALIDATED",
-      },
-    });
+    await appendAuditLogs([{
+      invoiceId: inv.id,
+      userId,
+      field: "status",
+      oldValue: inv.status,
+      newValue: "VALIDATED",
+    }]);
   }
 
   revalidatePath("/dashboard/admin/invoices");

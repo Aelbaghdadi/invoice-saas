@@ -5,6 +5,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { notifyClientInvoiceRejected } from "@/lib/email";
+import { appendAuditLogs } from "@/lib/auditLog";
 
 export type InvoiceQuickAction = { ok?: boolean; error?: string } | null;
 
@@ -89,15 +90,13 @@ export async function quickRejectDuplicate(
     });
   }
 
-  await prisma.auditLog.create({
-    data: {
-      invoiceId,
-      userId: session.user.id,
-      field: "status",
-      oldValue: invoice.status,
-      newValue: "REJECTED",
-    },
-  });
+  await appendAuditLogs([{
+    invoiceId,
+    userId: session.user.id,
+    field: "status",
+    oldValue: invoice.status,
+    newValue: "REJECTED",
+  }]);
 
   // Notificacion al cliente en background
   after(async () => {
