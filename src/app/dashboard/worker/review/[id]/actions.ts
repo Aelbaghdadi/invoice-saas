@@ -148,12 +148,23 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
   const issuerParsed   = parseTaxId(data.issuerCif);
   const receiverParsed = parseTaxId(data.receiverCif);
 
+  // Parte conocida (cliente) — la fuerza el sistema, no se acepta lo
+  // que envie el form. PURCHASE: cliente = receptor; SALE: cliente = emisor.
+  // Asi el gestor ni siquiera con devtools puede sustituir los datos
+  // del Client por otros distintos.
+  const isPurchase = invoice.type === "PURCHASE";
+  const finalIssuerName    = isPurchase ? (data.issuerName || null)              : invoice.client.name;
+  const finalIssuerCif     = isPurchase ? (issuerParsed.clean || null)           : invoice.client.cif;
+  const finalIssuerCountry = isPurchase ? issuerParsed.countryCode               : null;
+  const finalReceiverName  = isPurchase ? invoice.client.name                    : (data.receiverName || null);
+  const finalReceiverCif   = isPurchase ? invoice.client.cif                     : (receiverParsed.clean || null);
+
   const newData = {
-    issuerName:    data.issuerName    || null,
-    issuerCif:     issuerParsed.clean || null,
-    issuerCountry: issuerParsed.countryCode,
-    receiverName:  data.receiverName  || null,
-    receiverCif:   receiverParsed.clean || null,
+    issuerName:    finalIssuerName,
+    issuerCif:     finalIssuerCif,
+    issuerCountry: finalIssuerCountry,
+    receiverName:  finalReceiverName,
+    receiverCif:   finalReceiverCif,
     invoiceNumber: data.invoiceNumber || null,
     invoiceDate:   parseDate(data.invoiceDate),
     taxBase:       vatLines.length > 0 ? sumBase   : null,
@@ -251,11 +262,15 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
       },
     });
 
-    // Aprender: si hay CIF emisor + cuentas contables, actualizar plan de cuentas
-    const learnNif = newData.issuerCif?.trim().toUpperCase();
+    // Aprender plan de cuentas + operationType para la "otra parte"
+    // (la que NO es el cliente). En PURCHASE es el emisor (proveedor),
+    // en SALE es el receptor (cliente final). Asi indexamos por el NIF
+    // que cambia entre facturas, no por el del Client que siempre es
+    // el mismo.
+    const learnNif  = (isPurchase ? newData.issuerCif  : newData.receiverCif )?.trim().toUpperCase();
+    const learnName = (isPurchase ? newData.issuerName : newData.receiverName)?.trim();
     const learnSupplier = newData.supplierAccount?.trim();
     const learnExpense = newData.expenseAccount?.trim();
-    const learnName = newData.issuerName?.trim();
     // defaultVatRate solo lo aprendemos cuando hay un unico tipo (multi-IVA
     // no tiene un "tipo por defecto" significativo).
     const learnVatRate = vatLines.length === 1 ? vatLines[0].vatRate : null;

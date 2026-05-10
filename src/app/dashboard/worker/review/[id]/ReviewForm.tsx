@@ -6,7 +6,7 @@ import {
   CheckCircle2, AlertTriangle, Save, ChevronLeft, ChevronRight,
   Loader2, AlertCircle, ExternalLink, FileText, Image as ImageIcon,
   XCircle, RefreshCw, Eye, EyeOff, ShieldAlert, CheckCheck, X, Plus, Trash2,
-  Globe,
+  Globe, Lock,
 } from "lucide-react";
 import { saveInvoiceFields, validateInvoice, rejectInvoice, type ReviewState } from "./actions";
 import { resolveIssue, dismissIssue } from "@/app/dashboard/worker/issues/actions";
@@ -138,6 +138,18 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
   const [expenseAccountVal, setExpenseAccount]   = useState(fmt(invoice.expenseAccount) || suggestedAccount?.expenseAccount || "");
   const [operationType, setOperationType] = useState<OperationTypeName>(
     (invoice.operationType as OperationTypeName | undefined) ?? "INTERIOR",
+  );
+
+  // En facturas RECIBIDAS el cliente es el RECEPTOR, en EMITIDAS el EMISOR.
+  // Esa parte queda bloqueada porque la fija el sistema (no la decide OCR
+  // ni el gestor — la sabemos a priori al subir la factura).
+  const lockedSide: "issuer" | "receiver" = invoice.type === "PURCHASE" ? "receiver" : "issuer";
+  const lockedInputClass = "w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-[13px] text-slate-600 cursor-not-allowed";
+  const LockedBadge = (
+    <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-slate-500">
+      <Lock className="h-2.5 w-2.5" />
+      Cliente · automático
+    </span>
   );
 
   const updateVatLine = (idx: number, field: keyof VatLineInput, value: string) => {
@@ -639,45 +651,67 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
 
             {/* Emisor */}
             <fieldset className="rounded-xl border border-slate-100 p-4 space-y-3">
-              <legend className="px-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Emisor</legend>
+              <legend className="px-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                Emisor {lockedSide === "issuer" && LockedBadge}
+              </legend>
               <div>
                 <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
                   Nombre / Razon social
-                  <ConfidenceHint score={confidence?.issuerName ?? null} />
+                  {lockedSide !== "issuer" && <ConfidenceHint score={confidence?.issuerName ?? null} />}
                 </label>
-                <input id="issuerName" {...fp("issuerName")} defaultValue={invoice.issuerName ?? ""} />
+                {lockedSide === "issuer" ? (
+                  <input id="issuerName" className={lockedInputClass} value={invoice.issuerName ?? ""} readOnly tabIndex={-1} />
+                ) : (
+                  <input id="issuerName" {...fp("issuerName")} defaultValue={invoice.issuerName ?? ""} />
+                )}
               </div>
               <div>
                 <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
                   CIF / NIF
-                  <ConfidenceHint score={confidence?.issuerCif ?? null} />
+                  {lockedSide !== "issuer" && <ConfidenceHint score={confidence?.issuerCif ?? null} />}
                 </label>
-                <input id="issuerCif" {...fp("issuerCif")} defaultValue={invoice.issuerCif ?? ""} placeholder="B12345678" />
-                {invoice.issuerCif && !isValidNIF(invoice.issuerCif) && (
-                  <p className="mt-1 flex items-center gap-1 text-[11px] text-orange-600">
-                    <AlertTriangle className="h-3 w-3" />
-                    CIF/NIF con formato inválido
-                  </p>
+                {lockedSide === "issuer" ? (
+                  <input id="issuerCif" className={lockedInputClass} value={invoice.issuerCif ?? ""} readOnly tabIndex={-1} />
+                ) : (
+                  <>
+                    <input id="issuerCif" {...fp("issuerCif")} defaultValue={invoice.issuerCif ?? ""} placeholder="B12345678" />
+                    {invoice.issuerCif && !isValidNIF(invoice.issuerCif) && (
+                      <p className="mt-1 flex items-center gap-1 text-[11px] text-orange-600">
+                        <AlertTriangle className="h-3 w-3" />
+                        CIF/NIF con formato inválido
+                      </p>
+                    )}
+                  </>
                 )}
               </div>
             </fieldset>
 
             {/* Receptor */}
             <fieldset className="rounded-xl border border-slate-100 p-4 space-y-3">
-              <legend className="px-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Receptor</legend>
+              <legend className="px-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                Receptor {lockedSide === "receiver" && LockedBadge}
+              </legend>
               <div>
                 <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
                   Nombre / Razon social
-                  <ConfidenceHint score={confidence?.receiverName ?? null} />
+                  {lockedSide !== "receiver" && <ConfidenceHint score={confidence?.receiverName ?? null} />}
                 </label>
-                <input id="receiverName" {...fp("receiverName")} defaultValue={invoice.receiverName ?? ""} />
+                {lockedSide === "receiver" ? (
+                  <input id="receiverName" className={lockedInputClass} value={invoice.receiverName ?? ""} readOnly tabIndex={-1} />
+                ) : (
+                  <input id="receiverName" {...fp("receiverName")} defaultValue={invoice.receiverName ?? ""} />
+                )}
               </div>
               <div>
                 <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
                   CIF / NIF
-                  <ConfidenceHint score={confidence?.receiverCif ?? null} />
+                  {lockedSide !== "receiver" && <ConfidenceHint score={confidence?.receiverCif ?? null} />}
                 </label>
-                <input id="receiverCif" {...fp("receiverCif")} defaultValue={invoice.receiverCif ?? ""} placeholder="B12345678" />
+                {lockedSide === "receiver" ? (
+                  <input id="receiverCif" className={lockedInputClass} value={invoice.receiverCif ?? ""} readOnly tabIndex={-1} />
+                ) : (
+                  <input id="receiverCif" {...fp("receiverCif")} defaultValue={invoice.receiverCif ?? ""} placeholder="B12345678" />
+                )}
               </div>
             </fieldset>
 
