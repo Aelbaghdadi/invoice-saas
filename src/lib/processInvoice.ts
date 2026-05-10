@@ -125,26 +125,61 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     const denormVatRate = vatLines.length === 1 ? vatLines[0].vatRate : null;
 
     // Normalizacion de NIFs y deteccion de tipo de operacion a partir
-    // del prefijo del NIF:
-    // - "B-12345678"  -> clean: "B12345678", operationType: INTERIOR
-    // - "DE123456789" -> clean: "123456789", country: DE, operationType: INTRACOM
-    // - "GB123456789" -> clean: "123456789", country: GB, operationType: IMPORTACION
-    // El parser vive en validators.ts (no en ocr.ts) para no pisar la
-    // zona del compañero que trabaja en OCR.
+    // del prefijo del NIF (parser en validators.ts para no tocar OCR).
     const issuerParsed   = parseTaxId(extracted.issuerCif);
     const receiverParsed = parseTaxId(extracted.receiverCif);
 
-    // Aprendizaje por NIF: si ya hemos visto este emisor en este cliente
-    // y el gestor le asigno un operationType distinto al inferido, lo
-    // respetamos. Asi una factura de construccion siempre se marca como
-    // INVERSION_SP automaticamente la 2ª vez sin teclear nada.
-    const knownEntry = issuerParsed.clean
+    // ── Auto-rellenado del cliente como parte conocida ─────────────────
+    //
+    // Cuando el gestor sube una factura para un cliente concreto:
+    //  - PURCHASE (recibida) → el cliente es el RECEPTOR siempre
+    //  - SALE    (emitida)   → el cliente es el EMISOR siempre
+    //
+    // Esos datos NO los necesita el OCR — los sabemos a priori. Forzamos
+    // los campos del Client (nombre + CIF) ignorando lo que el OCR diga
+    // de esa parte. El OCR solo es responsable de la "otra parte".
+    const clientRecord = await prisma.client.findUnique({
+      where: { id: invoice.clientId },
+      select: { name: true, cif: true },
+    });
+
+    let finalIssuerName = extracted.issuerName;
+    let finalIssuerCif  = issuerParsed.clean || null;
+    let finalIssuerCountry = issuerParsed.countryCode;
+    let finalReceiverName = extracted.receiverName;
+    let finalReceiverCif  = receiverParsed.clean || null;
+
+    if (clientRecord) {
+      if (invoice.type === "PURCHASE") {
+        finalReceiverName = clientRecord.name;
+        finalReceiverCif  = clientRecord.cif;
+      } else {
+        finalIssuerName = clientRecord.name;
+        finalIssuerCif  = clientRecord.cif;
+        // Cliente es espanol por definicion (esta en una asesoria ES);
+        // no le ponemos issuerCountry para que quede null = nacional.
+        finalIssuerCountry = null;
+      }
+    }
+
+    // ── operationType desde la "otra parte" ────────────────────────────
+    //
+    // Para PURCHASE miramos al emisor (proveedor): si es DE -> INTRACOM.
+    // Para SALE miramos al receptor (cliente final): si es DE -> INTRACOM
+    // tambien (entrega intracomunitaria). Antes solo miraba al issuer y
+    // las SALE internacionales se marcaban mal.
+    const otherParty = invoice.type === "PURCHASE" ? issuerParsed : receiverParsed;
+    const otherPartyClean = otherParty.clean;
+
+    // Aprendizaje por NIF: si ya hemos visto a esta otra parte en este
+    // cliente y el gestor le asigno un operationType, lo respetamos.
+    const knownEntry = otherPartyClean
       ? await prisma.accountEntry.findUnique({
-          where: { clientId_nif: { clientId: invoice.clientId, nif: issuerParsed.clean } },
+          where: { clientId_nif: { clientId: invoice.clientId, nif: otherPartyClean } },
           select: { defaultOperationType: true },
         }).catch(() => null)
       : null;
-    const operationType = knownEntry?.defaultOperationType ?? issuerParsed.operationType;
+    const operationType = knownEntry?.defaultOperationType ?? otherParty.operationType;
 
     // Copy OCR data to Invoice (datos finales — gestor los editará)
     await prisma.$transaction([
@@ -165,12 +200,12 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
         where: { id: invoiceId },
         data: {
           status: targetStatus,
-          issuerName:    extracted.issuerName,
-          issuerCif:     issuerParsed.clean || null,
-          issuerCountry: issuerParsed.countryCode,
+          issuerName:    finalIssuerName,
+          issuerCif:     finalIssuerCif,
+          issuerCountry: finalIssuerCountry,
           operationType,
-          receiverName:  extracted.receiverName,
-          receiverCif:   receiverParsed.clean || null,
+          receiverName:  finalReceiverName,
+          receiverCif:   finalReceiverCif,
           invoiceNumber: extracted.invoiceNumber,
           invoiceDate:   extracted.invoiceDate ? new Date(extracted.invoiceDate) : null,
           taxBase:       extracted.taxBase,
