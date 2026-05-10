@@ -12,6 +12,7 @@ import {
   queueToSearchParams,
 } from "@/lib/reviewQueue";
 import { appendAuditLogs } from "@/lib/auditLog";
+import { parseTaxId } from "@/lib/validators";
 
 export type ReviewState = { error?: string } | null;
 
@@ -141,11 +142,18 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
   const sumAmount = vatLines.reduce((s, l) => s + l.vatAmount, 0);
   const denormVatRate = vatLines.length === 1 ? vatLines[0].vatRate : null;
 
+  // Normalizar NIFs introducidos a mano por el gestor (quita guiones,
+  // espacios, puntos y prefijos de pais). Evita guardar "B-12345678" o
+  // "ES B12345678" cuando lo correcto es "B12345678".
+  const issuerParsed   = parseTaxId(data.issuerCif);
+  const receiverParsed = parseTaxId(data.receiverCif);
+
   const newData = {
     issuerName:    data.issuerName    || null,
-    issuerCif:     data.issuerCif     || null,
+    issuerCif:     issuerParsed.clean || null,
+    issuerCountry: issuerParsed.countryCode,
     receiverName:  data.receiverName  || null,
-    receiverCif:   data.receiverCif   || null,
+    receiverCif:   receiverParsed.clean || null,
     invoiceNumber: data.invoiceNumber || null,
     invoiceDate:   parseDate(data.invoiceDate),
     taxBase:       vatLines.length > 0 ? sumBase   : null,
