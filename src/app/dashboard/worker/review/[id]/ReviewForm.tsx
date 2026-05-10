@@ -34,6 +34,7 @@ const RETENTION_TYPE_OPTIONS: RetentionTypeName[] = ["PROFESSIONAL", "RENT"];
 import Link from "next/link";
 import PdfViewer from "@/components/ui/PdfViewerDynamic";
 import { fieldPropsFromConfidence, ConfidenceHint } from "@/components/ui/SmartField";
+import type { FieldBoundingBoxes } from "@/lib/boundingBoxes";
 import { useReviewShortcuts } from "@/hooks/useReviewShortcuts";
 import { useRouter } from "next/navigation";
 
@@ -99,6 +100,7 @@ type Props = {
   extraction: ExtractionData | null;
   issues: IssueData[];
   suggestedAccount?: SuggestedAccount;
+  boundingBoxes?: FieldBoundingBoxes;
   /** Querystring ya formada ("?bucket=clean" o ""), a pegar a las URLs de nav. */
   queueSuffix?: string;
   /** Bucket actual de la cola; se envia al server para calcular el siguiente. */
@@ -118,7 +120,7 @@ function fmtDate(d: Date | null | undefined) {
   return new Date(d).toISOString().slice(0, 10);
 }
 
-export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position, batchTotal, backHref, extraction, issues, suggestedAccount, queueSuffix = "", bucket = "all", sessionContext }: Props) {
+export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position, batchTotal, backHref, extraction, issues, suggestedAccount, boundingBoxes, queueSuffix = "", bucket = "all", sessionContext }: Props) {
   const { success, error } = useToast();
   const isImage = invoice.fileType.startsWith("image/");
   const isXml   = invoice.fileType.includes("xml");
@@ -223,6 +225,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
   const [rejectCategory, setRejectCategory] = useState("");
   const [showOcrComparison, setShowOcrComparison] = useState(false);
   const [dismissedIssues, setDismissedIssues] = useState<Set<string>>(new Set());
+  const [activeField, setActiveField] = useState<string | null>(null);
   const [showHelp, setShowHelp] = useState(false);
   const router = useRouter();
 
@@ -572,7 +575,10 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                 <img src={previewUrl} alt={invoice.filename} className="max-h-full max-w-full rounded-lg shadow-2xl object-contain" />
               </div>
             ) : (
-              <PdfViewer url={previewUrl} />
+              <PdfViewer
+              url={previewUrl}
+              activeBox={activeField ? (boundingBoxes?.[activeField] ?? null) : null}
+            />
             )
           ) : (
             <div className="flex flex-1 flex-col items-center justify-center gap-3 text-slate-400">
@@ -590,7 +596,18 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
         </div>
 
         {/* RIGHT — extracted data form */}
-        <div className="flex w-[45%] flex-col overflow-y-auto bg-white">
+        <div
+          className="flex w-[45%] flex-col overflow-y-auto bg-white"
+          onFocus={(e) => {
+            const id = (e.target as HTMLElement).id;
+            if (id && boundingBoxes?.[id]) setActiveField(id);
+          }}
+          onBlur={(e) => {
+            if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+              setActiveField(null);
+            }
+          }}
+        >
           <div className="flex-1 px-5 py-4 space-y-4">
 
             {/* Semaphore */}

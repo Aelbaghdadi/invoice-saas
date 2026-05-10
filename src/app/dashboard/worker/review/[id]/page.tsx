@@ -8,6 +8,7 @@ import {
   parseBucket,
   queueToSearchParams,
 } from "@/lib/reviewQueue";
+import { extractBoundingBoxes } from "@/lib/boundingBoxes";
 
 // La cola se calcula en cada render — el conteo cambia segun otro
 // gestor valide/rechace facturas. Forzamos dinamico para que el "X de N"
@@ -78,6 +79,12 @@ export default async function ReviewPage({
     session.user.role === "ADMIN"
       ? `/dashboard/admin/invoices`
       : `/dashboard/worker/invoices`;
+
+  // Bounding boxes: solo Document AI devuelve coordenadas (XML no tiene imagen)
+  const boundingBoxes =
+    latestExtraction?.rawResponse && latestExtraction.source !== "xml_parse"
+      ? extractBoundingBoxes(latestExtraction.rawResponse)
+      : {};
 
   // Serialize extraction for client component
   const extractionData = latestExtraction ? {
@@ -153,6 +160,7 @@ export default async function ReviewPage({
         batchTotal={total}
         backHref={backHref}
         extraction={extractionData}
+        boundingBoxes={boundingBoxes}
         issues={issuesData}
         suggestedAccount={accountData}
         queueSuffix={queueSuffix}

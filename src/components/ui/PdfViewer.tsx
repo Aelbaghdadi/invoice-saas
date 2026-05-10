@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
@@ -12,6 +12,7 @@ import {
   Maximize2,
   Loader2,
 } from "lucide-react";
+import type { BoundingBox } from "@/lib/boundingBoxes";
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
   "pdfjs-dist/build/pdf.worker.min.mjs",
@@ -20,13 +21,20 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL(
 
 const ZOOM_STEPS = [0.5, 0.65, 0.75, 0.9, 1.0, 1.15, 1.25, 1.5, 1.75, 2.0];
 
-type Props = { url: string };
+type Props = { url: string; activeBox?: BoundingBox | null };
 
-export default function PdfViewer({ url }: Props) {
+export default function PdfViewer({ url, activeBox }: Props) {
   const [numPages, setNumPages] = useState<number>(0);
   const [page, setPage]         = useState(1);
   const [zoom, setZoom]         = useState(1.0);
   const [loading, setLoading]   = useState(true);
+
+  // Navegar automáticamente a la página donde está el campo activo.
+  useEffect(() => {
+    if (activeBox == null) return;
+    const target = activeBox.page + 1; // Document AI usa 0-indexed
+    if (target >= 1 && target <= numPages) setPage(target);
+  }, [activeBox, numPages]);
 
   const onLoad = useCallback(({ numPages }: { numPages: number }) => {
     setNumPages(numPages);
@@ -126,13 +134,28 @@ export default function PdfViewer({ url }: Props) {
           loading={null}
           className="flex flex-col items-center gap-4"
         >
-          <Page
-            pageNumber={page}
-            scale={zoom}
-            className="rounded-lg shadow-2xl"
-            renderAnnotationLayer
-            renderTextLayer
-          />
+          <div className="relative">
+            <Page
+              pageNumber={page}
+              scale={zoom}
+              className="rounded-lg shadow-2xl"
+              renderAnnotationLayer
+              renderTextLayer
+            />
+            {activeBox && activeBox.page === page - 1 && (
+              <div
+                className="pointer-events-none absolute"
+                style={{
+                  left:   `${activeBox.x * 100}%`,
+                  top:    `${activeBox.y * 100}%`,
+                  width:  `${activeBox.width * 100}%`,
+                  height: `${activeBox.height * 100}%`,
+                  background: "rgba(253,224,71,0.45)",
+                  mixBlendMode: "multiply",
+                }}
+              />
+            )}
+          </div>
         </Document>
       </div>
     </div>
