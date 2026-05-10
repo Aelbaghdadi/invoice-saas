@@ -17,18 +17,32 @@ enum InvoiceType {
   SALE
 }
 
-/// Ambito fiscal de la factura. Se detecta automaticamente del prefijo
-/// del NIF del emisor (ES/sin prefijo -> NATIONAL, UE no-ES -> INTRACOM,
-/// resto -> INTERNATIONAL). El gestor puede cambiarlo en revision.
+/// Tipo de operación según los códigos que A3 Asesor usa en la columna G
+/// del Excel de importación. Sustituye al antiguo `InvoiceScope` con un
+/// enum más granular alineado al estándar fiscal.
 ///
-/// Importante para A3 Asesor: las INTRACOM e INTERNATIONAL llevan IVA 0
-/// pero generan asientos con inversion del sujeto pasivo (IVA fictio
-/// soportado + repercutido que se anulan). En el export Excel cada
-/// scope va a un modelo distinto (303, 349 para intracom).
-enum InvoiceScope {
-  NATIONAL
+/// Mapeo a códigos numéricos (lo que va al Excel A3):
+///   INTERIOR        -> 1
+///   AGRARIA         -> 2
+///   INTRACOM        -> 3
+///   INVERSION_SP    -> 4
+///   IMPORTACION     -> 6
+///   IVA_NO_DEDUCIBLE -> 7
+/// (No hay 5 a propósito — A3 reserva ese código para usos futuros.)
+///
+/// Detección automática:
+///   ES o sin prefijo  -> INTERIOR (default)
+///   UE no-ES          -> INTRACOM
+///   No-UE             -> IMPORTACION
+/// Otros tipos los marca el gestor manualmente en revisión, o se aprenden
+/// del NIF (AccountEntry.defaultOperationType) la próxima vez.
+enum OperationType {
+  INTERIOR
+  AGRARIA
   INTRACOM
-  INTERNATIONAL
+  INVERSION_SP
+  IMPORTACION
+  IVA_NO_DEDUCIBLE
 }
 
 enum InvoiceStatus {
@@ -155,10 +169,10 @@ model Invoice {
   fileHash    String?
   type        InvoiceType
   status      InvoiceStatus @default(UPLOADED)
-  /// Ambito fiscal: nacional / intracomunitaria / internacional. Por
-  /// defecto NATIONAL hasta que el OCR detecte un emisor con prefijo
-  /// de pais distinto a ES.
-  scope       InvoiceScope  @default(NATIONAL)
+  /// Tipo de operación fiscal. Determina la columna G del Excel A3.
+  /// Por defecto INTERIOR; se cambia automáticamente si el NIF del
+  /// emisor tiene prefijo no-ES, o manualmente por el gestor.
+  operationType OperationType @default(INTERIOR)
   /// Codigo ISO del pais del emisor ("ES", "DE", "FR"...) o null si
   /// no se detecto prefijo y se asume nacional.
   issuerCountry String?     @db.Char(2)
@@ -393,6 +407,11 @@ model AccountEntry {
   supplierAccount String   // Cuenta proveedor 400.xxxxx / 410.xxxxx
   expenseAccount  String   // Cuenta gasto/ingreso 6xx.xxxxx / 7xx.xxxxx
   defaultVatRate  Decimal? @db.Decimal(5, 2)
+  /// Tipo de operación fiscal por defecto para este NIF. Se aprende al
+  /// validar la primera factura: si el gestor cambia el tipo (ej. detecta
+  /// que es Inversión SP), la próxima factura del mismo NIF la
+  /// pre-rellena automáticamente. null = sin aprender aún.
+  defaultOperationType OperationType?
 
   clientId String
   client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)

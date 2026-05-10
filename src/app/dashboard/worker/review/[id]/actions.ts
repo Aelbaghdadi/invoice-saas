@@ -40,7 +40,14 @@ type FieldData = {
   accountingPeriodYear:  string;
   supplierAccount: string;
   expenseAccount:  string;
+  operationType:   string;
 };
+
+const VALID_OPERATION_TYPES = [
+  "INTERIOR", "AGRARIA", "INTRACOM",
+  "INVERSION_SP", "IMPORTACION", "IVA_NO_DEDUCIBLE",
+] as const;
+type ValidOperationType = (typeof VALID_OPERATION_TYPES)[number];
 
 type ParsedVatLine = { taxBase: number; vatRate: number; vatAmount: number };
 
@@ -151,6 +158,9 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     accountingPeriodYear:  parseInt2(data.accountingPeriodYear),
     supplierAccount: data.supplierAccount || null,
     expenseAccount:  data.expenseAccount  || null,
+    operationType:   (VALID_OPERATION_TYPES as readonly string[]).includes(data.operationType)
+      ? (data.operationType as ValidOperationType)
+      : "INTERIOR" as ValidOperationType,
   };
 
   if (newData.totalAmount !== null && newData.totalAmount < 0) {
@@ -172,6 +182,7 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
   const trackedFields = [
     "issuerName","issuerCif","receiverName","receiverCif",
     "invoiceNumber","taxBase","vatRate","vatAmount","irpfRate","irpfAmount","totalAmount",
+    "operationType",
   ] as const;
 
   for (const field of trackedFields) {
@@ -240,7 +251,9 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     // defaultVatRate solo lo aprendemos cuando hay un unico tipo (multi-IVA
     // no tiene un "tipo por defecto" significativo).
     const learnVatRate = vatLines.length === 1 ? vatLines[0].vatRate : null;
-    if (learnNif && (learnSupplier || learnExpense)) {
+    // Aprendemos tambien el tipo de operacion por NIF: la proxima factura
+    // de este emisor pre-rellenara el operationType automaticamente.
+    if (learnNif && (learnSupplier || learnExpense || newData.operationType)) {
       await prisma.accountEntry.upsert({
         where: { clientId_nif: { clientId: invoice.clientId, nif: learnNif } },
         create: {
@@ -250,12 +263,14 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
           supplierAccount: learnSupplier || "",
           expenseAccount: learnExpense || "",
           defaultVatRate: learnVatRate != null ? (learnVatRate as any) : null,
+          defaultOperationType: newData.operationType,
         },
         update: {
           ...(learnName ? { name: learnName } : {}),
           ...(learnSupplier ? { supplierAccount: learnSupplier } : {}),
           ...(learnExpense ? { expenseAccount: learnExpense } : {}),
           ...(learnVatRate != null ? { defaultVatRate: learnVatRate as any } : {}),
+          defaultOperationType: newData.operationType,
         },
       });
     }
@@ -463,5 +478,6 @@ function extractFields(fd: FormData): FieldData {
     accountingPeriodYear:  fd.get("accountingPeriodYear")  as string ?? "",
     supplierAccount: fd.get("supplierAccount") as string ?? "",
     expenseAccount:  fd.get("expenseAccount")  as string ?? "",
+    operationType:   fd.get("operationType")   as string ?? "INTERIOR",
   };
 }

@@ -124,13 +124,27 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     // Multi-IVA -> null (el desglose vive en InvoiceVatLine).
     const denormVatRate = vatLines.length === 1 ? vatLines[0].vatRate : null;
 
-    // Normalizacion de NIFs y deteccion de pais a partir del prefijo:
-    // - Quita "B-12345678" -> "B12345678"
-    // - "DE123456789" -> clean: "123456789", country: DE, scope: INTRACOM
+    // Normalizacion de NIFs y deteccion de tipo de operacion a partir
+    // del prefijo del NIF:
+    // - "B-12345678"  -> clean: "B12345678", operationType: INTERIOR
+    // - "DE123456789" -> clean: "123456789", country: DE, operationType: INTRACOM
+    // - "GB123456789" -> clean: "123456789", country: GB, operationType: IMPORTACION
     // El parser vive en validators.ts (no en ocr.ts) para no pisar la
     // zona del compañero que trabaja en OCR.
     const issuerParsed   = parseTaxId(extracted.issuerCif);
     const receiverParsed = parseTaxId(extracted.receiverCif);
+
+    // Aprendizaje por NIF: si ya hemos visto este emisor en este cliente
+    // y el gestor le asigno un operationType distinto al inferido, lo
+    // respetamos. Asi una factura de construccion siempre se marca como
+    // INVERSION_SP automaticamente la 2ª vez sin teclear nada.
+    const knownEntry = issuerParsed.clean
+      ? await prisma.accountEntry.findUnique({
+          where: { clientId_nif: { clientId: invoice.clientId, nif: issuerParsed.clean } },
+          select: { defaultOperationType: true },
+        }).catch(() => null)
+      : null;
+    const operationType = knownEntry?.defaultOperationType ?? issuerParsed.operationType;
 
     // Copy OCR data to Invoice (datos finales — gestor los editará)
     await prisma.$transaction([
@@ -154,7 +168,7 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
           issuerName:    extracted.issuerName,
           issuerCif:     issuerParsed.clean || null,
           issuerCountry: issuerParsed.countryCode,
-          scope:         issuerParsed.scope,
+          operationType,
           receiverName:  extracted.receiverName,
           receiverCif:   receiverParsed.clean || null,
           invoiceNumber: extracted.invoiceNumber,

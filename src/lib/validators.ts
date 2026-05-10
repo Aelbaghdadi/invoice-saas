@@ -89,34 +89,70 @@ const NON_EU_COMMON = new Set([
   "TR", "JP", "CN", "KR", "AU", "NZ", "CA", "IN", "SG",
 ]);
 
+/** Tipo de operacion fiscal segun el enum Prisma `OperationType`. */
+export type OperationTypeName =
+  | "INTERIOR"
+  | "AGRARIA"
+  | "INTRACOM"
+  | "INVERSION_SP"
+  | "IMPORTACION"
+  | "IVA_NO_DEDUCIBLE";
+
+/** Codigo numerico A3 para cada OperationType. Lo que va a la columna G
+ *  del Excel A3 Asesor. */
+export const OPERATION_TYPE_CODE: Record<OperationTypeName, number> = {
+  INTERIOR: 1,
+  AGRARIA: 2,
+  INTRACOM: 3,
+  INVERSION_SP: 4,
+  IMPORTACION: 6,
+  IVA_NO_DEDUCIBLE: 7,
+};
+
+/** Etiquetas en español para mostrar en la UI. */
+export const OPERATION_TYPE_LABEL: Record<OperationTypeName, string> = {
+  INTERIOR: "Interior (IVA deducible)",
+  AGRARIA: "Compensaciones Agrarias",
+  INTRACOM: "Adquisición Intracomunitaria",
+  INVERSION_SP: "Inversión del Sujeto Pasivo",
+  IMPORTACION: "Importación (fuera UE)",
+  IVA_NO_DEDUCIBLE: "IVA no deducible",
+};
+
 /** Resultado del parser de NIF/VAT: el numero limpio (sin prefijo y sin
- *  caracteres especiales) y el codigo de pais detectado (si lo hay). */
+ *  caracteres especiales), el codigo de pais detectado y el tipo de
+ *  operación inferido por defecto a partir del prefijo. */
 export type ParsedTaxId = {
   /** NIF/CIF normalizado y SIN prefijo de pais. Lo que guardamos en BD. */
   clean: string;
   /** Codigo ISO de pais si se detecto uno (ES, DE, FR...). null si no. */
   countryCode: string | null;
-  /** "NATIONAL" si es ES o sin prefijo, "INTRACOM" si UE no-ES,
-   *  "INTERNATIONAL" para resto. */
-  scope: "NATIONAL" | "INTRACOM" | "INTERNATIONAL";
+  /** Tipo de operacion FISCAL inferido del prefijo del NIF.
+   *  Solo es la suposicion inicial — el gestor puede cambiarlo (p.ej.
+   *  marcar Inversion SP en una factura nacional de construccion). */
+  operationType: OperationTypeName;
 };
 
 /**
  * Parsea un NIF/CIF/VAT que puede venir con prefijo de pais.
  *
  * Ejemplos:
- *   "B-12345678"         -> { clean: "B12345678", countryCode: null, scope: NATIONAL }
- *   "ES B12345678"       -> { clean: "B12345678", countryCode: "ES", scope: NATIONAL }
- *   "DE123456789"        -> { clean: "123456789", countryCode: "DE", scope: INTRACOM }
- *   "FR 12 345678901"    -> { clean: "12345678901", countryCode: "FR", scope: INTRACOM }
- *   "GB123456789"        -> { clean: "123456789", countryCode: "GB", scope: INTERNATIONAL }
+ *   "B-12345678"         -> { clean: "B12345678", countryCode: null, operationType: INTERIOR }
+ *   "ES B12345678"       -> { clean: "B12345678", countryCode: "ES", operationType: INTERIOR }
+ *   "DE123456789"        -> { clean: "123456789", countryCode: "DE", operationType: INTRACOM }
+ *   "FR 12 345678901"    -> { clean: "12345678901", countryCode: "FR", operationType: INTRACOM }
+ *   "GB123456789"        -> { clean: "123456789", countryCode: "GB", operationType: IMPORTACION }
  *
- * El "clean" es lo que se guarda en BD: nunca con prefijo de pais. El
- * pais se detecta por el prefijo o, si falta, queda null y asumimos
- * NATIONAL (caso de personas fisicas con DNI sin prefijo).
+ * El "clean" es lo que se guarda en BD: nunca con prefijo de pais.
+ * Reglas de operationType por defecto:
+ *   - ES o sin prefijo  -> INTERIOR
+ *   - UE no-ES          -> INTRACOM
+ *   - No-UE             -> IMPORTACION
+ *   - AGRARIA / INVERSION_SP / IVA_NO_DEDUCIBLE: nunca por defecto, los
+ *     pone el gestor o se aprenden de AccountEntry.defaultOperationType.
  */
 export function parseTaxId(raw: string | null | undefined): ParsedTaxId {
-  if (!raw) return { clean: "", countryCode: null, scope: "NATIONAL" };
+  if (!raw) return { clean: "", countryCode: null, operationType: "INTERIOR" };
 
   // Normalizar: mayusculas, sin espacios/guiones/puntos.
   const normalized = formatNIF(raw);
@@ -129,16 +165,16 @@ export function parseTaxId(raw: string | null | undefined): ParsedTaxId {
     const rest   = normalized.slice(2);
 
     if (EU_VAT_PREFIXES.has(prefix)) {
-      const scope = prefix === "ES" ? "NATIONAL" : "INTRACOM";
-      return { clean: rest, countryCode: prefix, scope };
+      const operationType: OperationTypeName = prefix === "ES" ? "INTERIOR" : "INTRACOM";
+      return { clean: rest, countryCode: prefix, operationType };
     }
     if (NON_EU_COMMON.has(prefix)) {
-      return { clean: rest, countryCode: prefix, scope: "INTERNATIONAL" };
+      return { clean: rest, countryCode: prefix, operationType: "IMPORTACION" };
     }
   }
 
   // Sin prefijo identificable: asumimos nacional (DNI/CIF/NIE espanol).
-  return { clean: normalized, countryCode: null, scope: "NATIONAL" };
+  return { clean: normalized, countryCode: null, operationType: "INTERIOR" };
 }
 
 /** Helper rapido: solo el "clean" (lo que va a BD). */
@@ -146,7 +182,7 @@ export function cleanTaxId(raw: string | null | undefined): string {
   return parseTaxId(raw).clean;
 }
 
-/** Helper rapido: el scope detectado a partir del NIF del emisor. */
-export function detectScope(issuerCif: string | null | undefined): ParsedTaxId["scope"] {
-  return parseTaxId(issuerCif).scope;
+/** Helper rapido: el operationType detectado a partir del NIF del emisor. */
+export function detectOperationType(issuerCif: string | null | undefined): OperationTypeName {
+  return parseTaxId(issuerCif).operationType;
 }

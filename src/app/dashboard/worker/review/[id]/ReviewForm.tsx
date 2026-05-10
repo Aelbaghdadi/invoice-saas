@@ -6,11 +6,26 @@ import {
   CheckCircle2, AlertTriangle, Save, ChevronLeft, ChevronRight,
   Loader2, AlertCircle, ExternalLink, FileText, Image as ImageIcon,
   XCircle, RefreshCw, Eye, EyeOff, ShieldAlert, CheckCheck, X, Plus, Trash2,
+  Globe,
 } from "lucide-react";
 import { saveInvoiceFields, validateInvoice, rejectInvoice, type ReviewState } from "./actions";
 import { resolveIssue, dismissIssue } from "@/app/dashboard/worker/issues/actions";
 import type { Invoice, IssueType, IssueStatus } from "@prisma/client";
-import { isValidNIF } from "@/lib/validators";
+import {
+  isValidNIF,
+  OPERATION_TYPE_LABEL,
+  OPERATION_TYPE_CODE,
+  type OperationTypeName,
+} from "@/lib/validators";
+
+const OPERATION_TYPE_OPTIONS: OperationTypeName[] = [
+  "INTERIOR",
+  "AGRARIA",
+  "INTRACOM",
+  "INVERSION_SP",
+  "IMPORTACION",
+  "IVA_NO_DEDUCIBLE",
+];
 import Link from "next/link";
 import PdfViewer from "@/components/ui/PdfViewerDynamic";
 import { fieldPropsFromConfidence, ConfidenceHint } from "@/components/ui/SmartField";
@@ -121,6 +136,9 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
   const [totalAmount, setTotalAmount] = useState(fmt(invoice.totalAmount));
   const [supplierAccountVal, setSupplierAccount] = useState(fmt(invoice.supplierAccount) || suggestedAccount?.supplierAccount || "");
   const [expenseAccountVal, setExpenseAccount]   = useState(fmt(invoice.expenseAccount) || suggestedAccount?.expenseAccount || "");
+  const [operationType, setOperationType] = useState<OperationTypeName>(
+    (invoice.operationType as OperationTypeName | undefined) ?? "INTERIOR",
+  );
 
   const updateVatLine = (idx: number, field: keyof VatLineInput, value: string) => {
     setVatLines((prev) => {
@@ -267,10 +285,11 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     fd.set("accountingPeriodYear",  (document.getElementById("accountingPeriodYear")  as HTMLSelectElement)?.value ?? "");
     fd.set("supplierAccount", supplierAccountVal);
     fd.set("expenseAccount",  expenseAccountVal);
+    fd.set("operationType", operationType);
     fd.set("bucket", bucket);
     if (extra) Object.entries(extra).forEach(([k,v]) => fd.set(k,v));
     return fd;
-  }, [vatLines, totalAmount, supplierAccountVal, expenseAccountVal, invoice.id, invoice.updatedAt, bucket]);
+  }, [vatLines, totalAmount, supplierAccountVal, expenseAccountVal, operationType, invoice.id, invoice.updatedAt, bucket]);
 
   const handleSave = () => {
     startSave(async () => {
@@ -680,6 +699,38 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                   </label>
                   <input id="invoiceDate" type="date" {...fp("invoiceDate")} defaultValue={fmtDate(invoice.invoiceDate)} />
                 </div>
+              </div>
+
+              {/* Tipo de operacion fiscal — codigo G del Excel A3 */}
+              <div>
+                <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
+                  Tipo de operación
+                  {operationType !== "INTERIOR" && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-700">
+                      <Globe className="h-2.5 w-2.5" />
+                      {OPERATION_TYPE_LABEL[operationType]}
+                    </span>
+                  )}
+                </label>
+                <select
+                  className={inputClass}
+                  value={operationType}
+                  onChange={(e) => setOperationType(e.target.value as OperationTypeName)}
+                >
+                  {OPERATION_TYPE_OPTIONS.map((op) => (
+                    <option key={op} value={op}>
+                      {OPERATION_TYPE_CODE[op]} · {OPERATION_TYPE_LABEL[op]}
+                    </option>
+                  ))}
+                </select>
+                {operationType !== "INTERIOR" && operationType !== "AGRARIA"
+                  && operationType !== "IVA_NO_DEDUCIBLE"
+                  && vatTotals.sumAmount > 0.01 && (
+                  <p className="mt-1.5 flex items-center gap-1 text-[11px] text-amber-600">
+                    <AlertTriangle className="h-3 w-3" />
+                    Las facturas de tipo "{OPERATION_TYPE_LABEL[operationType]}" suelen ir sin IVA en factura (inversión del sujeto pasivo). Revisa el desglose.
+                  </p>
+                )}
               </div>
             </fieldset>
 

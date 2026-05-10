@@ -110,6 +110,8 @@ export async function GET(req: NextRequest) {
         })),
         supplierAccount: inv.supplierAccount,
         expenseAccount: inv.expenseAccount,
+        operationType: inv.operationType,
+        issuerCountry: inv.issuerCountry,
         type: inv.type,
         clientName: inv.client.name,
         clientCif: inv.client.cif,

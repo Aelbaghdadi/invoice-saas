@@ -1,5 +1,6 @@
 import type { Invoice, Client, InvoiceVatLine } from "@prisma/client";
 import * as XLSX from "xlsx";
+import { OPERATION_TYPE_CODE, type OperationTypeName } from "@/lib/validators";
 
 export type ExportFormat = "sage50" | "contasol" | "a3con" | "a3excel";
 export type ExportInvoiceType = "ALL" | "PURCHASE" | "SALE";
@@ -187,6 +188,11 @@ function buildA3Row(
   config?: ExportConfig,
 ): (string | number | null)[] {
   const isPurchase = inv.type === "PURCHASE";
+  // Codigo numerico de tipo de operacion para A3. Si por algun motivo
+  // viene null/desconocido, caemos a 1 (Interior) que es el caso comun.
+  const opTypeCode = inv.operationType
+    ? OPERATION_TYPE_CODE[inv.operationType as OperationTypeName] ?? 1
+    : 1;
   return [
     fmtDate(inv.invoiceDate, config?.dateFormat),             // A: Fecha expedición
     "",                                                        // B: Fecha contabilización (blank)
@@ -194,7 +200,7 @@ function buildA3Row(
     inv.invoiceNumber ?? "",                                   // D: Numero factura
     (isPurchase ? inv.issuerCif : inv.receiverCif) ?? "",     // E: NIF
     (isPurchase ? inv.issuerName : inv.receiverName) ?? "",   // F: Nombre
-    "",                                                        // G: Tipo operación (blank)
+    opTypeCode,                                                // G: Tipo operación (1/2/3/4/6/7)
     inv.supplierAccount ?? "",                                 // H: Cuenta proveedor
     inv.expenseAccount ?? "",                                  // I: Cuenta gasto
     line.taxBase,                                              // J: Base
