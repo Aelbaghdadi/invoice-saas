@@ -40,7 +40,10 @@ export default async function BatchPage() {
   const invoices = await prisma.invoice.findMany({
     where: { client: { advisoryFirmId: firmId } },
     include: { client: { select: { id: true, name: true, cif: true } } },
-    orderBy: [{ periodYear: "desc" }, { periodMonth: "desc" }, { createdAt: "desc" }],
+    // createdAt asc para que `firstPendingId` sea la mas vieja del lote
+    // y coincida con el orden de la cola de revision (que tambien usa
+    // asc). Asi al pulsar "Revisar" entras por la 1 de N, no por la N.
+    orderBy: [{ periodYear: "desc" }, { periodMonth: "desc" }, { createdAt: "asc" }],
   });
 
   // Group by client + period
@@ -161,7 +164,10 @@ export default async function BatchPage() {
                   <div className="flex items-center gap-2 flex-shrink-0">
                     {g.firstPendingId && (
                       <Link
-                        href={`/dashboard/worker/review/${g.firstPendingId}`}
+                        // bucket=all para que la cola incluya todas las
+                        // pendientes (clean + attention) y el contador
+                        // X de N cuadre con `pending` mostrado al lado.
+                        href={`/dashboard/worker/review/${g.firstPendingId}?bucket=all`}
                         className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-blue-700 transition-colors"
                       >
                         <Eye className="h-3.5 w-3.5" />
