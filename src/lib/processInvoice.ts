@@ -72,6 +72,37 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       }
     }
 
+    // Rechazo temprano: albaranes y notas de entrega no son facturas.
+    // Solo aplica a PDF/imagen (rawText undefined en XML, que es siempre factura legal).
+    if (ocrResult.rawText != null) {
+      const norm = ocrResult.rawText
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[̀-ͯ]/g, "");
+      const hasDeliveryNote = /\balbaran\b|\bnota de entrega\b|\bdelivery note\b/.test(norm);
+      const hasInvoice = /\bfactura\b|\binvoice\b/.test(norm);
+      if (hasDeliveryNote && !hasInvoice) {
+        await prisma.invoice.update({
+          where: { id: invoiceId },
+          data: {
+            status: "REJECTED",
+            rejectionCategory: "OTHER",
+            rejectionReason: "Documento rechazado automáticamente: parece un albarán, no una factura.",
+          },
+        });
+        await transitionStatus(invoiceId, "ANALYZING", "REJECTED", triggeredByUserId,
+          "Albarán detectado automáticamente");
+        await appendAuditLogs([{
+          invoiceId,
+          userId: triggeredByUserId,
+          field: "status",
+          oldValue: "ANALYZING",
+          newValue: "REJECTED",
+        }]);
+        return;
+      }
+    }
+
     const extracted = ocrResult.extracted;
     // rawResponse ahora es la respuesta CRUDA del proveedor (entities +
     // text para Doc AI; XML literal para Facturae). Antes guardabamos el

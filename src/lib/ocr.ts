@@ -253,6 +253,8 @@ export type OcrResult = {
   extracted: ExtractedInvoice;
   /** JSON original del proveedor OCR (Document AI, XML facturae crudo). */
   rawJson: string;
+  /** Texto plano extraído del documento (solo PDF/imagen). Undefined para XML. */
+  rawText?: string;
 };
 
 /**
@@ -386,6 +388,7 @@ async function extractWithDocumentAI(
 
   return {
     extracted,
+    rawText: text,
     // Guardamos solo entities + text para acotar tamano (data.document
     // entera puede ser MB con todos los tokens/pages/symbols).
     rawJson: JSON.stringify({ entities, text }),
