@@ -79,19 +79,27 @@ export async function reseedDemo(
     })
   ).map((c) => c.id);
 
-  await prisma.auditLog.deleteMany({ where: { invoice: { clientId: { in: clientIds } } } });
-  await prisma.invoiceIssue.deleteMany({ where: { invoice: { clientId: { in: clientIds } } } });
-  await prisma.invoiceStatusHistory.deleteMany({ where: { invoice: { clientId: { in: clientIds } } } });
-  await prisma.exportBatchItem.deleteMany({ where: { invoice: { clientId: { in: clientIds } } } });
-  await prisma.invoiceExtraction.deleteMany({ where: { invoice: { clientId: { in: clientIds } } } });
-  await prisma.invoiceVatLine.deleteMany({ where: { invoice: { clientId: { in: clientIds } } } });
-  await prisma.invoice.updateMany({ where: { clientId: { in: clientIds } }, data: { exportBatchId: null } });
-  await prisma.exportBatch.deleteMany({ where: { userId: triggeredBy } });
-  await prisma.invoice.deleteMany({ where: { clientId: { in: clientIds } } });
-  await prisma.document.deleteMany({ where: { clientId: { in: clientIds } } });
-  await prisma.periodClosure.deleteMany({ where: { clientId: { in: clientIds } } });
-  await prisma.accountEntry.deleteMany({ where: { clientId: { in: clientIds } } });
-  await prisma.workerClientAssignment.deleteMany({ where: { clientId: { in: clientIds } } });
+  // El trigger SQL bloquea DELETE/UPDATE en AuditLog. Para el reset
+  // legitimo activamos el bypass de sesion (`SET LOCAL`) dentro de una
+  // transaccion. Solo aplica a esta transaccion, no contamina otras
+  // conexiones ni queda persistido. El reset es la UNICA llamada en
+  // toda la app que activa esta variable.
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(`SET LOCAL app.allow_audit_mutation = 'true'`);
+    await tx.auditLog.deleteMany({ where: { invoice: { clientId: { in: clientIds } } } });
+    await tx.invoiceIssue.deleteMany({ where: { invoice: { clientId: { in: clientIds } } } });
+    await tx.invoiceStatusHistory.deleteMany({ where: { invoice: { clientId: { in: clientIds } } } });
+    await tx.exportBatchItem.deleteMany({ where: { invoice: { clientId: { in: clientIds } } } });
+    await tx.invoiceExtraction.deleteMany({ where: { invoice: { clientId: { in: clientIds } } } });
+    await tx.invoiceVatLine.deleteMany({ where: { invoice: { clientId: { in: clientIds } } } });
+    await tx.invoice.updateMany({ where: { clientId: { in: clientIds } }, data: { exportBatchId: null } });
+    await tx.exportBatch.deleteMany({ where: { userId: triggeredBy } });
+    await tx.invoice.deleteMany({ where: { clientId: { in: clientIds } } });
+    await tx.document.deleteMany({ where: { clientId: { in: clientIds } } });
+    await tx.periodClosure.deleteMany({ where: { clientId: { in: clientIds } } });
+    await tx.accountEntry.deleteMany({ where: { clientId: { in: clientIds } } });
+    await tx.workerClientAssignment.deleteMany({ where: { clientId: { in: clientIds } } });
+  });
 
   const linkedUserIds = (
     await prisma.client.findMany({
