@@ -8,7 +8,12 @@ import {
 } from "@/lib/ocr";
 import { detectIssues } from "@/lib/issueDetector";
 import { appendAuditLogs } from "@/lib/auditLog";
-import { parseTaxId } from "@/lib/validators";
+import {
+  parseTaxId,
+  isPersonaFisica,
+  RETENTION_DEFAULT_RATE,
+  type RetentionTypeName,
+} from "@/lib/validators";
 
 /** Transition status + record in history */
 async function transitionStatus(
@@ -172,14 +177,50 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     const otherPartyClean = otherParty.clean;
 
     // Aprendizaje por NIF: si ya hemos visto a esta otra parte en este
-    // cliente y el gestor le asigno un operationType, lo respetamos.
+    // cliente y el gestor le asigno un operationType / retencion, lo
+    // respetamos. Asi proveedores recurrentes (gestoria, abogado,
+    // alquiler) se autoconfiguran desde la 2a factura.
     const knownEntry = otherPartyClean
       ? await prisma.accountEntry.findUnique({
           where: { clientId_nif: { clientId: invoice.clientId, nif: otherPartyClean } },
-          select: { defaultOperationType: true },
+          select: {
+            defaultOperationType: true,
+            defaultRetentionType: true,
+            defaultRetentionRate: true,
+          },
         }).catch(() => null)
       : null;
     const operationType = knownEntry?.defaultOperationType ?? otherParty.operationType;
+
+    // ── Deteccion de retencion IRPF ────────────────────────────────────
+    //
+    // Heuristica conservadora: si el emisor (en PURCHASE) es persona
+    // fisica (DNI/NIE), sugerimos PROFESSIONAL al 15%. El gestor lo
+    // ajusta si hace falta (a 7% para nuevos autonomos, o lo desactiva).
+    // El aprendizaje por NIF tiene prioridad: si ya validamos antes una
+    // factura de esta persona como RENT 19%, lo respetamos.
+    let retentionType: RetentionTypeName | null =
+      knownEntry?.defaultRetentionType ?? null;
+    let retentionRate: number | null =
+      knownEntry?.defaultRetentionRate != null ? Number(knownEntry.defaultRetentionRate) : null;
+
+    // Sugerencia automatica: persona fisica como emisor en PURCHASE.
+    // Para SALE no sugerimos retencion (es el cliente quien retiene a
+    // sus proveedores, no al reves).
+    if (!retentionType && invoice.type === "PURCHASE" && isPersonaFisica(issuerParsed.clean)) {
+      retentionType = "PROFESSIONAL";
+      retentionRate = RETENTION_DEFAULT_RATE.PROFESSIONAL;
+    }
+
+    // Calculamos cuota e importe de la base de retencion solo si hay
+    // tipo. La base por defecto es la suma de bases imponibles del IVA.
+    const sumBasesAll = vatLines.reduce((s, l) => s + l.taxBase, 0);
+    const retentionBase = retentionType ? sumBasesAll : null;
+    const computedIrpfAmount = retentionType && retentionRate != null
+      ? parseFloat(((sumBasesAll * retentionRate) / 100).toFixed(2))
+      : (extracted.irpfAmount ?? null);
+    const finalIrpfRate = retentionRate ?? extracted.irpfRate ?? null;
+    const finalIrpfAmount = computedIrpfAmount;
 
     // Copy OCR data to Invoice (datos finales — gestor los editará)
     await prisma.$transaction([
@@ -211,8 +252,10 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
           taxBase:       extracted.taxBase,
           vatRate:       extracted.vatRate ?? denormVatRate,
           vatAmount:     extracted.vatAmount,
-          irpfRate:      extracted.irpfRate,
-          irpfAmount:    extracted.irpfAmount,
+          irpfRate:      finalIrpfRate,
+          irpfAmount:    finalIrpfAmount,
+          retentionType,
+          retentionBase,
           totalAmount:   extracted.totalAmount,
           isValid,
           lastOcrError:  null,

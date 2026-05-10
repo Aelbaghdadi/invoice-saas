@@ -1,6 +1,11 @@
 import type { Invoice, Client, InvoiceVatLine } from "@prisma/client";
 import * as XLSX from "xlsx";
-import { OPERATION_TYPE_CODE, type OperationTypeName } from "@/lib/validators";
+import {
+  OPERATION_TYPE_CODE,
+  RETENTION_TYPE_CODE,
+  type OperationTypeName,
+  type RetentionTypeName,
+} from "@/lib/validators";
 
 export type ExportFormat = "sage50" | "contasol" | "a3con" | "a3excel";
 export type ExportInvoiceType = "ALL" | "PURCHASE" | "SALE";
@@ -167,24 +172,30 @@ export function suggestFilename(
 // ─── A3 Excel export (.xlsx) ────────────────────────────────────────────────
 
 const A3_HEADERS = [
-  "Fecha de Expedición",
-  "Fecha de Contabilización",
-  "Concepto",
-  "Numero Factura",
-  "NIF",
-  "Nombre",
-  "Tipo de Operación",
-  "Cuenta Cliente/Proveedor",
-  "Cuenta de Compras/Ventas",
-  "Base",
-  "% IVA",
-  "Cuota IVA",
-  "Enlace de la Factura",
+  "Fecha de Expedición",         // A
+  "Fecha de Contabilización",    // B
+  "Concepto",                    // C
+  "Numero Factura",              // D
+  "NIF",                         // E
+  "Nombre",                      // F
+  "Tipo de Operación",           // G
+  "Cuenta Cliente/Proveedor",    // H
+  "Cuenta de Compras/Ventas",    // I
+  "Base",                        // J
+  "% IVA",                       // K
+  "Cuota IVA",                   // L
+  "% Recargo Equivalencia",      // M (siempre 0 en nuestro flujo)
+  "Cuota Recargo Equivalencia",  // N (siempre 0)
+  "% Retención",                 // O
+  "Cuota Retención",             // P
+  "Tipo Retención",              // Q (1=Profesional/M111, 2=Alquiler/M115)
+  "Enlace de la Factura",        // R
 ];
 
 function buildA3Row(
   inv: InvoiceWithClient,
   line: ExportVatLine,
+  isFirstLine: boolean,
   config?: ExportConfig,
 ): (string | number | null)[] {
   const isPurchase = inv.type === "PURCHASE";
@@ -193,6 +204,13 @@ function buildA3Row(
   const opTypeCode = inv.operationType
     ? OPERATION_TYPE_CODE[inv.operationType as OperationTypeName] ?? 1
     : 1;
+  // Retencion IRPF: solo se emite en la PRIMERA fila del multi-IVA para
+  // que A3 no sume varias veces. En las filas siguientes va a 0.
+  const retentionCode = isFirstLine && inv.retentionType
+    ? RETENTION_TYPE_CODE[inv.retentionType as RetentionTypeName] ?? 0
+    : 0;
+  const retentionRate   = isFirstLine && inv.irpfRate   ? Number(inv.irpfRate)   : 0;
+  const retentionAmount = isFirstLine && inv.irpfAmount ? Number(inv.irpfAmount) : 0;
   return [
     fmtDate(inv.invoiceDate, config?.dateFormat),             // A: Fecha expedición
     "",                                                        // B: Fecha contabilización (blank)
@@ -206,7 +224,12 @@ function buildA3Row(
     line.taxBase,                                              // J: Base
     line.vatRate,                                              // K: % IVA
     line.vatAmount,                                            // L: Cuota IVA
-    "",                                                        // M: Enlace factura
+    0,                                                         // M: % Recargo Equivalencia
+    0,                                                         // N: Cuota Recargo Equivalencia
+    retentionRate,                                             // O: % Retención
+    retentionAmount,                                           // P: Cuota Retención
+    retentionCode || "",                                       // Q: Tipo Retención (1/2 o vacío)
+    "",                                                        // R: Enlace factura
   ];
 }
 
@@ -264,12 +287,14 @@ export function generateA3Excel(
 
   const makeSheet = (items: InvoiceWithClient[]) => {
     // A3: una fila por linea de IVA. Para multi-IVA, todo se repite igual
-    // (NIF, fecha, num factura...) excepto Base/%IVA/Cuota.
+    // (NIF, fecha, num factura...) excepto Base/%IVA/Cuota. La retencion
+    // IRPF se emite SOLO en la primera fila para no sumar varias veces.
     const rows: (string | number | null)[][] = [];
     for (const inv of items) {
-      for (const line of getExportLines(inv)) {
-        rows.push(buildA3Row(inv, line, config));
-      }
+      const exportLines = getExportLines(inv);
+      exportLines.forEach((line, i) => {
+        rows.push(buildA3Row(inv, line, i === 0, config));
+      });
     }
     const ws = XLSX.utils.aoa_to_sheet([A3_HEADERS, ...rows]);
 
@@ -287,7 +312,12 @@ export function generateA3Excel(
       { wch: 12 }, // J: Base
       { wch: 8 },  // K: % IVA
       { wch: 12 }, // L: Cuota IVA
-      { wch: 30 }, // M: Enlace
+      { wch: 10 }, // M: % Rec.Equiv
+      { wch: 12 }, // N: Cuota Rec.Equiv
+      { wch: 10 }, // O: % Retención
+      { wch: 12 }, // P: Cuota Retención
+      { wch: 10 }, // Q: Tipo Retención
+      { wch: 30 }, // R: Enlace
     ];
 
     return ws;

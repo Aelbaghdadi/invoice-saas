@@ -42,6 +42,10 @@ type FieldData = {
   supplierAccount: string;
   expenseAccount:  string;
   operationType:   string;
+  retentionType:   string;
+  retentionBase:   string;
+  retentionRate:   string;
+  retentionAmount: string;
 };
 
 const VALID_OPERATION_TYPES = [
@@ -49,6 +53,9 @@ const VALID_OPERATION_TYPES = [
   "INVERSION_SP", "IMPORTACION", "IVA_NO_DEDUCIBLE",
 ] as const;
 type ValidOperationType = (typeof VALID_OPERATION_TYPES)[number];
+
+const VALID_RETENTION_TYPES = ["PROFESSIONAL", "RENT"] as const;
+type ValidRetentionType = (typeof VALID_RETENTION_TYPES)[number];
 
 type ParsedVatLine = { taxBase: number; vatRate: number; vatAmount: number };
 
@@ -159,6 +166,22 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
   const finalReceiverName  = isPurchase ? invoice.client.name                    : (data.receiverName || null);
   const finalReceiverCif   = isPurchase ? invoice.client.cif                     : (receiverParsed.clean || null);
 
+  // Retencion IRPF: solo persistimos los campos si el tipo esta puesto.
+  // Si el gestor "quita retencion" -> todos los campos a null.
+  const retentionType: ValidRetentionType | null =
+    (VALID_RETENTION_TYPES as readonly string[]).includes(data.retentionType)
+      ? (data.retentionType as ValidRetentionType)
+      : null;
+  const retentionRateNum = retentionType ? parse(data.retentionRate) : null;
+  const retentionBaseNum = retentionType ? parse(data.retentionBase) : null;
+  // Cuota: si el form la mando, la usamos; si no, calculamos.
+  const retentionAmountNum = retentionType
+    ? (parse(data.retentionAmount)
+        ?? (retentionBaseNum != null && retentionRateNum != null
+            ? parseFloat(((retentionBaseNum * retentionRateNum) / 100).toFixed(2))
+            : null))
+    : null;
+
   const newData = {
     issuerName:    finalIssuerName,
     issuerCif:     finalIssuerCif,
@@ -170,8 +193,10 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     taxBase:       vatLines.length > 0 ? sumBase   : null,
     vatRate:       denormVatRate,
     vatAmount:     vatLines.length > 0 ? sumAmount : null,
-    irpfRate:      parse(data.irpfRate),
-    irpfAmount:    parse(data.irpfAmount),
+    irpfRate:      retentionRateNum,
+    irpfAmount:    retentionAmountNum,
+    retentionType,
+    retentionBase: retentionBaseNum,
     totalAmount:   parse(data.totalAmount),
     accountingPeriodMonth: parseInt2(data.accountingPeriodMonth),
     accountingPeriodYear:  parseInt2(data.accountingPeriodYear),
@@ -287,6 +312,8 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
           expenseAccount: learnExpense || "",
           defaultVatRate: learnVatRate != null ? (learnVatRate as any) : null,
           defaultOperationType: newData.operationType,
+          defaultRetentionType: newData.retentionType,
+          defaultRetentionRate: newData.irpfRate != null ? (newData.irpfRate as any) : null,
         },
         update: {
           ...(learnName ? { name: learnName } : {}),
@@ -294,6 +321,10 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
           ...(learnExpense ? { expenseAccount: learnExpense } : {}),
           ...(learnVatRate != null ? { defaultVatRate: learnVatRate as any } : {}),
           defaultOperationType: newData.operationType,
+          // Si el gestor quita la retencion explicitamente, tambien
+          // limpiamos lo aprendido para no re-sugerirla la proxima vez.
+          defaultRetentionType: newData.retentionType,
+          defaultRetentionRate: newData.irpfRate != null ? (newData.irpfRate as any) : null,
         },
       });
     }
@@ -502,5 +533,9 @@ function extractFields(fd: FormData): FieldData {
     supplierAccount: fd.get("supplierAccount") as string ?? "",
     expenseAccount:  fd.get("expenseAccount")  as string ?? "",
     operationType:   fd.get("operationType")   as string ?? "INTERIOR",
+    retentionType:   fd.get("retentionType")   as string ?? "",
+    retentionBase:   fd.get("retentionBase")   as string ?? "",
+    retentionRate:   fd.get("retentionRate")   as string ?? "",
+    retentionAmount: fd.get("retentionAmount") as string ?? "",
   };
 }

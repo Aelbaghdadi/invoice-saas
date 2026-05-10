@@ -186,3 +186,44 @@ export function cleanTaxId(raw: string | null | undefined): string {
 export function detectOperationType(issuerCif: string | null | undefined): OperationTypeName {
   return parseTaxId(issuerCif).operationType;
 }
+
+// ─── Retenciones IRPF ──────────────────────────────────────────────────
+
+export type RetentionTypeName = "PROFESSIONAL" | "RENT";
+
+/** Codigo numerico para A3 (Modelo 111 vs 115). */
+export const RETENTION_TYPE_CODE: Record<RetentionTypeName, number> = {
+  PROFESSIONAL: 1,  // Modelo 111 — actividades profesionales
+  RENT:         2,  // Modelo 115 — arrendamientos urbanos
+};
+
+/** Etiquetas para UI. */
+export const RETENTION_TYPE_LABEL: Record<RetentionTypeName, string> = {
+  PROFESSIONAL: "Profesional (Modelo 111)",
+  RENT:         "Arrendamiento (Modelo 115)",
+};
+
+/** % por defecto cuando se detecta el tipo. PROFESSIONAL puede ser 7%
+ *  para nuevos autonomos pero el caso comun es 15% — el gestor lo
+ *  ajusta a mano si es 7%. */
+export const RETENTION_DEFAULT_RATE: Record<RetentionTypeName, number> = {
+  PROFESSIONAL: 15,
+  RENT:         19,
+};
+
+/**
+ * Detecta si un NIF/CIF corresponde a una persona fisica (DNI o NIE),
+ * lo que sugiere fuertemente que la factura es de un profesional
+ * autonomo y por tanto suele llevar retencion IRPF (Modelo 111).
+ *
+ * Reglas:
+ *  - DNI: 8 digitos + letra (ej. 12345678Z)
+ *  - NIE: empieza por X/Y/Z + 7 digitos + letra (ej. X1234567L)
+ *  - CIF (empresas) empieza por A/B/C/D/E/F/G/H/J/N/P/Q/R/S/U/V/W -> NO persona fisica
+ */
+export function isPersonaFisica(rawCif: string | null | undefined): boolean {
+  if (!rawCif) return false;
+  const cif = formatNIF(rawCif);
+  if (cif.length !== 9) return false;
+  return /^\d{8}[A-Z]$/.test(cif) || /^[XYZ]\d{7}[A-Z]$/.test(cif);
+}

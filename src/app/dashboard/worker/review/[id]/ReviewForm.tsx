@@ -6,7 +6,7 @@ import {
   CheckCircle2, AlertTriangle, Save, ChevronLeft, ChevronRight,
   Loader2, AlertCircle, ExternalLink, FileText, Image as ImageIcon,
   XCircle, RefreshCw, Eye, EyeOff, ShieldAlert, CheckCheck, X, Plus, Trash2,
-  Globe, Lock,
+  Globe,
 } from "lucide-react";
 import { saveInvoiceFields, validateInvoice, rejectInvoice, type ReviewState } from "./actions";
 import { resolveIssue, dismissIssue } from "@/app/dashboard/worker/issues/actions";
@@ -15,7 +15,10 @@ import {
   isValidNIF,
   OPERATION_TYPE_LABEL,
   OPERATION_TYPE_CODE,
+  RETENTION_TYPE_LABEL,
+  RETENTION_DEFAULT_RATE,
   type OperationTypeName,
+  type RetentionTypeName,
 } from "@/lib/validators";
 
 const OPERATION_TYPE_OPTIONS: OperationTypeName[] = [
@@ -26,6 +29,8 @@ const OPERATION_TYPE_OPTIONS: OperationTypeName[] = [
   "IMPORTACION",
   "IVA_NO_DEDUCIBLE",
 ];
+
+const RETENTION_TYPE_OPTIONS: RetentionTypeName[] = ["PROFESSIONAL", "RENT"];
 import Link from "next/link";
 import PdfViewer from "@/components/ui/PdfViewerDynamic";
 import { fieldPropsFromConfidence, ConfidenceHint } from "@/components/ui/SmartField";
@@ -140,17 +145,46 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     (invoice.operationType as OperationTypeName | undefined) ?? "INTERIOR",
   );
 
+  // Retencion IRPF (Modelo 111 / 115). Si no hay tipo no aplica retencion.
+  const [retentionType, setRetentionType] = useState<RetentionTypeName | "">(
+    (invoice.retentionType as RetentionTypeName | null) ?? "",
+  );
+  const [retentionRate, setRetentionRate] = useState(fmt(invoice.irpfRate));
+  const [retentionBase, setRetentionBase] = useState(fmt(invoice.retentionBase));
+
+  // Cuota retencion: derivada de base * % / 100. La calculamos en cada
+  // render para evitar quedar desincronizada si el gestor cambia base o %.
+  const retentionAmount = useMemo(() => {
+    const b = parseFloat(retentionBase);
+    const r = parseFloat(retentionRate);
+    if (!retentionType || isNaN(b) || isNaN(r)) return 0;
+    return Math.round((b * r)) / 100;
+  }, [retentionBase, retentionRate, retentionType]);
+
+  // Al cambiar el tipo, autocompletamos % y base por defecto si estan
+  // vacios. La base por defecto es la suma de bases imponibles del IVA.
+  const handleRetentionTypeChange = (value: string) => {
+    if (value === "") {
+      setRetentionType("");
+      setRetentionRate("");
+      setRetentionBase("");
+      return;
+    }
+    const newType = value as RetentionTypeName;
+    setRetentionType(newType);
+    if (!retentionRate) setRetentionRate(String(RETENTION_DEFAULT_RATE[newType]));
+    // Base por defecto = suma de bases IVA (lo que ya tiene en pantalla)
+    if (!retentionBase) {
+      const sumB = vatLines.reduce((s, l) => s + (parseFloat(l.taxBase) || 0), 0);
+      if (sumB > 0) setRetentionBase(sumB.toFixed(2));
+    }
+  };
+
   // En facturas RECIBIDAS el cliente es el RECEPTOR, en EMITIDAS el EMISOR.
-  // Esa parte queda bloqueada porque la fija el sistema (no la decide OCR
-  // ni el gestor — la sabemos a priori al subir la factura).
+  // Esa parte queda bloqueada (read-only) porque la fija el sistema, pero
+  // sin etiquetas adicionales — el fondo gris ya indica que no se edita.
   const lockedSide: "issuer" | "receiver" = invoice.type === "PURCHASE" ? "receiver" : "issuer";
   const lockedInputClass = "w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-[13px] text-slate-600 cursor-not-allowed";
-  const LockedBadge = (
-    <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-slate-500">
-      <Lock className="h-2.5 w-2.5" />
-      Cliente · automático
-    </span>
-  );
 
   const updateVatLine = (idx: number, field: keyof VatLineInput, value: string) => {
     setVatLines((prev) => {
@@ -210,10 +244,10 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     return { sumBase, sumAmount, anyFilled };
   }, [vatLines]);
 
-  // Math semaphore: Sigma(bases) + Sigma(cuotas) = Total
+  // Math semaphore: Total = Σ Bases + Σ Cuotas - Retencion IRPF
   const totalNum   = parseFloat(totalAmount) || 0;
   const hasValues  = vatTotals.anyFilled && totalAmount;
-  const calculated = Math.round((vatTotals.sumBase + vatTotals.sumAmount) * 100);
+  const calculated = Math.round((vatTotals.sumBase + vatTotals.sumAmount - retentionAmount) * 100);
   const actual     = Math.round(totalNum * 100);
   const mathOk     = hasValues ? Math.abs(calculated - actual) <= 2 : null;
 
@@ -298,10 +332,14 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     fd.set("supplierAccount", supplierAccountVal);
     fd.set("expenseAccount",  expenseAccountVal);
     fd.set("operationType", operationType);
+    fd.set("retentionType", retentionType);
+    fd.set("retentionBase", retentionBase);
+    fd.set("retentionRate", retentionRate);
+    fd.set("retentionAmount", String(retentionAmount));
     fd.set("bucket", bucket);
     if (extra) Object.entries(extra).forEach(([k,v]) => fd.set(k,v));
     return fd;
-  }, [vatLines, totalAmount, supplierAccountVal, expenseAccountVal, operationType, invoice.id, invoice.updatedAt, bucket]);
+  }, [vatLines, totalAmount, supplierAccountVal, expenseAccountVal, operationType, retentionType, retentionBase, retentionRate, retentionAmount, invoice.id, invoice.updatedAt, bucket]);
 
   const handleSave = () => {
     startSave(async () => {
@@ -566,8 +604,8 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                 }
                 <span className="text-[12px] font-medium">
                   {mathOk
-                    ? "Validación matemática correcta — Σ Bases + Σ Cuotas = Total"
-                    : `Error: ${(vatTotals.sumBase + vatTotals.sumAmount).toFixed(2)} ≠ ${totalNum.toFixed(2)} (diferencia: ${Math.abs(vatTotals.sumBase + vatTotals.sumAmount - totalNum).toFixed(2)} €)`
+                    ? `Validación matemática correcta — Σ Bases + Σ Cuotas${retentionAmount > 0 ? " − Retención" : ""} = Total`
+                    : `Error: ${(vatTotals.sumBase + vatTotals.sumAmount - retentionAmount).toFixed(2)} ≠ ${totalNum.toFixed(2)} (diferencia: ${Math.abs(vatTotals.sumBase + vatTotals.sumAmount - retentionAmount - totalNum).toFixed(2)} €)`
                   }
                 </span>
               </div>
@@ -652,7 +690,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
             {/* Emisor */}
             <fieldset className="rounded-xl border border-slate-100 p-4 space-y-3">
               <legend className="px-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-                Emisor {lockedSide === "issuer" && LockedBadge}
+                Emisor
               </legend>
               <div>
                 <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
@@ -689,7 +727,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
             {/* Receptor */}
             <fieldset className="rounded-xl border border-slate-100 p-4 space-y-3">
               <legend className="px-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-                Receptor {lockedSide === "receiver" && LockedBadge}
+                Receptor
               </legend>
               <div>
                 <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
@@ -874,6 +912,77 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                   <Plus className="h-3 w-3" />
                   Anadir linea de IVA
                 </button>
+              </div>
+
+              {/* Retencion IRPF — Modelo 111 (profesional) o 115 (alquiler).
+                  Muchos profesionales y alquileres llevan retencion: A3
+                  necesita base, %, cuota y tipo para alimentar el modelo. */}
+              <div className="border-t border-slate-100 pt-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                    Retención IRPF
+                  </label>
+                  {retentionType && (
+                    <button
+                      type="button"
+                      onClick={() => handleRetentionTypeChange("")}
+                      className="text-[10px] font-medium text-slate-400 hover:text-red-500"
+                    >
+                      Quitar retención
+                    </button>
+                  )}
+                </div>
+                <select
+                  className={inputClass}
+                  value={retentionType}
+                  onChange={(e) => handleRetentionTypeChange(e.target.value)}
+                >
+                  <option value="">Sin retención</option>
+                  {RETENTION_TYPE_OPTIONS.map((rt) => (
+                    <option key={rt} value={rt}>
+                      {RETENTION_TYPE_LABEL[rt]}
+                    </option>
+                  ))}
+                </select>
+                {retentionType && (
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="mb-1 block text-[10px] uppercase tracking-wider text-slate-400">Base ret.</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        className={inputClass}
+                        value={retentionBase}
+                        onChange={(e) => setRetentionBase(e.target.value)}
+                        placeholder="100.00"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[10px] uppercase tracking-wider text-slate-400">% Ret.</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max="100"
+                        className={inputClass}
+                        value={retentionRate}
+                        onChange={(e) => setRetentionRate(e.target.value)}
+                        placeholder="15"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[10px] uppercase tracking-wider text-slate-400">Cuota ret.</label>
+                      <input
+                        type="text"
+                        className={`${inputClass} bg-slate-50 cursor-not-allowed`}
+                        value={retentionAmount.toFixed(2)}
+                        readOnly
+                        tabIndex={-1}
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Total factura — campo separado, no es la suma automatica

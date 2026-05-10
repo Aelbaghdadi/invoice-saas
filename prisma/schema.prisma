@@ -45,6 +45,19 @@ enum OperationType {
   IVA_NO_DEDUCIBLE
 }
 
+/// Tipo de retención IRPF aplicada en la factura. Determina a qué
+/// modelo fiscal alimenta cuando se exporta a A3:
+///   PROFESSIONAL -> Modelo 111 (actividades profesionales: abogados,
+///                   gestores, programadores freelance...)
+///   RENT         -> Modelo 115 (arrendamientos urbanos / locales)
+///
+/// Default % por tipo: PROFESSIONAL=15 (o 7 nuevos autónomos),
+///                     RENT=19.
+enum RetentionType {
+  PROFESSIONAL
+  RENT
+}
+
 enum InvoiceStatus {
   UPLOADED
   ANALYZING
@@ -191,6 +204,13 @@ model Invoice {
   vatAmount     Decimal?  @db.Decimal(12, 2)
   irpfRate      Decimal?  @db.Decimal(5, 2)
   irpfAmount    Decimal?  @db.Decimal(12, 2)
+  /// Tipo de retención IRPF aplicada (Modelo 111 vs 115). null si la
+  /// factura no lleva retención.
+  retentionType RetentionType?
+  /// Base sobre la que se calcula la retención. Normalmente coincide
+  /// con `taxBase` pero a veces el alcance es distinto, asi que lo
+  /// almacenamos por separado.
+  retentionBase Decimal?  @db.Decimal(12, 2)
   totalAmount   Decimal?  @db.Decimal(12, 2)
   isValid       Boolean?
 
@@ -412,6 +432,11 @@ model AccountEntry {
   /// que es Inversión SP), la próxima factura del mismo NIF la
   /// pre-rellena automáticamente. null = sin aprender aún.
   defaultOperationType OperationType?
+  /// Tipo y % de retención IRPF aprendidos de validaciones previas.
+  /// Si un proveedor SIEMPRE emite con retención de profesional al 15%,
+  /// la próxima factura suya se pre-rellena con esos valores.
+  defaultRetentionType RetentionType?
+  defaultRetentionRate Decimal?       @db.Decimal(5, 2)
 
   clientId String
   client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
