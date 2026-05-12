@@ -2,9 +2,7 @@ import type { Invoice, Client, InvoiceVatLine } from "@prisma/client";
 import * as XLSX from "xlsx";
 import {
   OPERATION_TYPE_CODE,
-  RETENTION_TYPE_CODE,
   type OperationTypeName,
-  type RetentionTypeName,
 } from "@/lib/validators";
 
 export type ExportFormat = "sage50" | "contasol" | "a3con" | "a3excel";
@@ -171,12 +169,17 @@ export function suggestFilename(
 
 // ─── A3 Excel export (.xlsx) ────────────────────────────────────────────────
 
+// Cabeceras EXACTAS de la plantilla oficial A3 (Libro_de_Facturas_*).
+// Mantenemos los typos del original ("Cutoa") para que el mapeo en el
+// wizard A3 sea por nombre y no tengamos que cambiarlo. 16 columnas
+// totales — la columna B "Fecha de Contabilizacion" es la obligatoria
+// según el cliente, A "Fecha de Expedición" puede ir en blanco.
 const A3_HEADERS = [
-  "Fecha de Expedición",         // A
-  "Fecha de Contabilización",    // B
+  "Fecha de Expedición",         // A — opcional, se puede dejar en blanco
+  "Fecha de Contabilizacion",    // B — OBLIGATORIA, sin tilde en plantilla
   "Concepto",                    // C
   "Numero Factura",              // D
-  "NIF",                         // E
+  "Nif",                         // E — plantilla usa "Nif" con minúsculas
   "Nombre",                      // F
   "Tipo de Operación",           // G
   "Cuenta Cliente/Proveedor",    // H
@@ -184,12 +187,10 @@ const A3_HEADERS = [
   "Base",                        // J
   "% IVA",                       // K
   "Cuota IVA",                   // L
-  "% Recargo Equivalencia",      // M (siempre 0 en nuestro flujo)
-  "Cuota Recargo Equivalencia",  // N (siempre 0)
-  "% Retención",                 // O
-  "Cuota Retención",             // P
-  "Tipo Retención",              // Q (1=Profesional/M111, 2=Alquiler/M115)
-  "Enlace de la Factura",        // R
+  "% Rec. Equiv.",               // M
+  "Cutoa Rec. Equiv.",           // N — sic, "Cutoa" con typo igual que plantilla
+  "% Retención IRPF",            // O
+  "Cuota Retención IRPF",        // P
 ];
 
 function buildA3Row(
@@ -206,30 +207,29 @@ function buildA3Row(
     : 1;
   // Retencion IRPF: solo se emite en la PRIMERA fila del multi-IVA para
   // que A3 no sume varias veces. En las filas siguientes va a 0.
-  const retentionCode = isFirstLine && inv.retentionType
-    ? RETENTION_TYPE_CODE[inv.retentionType as RetentionTypeName] ?? 0
-    : 0;
   const retentionRate   = isFirstLine && inv.irpfRate   ? Number(inv.irpfRate)   : 0;
   const retentionAmount = isFirstLine && inv.irpfAmount ? Number(inv.irpfAmount) : 0;
+  // Fecha de Contabilizacion (col B): obligatoria segun plantilla A3.
+  // Por defecto = fecha de la factura. El gestor puede sobreescribirla
+  // en el Excel exportado si quiere registrar el asiento en otro mes.
+  const fechaFactura = fmtDate(inv.invoiceDate, config?.dateFormat);
   return [
-    fmtDate(inv.invoiceDate, config?.dateFormat),             // A: Fecha expedición
-    "",                                                        // B: Fecha contabilización (blank)
+    fechaFactura,                                              // A: Fecha expedición (opcional)
+    fechaFactura,                                              // B: Fecha contabilización (OBLIGATORIA)
     inv.invoiceNumber ?? "",                                   // C: Concepto
     inv.invoiceNumber ?? "",                                   // D: Numero factura
     (isPurchase ? inv.issuerCif : inv.receiverCif) ?? "",     // E: NIF
     (isPurchase ? inv.issuerName : inv.receiverName) ?? "",   // F: Nombre
     opTypeCode,                                                // G: Tipo operación (1/2/3/4/6/7)
-    inv.supplierAccount ?? "",                                 // H: Cuenta proveedor
-    inv.expenseAccount ?? "",                                  // I: Cuenta gasto
+    inv.supplierAccount ?? "",                                 // H: Cuenta proveedor/cliente
+    inv.expenseAccount ?? "",                                  // I: Cuenta compras/ventas
     line.taxBase,                                              // J: Base
     line.vatRate,                                              // K: % IVA
     line.vatAmount,                                            // L: Cuota IVA
-    0,                                                         // M: % Recargo Equivalencia
-    0,                                                         // N: Cuota Recargo Equivalencia
-    retentionRate,                                             // O: % Retención
-    retentionAmount,                                           // P: Cuota Retención
-    retentionCode || "",                                       // Q: Tipo Retención (1/2 o vacío)
-    "",                                                        // R: Enlace factura
+    0,                                                         // M: % Rec. Equiv.
+    0,                                                         // N: Cutoa Rec. Equiv.
+    retentionRate,                                             // O: % Retención IRPF
+    retentionAmount,                                           // P: Cuota Retención IRPF
   ];
 }
 
@@ -298,26 +298,24 @@ export function generateA3Excel(
     }
     const ws = XLSX.utils.aoa_to_sheet([A3_HEADERS, ...rows]);
 
-    // Set column widths
+    // Set column widths (16 cols, alineadas con plantilla A3 oficial)
     ws["!cols"] = [
-      { wch: 16 }, // A: Fecha
-      { wch: 16 }, // B: Fecha contab.
+      { wch: 16 }, // A: Fecha expedición
+      { wch: 16 }, // B: Fecha contabilización
       { wch: 20 }, // C: Concepto
       { wch: 16 }, // D: Nº Factura
-      { wch: 12 }, // E: NIF
+      { wch: 12 }, // E: Nif
       { wch: 30 }, // F: Nombre
       { wch: 12 }, // G: Tipo op.
-      { wch: 16 }, // H: Cuenta prov.
-      { wch: 16 }, // I: Cuenta gasto
+      { wch: 16 }, // H: Cuenta cli/prov
+      { wch: 16 }, // I: Cuenta compras/ventas
       { wch: 12 }, // J: Base
       { wch: 8 },  // K: % IVA
       { wch: 12 }, // L: Cuota IVA
-      { wch: 10 }, // M: % Rec.Equiv
-      { wch: 12 }, // N: Cuota Rec.Equiv
-      { wch: 10 }, // O: % Retención
-      { wch: 12 }, // P: Cuota Retención
-      { wch: 10 }, // Q: Tipo Retención
-      { wch: 30 }, // R: Enlace
+      { wch: 10 }, // M: % Rec. Equiv.
+      { wch: 12 }, // N: Cutoa Rec. Equiv.
+      { wch: 12 }, // O: % Retención IRPF
+      { wch: 14 }, // P: Cuota Retención IRPF
     ];
 
     return ws;

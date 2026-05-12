@@ -5,11 +5,10 @@ import { useToast } from "@/components/ui/Toast";
 import {
   CheckCircle2, AlertTriangle, Save, ChevronLeft, ChevronRight,
   Loader2, AlertCircle, ExternalLink, FileText, Image as ImageIcon,
-  XCircle, RefreshCw, Eye, EyeOff, ShieldAlert, CheckCheck, X, Plus, Trash2,
+  XCircle, RefreshCw, Eye, EyeOff, CheckCheck, Plus, Trash2,
   Globe,
 } from "lucide-react";
 import { saveInvoiceFields, validateInvoice, rejectInvoice, type ReviewState } from "./actions";
-import { resolveIssue, dismissIssue } from "@/app/dashboard/worker/issues/actions";
 import type { Invoice, IssueType, IssueStatus } from "@prisma/client";
 import {
   isValidNIF,
@@ -219,18 +218,15 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
   const [isPendingValidate, startValidate]= useTransition();
   const [isPendingReject, startReject]    = useTransition();
   const [isPendingReprocess, startReprocess] = useTransition();
-  const [isPendingIssueAction, startIssueAction] = useTransition();
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [rejectReason, setRejectReason]   = useState("");
   const [rejectCategory, setRejectCategory] = useState("");
   const [showOcrComparison, setShowOcrComparison] = useState(false);
-  const [dismissedIssues, setDismissedIssues] = useState<Set<string>>(new Set());
   const [activeField, setActiveField] = useState<string | null>(null);
   const [showHelp, setShowHelp] = useState(false);
   const router = useRouter();
 
   const confidence = extraction?.confidence ?? null;
-  const openIssues = issues.filter((i) => i.status === "OPEN" && !dismissedIssues.has(i.id));
 
   // Sumas de las lineas de IVA. Cualquier linea con campos vacios cuenta
   // como 0 para no romper el semaforo mientras el usuario teclea.
@@ -383,32 +379,6 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
       } else {
         success("Factura rechazada");
         setShowRejectModal(false);
-      }
-    });
-  };
-
-  const handleResolveIssue = (issueId: string) => {
-    startIssueAction(async () => {
-      const fd = new FormData();
-      fd.set("issueId", issueId);
-      const res = await resolveIssue(null, fd);
-      if (res?.error) error(res.error);
-      else {
-        setDismissedIssues((prev) => new Set(prev).add(issueId));
-        success("Incidencia resuelta");
-      }
-    });
-  };
-
-  const handleDismissIssue = (issueId: string) => {
-    startIssueAction(async () => {
-      const fd = new FormData();
-      fd.set("issueId", issueId);
-      const res = await dismissIssue(null, fd);
-      if (res?.error) error(res.error);
-      else {
-        setDismissedIssues((prev) => new Set(prev).add(issueId));
-        success("Incidencia descartada");
       }
     });
   };
@@ -649,50 +619,6 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                   {isPendingReprocess ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
                   Reprocesar
                 </button>
-              </div>
-            )}
-
-            {/* Issues banner */}
-            {openIssues.length > 0 && (
-              <div className="space-y-2">
-                {openIssues.map((issue) => (
-                  <div key={issue.id} className={`flex items-start justify-between gap-2 rounded-xl px-4 py-3 ${
-                    issue.type === "POSSIBLE_DUPLICATE" ? "bg-orange-50 text-orange-700" :
-                    issue.type === "MATH_MISMATCH" ? "bg-red-50 text-red-600" :
-                    "bg-amber-50 text-amber-700"
-                  }`}>
-                    <div className="flex items-start gap-2.5">
-                      <ShieldAlert className="h-4 w-4 flex-shrink-0 mt-0.5" />
-                      <div>
-                        <p className="text-[11px] font-semibold uppercase tracking-wide">
-                          {issue.type === "OCR_FAILED" ? "Error OCR" :
-                           issue.type === "LOW_CONFIDENCE" ? "Baja confianza" :
-                           issue.type === "MATH_MISMATCH" ? "Error matematico" :
-                           issue.type === "POSSIBLE_DUPLICATE" ? "Posible duplicado" : "Incidencia"}
-                        </p>
-                        <p className="text-[12px] mt-0.5">{issue.description}</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1 flex-shrink-0">
-                      <button
-                        onClick={() => handleResolveIssue(issue.id)}
-                        disabled={isPendingIssueAction}
-                        className="flex items-center gap-1 rounded-md bg-white/80 px-2 py-1 text-[11px] font-medium hover:bg-white"
-                        title="Resolver"
-                      >
-                        <CheckCheck className="h-3 w-3" /> Resolver
-                      </button>
-                      <button
-                        onClick={() => handleDismissIssue(issue.id)}
-                        disabled={isPendingIssueAction}
-                        className="flex items-center gap-1 rounded-md bg-white/80 px-2 py-1 text-[11px] font-medium hover:bg-white"
-                        title="Descartar"
-                      >
-                        <X className="h-3 w-3" /> Descartar
-                      </button>
-                    </div>
-                  </div>
-                ))}
               </div>
             )}
 
