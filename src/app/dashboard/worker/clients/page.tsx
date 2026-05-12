@@ -41,7 +41,7 @@ export default async function WorkerClientsPage() {
         title={session.user.role === "ADMIN" ? "Clientes" : "Mis Clientes"}
         description={
           session.user.role === "ADMIN"
-            ? `${assignments.length} cliente${assignments.length !== 1 ? "s" : ""} en la asesoria`
+            ? `${assignments.length} cliente${assignments.length !== 1 ? "s" : ""} en la asesoría`
             : `${assignments.length} cliente${assignments.length !== 1 ? "s" : ""} asignado${assignments.length !== 1 ? "s" : ""}`
         }
       />

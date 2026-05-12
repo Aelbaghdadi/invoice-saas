@@ -46,6 +46,11 @@ type FieldData = {
   retentionBase:   string;
   retentionRate:   string;
   retentionAmount: string;
+  isRectificative:        string;  // "1" / "0"
+  rectifiedInvoiceSeries: string;
+  rectifiedInvoiceNumber: string;
+  rectificativeType:      string;  // "BY_DIFFERENCE" / "BY_SUBSTITUTION" / ""
+  art80Tres:              string;  // "1" / "0"
 };
 
 const VALID_OPERATION_TYPES = [
@@ -56,6 +61,9 @@ type ValidOperationType = (typeof VALID_OPERATION_TYPES)[number];
 
 const VALID_RETENTION_TYPES = ["PROFESSIONAL", "RENT"] as const;
 type ValidRetentionType = (typeof VALID_RETENTION_TYPES)[number];
+
+const VALID_RECTIFICATIVE_TYPES = ["BY_DIFFERENCE", "BY_SUBSTITUTION"] as const;
+type ValidRectificativeType = (typeof VALID_RECTIFICATIVE_TYPES)[number];
 
 type ParsedVatLine = { taxBase: number; vatRate: number; vatAmount: number };
 
@@ -129,17 +137,20 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
   const parseDate = (v: string) => v.trim() === "" ? null : new Date(v);
 
   const vatLines = parseVatLines(data.vatLines);
+  const isRectificativeFlag = data.isRectificative === "1";
 
-  // Validacion de cada linea de IVA antes de calcular nada.
+  // Validacion de cada linea de IVA antes de calcular nada. En facturas
+  // rectificativas permitimos negativos (abonos), en facturas normales
+  // solo valores >= 0.
   for (const line of vatLines) {
     if (line.vatRate < 0 || line.vatRate > 100) {
       return { error: "El % IVA debe estar entre 0 y 100 en todas las lineas" };
     }
-    if (line.taxBase < 0) {
-      return { error: "La base imponible no puede ser negativa" };
+    if (!isRectificativeFlag && line.taxBase < 0) {
+      return { error: "La base imponible no puede ser negativa (marca como rectificativa si es un abono)" };
     }
-    if (line.vatAmount < 0) {
-      return { error: "La cuota IVA no puede ser negativa" };
+    if (!isRectificativeFlag && line.vatAmount < 0) {
+      return { error: "La cuota IVA no puede ser negativa (marca como rectificativa si es un abono)" };
     }
   }
 
@@ -205,10 +216,17 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     operationType:   (VALID_OPERATION_TYPES as readonly string[]).includes(data.operationType)
       ? (data.operationType as ValidOperationType)
       : "INTERIOR" as ValidOperationType,
+    isRectificative:        isRectificativeFlag,
+    rectifiedInvoiceSeries: isRectificativeFlag ? (data.rectifiedInvoiceSeries.trim() || null) : null,
+    rectifiedInvoiceNumber: isRectificativeFlag ? (data.rectifiedInvoiceNumber.trim() || null) : null,
+    rectificativeType:      isRectificativeFlag && (VALID_RECTIFICATIVE_TYPES as readonly string[]).includes(data.rectificativeType)
+      ? (data.rectificativeType as ValidRectificativeType)
+      : null,
+    art80Tres:              isRectificativeFlag && data.art80Tres === "1",
   };
 
-  if (newData.totalAmount !== null && newData.totalAmount < 0) {
-    return { error: "El total no puede ser negativo" };
+  if (!isRectificativeFlag && newData.totalAmount !== null && newData.totalAmount < 0) {
+    return { error: "El total no puede ser negativo (marca como rectificativa si es un abono)" };
   }
 
   // Math validation: Sigma(bases) + Sigma(cuotas) - IRPF = Total
@@ -227,6 +245,7 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     "issuerName","issuerCif","receiverName","receiverCif",
     "invoiceNumber","taxBase","vatRate","vatAmount","irpfRate","irpfAmount","totalAmount",
     "operationType",
+    "isRectificative","rectifiedInvoiceNumber","rectificativeType",
   ] as const;
 
   for (const field of trackedFields) {
@@ -537,5 +556,10 @@ function extractFields(fd: FormData): FieldData {
     retentionBase:   fd.get("retentionBase")   as string ?? "",
     retentionRate:   fd.get("retentionRate")   as string ?? "",
     retentionAmount: fd.get("retentionAmount") as string ?? "",
+    isRectificative:        fd.get("isRectificative")        as string ?? "0",
+    rectifiedInvoiceSeries: fd.get("rectifiedInvoiceSeries") as string ?? "",
+    rectifiedInvoiceNumber: fd.get("rectifiedInvoiceNumber") as string ?? "",
+    rectificativeType:      fd.get("rectificativeType")      as string ?? "",
+    art80Tres:              fd.get("art80Tres")              as string ?? "0",
   };
 }

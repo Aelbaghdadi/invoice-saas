@@ -124,6 +124,32 @@ describe("generateCsv", () => {
     expect(dataRows).toHaveLength(1);
     expect(dataRows[0].split(";")[6]).toBe("21,00");
   });
+
+  it("rectificativa with mixed multi-VAT (one +, one -) emits both signs", () => {
+    // Caso del doc: 21% da +50 y 10% da -20. A3 espera 2 filas con sus
+    // signos respectivos para que sume/reste cada IVA por separado.
+    const inv = mkInvoice({
+      isRectificative: true as any,
+      taxBase: 30 as any,         // 100 + (-50) si fueran bases coherentes
+      vatAmount: 8.50 as any,     // 21*100/100 + 10*(-50)/100 / ajustado
+      totalAmount: 38.50 as any,
+      invoiceNumber: "F24-001",
+      vatLines: [
+        { id: "v1", invoiceId: "inv-1", position: 0, taxBase: 100 as any,  vatRate: 21 as any, vatAmount: 21 as any,    createdAt: new Date() },
+        { id: "v2", invoiceId: "inv-1", position: 1, taxBase: -125 as any, vatRate: 10 as any, vatAmount: -12.5 as any, createdAt: new Date() },
+      ] as any,
+    });
+    const csv = generateCsv([inv], "sage50");
+    const dataRows = csv.slice(1).split("\r\n").slice(1);
+    expect(dataRows).toHaveLength(2);
+    const cols = (r: string) => r.split(";");
+    // Fila 1: positiva
+    expect(cols(dataRows[0])[5]).toBe("100,00");   // base
+    expect(cols(dataRows[0])[7]).toBe("21,00");    // cuota
+    // Fila 2: negativa con signo respetado
+    expect(cols(dataRows[1])[5]).toBe("-125,00");  // base negativa
+    expect(cols(dataRows[1])[7]).toBe("-12,50");   // cuota negativa
+  });
 });
 
 describe("suggestFilename", () => {

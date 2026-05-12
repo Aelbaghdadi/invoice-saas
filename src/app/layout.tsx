@@ -14,16 +14,16 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: {
-    default: "FacturOCR — Gestion inteligente de facturas",
+    default: "FacturOCR — Gestión inteligente de facturas",
     template: "%s | FacturOCR",
   },
   description:
-    "Automatiza la extraccion, validacion y exportacion de facturas para asesorias contables con OCR e inteligencia artificial.",
-  keywords: ["facturacion", "OCR", "asesoria contable", "A3 Asesor", "facturas"],
+    "Automatiza la extracción, validación y exportación de facturas para asesorías contables con OCR e inteligencia artificial.",
+  keywords: ["facturación", "OCR", "asesoría contable", "A3 Asesor", "facturas"],
   openGraph: {
-    title: "FacturOCR — Gestion inteligente de facturas",
+    title: "FacturOCR — Gestión inteligente de facturas",
     description:
-      "De la factura al asiento en menos de 2 minutos. OCR + IA para asesorias.",
+      "De la factura al asiento en menos de 2 minutos. OCR + IA para asesorías.",
     type: "website",
     locale: "es_ES",
   },

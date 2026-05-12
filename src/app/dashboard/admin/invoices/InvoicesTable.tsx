@@ -150,7 +150,7 @@ export function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
       showToast("Factura enviada a reprocesar", "ok");
       window.location.reload();
     } catch {
-      showToast("Error de conexion al reprocesar", "err");
+      showToast("Error de conexión al reprocesar", "err");
     }
   }
 

@@ -135,7 +135,7 @@ export function UploadForm() {
           {/* Year */}
           <div>
             <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-              Ano
+              Año
             </label>
             <Select
               value={String(year)}

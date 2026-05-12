@@ -172,7 +172,7 @@ export default async function InvoicesPage({
           <EmptyState
             icon={FileText}
             title="Sin facturas"
-            description="Las facturas apareceran aqui cuando los clientes suban archivos."
+            description="Las facturas aparecerán aquí cuando los clientes suban archivos."
           />
         </div>
       ) : (

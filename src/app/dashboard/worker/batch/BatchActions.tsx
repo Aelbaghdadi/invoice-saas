@@ -59,7 +59,7 @@ export function BatchActions({
           <button
             type="submit"
             disabled={closePending}
-            title="Bloquea el periodo: no se podran subir ni modificar facturas"
+            title="Bloquea el periodo: no se podrán subir ni modificar facturas"
             className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-[12px] font-medium text-emerald-700 hover:bg-emerald-100 disabled:opacity-60"
           >
             {closePending ? (

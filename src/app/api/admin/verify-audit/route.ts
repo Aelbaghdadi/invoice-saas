@@ -18,7 +18,7 @@ export async function GET() {
     return NextResponse.json({ error: "Solo administradores" }, { status: 403 });
   }
   if (!session.user.advisoryFirmId) {
-    return NextResponse.json({ error: "Tu usuario no esta asociado a una asesoria" }, { status: 400 });
+    return NextResponse.json({ error: "Tu usuario no está asociado a una asesoría" }, { status: 400 });
   }
 
   const result = await verifyFirmAuditChains(session.user.advisoryFirmId);

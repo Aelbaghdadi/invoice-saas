@@ -207,25 +207,33 @@ function buildA3Row(
     : 1;
   // Retencion IRPF: solo se emite en la PRIMERA fila del multi-IVA para
   // que A3 no sume varias veces. En las filas siguientes va a 0.
+  // Para rectificativas, la retencion respeta el signo de la base.
   const retentionRate   = isFirstLine && inv.irpfRate   ? Number(inv.irpfRate)   : 0;
   const retentionAmount = isFirstLine && inv.irpfAmount ? Number(inv.irpfAmount) : 0;
   // Fecha de Contabilizacion (col B): obligatoria segun plantilla A3.
   // Por defecto = fecha de la factura. El gestor puede sobreescribirla
   // en el Excel exportado si quiere registrar el asiento en otro mes.
   const fechaFactura = fmtDate(inv.invoiceDate, config?.dateFormat);
+  // Sufijo _R en facturas rectificativas: A3 no permite importar dos
+  // facturas con mismo NIF + numero, asi que la rectificativa lleva
+  // siempre _R para diferenciarla de la original sin colisionar.
+  const baseNumber = inv.invoiceNumber ?? "";
+  const exportNumber = inv.isRectificative && baseNumber
+    ? `${baseNumber}_R`
+    : baseNumber;
   return [
     fechaFactura,                                              // A: Fecha expedición (opcional)
     fechaFactura,                                              // B: Fecha contabilización (OBLIGATORIA)
-    inv.invoiceNumber ?? "",                                   // C: Concepto
-    inv.invoiceNumber ?? "",                                   // D: Numero factura
+    exportNumber,                                              // C: Concepto
+    exportNumber,                                              // D: Numero factura (con _R si rectificativa)
     (isPurchase ? inv.issuerCif : inv.receiverCif) ?? "",     // E: NIF
     (isPurchase ? inv.issuerName : inv.receiverName) ?? "",   // F: Nombre
     opTypeCode,                                                // G: Tipo operación (1/2/3/4/6/7)
     inv.supplierAccount ?? "",                                 // H: Cuenta proveedor/cliente
     inv.expenseAccount ?? "",                                  // I: Cuenta compras/ventas
-    line.taxBase,                                              // J: Base
+    line.taxBase,                                              // J: Base (signo respetado en rectificativa)
     line.vatRate,                                              // K: % IVA
-    line.vatAmount,                                            // L: Cuota IVA
+    line.vatAmount,                                            // L: Cuota IVA (signo respetado)
     0,                                                         // M: % Rec. Equiv.
     0,                                                         // N: Cutoa Rec. Equiv.
     retentionRate,                                             // O: % Retención IRPF
@@ -253,16 +261,23 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
     if (!inv.supplierAccount) warnings.push("Sin cuenta proveedor");
     if (!inv.expenseAccount) warnings.push("Sin cuenta gasto");
 
+    // Total = 0: A3 rechaza asientos de valor cero. Lo marcamos como
+    // warning serio para que el gestor o lo corrija o lo excluya del
+    // export. En `generateA3Excel` se filtra fuera automáticamente.
+    const totalNum = Number(inv.totalAmount ?? 0);
+    if (Math.abs(totalNum) < 0.005) {
+      warnings.push("Total = 0 (excluida del export — A3 no acepta importes cero)");
+    }
+
     // Base + IVA - IRPF = Total. Suma sobre las lineas si las hay.
-    if (inv.totalAmount) {
+    if (inv.totalAmount && Math.abs(totalNum) >= 0.005) {
       const lines = getExportLines(inv);
       const sumBase = lines.reduce((s, l) => s + l.taxBase, 0);
       const sumAmt  = lines.reduce((s, l) => s + l.vatAmount, 0);
       const irpf    = inv.irpfAmount ? Number(inv.irpfAmount) : 0;
-      const total   = Number(inv.totalAmount);
       const expected = sumBase + sumAmt - irpf;
-      if (sumBase > 0 || sumAmt > 0) {
-        const diff = Math.abs(Math.round(expected * 100) - Math.round(total * 100));
+      if (Math.abs(sumBase) > 0 || Math.abs(sumAmt) > 0) {
+        const diff = Math.abs(Math.round(expected * 100) - Math.round(totalNum * 100));
         if (diff > 1) warnings.push(`Descuadre Base+IVA vs Total: ${(diff / 100).toFixed(2)}`);
       }
     }
@@ -282,8 +297,17 @@ export function generateA3Excel(
 ): Buffer {
   const wb = XLSX.utils.book_new();
 
-  const purchases = invoices.filter((i) => i.type === "PURCHASE");
-  const sales = invoices.filter((i) => i.type === "SALE");
+  // Filtrar facturas con total = 0: A3 rechaza asientos de importe cero
+  // (puede pasar cuando una rectificativa anula exactamente a la original
+  // y se intentan exportar juntas). El gestor recibe el warning previo
+  // en validateForA3Export para que sepa lo que ha pasado.
+  const exportable = invoices.filter((i) => {
+    const total = Number(i.totalAmount ?? 0);
+    return Math.abs(total) >= 0.005;
+  });
+
+  const purchases = exportable.filter((i) => i.type === "PURCHASE");
+  const sales = exportable.filter((i) => i.type === "SALE");
 
   const makeSheet = (items: InvoiceWithClient[]) => {
     // A3: una fila por linea de IVA. Para multi-IVA, todo se repite igual

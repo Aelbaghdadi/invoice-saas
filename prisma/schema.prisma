@@ -58,6 +58,16 @@ enum RetentionType {
   RENT
 }
 
+/// Tipo de rectificativa según la lógica A3:
+///   BY_DIFFERENCE   -> Por diferencias: se registra solo el importe
+///                      de la variación (delta sobre la original).
+///   BY_SUBSTITUTION -> Por sustitución: se anula la anterior y se
+///                      emite una nueva con los datos correctos.
+enum RectificativeType {
+  BY_DIFFERENCE
+  BY_SUBSTITUTION
+}
+
 enum InvoiceStatus {
   UPLOADED
   ANALYZING
@@ -213,6 +223,24 @@ model Invoice {
   retentionBase Decimal?  @db.Decimal(12, 2)
   totalAmount   Decimal?  @db.Decimal(12, 2)
   isValid       Boolean?
+
+  // ── Factura rectificativa (abono / corrección) ─────────────────────
+  /// true si esta factura RECTIFICA una anterior. Las rectificativas
+  /// suelen tener líneas con importe negativo o total negativo. Se
+  /// detecta automáticamente del OCR (línea IVA con base negativa) o
+  /// el gestor lo marca manualmente.
+  isRectificative        Boolean   @default(false)
+  /// Serie de la factura original que se está rectificando.
+  /// Ej: "F24" si la original era "F24-001".
+  rectifiedInvoiceSeries String?
+  /// Número de la factura original. Ej: "F24-001".
+  rectifiedInvoiceNumber String?
+  /// Tipo de rectificación. Lo pide A3 en la columna "Tipo Rectificativa"
+  /// si exportamos a un mapping extendido.
+  rectificativeType      RectificativeType?
+  /// Casos especiales: concursos de acreedores o créditos incobrables
+  /// (Art. 80.Tres de la Ley del IVA). Muy raro pero hay que tenerlo.
+  art80Tres              Boolean   @default(false)
 
   // Cuentas contables asignadas (del plan de cuentas)
   supplierAccount String?   // Cuenta proveedor 400.xxxxx / 410.xxxxx

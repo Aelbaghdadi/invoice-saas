@@ -73,7 +73,7 @@ export async function closePeriodFromBatch(
   });
   if (pending > 0) {
     return {
-      error: `Aun quedan ${pending} factura${pending !== 1 ? "s" : ""} sin procesar en el periodo`,
+      error: `Aún quedan ${pending} factura${pending !== 1 ? "s" : ""} sin procesar en el periodo`,
     };
   }
 
@@ -87,7 +87,7 @@ export async function closePeriodFromBatch(
     },
   });
   if (existing && !existing.reopenedAt) {
-    return { error: "Este periodo ya esta cerrado" };
+    return { error: "Este periodo ya está cerrado" };
   }
 
   await prisma.periodClosure.upsert({

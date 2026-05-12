@@ -53,7 +53,7 @@ export async function quickRejectDuplicate(
   const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
   if (!invoice) return { error: "Factura no encontrada" };
   if (invoice.status === "REJECTED" || invoice.status === "VALIDATED") {
-    return { error: "La factura ya esta cerrada" };
+    return { error: "La factura ya está cerrada" };
   }
 
   // Construye motivo a partir del issue POSSIBLE_DUPLICATE si existe

@@ -253,6 +253,15 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     const finalIrpfRate = retentionRate ?? extracted.irpfRate ?? null;
     const finalIrpfAmount = computedIrpfAmount;
 
+    // ── Detección rectificativa (abono / corrección) ───────────────────
+    //
+    // Si alguna línea de IVA tiene base negativa, O el total negativo,
+    // marcamos la factura como rectificativa. El gestor puede confirmar
+    // o desmarcar en revisión y rellenar el número de factura original.
+    const hasNegativeLine = vatLines.some((l) => l.taxBase < 0 || l.vatAmount < 0);
+    const hasNegativeTotal = (extracted.totalAmount ?? 0) < 0;
+    const isRectificative = hasNegativeLine || hasNegativeTotal;
+
     // Copy OCR data to Invoice (datos finales — gestor los editará)
     await prisma.$transaction([
       // Reemplazar lineas previas (idempotente: si reproceso, borra y mete).
@@ -287,6 +296,7 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
           irpfAmount:    finalIrpfAmount,
           retentionType,
           retentionBase,
+          isRectificative,
           totalAmount:   extracted.totalAmount,
           isValid,
           lastOcrError:  null,

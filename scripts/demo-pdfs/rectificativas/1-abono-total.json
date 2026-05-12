@@ -1,0 +1,38 @@
+{
+  "emisor": {
+    "nombre": "Suministros Industriales ABC S.L.",
+    "cif": "B12345674",
+    "direccion": "Polígono Industrial Sur, Nave 7",
+    "cp_ciudad": "28914 Leganés"
+  },
+  "receptor": {
+    "nombre": "Panadería La Espiga S.L.",
+    "cif": "B12345674",
+    "direccion": "Calle Mayor 42",
+    "cp_ciudad": "28013 Madrid"
+  },
+  "numero": "ABONO-2026-001",
+  "fecha_emision": "20/04/2026",
+  "fecha_vencimiento": "20/05/2026",
+  "conceptos": [
+    ["DEVOLUCION: Bandejas horno acero defectuosas", "-8 ud.", "18,00 EUR", "-144,00 EUR"],
+    ["DEVOLUCION: Guantes termicos talla incorrecta", "-4 ud.", "9,00 EUR", "-36,00 EUR"]
+  ],
+  "iva_lines": [
+    { "base": -180.00, "rate": 21, "cuota": -37.80 }
+  ],
+  "base": -180.00,
+  "total": -217.80,
+  "logo_texto": "SUMINISTROS",
+  "titulo_cabecera": "FACTURA RECTIFICATIVA (ABONO)",
+  "subtitulo_izq": "Rectifica F-2026-100",
+  "color_primary": "#7C2D12",
+  "color_accent": "#F59E0B",
+  "forma_pago": "Transferencia bancaria 30 dias",
+  "datos_extra_titulo": "RECTIFICACION",
+  "datos_extra": {
+    "Factura original": "F-2026-100",
+    "Motivo": "Devolucion por defecto de fabricacion",
+    "Tipo": "Por diferencias"
+  }
+}

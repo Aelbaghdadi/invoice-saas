@@ -20,7 +20,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Solo administradores" }, { status: 403 });
   }
   if (!session.user.advisoryFirmId) {
-    return NextResponse.json({ error: "Tu usuario no esta asociado a una asesoria" }, { status: 400 });
+    return NextResponse.json({ error: "Tu usuario no está asociado a una asesoría" }, { status: 400 });
   }
 
   const body = await req.json().catch(() => ({}));

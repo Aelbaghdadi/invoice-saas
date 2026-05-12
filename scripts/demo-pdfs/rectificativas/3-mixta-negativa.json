@@ -1,0 +1,37 @@
+{
+  "emisor": {
+    "nombre": "Distribuciones Hierro S.L.",
+    "cif": "B45678919",
+    "direccion": "Av. de Castilla 14",
+    "cp_ciudad": "28850 Torrejon de Ardoz"
+  },
+  "receptor": {
+    "nombre": "Panadería La Espiga S.L.",
+    "cif": "B12345674",
+    "direccion": "Calle Mayor 42",
+    "cp_ciudad": "28013 Madrid"
+  },
+  "numero": "DH-2026-0089-R",
+  "fecha_emision": "23/04/2026",
+  "conceptos": [
+    ["Material adicional servido", "1 ud.", "20,00 EUR", "20,00 EUR"],
+    ["ABONO: Devolucion grande", "-1 ud.", "100,00 EUR", "-100,00 EUR"]
+  ],
+  "iva_lines": [
+    { "base": -80.00, "rate": 21, "cuota": -16.80 }
+  ],
+  "base": -80.00,
+  "total": -96.80,
+  "logo_texto": "DIST. HIERRO",
+  "titulo_cabecera": "FACTURA RECTIFICATIVA (ABONO)",
+  "subtitulo_izq": "Total negativo (abono mayor que entrega)",
+  "color_primary": "#7C2D12",
+  "color_accent": "#F59E0B",
+  "forma_pago": "Compensacion en proxima factura",
+  "datos_extra_titulo": "RECTIFICACION",
+  "datos_extra": {
+    "Factura original": "DH-2026-0089",
+    "Motivo": "Devolucion mayoritaria con material adicional",
+    "Tipo": "Por diferencias"
+  }
+}

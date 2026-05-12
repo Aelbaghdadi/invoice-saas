@@ -5,7 +5,7 @@ import { useToast } from "@/components/ui/Toast";
 import {
   CheckCircle2, AlertTriangle, Save, ChevronLeft, ChevronRight,
   Loader2, AlertCircle, ExternalLink, FileText, Image as ImageIcon,
-  XCircle, RefreshCw, Eye, EyeOff, CheckCheck, Plus, Trash2,
+  XCircle, RefreshCw, CheckCheck, Plus, Trash2,
   Globe,
 } from "lucide-react";
 import { saveInvoiceFields, validateInvoice, rejectInvoice, type ReviewState } from "./actions";
@@ -153,6 +153,22 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
   const [retentionRate, setRetentionRate] = useState(fmt(invoice.irpfRate));
   const [retentionBase, setRetentionBase] = useState(fmt(invoice.retentionBase));
 
+  // Factura rectificativa (abono / correccion). Auto-detectada si alguna
+  // linea tiene importe negativo, o el gestor la marca manualmente.
+  const [isRectificative, setIsRectificative] = useState<boolean>(
+    Boolean(invoice.isRectificative),
+  );
+  const [rectifiedInvoiceSeries, setRectifiedInvoiceSeries] = useState(
+    fmt(invoice.rectifiedInvoiceSeries),
+  );
+  const [rectifiedInvoiceNumber, setRectifiedInvoiceNumber] = useState(
+    fmt(invoice.rectifiedInvoiceNumber),
+  );
+  const [rectificativeType, setRectificativeType] = useState<"BY_DIFFERENCE" | "BY_SUBSTITUTION">(
+    (invoice.rectificativeType as "BY_DIFFERENCE" | "BY_SUBSTITUTION" | null) ?? "BY_DIFFERENCE",
+  );
+  const [art80Tres, setArt80Tres] = useState<boolean>(Boolean(invoice.art80Tres));
+
   // Cuota retencion: derivada de base * % / 100. La calculamos en cada
   // render para evitar quedar desincronizada si el gestor cambia base o %.
   const retentionAmount = useMemo(() => {
@@ -162,8 +178,10 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     return Math.round((b * r)) / 100;
   }, [retentionBase, retentionRate, retentionType]);
 
-  // Al cambiar el tipo, autocompletamos % y base por defecto si estan
-  // vacios. La base por defecto es la suma de bases imponibles del IVA.
+  // Al cambiar el tipo, siempre actualizamos el % al default del nuevo
+  // tipo (15 para Profesional, 19 para Arrendamiento). Si el gestor
+  // tenia un % custom (ej. 7% nuevos autonomos), lo vuelve a teclear.
+  // La base por defecto = suma de bases IVA si estaba vacia.
   const handleRetentionTypeChange = (value: string) => {
     if (value === "") {
       setRetentionType("");
@@ -173,8 +191,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     }
     const newType = value as RetentionTypeName;
     setRetentionType(newType);
-    if (!retentionRate) setRetentionRate(String(RETENTION_DEFAULT_RATE[newType]));
-    // Base por defecto = suma de bases IVA (lo que ya tiene en pantalla)
+    setRetentionRate(String(RETENTION_DEFAULT_RATE[newType]));
     if (!retentionBase) {
       const sumB = vatLines.reduce((s, l) => s + (parseFloat(l.taxBase) || 0), 0);
       if (sumB > 0) setRetentionBase(sumB.toFixed(2));
@@ -221,7 +238,6 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [rejectReason, setRejectReason]   = useState("");
   const [rejectCategory, setRejectCategory] = useState("");
-  const [showOcrComparison, setShowOcrComparison] = useState(false);
   const [activeField, setActiveField] = useState<string | null>(null);
   const [showHelp, setShowHelp] = useState(false);
   const router = useRouter();
@@ -335,10 +351,15 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     fd.set("retentionBase", retentionBase);
     fd.set("retentionRate", retentionRate);
     fd.set("retentionAmount", String(retentionAmount));
+    fd.set("isRectificative", isRectificative ? "1" : "0");
+    fd.set("rectifiedInvoiceSeries", rectifiedInvoiceSeries);
+    fd.set("rectifiedInvoiceNumber", rectifiedInvoiceNumber);
+    fd.set("rectificativeType", isRectificative ? rectificativeType : "");
+    fd.set("art80Tres", isRectificative && art80Tres ? "1" : "0");
     fd.set("bucket", bucket);
     if (extra) Object.entries(extra).forEach(([k,v]) => fd.set(k,v));
     return fd;
-  }, [vatLines, totalAmount, supplierAccountVal, expenseAccountVal, operationType, retentionType, retentionBase, retentionRate, retentionAmount, invoice.id, invoice.updatedAt, bucket]);
+  }, [vatLines, totalAmount, supplierAccountVal, expenseAccountVal, operationType, retentionType, retentionBase, retentionRate, retentionAmount, isRectificative, rectifiedInvoiceSeries, rectifiedInvoiceNumber, rectificativeType, art80Tres, invoice.id, invoice.updatedAt, bucket]);
 
   const handleSave = () => {
     startSave(async () => {
@@ -395,7 +416,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
           error(data.error ?? "Error al reprocesar");
         }
       } catch {
-        error("Error de conexion al reprocesar");
+        error("Error de conexión al reprocesar");
       }
     });
   };
@@ -637,7 +658,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
               </legend>
               <div>
                 <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
-                  Nombre / Razon social
+                  Nombre / Razón social
                   {lockedSide !== "issuer" && <ConfidenceHint score={confidence?.issuerName ?? null} />}
                 </label>
                 {lockedSide === "issuer" ? (
@@ -674,7 +695,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
               </legend>
               <div>
                 <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
-                  Nombre / Razon social
+                  Nombre / Razón social
                   {lockedSide !== "receiver" && <ConfidenceHint score={confidence?.receiverName ?? null} />}
                 </label>
                 {lockedSide === "receiver" ? (
@@ -749,6 +770,84 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
               </div>
             </fieldset>
 
+            {/* Factura rectificativa (abono / correccion) — solo visible
+                si esta marcada (switch arriba), pero el switch siempre
+                se muestra para activarla manualmente. */}
+            <fieldset className="rounded-xl border border-slate-100 p-4 space-y-3">
+              <legend className="px-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                Factura rectificativa
+              </legend>
+              <label className="flex items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2 cursor-pointer">
+                <div className="flex flex-col">
+                  <span className="text-[12px] font-medium text-slate-700">
+                    Es una rectificativa (abono o corrección)
+                  </span>
+                  <span className="text-[10px] text-slate-400">
+                    Detección automática si el OCR encuentra líneas con importe negativo
+                  </span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={isRectificative}
+                  onChange={(e) => setIsRectificative(e.target.checked)}
+                  className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                />
+              </label>
+
+              {isRectificative && (
+                <div className="space-y-3 border-l-2 border-amber-200 pl-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="mb-1 block text-[11px] font-medium text-slate-500">
+                        Serie rectificada
+                      </label>
+                      <input
+                        type="text"
+                        className={inputClass}
+                        value={rectifiedInvoiceSeries}
+                        onChange={(e) => setRectifiedInvoiceSeries(e.target.value)}
+                        placeholder="F24"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[11px] font-medium text-slate-500">
+                        Factura rectificada
+                      </label>
+                      <input
+                        type="text"
+                        className={inputClass}
+                        value={rectifiedInvoiceNumber}
+                        onChange={(e) => setRectifiedInvoiceNumber(e.target.value)}
+                        placeholder="F24-001"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] font-medium text-slate-500">
+                      Tipo de rectificación
+                    </label>
+                    <select
+                      className={inputClass}
+                      value={rectificativeType}
+                      onChange={(e) => setRectificativeType(e.target.value as "BY_DIFFERENCE" | "BY_SUBSTITUTION")}
+                    >
+                      <option value="BY_DIFFERENCE">1 · Por diferencias (solo el delta)</option>
+                      <option value="BY_SUBSTITUTION">2 · Por sustitución (anula y reemplaza)</option>
+                    </select>
+                  </div>
+                  <label className="flex items-center gap-2 text-[11px] text-slate-600">
+                    <input
+                      type="checkbox"
+                      checked={art80Tres}
+                      onChange={(e) => setArt80Tres(e.target.checked)}
+                      className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    Art. 80.Tres (concurso de acreedores / crédito incobrable)
+                  </label>
+                </div>
+              )}
+            </fieldset>
+
             {/* Periodo contable */}
             <fieldset className="rounded-xl border border-slate-100 p-4 space-y-3">
               <legend className="px-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Periodo contable</legend>
@@ -766,7 +865,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                   </select>
                 </div>
                 <div>
-                  <label className="mb-1 block text-[11px] font-medium text-slate-500">Ano</label>
+                  <label className="mb-1 block text-[11px] font-medium text-slate-500">Año</label>
                   <select id="accountingPeriodYear" className={inputClass} defaultValue={invoice.accountingPeriodYear ?? ""}>
                     <option value="">Mismo que subida</option>
                     {Array.from({ length: 5 }, (_, i) => {
@@ -796,12 +895,16 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                 </div>
 
                 {vatLines.map((line, idx) => {
+                  // En facturas rectificativas permitimos valores negativos
+                  // (abonos / descuentos). En facturas normales restringimos
+                  // a >= 0 para evitar errores de tecleo.
+                  const minVal = isRectificative ? undefined : "0";
                   return (
                     <div key={idx} className="grid grid-cols-[1fr_80px_1fr_28px] gap-2 items-start">
                       <input
                         type="number"
                         step="0.01"
-                        min="0"
+                        min={minVal}
                         className={inputClass}
                         value={line.taxBase}
                         onChange={(e) => updateVatLine(idx, "taxBase", e.target.value)}
@@ -820,7 +923,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                       <input
                         type="number"
                         step="0.01"
-                        min="0"
+                        min={minVal}
                         className={inputClass}
                         value={line.vatAmount}
                         onChange={(e) => updateVatLine(idx, "vatAmount", e.target.value)}
@@ -942,7 +1045,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                       id="totalAmount"
                       type="number"
                       step="0.01"
-                      min="0"
+                      min={isRectificative ? undefined : "0"}
                       className={`${props.className} font-semibold`}
                       tabIndex={props.tabIndex}
                       value={totalAmount}
@@ -993,63 +1096,6 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
               </div>
             </fieldset>
 
-            {/* OCR Comparison panel */}
-            {extraction && (
-              <div className="rounded-xl border border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setShowOcrComparison(!showOcrComparison)}
-                  className="flex w-full items-center justify-between px-4 py-3 text-[11px] font-semibold uppercase tracking-wider text-slate-400 hover:text-slate-600"
-                >
-                  <span className="flex items-center gap-1.5">
-                    {showOcrComparison ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                    Comparar con OCR ({extraction.source})
-                  </span>
-                  <span className="text-[10px] font-normal normal-case text-slate-400">
-                    {new Date(extraction.createdAt).toLocaleString("es-ES")}
-                  </span>
-                </button>
-                {showOcrComparison && (
-                  <div className="border-t border-slate-100 px-4 py-3">
-                    <table className="w-full text-[12px]">
-                      <thead>
-                        <tr className="text-[10px] uppercase tracking-wider text-slate-400">
-                          <th className="pb-2 text-left font-semibold">Campo</th>
-                          <th className="pb-2 text-left font-semibold">Valor OCR</th>
-                          <th className="pb-2 text-left font-semibold">Valor actual</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-50">
-                        {([
-                          ["issuerName", "Emisor", extraction.issuerName, invoice.issuerName],
-                          ["issuerCif", "CIF Emisor", extraction.issuerCif, invoice.issuerCif],
-                          ["receiverName", "Receptor", extraction.receiverName, invoice.receiverName],
-                          ["receiverCif", "CIF Receptor", extraction.receiverCif, invoice.receiverCif],
-                          ["invoiceNumber", "N Factura", extraction.invoiceNumber, invoice.invoiceNumber],
-                          ["invoiceDate", "Fecha", extraction.invoiceDate, fmtDate(invoice.invoiceDate)],
-                          ["taxBase", "Base", extraction.taxBase != null ? String(extraction.taxBase) : null, fmt(invoice.taxBase)],
-                          ["vatRate", "% IVA", extraction.vatRate != null ? String(extraction.vatRate) : null, fmt(invoice.vatRate)],
-                          ["vatAmount", "Cuota IVA", extraction.vatAmount != null ? String(extraction.vatAmount) : null, fmt(invoice.vatAmount)],
-                          ["totalAmount", "Total", extraction.totalAmount != null ? String(extraction.totalAmount) : null, fmt(invoice.totalAmount)],
-                        ] as [string, string, string | null, string | null][]).map(([key, label, ocrVal, currentVal]) => {
-                          const changed = (ocrVal ?? "") !== (currentVal ?? "");
-                          return (
-                            <tr key={key} className={changed ? "bg-amber-50/50" : ""}>
-                              <td className="py-1.5 font-medium text-slate-600">{label}</td>
-                              <td className="py-1.5 text-slate-500">{ocrVal ?? "—"}</td>
-                              <td className={`py-1.5 ${changed ? "font-semibold text-amber-700" : "text-slate-500"}`}>
-                                {currentVal || "—"}
-                                {changed && <span className="ml-1 text-[10px] text-amber-500">modificado</span>}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            )}
           </div>
 
           {/* Sticky action bar */}
@@ -1158,7 +1204,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                   onChange={e => setRejectCategory(e.target.value)}
                   className="mt-3 w-full rounded-lg border border-slate-200 px-3 py-2 text-[13px] text-slate-700 outline-none focus:border-red-300 focus:ring-2 focus:ring-red-100"
                 >
-                  <option value="">Categoria (opcional)</option>
+                  <option value="">Categoría (opcional)</option>
                   <option value="ILLEGIBLE">Ilegible</option>
                   <option value="INCOMPLETE">Incompleta</option>
                   <option value="WRONG_PERIOD">Periodo incorrecto</option>

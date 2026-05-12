@@ -200,10 +200,10 @@ export default async function WorkerDashboard() {
         </h1>
         <p className="mt-0.5 text-[13px] text-slate-500">
           {attentionTotal > 0
-            ? `${attentionTotal} factura${attentionTotal !== 1 ? "s" : ""} requiere${attentionTotal !== 1 ? "n" : ""} tu atencion.`
+            ? `${attentionTotal} factura${attentionTotal !== 1 ? "s" : ""} requiere${attentionTotal !== 1 ? "n" : ""} tu atención.`
             : cleanTotal > 0
               ? `${cleanTotal} factura${cleanTotal !== 1 ? "s" : ""} lista${cleanTotal !== 1 ? "s" : ""} para validar.`
-              : "No hay trabajo pendiente. Buen momento para un cafe."}
+              : "No hay trabajo pendiente. Buen momento para un café."}
         </p>
       </div>
 
