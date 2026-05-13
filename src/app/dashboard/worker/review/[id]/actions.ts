@@ -4,6 +4,7 @@ import { after } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
+import { revalidatePath } from "next/cache";
 import { notifyClientInvoiceValidated, notifyClientInvoiceRejected } from "@/lib/email";
 import {
   filterFromInvoice,
@@ -416,6 +417,13 @@ export async function validateInvoice(
   // Recomputar el siguiente respetando el bucket actual (puede haber
   // cambiado desde que cargo la pagina: otro gestor valido, etc).
   const nextId = await resolveNextId(id, bucket, fallbackNext);
+  // Invalidar el cache de la siguiente factura: Next.js la habia
+  // prefetcheado mientras la actual aun estaba PENDING, asi que el
+  // contador X/N quedaria desfasado (p.ej. "2/8" en vez de "2/7").
+  if (nextId) revalidatePath(`/dashboard/worker/review/${nextId}`);
+  revalidatePath("/dashboard/worker/invoices");
+  revalidatePath("/dashboard/worker/batch", "layout");
+  revalidatePath("/dashboard/admin/batch", "layout");
   if (nextId) {
     const suffix = queueToSearchParams({ bucket }).toString();
     redirect(`/dashboard/worker/review/${nextId}${suffix ? `?${suffix}` : ""}`);
@@ -528,6 +536,12 @@ export async function rejectInvoice(
   });
 
   const nextId = await resolveNextId(id, bucket, fallbackNext);
+  // Mismo motivo que en validateInvoice: prefetch del siguiente puede
+  // tener un contador X/N desfasado tras rechazar la actual.
+  if (nextId) revalidatePath(`/dashboard/worker/review/${nextId}`);
+  revalidatePath("/dashboard/worker/invoices");
+  revalidatePath("/dashboard/worker/batch", "layout");
+  revalidatePath("/dashboard/admin/batch", "layout");
   if (nextId) {
     const suffix = queueToSearchParams({ bucket }).toString();
     redirect(`/dashboard/worker/review/${nextId}${suffix ? `?${suffix}` : ""}`);
