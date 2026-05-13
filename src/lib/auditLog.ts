@@ -16,12 +16,11 @@
  */
 import { createHash } from "node:crypto";
 import { prisma } from "@/lib/prisma";
-import type { Prisma } from "@prisma/client";
 
 /** Calcula el hash de un registro dado los campos. Mismo algoritmo
  *  que el del backfill SQL, asi la cadena es consistente entre los
  *  registros sembrados y los nuevos. */
-export function computeAuditHash(input: {
+function computeAuditHash(input: {
   id: string;
   invoiceId: string;
   userId: string;
@@ -146,7 +145,7 @@ export type AuditChainBreak = {
  * Devuelve la lista de eslabones rotos. Si la cadena esta intacta
  * devuelve [].
  */
-export async function verifyInvoiceAuditChain(
+async function verifyInvoiceAuditChain(
   invoiceId: string,
 ): Promise<AuditChainBreak[]> {
   const records = await prisma.auditLog.findMany({
@@ -246,50 +245,3 @@ export async function verifyFirmAuditChains(firmId: string): Promise<{
 
 // ─── helper de tipos para callers que ya estan en transaccion ────────
 
-/** Variante de appendAuditLogs que opera DENTRO de una transaccion
- *  Prisma existente. La usan los callers que ya tienen su propio
- *  $transaction y no quieren anidar. */
-export async function appendAuditLogsTx(
-  tx: Prisma.TransactionClient,
-  entries: AuditEntry[],
-): Promise<void> {
-  if (entries.length === 0) return;
-  const byInvoice = new Map<string, AuditEntry[]>();
-  for (const e of entries) {
-    const arr = byInvoice.get(e.invoiceId) ?? [];
-    arr.push(e);
-    byInvoice.set(e.invoiceId, arr);
-  }
-
-  for (const [invoiceId, group] of byInvoice) {
-    const last = await tx.auditLog.findFirst({
-      where: { invoiceId },
-      orderBy: { createdAt: "desc" },
-      select: { id: true, hash: true },
-    });
-    let prevId: string | null = last?.id ?? null;
-    let prevHash: string = last?.hash ?? "GENESIS";
-
-    for (const entry of group) {
-      const id = createCuid();
-      const createdAt = new Date();
-      const hash = computeAuditHash({
-        id, invoiceId,
-        userId: entry.userId,
-        field: entry.field,
-        oldValue: entry.oldValue ?? null,
-        newValue: entry.newValue ?? null,
-        createdAt, prevHash,
-      });
-      await tx.auditLog.create({
-        data: {
-          id, invoiceId, userId: entry.userId, field: entry.field,
-          oldValue: entry.oldValue ?? null, newValue: entry.newValue ?? null,
-          createdAt, prevId, prevHash, hash,
-        },
-      });
-      prevId = id;
-      prevHash = hash;
-    }
-  }
-}

@@ -30,7 +30,7 @@ function gc() {
   }
 }
 
-export function rateLimit({ windowMs, max }: Options) {
+function rateLimit({ windowMs, max }: Options) {
   return {
     check(key: string): { allowed: boolean; retryAfterMs: number; remaining: number } {
       gc();

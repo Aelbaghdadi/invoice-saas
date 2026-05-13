@@ -6,7 +6,7 @@ export function Skeleton({ className = "" }: { className?: string }) {
   );
 }
 
-export function CardSkeleton() {
+function CardSkeleton() {
   return (
     <div className="rounded-2xl border border-slate-100 bg-white p-5">
       <div className="flex items-center gap-3">
@@ -20,7 +20,7 @@ export function CardSkeleton() {
   );
 }
 
-export function TableSkeleton({ rows = 5 }: { rows?: number }) {
+function TableSkeleton({ rows = 5 }: { rows?: number }) {
   return (
     <div className="rounded-2xl border border-slate-100 bg-white">
       <div className="border-b border-slate-100 px-5 py-4">

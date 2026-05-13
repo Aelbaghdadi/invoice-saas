@@ -69,16 +69,3 @@ export async function reopenPeriod(formData: FormData) {
   return { success: true };
 }
 
-/**
- * Check if a period is closed for a given client.
- */
-export async function isPeriodClosed(
-  clientId: string,
-  month: number,
-  year: number
-): Promise<boolean> {
-  const closure = await prisma.periodClosure.findUnique({
-    where: { clientId_month_year: { clientId, month, year } },
-  });
-  return !!closure && !closure.reopenedAt;
-}

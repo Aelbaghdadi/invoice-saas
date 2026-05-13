@@ -87,7 +87,7 @@ function buildWhere(filter: QueueFilter): Prisma.InvoiceWhereInput {
  * Incluye la factura actual aunque ya este VALIDATED/REJECTED para que
  * el indice "X de N" siga teniendo sentido.
  */
-export async function getQueueIds(
+async function getQueueIds(
   filter: QueueFilter,
   currentInvoiceId?: string,
 ): Promise<string[]> {

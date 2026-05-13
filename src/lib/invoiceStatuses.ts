@@ -16,15 +16,6 @@
 
 import type { InvoiceStatus } from "@prisma/client";
 
-/** Estados activos del flujo nuevo. No incluye legacy. */
-export const STATUS_UPLOADED:        InvoiceStatus = "UPLOADED";
-export const STATUS_ANALYZING:       InvoiceStatus = "ANALYZING";
-export const STATUS_PENDING_REVIEW:  InvoiceStatus = "PENDING_REVIEW";
-export const STATUS_NEEDS_ATTENTION: InvoiceStatus = "NEEDS_ATTENTION";
-export const STATUS_OCR_ERROR:       InvoiceStatus = "OCR_ERROR";
-export const STATUS_VALIDATED:       InvoiceStatus = "VALIDATED";
-export const STATUS_REJECTED:        InvoiceStatus = "REJECTED";
-
 /** Pte. de que el gestor haga algo (revisar, re-procesar o subir). */
 export const PENDING_WORK: InvoiceStatus[] = [
   "UPLOADED",
@@ -50,9 +41,6 @@ export const DONE_WORK: InvoiceStatus[] = [
   // Legacy: EXPORTED equivale a VALIDATED + exportada. Contamos como "done".
   "EXPORTED",
 ];
-
-/** Solo las validadas (exportables). */
-export const EXPORTABLE: InvoiceStatus[] = ["VALIDATED"];
 
 /** Calcula el porcentaje completado de un conjunto. */
 export function completionPercent(counts: {

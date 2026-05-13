@@ -47,3 +47,24 @@ next-env.d.ts
 
 .vercel
 scripts/clear-invoices.mjs
+
+# Artefactos generados / archivos sueltos del autor que NO van al repo.
+# (instaladores, descargas, exports temporales, etc.)
+*.exe
+*.msi
+*.dmg
+docs/*.xlsx
+docs/*.csv
+docs/hero.png
+
+# Archivos hero/heroe sueltos en public/ que no son assets del proyecto.
+public/login-hero.png
+public/hero.png
+
+# IDE / editor
+.idea/
+.vscode/
+
+# Logs locales
+*.log
+

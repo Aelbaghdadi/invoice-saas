@@ -6,7 +6,6 @@ import {
 } from "@/lib/validators";
 
 export type ExportFormat = "sage50" | "contasol" | "a3con" | "a3excel";
-export type ExportInvoiceType = "ALL" | "PURCHASE" | "SALE";
 
 export type ExportConfig = {
   encoding?: string;    // "utf-8" | "windows-1252"

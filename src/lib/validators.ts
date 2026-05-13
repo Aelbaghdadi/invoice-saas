@@ -177,25 +177,9 @@ export function parseTaxId(raw: string | null | undefined): ParsedTaxId {
   return { clean: normalized, countryCode: null, operationType: "INTERIOR" };
 }
 
-/** Helper rapido: solo el "clean" (lo que va a BD). */
-export function cleanTaxId(raw: string | null | undefined): string {
-  return parseTaxId(raw).clean;
-}
-
-/** Helper rapido: el operationType detectado a partir del NIF del emisor. */
-export function detectOperationType(issuerCif: string | null | undefined): OperationTypeName {
-  return parseTaxId(issuerCif).operationType;
-}
-
 // ─── Retenciones IRPF ──────────────────────────────────────────────────
 
 export type RetentionTypeName = "PROFESSIONAL" | "RENT";
-
-/** Codigo numerico para A3 (Modelo 111 vs 115). */
-export const RETENTION_TYPE_CODE: Record<RetentionTypeName, number> = {
-  PROFESSIONAL: 1,  // Modelo 111 — actividades profesionales
-  RENT:         2,  // Modelo 115 — arrendamientos urbanos
-};
 
 /** Etiquetas para UI. */
 export const RETENTION_TYPE_LABEL: Record<RetentionTypeName, string> = {

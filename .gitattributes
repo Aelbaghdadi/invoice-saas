@@ -1,0 +1,21 @@
+# Force binary handling for these file types so Git no convierte
+# saltos de linea (CRLF<->LF) en Windows. Sin esto un `git status`
+# en Windows marca como modificados PDFs y otros binarios.
+*.pdf   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.xlsx  binary
+*.xls   binary
+*.zip   binary
+*.exe   binary
+*.bin   binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.otf   binary
+
+# Normalizar LF para fuentes — evita warnings de CRLF en checkouts Windows.
+* text=auto eol=lf
