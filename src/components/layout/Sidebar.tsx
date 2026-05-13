@@ -116,9 +116,12 @@ export function Sidebar({ role, userName }: SidebarProps) {
   const batchLink = BATCH_LINKS[role];
 
   // Estado de secciones abiertas, persistido en localStorage. Por defecto
-  // todas abiertas: el usuario las cierra si quiere y se queda guardado.
+  // solo "Diario" abierto: "Otros" se pliega para reducir ruido visual,
+  // el usuario lo abre si lo necesita y se queda guardado.
   const [openSections, setOpenSections] = useState<Set<string>>(() => {
-    return new Set(sections.filter((s) => s.label).map((s) => s.label!));
+    return new Set(
+      sections.filter((s) => s.label && s.label !== "Otros").map((s) => s.label!),
+    );
   });
 
   // Hidratar desde localStorage tras el mount (evitar mismatch SSR).
