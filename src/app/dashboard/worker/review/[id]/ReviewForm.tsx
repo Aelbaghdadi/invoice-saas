@@ -562,8 +562,23 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
           ) : previewUrl && !isXml ? (
             isImage ? (
               <div className="flex flex-1 items-center justify-center overflow-auto bg-[#1e1e2e] p-6">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={previewUrl} alt={invoice.filename} className="max-h-full max-w-full rounded-lg shadow-2xl object-contain" />
+                <div className="relative w-fit">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={previewUrl} alt={invoice.filename} className="block max-h-[80vh] max-w-full rounded-lg shadow-2xl" />
+                  {activeField && boundingBoxes?.[activeField] && (
+                    <div
+                      className="pointer-events-none absolute rounded-sm"
+                      style={{
+                        left:         `${boundingBoxes[activeField]!.x * 100}%`,
+                        top:          `${boundingBoxes[activeField]!.y * 100}%`,
+                        width:        `${boundingBoxes[activeField]!.width * 100}%`,
+                        height:       `${boundingBoxes[activeField]!.height * 100}%`,
+                        background:   "rgba(253,224,71,0.45)",
+                        mixBlendMode: "multiply",
+                      }}
+                    />
+                  )}
+                </div>
               </div>
             ) : (
               <PdfViewer
@@ -905,6 +920,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                         type="number"
                         step="0.01"
                         min={minVal}
+                        id={idx === 0 ? "taxBase" : undefined}
                         className={inputClass}
                         value={line.taxBase}
                         onChange={(e) => updateVatLine(idx, "taxBase", e.target.value)}
@@ -924,6 +940,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                         type="number"
                         step="0.01"
                         min={minVal}
+                        id={idx === 0 ? "vatAmount" : undefined}
                         className={inputClass}
                         value={line.vatAmount}
                         onChange={(e) => updateVatLine(idx, "vatAmount", e.target.value)}
