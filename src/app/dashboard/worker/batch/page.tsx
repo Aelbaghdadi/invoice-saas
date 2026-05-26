@@ -5,13 +5,18 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Badge } from "@/components/ui/Badge";
 import {
-  Layers, AlertTriangle, PenLine, ArrowRight, CheckCircle2,
+  Layers, AlertTriangle, PenLine, ArrowRight, CheckCircle2, Loader2,
 } from "lucide-react";
 import Link from "next/link";
 import type { InvoiceType } from "@prisma/client";
 import { completionPercent } from "@/lib/invoiceStatuses";
 import { BatchActions } from "./BatchActions";
 import { getAccessibleClientIds } from "@/lib/accessibleClients";
+import { AutoRefresh } from "@/components/ui/AutoRefresh";
+
+// Esta pagina muta visualmente cada vez que avanza el OCR de fondo —
+// la marcamos dynamic para que no quede cacheada entre cargas.
+export const dynamic = "force-dynamic";
 
 type BatchGroup = {
   clientId: string;
@@ -123,6 +128,24 @@ export default async function WorkerBatchPage() {
 
   const groups = Array.from(groupMap.values());
 
+  // Media historica de duracion OCR a nivel de firma. La usamos para
+  // dar una ETA decente en los lotes con facturas analizandose. Si no
+  // hay historial todavia, fallback a 10s.
+  const anyProcessing = Array.from(groupMap.values()).some((g) => g.processingCount > 0);
+  let avgOcrSec = 10;
+  if (anyProcessing && session.user.advisoryFirmId) {
+    const agg = await prisma.invoiceExtraction.aggregate({
+      where: {
+        ocrDurationMs: { not: null, gt: 0 },
+        invoice: { client: { advisoryFirmId: session.user.advisoryFirmId } },
+      },
+      _avg: { ocrDurationMs: true },
+    });
+    if (agg._avg.ocrDurationMs) {
+      avgOcrSec = Math.max(1, Math.round(agg._avg.ocrDurationMs / 1000));
+    }
+  }
+
   // Cierre de periodos: consultamos los que coinciden con cualquiera
   // de los lotes, asi sabemos cuales pintar como "cerrado".
   const closureKeys = groups.map((g) => ({
@@ -181,6 +204,9 @@ export default async function WorkerBatchPage() {
 
   return (
     <div>
+      {/* Auto-refresh cada 5s si hay alguna factura en analisis OCR,
+          para que las cards reflejen el progreso sin tocar F5. */}
+      {anyProcessing && <AutoRefresh intervalMs={5000} />}
       <PageHeader
         title="Lotes de facturas"
         description="Sesiones de trabajo agrupadas por cliente y periodo — empieza por los que tienen incidencias"
@@ -328,6 +354,20 @@ export default async function WorkerBatchPage() {
                     </div>
                   </div>
                 </div>
+
+                {/* Indicador de OCR en curso. Solo aparece si quedan
+                    facturas analizandose. Estima total = N x media. */}
+                {g.processingCount > 0 && (
+                  <div className="mt-3 flex items-center gap-2 rounded-lg bg-blue-50 px-3 py-2 text-[12px] text-blue-700">
+                    <Loader2 className="h-3.5 w-3.5 flex-shrink-0 animate-spin" />
+                    <span>
+                      {g.processingCount} en análisis OCR — media {avgOcrSec}s por factura
+                      {g.processingCount > 1 && (
+                        <span className="text-blue-500">{" "}(≈{g.processingCount * avgOcrSec}s en cola)</span>
+                      )}
+                    </span>
+                  </div>
+                )}
 
                 {/* Status pills */}
                 <div className="mt-3 flex flex-wrap gap-2">

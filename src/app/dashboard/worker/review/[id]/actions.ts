@@ -13,9 +13,14 @@ import {
   queueToSearchParams,
 } from "@/lib/reviewQueue";
 import { appendAuditLogs } from "@/lib/auditLog";
-import { parseTaxId } from "@/lib/validators";
+import { parseTaxId, isPersonaFisica } from "@/lib/validators";
+import { appError, type AppError } from "@/lib/errorCodes";
 
-export type ReviewState = { error?: string } | null;
+/** Resultado de las server actions de revision. El `error` puede ser:
+ *  - AppError: cuando es un fallo "conocido" del dominio (tiene codigo)
+ *  - string: legacy / errores sin clasificar aun
+ *  - undefined / null: exito */
+export type ReviewState = { error?: AppError | string } | null;
 
 async function assertWorkerAccess(userId: string, role: string, clientId: string): Promise<ReviewState> {
   if (role !== "WORKER") return null;
@@ -122,7 +127,7 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     },
   });
   if (closure && !closure.reopenedAt) {
-    return { error: `El periodo ${checkMonth}/${checkYear} está cerrado. No se pueden modificar facturas.` };
+    return { error: appError("ERR-VALIDATE-002", `Periodo ${checkMonth}/${checkYear} cerrado`) };
   }
 
   // Optimistic locking: reject if another user modified the invoice
@@ -130,7 +135,7 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     const expected = new Date(expectedUpdatedAt).getTime();
     const actual   = invoice.updatedAt.getTime();
     if (actual !== expected) {
-      return { error: "Esta factura ha sido modificada por otro usuario. Recarga la página para ver los cambios." };
+      return { error: appError("ERR-VALIDATE-003", `expected=${expected} actual=${actual}`) };
     }
   }
 
@@ -177,6 +182,15 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
   const finalIssuerCountry = isPurchase ? issuerParsed.countryCode               : null;
   const finalReceiverName  = isPurchase ? invoice.client.name                    : (data.receiverName || null);
   const finalReceiverCif   = isPurchase ? invoice.client.cif                     : (receiverParsed.clean || null);
+
+  // Coherencia: el CIF de emisor y receptor no pueden ser iguales (seria
+  // una factura del cliente consigo mismo). Sucede a menudo cuando el
+  // OCR confunde los dos cuadros de la factura. Solo bloqueamos al
+  // validar — guardar borrador con el conflicto se permite para que el
+  // gestor pueda corregirlo en pasos.
+  if (validate && finalIssuerCif && finalReceiverCif && finalIssuerCif === finalReceiverCif) {
+    return { error: appError("ERR-VALIDATE-001", `cif=${finalIssuerCif}`) };
+  }
 
   // Retencion IRPF: solo persistimos los campos si el tipo esta puesto.
   // Si el gestor "quita retencion" -> todos los campos a null.
@@ -290,6 +304,10 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
       data: {
         ...newData,
         isValid,
+        // Si la factura estaba pospuesta y el gestor la edita/valida,
+        // la sacamos de la "cola de pospuestas" para que vuelva al
+        // orden normal.
+        deferredAt: null,
         ...(validate ? { status: "VALIDATED" as const } : saveStatus ? { status: saveStatus as "PENDING_REVIEW" } : {}),
       },
     }),
@@ -319,6 +337,13 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     // defaultVatRate solo lo aprendemos cuando hay un unico tipo (multi-IVA
     // no tiene un "tipo por defecto" significativo).
     const learnVatRate = vatLines.length === 1 ? vatLines[0].vatRate : null;
+    // Retencion: solo se aprende si el NIF es persona fisica (DNI/NIE).
+    // Una SL/SA no tiene retencion IRPF; si el gestor marco una por
+    // error y la persistieramos, contaminariamos todas las facturas
+    // siguientes del mismo proveedor (caso Parlem Telecom B66486598).
+    const learnIsPF = isPersonaFisica(learnNif);
+    const learnRetentionType = learnIsPF ? newData.retentionType : null;
+    const learnRetentionRate = learnIsPF && newData.irpfRate != null ? newData.irpfRate : null;
     // Aprendemos tambien el tipo de operacion por NIF: la proxima factura
     // de este emisor pre-rellenara el operationType automaticamente.
     if (learnNif && (learnSupplier || learnExpense || newData.operationType)) {
@@ -332,8 +357,8 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
           expenseAccount: learnExpense || "",
           defaultVatRate: learnVatRate != null ? (learnVatRate as any) : null,
           defaultOperationType: newData.operationType,
-          defaultRetentionType: newData.retentionType,
-          defaultRetentionRate: newData.irpfRate != null ? (newData.irpfRate as any) : null,
+          defaultRetentionType: learnRetentionType,
+          defaultRetentionRate: learnRetentionRate != null ? (learnRetentionRate as any) : null,
         },
         update: {
           ...(learnName ? { name: learnName } : {}),
@@ -341,10 +366,11 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
           ...(learnExpense ? { expenseAccount: learnExpense } : {}),
           ...(learnVatRate != null ? { defaultVatRate: learnVatRate as any } : {}),
           defaultOperationType: newData.operationType,
-          // Si el gestor quita la retencion explicitamente, tambien
-          // limpiamos lo aprendido para no re-sugerirla la proxima vez.
-          defaultRetentionType: newData.retentionType,
-          defaultRetentionRate: newData.irpfRate != null ? (newData.irpfRate as any) : null,
+          // Si el gestor quita la retencion (o no aplica por no ser
+          // persona fisica), tambien limpiamos lo aprendido para no
+          // re-sugerirla la proxima vez.
+          defaultRetentionType: learnRetentionType,
+          defaultRetentionRate: learnRetentionRate != null ? (learnRetentionRate as any) : null,
         },
       });
     }
@@ -454,6 +480,51 @@ async function resolveNextId(
   } catch {
     return fallback || null;
   }
+}
+
+/**
+ * "Posponer" una factura: la marca con `deferredAt = now()` (sin
+ * cambiar status) y salta a la siguiente. La cola ordena las pospuestas
+ * al final, así no estorban al flujo principal. Se limpia automáticamente
+ * cuando alguien edita o valida la factura.
+ */
+export async function deferInvoice(
+  _prev: ReviewState,
+  formData: FormData
+): Promise<ReviewState> {
+  const session = await auth();
+  if (!session?.user || !["ADMIN", "WORKER"].includes(session.user.role)) {
+    return { error: "No autorizado" };
+  }
+
+  const id = formData.get("invoiceId") as string;
+  const fallbackNext = formData.get("nextId") as string | null;
+  const bucket = parseBucket(formData.get("bucket"));
+
+  const invoice = await prisma.invoice.findUnique({ where: { id } });
+  if (!invoice) return { error: "Factura no encontrada" };
+
+  const accessErr = await assertWorkerAccess(session.user.id, session.user.role, invoice.clientId);
+  if (accessErr) return accessErr;
+
+  await prisma.invoice.update({
+    where: { id },
+    data: { deferredAt: new Date() },
+  });
+
+  const nextId = await resolveNextId(id, bucket, fallbackNext);
+  // Posponer no marca la factura como "hecha" — el contador X/N no
+  // cambia. Solo invalidamos las listas para que los lotes muestren el
+  // nuevo orden.
+  if (nextId) revalidatePath(`/dashboard/worker/review/${nextId}`);
+  revalidatePath("/dashboard/worker/invoices");
+  revalidatePath("/dashboard/worker/batch", "layout");
+  revalidatePath("/dashboard/admin/batch", "layout");
+  if (nextId) {
+    const suffix = queueToSearchParams({ bucket }).toString();
+    redirect(`/dashboard/worker/review/${nextId}${suffix ? `?${suffix}` : ""}`);
+  }
+  redirect("/dashboard/worker/invoices");
 }
 
 export async function rejectInvoice(

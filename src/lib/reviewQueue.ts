@@ -97,7 +97,9 @@ async function getQueueIds(
 
   const rows = await prisma.invoice.findMany({
     where,
-    orderBy: { createdAt: "asc" },
+    // Las pospuestas (`deferredAt != null`) van al final. Dentro de
+    // cada grupo, orden cronologico de subida.
+    orderBy: [{ deferredAt: { sort: "asc", nulls: "first" } }, { createdAt: "asc" }],
     select: { id: true },
   });
   return rows.map((r) => r.id);
@@ -113,17 +115,47 @@ export type QueuePosition = {
 
 /**
  * Devuelve la cola y la posicion del actual.
- * `nextId`/`prevId` saltan sobre facturas ya procesadas (VALIDATED/REJECTED)
- * en el sentido "avanza", pero respetan el orden cronologico.
+ *
+ * El contador "X de N" usa el TAMANO ORIGINAL del lote (todas las
+ * facturas del cliente+periodo+tipo, en cualquier estado), no solo las
+ * pendientes. De esta forma al validar "1/8" se ve "2/8", "3/8"... sin
+ * que el total decrezca conforme se completan — la percepcion natural
+ * del usuario.
+ *
+ * La navegacion prev/next sigue saltando solo entre facturas del bucket
+ * activo (pendientes), saltandose las ya completadas en el sentido
+ * "avanza" — uses getNextInQueue para eso.
  */
 export async function getQueuePosition(
   currentInvoiceId: string,
   filter: QueueFilter,
 ): Promise<QueuePosition> {
-  const ids = await getQueueIds(filter, currentInvoiceId);
+  // Total e indice se calculan sobre el lote entero (mismo cliente +
+  // periodo + tipo, todos los estados). Asi el "X/N" no fluctua.
+  // Ordenacion: pospuestas al final para que el "X de N" coincida con
+  // el orden visual de la cola.
+  const allInBatch = await prisma.invoice.findMany({
+    where: {
+      clientId: filter.clientId,
+      periodMonth: filter.periodMonth,
+      periodYear: filter.periodYear,
+      type: filter.type,
+    },
+    orderBy: [{ deferredAt: { sort: "asc", nulls: "first" } }, { createdAt: "asc" }],
+    select: { id: true },
+  });
+  const ids = allInBatch.map((r) => r.id);
   const index = ids.indexOf(currentInvoiceId);
-  const prevId = index > 0 ? ids[index - 1] : null;
-  const nextId = index >= 0 && index < ids.length - 1 ? ids[index + 1] : null;
+
+  // Para prev/next nos quedamos solo con los del bucket (pendientes),
+  // mas la actual para que prev funcione si estamos en una "done".
+  const bucketIds = await getQueueIds(filter, currentInvoiceId);
+  const bucketIndex = bucketIds.indexOf(currentInvoiceId);
+  const prevId = bucketIndex > 0 ? bucketIds[bucketIndex - 1] : null;
+  const nextId = bucketIndex >= 0 && bucketIndex < bucketIds.length - 1
+    ? bucketIds[bucketIndex + 1]
+    : null;
+
   return { ids, index, prevId, nextId, total: ids.length };
 }
 
@@ -137,10 +169,11 @@ export async function getNextInQueue(
   filter: QueueFilter,
 ): Promise<string | null> {
   const where = buildWhere(filter);
-  // Excluir la factura actual y buscar el siguiente cronologico.
+  // Excluir la factura actual y buscar el siguiente cronologico,
+  // respetando el orden de la cola (pospuestas al final).
   const row = await prisma.invoice.findFirst({
     where: { ...where, id: { not: currentInvoiceId } },
-    orderBy: { createdAt: "asc" },
+    orderBy: [{ deferredAt: { sort: "asc", nulls: "first" } }, { createdAt: "asc" }],
     select: { id: true },
   });
   return row?.id ?? null;

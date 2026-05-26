@@ -15,6 +15,20 @@ import {
   type RetentionTypeName,
 } from "@/lib/validators";
 
+/**
+ * Convierte el string de fecha del OCR a Date. Si el OCR devuelve algo
+ * imparseable (p.ej. un rango "14-jul-25/10-set-25" en facturas de
+ * suministros) devolvemos null en vez de un Date inválido — Prisma
+ * lo rechaza con `Provided Date object is invalid`. Mejor guardar null
+ * y que el gestor la complete a mano.
+ */
+function safeParseDate(raw: string | null | undefined): Date | null {
+  if (!raw) return null;
+  const d = new Date(raw);
+  if (isNaN(d.getTime())) return null;
+  return d;
+}
+
 /** Transition status + record in history */
 async function transitionStatus(
   invoiceId: string,
@@ -141,7 +155,7 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
         receiverName:  extracted.receiverName,
         receiverCif:   extracted.receiverCif,
         invoiceNumber: extracted.invoiceNumber,
-        invoiceDate:   extracted.invoiceDate ? new Date(extracted.invoiceDate) : null,
+        invoiceDate:   safeParseDate(extracted.invoiceDate),
         taxBase:       extracted.taxBase,
         vatRate:       extracted.vatRate,
         vatAmount:     extracted.vatAmount,
@@ -228,17 +242,25 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     // Heuristica conservadora: si el emisor (en PURCHASE) es persona
     // fisica (DNI/NIE), sugerimos PROFESSIONAL al 15%. El gestor lo
     // ajusta si hace falta (a 7% para nuevos autonomos, o lo desactiva).
-    // El aprendizaje por NIF tiene prioridad: si ya validamos antes una
-    // factura de esta persona como RENT 19%, lo respetamos.
+    //
+    // El aprendizaje por NIF (`knownEntry.defaultRetentionType`) solo lo
+    // respetamos si el emisor es realmente persona fisica. Asi evitamos
+    // que una factura mal validada (con retencion guardada por error)
+    // de una SL/SA siga contaminando todas las siguientes — caso real
+    // reportado con Parlem Telecom (B66486598) marcando retencion en
+    // todas las facturas.
+    const issuerIsPF = isPersonaFisica(issuerParsed.clean);
     let retentionType: RetentionTypeName | null =
-      knownEntry?.defaultRetentionType ?? null;
+      issuerIsPF ? (knownEntry?.defaultRetentionType ?? null) : null;
     let retentionRate: number | null =
-      knownEntry?.defaultRetentionRate != null ? Number(knownEntry.defaultRetentionRate) : null;
+      issuerIsPF && knownEntry?.defaultRetentionRate != null
+        ? Number(knownEntry.defaultRetentionRate)
+        : null;
 
     // Sugerencia automatica: persona fisica como emisor en PURCHASE.
     // Para SALE no sugerimos retencion (es el cliente quien retiene a
     // sus proveedores, no al reves).
-    if (!retentionType && invoice.type === "PURCHASE" && isPersonaFisica(issuerParsed.clean)) {
+    if (!retentionType && invoice.type === "PURCHASE" && issuerIsPF) {
       retentionType = "PROFESSIONAL";
       retentionRate = RETENTION_DEFAULT_RATE.PROFESSIONAL;
     }
@@ -288,7 +310,7 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
           receiverName:  finalReceiverName,
           receiverCif:   finalReceiverCif,
           invoiceNumber: extracted.invoiceNumber,
-          invoiceDate:   extracted.invoiceDate ? new Date(extracted.invoiceDate) : null,
+          invoiceDate:   safeParseDate(extracted.invoiceDate),
           taxBase:       extracted.taxBase,
           vatRate:       extracted.vatRate ?? denormVatRate,
           vatAmount:     extracted.vatAmount,
@@ -315,11 +337,27 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     }]);
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
+    // Clasificar el error en un codigo del catalogo. Lo persistimos como
+    // prefijo "[ERR-OCR-XXX] mensaje tecnico" para que la UI pueda
+    // separarlos y mostrar el chip de codigo.
+    const code = classifyOcrError(errorMsg);
+    const taggedMsg = `[${code}] ${errorMsg}`;
     await prisma.invoice.update({
       where: { id: invoiceId },
-      data: { status: "OCR_ERROR", lastOcrError: errorMsg },
+      data: { status: "OCR_ERROR", lastOcrError: taggedMsg },
     });
-    await transitionStatus(invoiceId, "ANALYZING", "OCR_ERROR", triggeredByUserId, errorMsg);
-    console.error("OCR error:", err);
+    await transitionStatus(invoiceId, "ANALYZING", "OCR_ERROR", triggeredByUserId, taggedMsg);
+    console.error(`[processInvoice] ${code}:`, err);
   }
+}
+
+/** Clasifica un error de OCR en un codigo del catalogo. Heuristica simple:
+ *  no necesita ser perfecta, solo ayudar al soporte a triagear sin tener
+ *  que abrir logs. */
+function classifyOcrError(msg: string): "ERR-OCR-001" | "ERR-OCR-002" | "ERR-OCR-003" | "ERR-OCR-004" {
+  const lower = msg.toLowerCase();
+  if (lower.includes("timeout") || lower.includes("timed out")) return "ERR-OCR-003";
+  if (lower.includes("download") || lower.includes("storage") || lower.includes("404")) return "ERR-OCR-004";
+  if (lower.includes("invalid") || lower.includes("corrupt") || lower.includes("malformed")) return "ERR-OCR-002";
+  return "ERR-OCR-001";
 }

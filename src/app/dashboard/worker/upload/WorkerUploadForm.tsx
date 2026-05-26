@@ -15,6 +15,7 @@ import {
   CloudUpload,
 } from "lucide-react";
 import { workerUploadInvoicesAction, type WorkerUploadState } from "./actions";
+import { ErrorBox } from "@/components/ui/ErrorBox";
 
 const MONTHS = [
   { value: "1", label: "Enero" },
@@ -101,7 +102,7 @@ export function WorkerUploadForm({ clients }: Props) {
         setFiles([]);
         success("Facturas subidas correctamente");
       } else if (res?.error) {
-        toastError(res.error);
+        toastError(typeof res.error === "string" ? res.error : res.error.message);
       }
     });
   };
@@ -241,12 +242,7 @@ export function WorkerUploadForm({ clients }: Props) {
         </div>
       )}
 
-      {result?.error && (
-        <div className="flex items-center gap-2.5 rounded-xl bg-red-50 px-4 py-3 text-[13px] text-red-600">
-          <AlertCircle className="h-4 w-4 flex-shrink-0" />
-          <span>{result.error}</span>
-        </div>
-      )}
+      {result?.error && <ErrorBox error={result.error} variant="banner" />}
 
       {/* Submit */}
       <div className="flex items-center justify-between">

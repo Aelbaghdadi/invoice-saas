@@ -14,9 +14,11 @@ import { useEffect } from "react";
  *  - Las teclas individuales (R, D) exigen que el foco NO este en input.
  *
  * Orden de precedencia del Enter:
- *  - En textarea -> comportamiento nativo (salto de linea).
  *  - Con Ctrl/Cmd en cualquier sitio -> validar.
- *  - Sin modificadores en input/select/body -> validar.
+ *  - Sin modificadores SOLO si el foco esta fuera de input/textarea/select
+ *    (en el body): asi un Enter accidental mientras editas no te cambia
+ *    de factura. Caso reportado: el gestor teclea un importe, pulsa
+ *    Enter por instinto y la factura se valida sin querer.
  *
  * El caller pasa los handlers que quiere exponer; los que no pasa quedan
  * inactivos (no se asigna su atajo).
@@ -56,7 +58,6 @@ export function useReviewShortcuts(h: ReviewShortcutHandlers) {
 
       const isMod = e.ctrlKey || e.metaKey;
       const inInput = isTypingInput(e.target);
-      const inTextarea = (e.target as HTMLElement)?.tagName === "TEXTAREA";
 
       // Ayuda: "?"
       if (e.key === "?" && !inInput) {
@@ -65,14 +66,17 @@ export function useReviewShortcuts(h: ReviewShortcutHandlers) {
         return;
       }
 
-      // Enter: validar (con Cmd/Ctrl siempre; sin modificador solo si no
-      // estamos en textarea, y si el target no es un boton/link).
+      // Enter: validar SOLO si:
+      //  - Es Ctrl/Cmd+Enter (atajo explicito), o
+      //  - No hay foco en ningun input/textarea/select.
+      // Antes bastaba con Enter en cualquier input → si el gestor
+      // tecleaba y pulsaba Enter por reflejo, se cambiaba de factura
+      // sin haberla terminado de revisar. Ahora hace falta intencion.
       if (e.key === "Enter" && h.onValidate) {
-        if (isMod || !inTextarea) {
-          // No interceptar si el foco esta en un boton (el Enter nativo lo
-          // activa) o en un Link.
-          const tag = (e.target as HTMLElement)?.tagName;
-          if (tag === "BUTTON" || tag === "A") return;
+        const tag = (e.target as HTMLElement)?.tagName;
+        // No interceptar Enter sobre boton/link (el navegador los activa).
+        if (tag === "BUTTON" || tag === "A") return;
+        if (isMod || !inInput) {
           e.preventDefault();
           h.onValidate();
           return;

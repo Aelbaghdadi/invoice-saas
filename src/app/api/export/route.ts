@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { generateCsv, generateA3Excel, suggestFilename, validateForA3Export, type ExportFormat, type ExportConfig } from "@/lib/exportFormats";
 import { appendAuditLogs } from "@/lib/auditLog";
+import { appError } from "@/lib/errorCodes";
 import type { InvoiceType, InvoiceStatus } from "@prisma/client";
 
 export async function GET(req: NextRequest) {
@@ -65,9 +66,9 @@ export async function GET(req: NextRequest) {
   });
 
   if (!invoices.length) {
-    return new NextResponse(
-      JSON.stringify({ error: "No hay facturas validadas con esos filtros." }),
-      { status: 404, headers: { "Content-Type": "application/json" } },
+    return NextResponse.json(
+      { error: appError("ERR-EXPORT-001", `filters: client=${clientId} ${month}/${year} type=${typeParam}`) },
+      { status: 404 },
     );
   }
 
@@ -158,23 +159,36 @@ export async function GET(req: NextRequest) {
 
   const filename = suggestFilename(invoices, format, month ?? 0, year ?? 0);
 
-  if (format === "a3excel") {
-    const xlsxData = generateA3Excel(invoices, exportConfig);
-    return new NextResponse(new Uint8Array(xlsxData), {
+  try {
+    if (format === "a3excel") {
+      const xlsxData = generateA3Excel(invoices, exportConfig);
+      return new NextResponse(new Uint8Array(xlsxData), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          "Content-Disposition": `attachment; filename="${filename}"`,
+        },
+      });
+    }
+
+    const csv = generateCsv(invoices, format, exportConfig);
+    return new NextResponse(csv, {
       status: 200,
       headers: {
-        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "Content-Type":        "text/csv; charset=utf-8",
         "Content-Disposition": `attachment; filename="${filename}"`,
       },
     });
+  } catch (err) {
+    // Cualquier fallo en la generacion del archivo (libreria xlsx,
+    // datos invalidos, etc) cae aqui. Devolvemos ERR-EXPORT-002 para
+    // que el frontend lo muestre con su codigo y el batch quede
+    // registrado igualmente (no rebobinamos la BD).
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[export] ERR-EXPORT-002 batch=${batch.id}:`, err);
+    return NextResponse.json(
+      { error: appError("ERR-EXPORT-002", `batch=${batch.id} format=${format}: ${msg}`) },
+      { status: 500 },
+    );
   }
-
-  const csv = generateCsv(invoices, format, exportConfig);
-  return new NextResponse(csv, {
-    status: 200,
-    headers: {
-      "Content-Type":        "text/csv; charset=utf-8",
-      "Content-Disposition": `attachment; filename="${filename}"`,
-    },
-  });
 }

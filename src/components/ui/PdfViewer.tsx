@@ -11,6 +11,7 @@ import {
   ChevronRight,
   Maximize2,
   Loader2,
+  RotateCw,
 } from "lucide-react";
 import type { BoundingBox } from "@/lib/boundingBoxes";
 
@@ -28,6 +29,9 @@ export default function PdfViewer({ url, activeBox }: Props) {
   const [page, setPage]         = useState(1);
   const [zoom, setZoom]         = useState(1.0);
   const [loading, setLoading]   = useState(true);
+  // Rotacion en grados (0, 90, 180, 270) para facturas escaneadas
+  // boca abajo o de lado. Se aplica a la pagina entera via react-pdf.
+  const [rotation, setRotation] = useState(0);
 
   // Navegar automáticamente a la página donde está el campo activo.
   useEffect(() => {
@@ -44,6 +48,7 @@ export default function PdfViewer({ url, activeBox }: Props) {
   const zoomIn  = () => setZoom((z) => Math.min(ZOOM_STEPS[ZOOM_STEPS.length - 1], ZOOM_STEPS[ZOOM_STEPS.findIndex((s) => s >= z) + 1] ?? z));
   const zoomOut = () => setZoom((z) => Math.max(ZOOM_STEPS[0], ZOOM_STEPS[ZOOM_STEPS.findIndex((s) => s >= z) - 1] ?? z));
   const reset   = () => setZoom(1.0);
+  const rotate  = () => setRotation((r) => (r + 90) % 360);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-[#1e1e2e]">
@@ -112,6 +117,13 @@ export default function PdfViewer({ url, activeBox }: Props) {
           </button>
           <div className="mx-1 h-4 w-px bg-white/10" />
           <button
+            onClick={rotate}
+            title={`Rotar 90° (actual: ${rotation}°)`}
+            className="flex h-7 w-7 items-center justify-center rounded-lg text-white/60 transition hover:bg-white/10 hover:text-white"
+          >
+            <RotateCw className="h-3.5 w-3.5" />
+          </button>
+          <button
             onClick={reset}
             title="Restablecer zoom"
             className="flex h-7 w-7 items-center justify-center rounded-lg text-white/60 transition hover:bg-white/10 hover:text-white"
@@ -138,11 +150,15 @@ export default function PdfViewer({ url, activeBox }: Props) {
             <Page
               pageNumber={page}
               scale={zoom}
+              rotate={rotation}
               className="rounded-lg shadow-2xl"
               renderAnnotationLayer
               renderTextLayer
             />
-            {activeBox && activeBox.page === page - 1 && (
+            {/* Bounding box del campo activo. Solo lo dibujamos sin rotacion:
+                las coordenadas del OCR son en orientacion original; al rotar
+                la pagina la caja quedaria desalineada. */}
+            {activeBox && activeBox.page === page - 1 && rotation === 0 && (
               <div
                 className="pointer-events-none absolute"
                 style={{

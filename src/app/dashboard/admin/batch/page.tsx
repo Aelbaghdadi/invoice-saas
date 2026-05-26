@@ -6,11 +6,16 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { Badge } from "@/components/ui/Badge";
 import {
   Layers, FileText, CheckCircle2, Clock, ArrowRight,
-  AlertTriangle, Eye, Upload,
+  AlertTriangle, Eye, Upload, Loader2,
 } from "lucide-react";
 import Link from "next/link";
 import type { InvoiceType } from "@prisma/client";
 import { PENDING_WORK, completionPercent } from "@/lib/invoiceStatuses";
+import { AutoRefresh } from "@/components/ui/AutoRefresh";
+
+// La pagina muestra estados de OCR en curso — la marcamos dynamic para
+// que el conteo no quede cacheado entre cargas.
+export const dynamic = "force-dynamic";
 
 type BatchGroup = {
   clientId: string;
@@ -94,11 +99,28 @@ export default async function BatchPage() {
 
   const groups = Array.from(groupMap.values());
 
+  // Media historica de duracion OCR de la firma para la ETA. Fallback 10s.
+  const anyProcessing = groups.some((g) => g.uploaded + g.analyzing > 0);
+  let avgOcrSec = 10;
+  if (anyProcessing && firmId) {
+    const agg = await prisma.invoiceExtraction.aggregate({
+      where: {
+        ocrDurationMs: { not: null, gt: 0 },
+        invoice: { client: { advisoryFirmId: firmId } },
+      },
+      _avg: { ocrDurationMs: true },
+    });
+    if (agg._avg.ocrDurationMs) {
+      avgOcrSec = Math.max(1, Math.round(agg._avg.ocrDurationMs / 1000));
+    }
+  }
+
   const monthName = (m: number) =>
     new Date(2000, m - 1).toLocaleString("es-ES", { month: "long" });
 
   return (
     <div>
+      {anyProcessing && <AutoRefresh intervalMs={5000} />}
       <PageHeader
         title="Lotes de facturas"
         description="Facturas agrupadas por cliente y periodo mensual"
@@ -218,6 +240,23 @@ export default async function BatchPage() {
                     </div>
                   </div>
                 </div>
+
+                {/* Indicador de OCR en curso (uploaded + analyzing). Solo
+                    se muestra mientras quedan facturas analizandose. */}
+                {(g.uploaded + g.analyzing) > 0 && (() => {
+                  const inProgress = g.uploaded + g.analyzing;
+                  return (
+                    <div className="mt-3 flex items-center gap-2 rounded-lg bg-blue-50 px-3 py-2 text-[12px] text-blue-700">
+                      <Loader2 className="h-3.5 w-3.5 flex-shrink-0 animate-spin" />
+                      <span>
+                        {inProgress} en análisis OCR — media {avgOcrSec}s por factura
+                        {inProgress > 1 && (
+                          <span className="text-blue-500">{" "}(≈{inProgress * avgOcrSec}s en cola)</span>
+                        )}
+                      </span>
+                    </div>
+                  );
+                })()}
 
                 {/* Status pills */}
                 <div className="mt-3 flex flex-wrap gap-2">

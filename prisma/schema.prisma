@@ -262,6 +262,12 @@ model Invoice {
   ocrAttempts     Int       @default(0)
   lastOcrError    String?
 
+  /// Marca de "posponer": el gestor decidió saltarse esta factura para
+  /// más tarde sin cambiar su estado. La cola de revisión ordena las
+  /// pospuestas al final, así no estorban al flujo principal. Se limpia
+  /// automáticamente cuando alguien la edita o valida.
+  deferredAt    DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

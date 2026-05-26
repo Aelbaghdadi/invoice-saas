@@ -5,7 +5,7 @@ import { createHash } from "crypto";
 import { revalidatePath } from "next/cache";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { createServerSupabase } from "@/lib/supabase";
+import { createServerSupabase, sanitizeFilenameForStorage } from "@/lib/supabase";
 import { processInvoice } from "@/lib/processInvoice";
 
 export type ReuploadState = {
@@ -69,7 +69,8 @@ export async function reuploadInvoiceAction(
   }
 
   const supabase = createServerSupabase();
-  const storageKey = `${client.id}/${rejected.periodYear}-${String(rejected.periodMonth).padStart(2, "0")}/reupload-${Date.now()}-${file.name}`;
+  const safeName = sanitizeFilenameForStorage(file.name);
+  const storageKey = `${client.id}/${rejected.periodYear}-${String(rejected.periodMonth).padStart(2, "0")}/reupload-${Date.now()}-${safeName}`;
 
   if (supabase) {
     const { error: storageError } = await supabase.storage

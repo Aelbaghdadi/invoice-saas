@@ -145,6 +145,23 @@ export default async function ReviewPage({
         }]
       : [];
 
+  // Si la factura sigue en UPLOADED/ANALYZING, calculamos la media
+  // historica de duracion OCR de la firma para mostrar una ETA decente
+  // en el banner. Si no hay historial, OcrProcessingBanner usa el
+  // fallback (10s).
+  let avgOcrDurationMs: number | null = null;
+  if (invoice.status === "UPLOADED" || invoice.status === "ANALYZING") {
+    // Solo aggregamos extractions de la misma firma (acceso via Client).
+    const agg = await prisma.invoiceExtraction.aggregate({
+      where: {
+        ocrDurationMs: { not: null, gt: 0 },
+        invoice: { client: { advisoryFirmId: invoice.client.advisoryFirmId } },
+      },
+      _avg: { ocrDurationMs: true },
+    });
+    avgOcrDurationMs = agg._avg.ocrDurationMs ? Math.round(agg._avg.ocrDurationMs) : null;
+  }
+
   // El cliente recibe la factura sin las relaciones (el form ya tiene
   // sus campos planos). Quitamos vatLines de invoice para no duplicar.
   const { vatLines: _vl, client: _c, ...invoiceForForm } = invoice;
@@ -165,6 +182,7 @@ export default async function ReviewPage({
         suggestedAccount={accountData}
         queueSuffix={queueSuffix}
         bucket={bucket}
+        avgOcrDurationMs={avgOcrDurationMs}
         sessionContext={{
           clientName: invoice.client.name,
           periodMonth: invoice.periodMonth,
