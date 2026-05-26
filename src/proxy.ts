@@ -60,5 +60,12 @@ export default auth((req) => {
 });
 
 export const config = {
-  matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
+  // Excluir explicitamente los assets estaticos de public/ y los
+  // optimizados por Next, ademas de cualquier path con extension
+  // de imagen/fuente. Sin esto el middleware redirige a /login las
+  // peticiones a /hero/login.png cuando el usuario no esta logueado,
+  // y la pagina de login no puede pintar su propia foto.
+  matcher: [
+    "/((?!api|_next/static|_next/image|favicon.ico|.*\\.(?:png|jpg|jpeg|gif|webp|svg|ico|woff|woff2|ttf|otf)$).*)",
+  ],
 };

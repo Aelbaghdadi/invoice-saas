@@ -100,6 +100,9 @@ type SidebarProps = {
   role: Role;
   userName: string;
   userEmail?: string | null;
+  /** Modo "solo iconos" en desktop. Controlado por DashboardShell, que
+   *  tambien renderiza el boton de toggle como pestania en el borde. */
+  collapsed?: boolean;
 };
 
 const BATCH_LINKS: Record<Role, { href: string; label: string }> = {
@@ -110,7 +113,7 @@ const BATCH_LINKS: Record<Role, { href: string; label: string }> = {
 
 const STORAGE_KEY = "facturocr.sidebar.openSections";
 
-export function Sidebar({ role, userName }: SidebarProps) {
+export function Sidebar({ role, userName, collapsed = false }: SidebarProps) {
   const pathname = usePathname();
   const sections = NAV_SECTIONS[role];
   const batchLink = BATCH_LINKS[role];
@@ -170,30 +173,40 @@ export function Sidebar({ role, userName }: SidebarProps) {
       <li key={item.href}>
         <Link
           href={item.href}
-          className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-[13px] font-medium transition-all duration-200 ${
+          title={collapsed ? item.label : undefined}
+          className={`flex items-center rounded-xl text-[13px] font-medium transition-all duration-200 ${
+            collapsed ? "justify-center px-2 py-2.5" : "gap-3 px-3 py-2.5"
+          } ${
             active
               ? "bg-gradient-to-r from-blue-600 to-blue-500 text-white shadow-md shadow-blue-500/20"
               : "text-slate-600 hover:bg-slate-100/70 hover:text-slate-900"
           }`}
         >
           <Icon className={`h-[18px] w-[18px] flex-shrink-0 ${active ? "text-white" : "text-slate-400"}`} />
-          {item.label}
+          {!collapsed && item.label}
         </Link>
       </li>
     );
   };
 
   return (
-    <aside className="flex h-full w-56 flex-col border-r border-slate-200/80 bg-gradient-to-b from-white to-slate-50/80">
-      {/* Logo */}
-      <div className="flex items-center gap-3 border-b border-slate-100 px-4 py-4">
-        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600 text-white shadow-md shadow-blue-500/30">
-          <span className="text-[11px] font-bold tracking-wide">OCR</span>
+    <aside className="flex h-full w-full flex-col border-r border-slate-200/80 bg-white">
+      {/* Logo. Altura alineada con la Topbar (h-12 = 48px) para que
+          quede una linea horizontal continua entre las dos zonas.
+          Marca sobria: chip slate-900 sin sombra colorida.
+          El toggle plegar/expandir vive como pestania en el borde
+          derecho (renderizado por DashboardShell) + atajo Ctrl+B. */}
+      <div className={`flex h-12 flex-shrink-0 items-center border-b border-slate-200/70 ${
+        collapsed ? "justify-center px-2" : "gap-2.5 px-4"
+      }`}>
+        <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md bg-slate-900 text-white">
+          <span className="text-[9px] font-bold tracking-wider">OCR</span>
         </div>
-        <div>
-          <p className="text-[13.5px] font-bold text-slate-900">FacturOCR</p>
-          <p className="text-[10px] text-slate-400">Portal de asesoría</p>
-        </div>
+        {!collapsed && (
+          <p className="text-[13px] font-semibold text-slate-800 tracking-tight">
+            FacturOCR
+          </p>
+        )}
       </div>
 
       {/* Nav */}
@@ -205,6 +218,18 @@ export function Sidebar({ role, userName }: SidebarProps) {
               <ul key={idx} className="space-y-0.5">
                 {section.items.map(renderItem)}
               </ul>
+            );
+          }
+          // En modo colapsado no hay sentido a las cabeceras "Diario" /
+          // "Otros": ocupan sitio y sin texto al lado no aportan. Las
+          // sustituimos por un separador y mostramos todos los items.
+          if (collapsed) {
+            return (
+              <div key={section.label} className={idx > 0 ? "mt-2 pt-2 border-t border-slate-100" : ""}>
+                <ul className="space-y-0.5">
+                  {section.items.map(renderItem)}
+                </ul>
+              </div>
             );
           }
           const isOpen = openSections.has(section.label);
@@ -230,32 +255,40 @@ export function Sidebar({ role, userName }: SidebarProps) {
         })}
       </nav>
 
-      {/* Bottom actions */}
-      <div className="border-t border-slate-100 p-3 space-y-1.5">
+      {/* Bottom actions — en colapsado: solo iconos centrados. */}
+      <div className={`border-t border-slate-100 ${collapsed ? "px-2 py-2 space-y-1" : "p-3 space-y-1.5"}`}>
         {/* User section */}
-        <div className="flex items-center gap-2.5 rounded-xl px-2 py-2 mb-2">
+        <div className={`flex items-center rounded-xl ${collapsed ? "justify-center py-1.5" : "gap-2.5 px-2 py-2 mb-2"}`}>
           <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-orange-100 text-[11px] font-bold text-orange-600 ring-2 ring-white shadow-sm">
             {initials}
           </div>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-[12px] font-semibold text-slate-800">{userName}</p>
-            <p className="text-[10px] text-slate-400 capitalize">{role.toLowerCase()}</p>
-          </div>
+          {!collapsed && (
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[12px] font-semibold text-slate-800">{userName}</p>
+              <p className="text-[10px] text-slate-400 capitalize">{role.toLowerCase()}</p>
+            </div>
+          )}
         </div>
 
         <Link
           href={batchLink.href}
-          className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-blue-500 px-4 py-2.5 text-[13px] font-semibold text-white shadow-sm shadow-blue-500/25 transition-all duration-200 hover:from-blue-700 hover:to-blue-600 hover:shadow-md hover:shadow-blue-500/30"
+          title={collapsed ? batchLink.label : undefined}
+          className={`flex w-full items-center justify-center rounded-xl bg-gradient-to-r from-blue-600 to-blue-500 text-[13px] font-semibold text-white shadow-sm shadow-blue-500/25 transition-all duration-200 hover:from-blue-700 hover:to-blue-600 hover:shadow-md hover:shadow-blue-500/30 ${
+            collapsed ? "px-2 py-2.5" : "gap-2 px-4 py-2.5"
+          }`}
         >
           <Upload className="h-4 w-4" />
-          {batchLink.label}
+          {!collapsed && batchLink.label}
         </Link>
         <button
           onClick={() => signOut({ callbackUrl: "/login" })}
-          className="flex w-full items-center justify-center gap-2 rounded-xl px-4 py-2 text-[12px] font-medium text-slate-400 transition-all duration-200 hover:bg-slate-100/70 hover:text-slate-600"
+          title={collapsed ? "Cerrar sesión" : undefined}
+          className={`flex w-full items-center justify-center rounded-xl text-[12px] font-medium text-slate-400 transition-all duration-200 hover:bg-slate-100/70 hover:text-slate-600 ${
+            collapsed ? "px-2 py-2" : "gap-2 px-4 py-2"
+          }`}
         >
           <LogOut className="h-3.5 w-3.5" />
-          Cerrar sesión
+          {!collapsed && "Cerrar sesión"}
         </button>
       </div>
     </aside>

@@ -3,12 +3,6 @@ import { redirect } from "next/navigation";
 import { DashboardShell } from "@/components/layout/DashboardShell";
 import { Role } from "@prisma/client";
 
-const ROLE_LABELS: Record<Role, string> = {
-  ADMIN: "Administrador",
-  WORKER: "Gestor",
-  CLIENT: "Cliente",
-};
-
 export default async function DashboardLayout({
   children,
 }: {
@@ -24,7 +18,6 @@ export default async function DashboardLayout({
       role={role}
       userName={session.user.name ?? "Usuario"}
       userEmail={session.user.email}
-      userRole={ROLE_LABELS[role]}
     >
       {children}
     </DashboardShell>

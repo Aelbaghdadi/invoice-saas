@@ -25,6 +25,12 @@ const nextConfig: NextConfig = {
       bodySizeLimit: "25mb",
     },
   },
+  // Next 16 exige declarar explicitamente que valores de `quality` se
+  // permiten en <Image>. Default es solo [75]. Anadimos 95 para el hero
+  // del login (foto editorial, queremos minima compresion).
+  images: {
+    qualities: [75, 95],
+  },
   // Incluir los PDFs pre-construidos del seed de demo en el bundle de
   // funciones serverless de Vercel. Sin esto, scripts/seed-pdfs/ no se
   // empaqueta y el endpoint /api/admin/reset-demo falla con ENOENT.
