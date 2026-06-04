@@ -75,6 +75,7 @@ type SuggestedAccount = {
 
 type SessionContext = {
   clientName: string;
+  clientCif: string;
   periodMonth: number;
   periodYear: number;
   type: "PURCHASE" | "SALE";
@@ -198,6 +199,14 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
   const [showRectificativePanel, setShowRectificativePanel] = useState<boolean>(
     Boolean(invoice.isRectificative),
   );
+  // Periodo contable plegado por defecto: el caso comun es que coincida
+  // con el de subida (ya visible en el strip superior). Se auto-expande
+  // si el accountingPeriod difiere — entonces hay algo que el gestor
+  // ya tocó y debe poder revisar/cambiar.
+  const accountingDiffers =
+    (invoice.accountingPeriodMonth !== null && invoice.accountingPeriodMonth !== invoice.periodMonth) ||
+    (invoice.accountingPeriodYear !== null && invoice.accountingPeriodYear !== invoice.periodYear);
+  const [showAccountingPanel, setShowAccountingPanel] = useState<boolean>(accountingDiffers);
 
   // Cuota retencion: derivada de base * % / 100. La calculamos en cada
   // render para evitar quedar desincronizada si el gestor cambia base o %.
@@ -570,6 +579,10 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
         <div className="flex flex-shrink-0 items-center gap-3 border-b border-slate-100 bg-slate-50/60 px-5 py-2">
           <div className="flex items-center gap-2 text-[12px] text-slate-600">
             <span className="font-semibold text-slate-700">{sessionContext.clientName}</span>
+            {/* CIF del cliente al lado del nombre — asi el bloque del lado
+                bloqueado (Receptor en PURCHASE, Emisor en SALE) ya no hace
+                falta en el form. */}
+            <span className="font-mono text-[10px] text-slate-400">{sessionContext.clientCif}</span>
             <span className="text-slate-300">·</span>
             <span className="capitalize">{monthLabel} {sessionContext.periodYear}</span>
             <span className="text-slate-300">·</span>
@@ -727,31 +740,48 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
               />
             )}
 
-            {/* Emisor */}
-            <fieldset className="rounded-xl border border-slate-100 p-3 space-y-2">
-              <legend className="px-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-                Emisor
-              </legend>
-              <div>
-                <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
-                  Nombre / Razón social
-                  {lockedSide !== "issuer" && <ConfidenceHint score={confidence?.issuerName ?? null} />}
-                </label>
-                {lockedSide === "issuer" ? (
-                  <input id="issuerName" className={lockedInputClass} value={invoice.issuerName ?? ""} readOnly tabIndex={-1} />
-                ) : (
-                  <input id="issuerName" {...fp("issuerName")} defaultValue={invoice.issuerName ?? ""} />
-                )}
-              </div>
-              <div>
-                <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
-                  CIF / NIF
-                  {lockedSide !== "issuer" && <ConfidenceHint score={confidence?.issuerCif ?? null} />}
-                </label>
-                {lockedSide === "issuer" ? (
-                  <input id="issuerCif" className={lockedInputClass} value={invoice.issuerCif ?? ""} readOnly tabIndex={-1} />
-                ) : (
-                  <>
+            {/* ── Cabecera 2 columnas: parte editable + datos factura ──────
+                El lado bloqueado (datos del cliente: nombre + CIF) ya
+                vive arriba en el strip de sesion — quitamos su bloque
+                para reducir scroll. Los hidden inputs llevan los
+                valores que parseAndSave espera del lado bloqueado
+                (de todas formas los fuerza al cliente, pero los
+                enviamos para no romper buildFormData). */}
+            <input
+              type="hidden"
+              id={lockedSide === "issuer" ? "issuerName" : "receiverName"}
+              defaultValue={lockedSide === "issuer" ? (invoice.issuerName ?? "") : (invoice.receiverName ?? "")}
+            />
+            <input
+              type="hidden"
+              id={lockedSide === "issuer" ? "issuerCif" : "receiverCif"}
+              defaultValue={lockedSide === "issuer" ? (invoice.issuerCif ?? "") : (invoice.receiverCif ?? "")}
+            />
+
+            <div className="grid grid-cols-2 gap-2.5">
+              {/* Lado editable: Emisor en PURCHASE, Receptor en SALE.
+                  Es siempre la "otra parte" — la que NO es el cliente. */}
+              <fieldset className="rounded-xl border border-slate-200 bg-white p-3 space-y-2">
+                <legend className="px-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                  {lockedSide === "receiver" ? "Emisor" : "Receptor"}
+                </legend>
+                <div>
+                  <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
+                    Nombre / Razón social
+                    <ConfidenceHint score={confidence?.[lockedSide === "receiver" ? "issuerName" : "receiverName"] ?? null} />
+                  </label>
+                  {lockedSide === "receiver" ? (
+                    <input id="issuerName" {...fp("issuerName")} defaultValue={invoice.issuerName ?? ""} />
+                  ) : (
+                    <input id="receiverName" {...fp("receiverName")} defaultValue={invoice.receiverName ?? ""} />
+                  )}
+                </div>
+                <div>
+                  <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
+                    CIF / NIF
+                    <ConfidenceHint score={confidence?.[lockedSide === "receiver" ? "issuerCif" : "receiverCif"] ?? null} />
+                  </label>
+                  {lockedSide === "receiver" ? (
                     <input
                       id="issuerCif"
                       {...fp("issuerCif")}
@@ -759,48 +789,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                       onChange={(e) => setEditableIssuerCif(e.target.value)}
                       placeholder="B12345678"
                     />
-                    {editableIssuerCif && !isValidNIF(editableIssuerCif) && (
-                      <p className="mt-1 flex items-center gap-1 text-[11px] text-orange-600">
-                        <AlertTriangle className="h-3 w-3" />
-                        CIF/NIF con formato inválido
-                      </p>
-                    )}
-                    {cifConflict && (
-                      <p className="mt-1 flex items-center gap-1 text-[11px] text-red-600">
-                        <AlertTriangle className="h-3 w-3" />
-                        Coincide con el CIF del cliente — revisa el OCR
-                      </p>
-                    )}
-                  </>
-                )}
-              </div>
-            </fieldset>
-
-            {/* Receptor */}
-            <fieldset className="rounded-xl border border-slate-100 p-3 space-y-2">
-              <legend className="px-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-                Receptor
-              </legend>
-              <div>
-                <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
-                  Nombre / Razón social
-                  {lockedSide !== "receiver" && <ConfidenceHint score={confidence?.receiverName ?? null} />}
-                </label>
-                {lockedSide === "receiver" ? (
-                  <input id="receiverName" className={lockedInputClass} value={invoice.receiverName ?? ""} readOnly tabIndex={-1} />
-                ) : (
-                  <input id="receiverName" {...fp("receiverName")} defaultValue={invoice.receiverName ?? ""} />
-                )}
-              </div>
-              <div>
-                <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
-                  CIF / NIF
-                  {lockedSide !== "receiver" && <ConfidenceHint score={confidence?.receiverCif ?? null} />}
-                </label>
-                {lockedSide === "receiver" ? (
-                  <input id="receiverCif" className={lockedInputClass} value={invoice.receiverCif ?? ""} readOnly tabIndex={-1} />
-                ) : (
-                  <>
+                  ) : (
                     <input
                       id="receiverCif"
                       {...fp("receiverCif")}
@@ -808,21 +797,31 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                       onChange={(e) => setEditableReceiverCif(e.target.value)}
                       placeholder="B12345678"
                     />
-                    {cifConflict && (
-                      <p className="mt-1 flex items-center gap-1 text-[11px] text-red-600">
+                  )}
+                  {(() => {
+                    const v = lockedSide === "receiver" ? editableIssuerCif : editableReceiverCif;
+                    return v && !isValidNIF(v) ? (
+                      <p className="mt-1 flex items-center gap-1 text-[11px] text-orange-600">
                         <AlertTriangle className="h-3 w-3" />
-                        Coincide con el CIF del cliente — revisa el OCR
+                        CIF/NIF con formato inválido
                       </p>
-                    )}
-                  </>
-                )}
-              </div>
-            </fieldset>
+                    ) : null;
+                  })()}
+                  {cifConflict && (
+                    <p className="mt-1 flex items-center gap-1 text-[11px] text-red-600">
+                      <AlertTriangle className="h-3 w-3" />
+                      Coincide con el CIF del cliente — revisa el OCR
+                    </p>
+                  )}
+                </div>
+              </fieldset>
 
-            {/* Factura */}
-            <fieldset className="rounded-xl border border-slate-100 p-3 space-y-2">
-              <legend className="px-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Factura</legend>
-              <div className="grid grid-cols-2 gap-3">
+              {/* Datos factura: N + Fecha + Tipo de operacion. En la
+                  columna derecha, al lado del Emisor/Receptor. */}
+              <fieldset className="rounded-xl border border-slate-200 bg-white p-3 space-y-2">
+                <legend className="px-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                  Factura
+                </legend>
                 <div>
                   <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
                     N factura
@@ -837,47 +836,46 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                   </label>
                   <input id="invoiceDate" type="date" {...fp("invoiceDate")} defaultValue={fmtDate(invoice.invoiceDate)} />
                 </div>
-              </div>
+                <div>
+                  <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
+                    Tipo de operación
+                    {operationType !== "INTERIOR" && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-700">
+                        <Globe className="h-2.5 w-2.5" />
+                      </span>
+                    )}
+                  </label>
+                  <select
+                    className={inputClass}
+                    value={operationType}
+                    onChange={(e) => setOperationType(e.target.value as OperationTypeName)}
+                  >
+                    {OPERATION_TYPE_OPTIONS.map((op) => (
+                      <option key={op} value={op}>
+                        {OPERATION_TYPE_CODE[op]} · {OPERATION_TYPE_LABEL[op]}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </fieldset>
+            </div>
 
-              {/* Tipo de operacion fiscal — codigo G del Excel A3 */}
-              <div>
-                <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
-                  Tipo de operación
-                  {operationType !== "INTERIOR" && (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-700">
-                      <Globe className="h-2.5 w-2.5" />
-                      {OPERATION_TYPE_LABEL[operationType]}
-                    </span>
-                  )}
-                </label>
-                <select
-                  className={inputClass}
-                  value={operationType}
-                  onChange={(e) => setOperationType(e.target.value as OperationTypeName)}
-                >
-                  {OPERATION_TYPE_OPTIONS.map((op) => (
-                    <option key={op} value={op}>
-                      {OPERATION_TYPE_CODE[op]} · {OPERATION_TYPE_LABEL[op]}
-                    </option>
-                  ))}
-                </select>
-                {operationType !== "INTERIOR" && operationType !== "AGRARIA"
-                  && operationType !== "IVA_NO_DEDUCIBLE"
-                  && vatTotals.sumAmount > 0.01 && (
-                  <p className="mt-1.5 flex items-center gap-1 text-[11px] text-amber-600">
-                    <AlertTriangle className="h-3 w-3" />
-                    Las facturas de tipo "{OPERATION_TYPE_LABEL[operationType]}" suelen ir sin IVA en factura (inversión del sujeto pasivo). Revisa el desglose.
-                  </p>
-                )}
-              </div>
-            </fieldset>
+            {/* Aviso ISP/intracom — fuera del grid para no romper alturas. */}
+            {operationType !== "INTERIOR" && operationType !== "AGRARIA"
+              && operationType !== "IVA_NO_DEDUCIBLE"
+              && vatTotals.sumAmount > 0.01 && (
+              <p className="flex items-center gap-1 text-[11px] text-amber-600">
+                <AlertTriangle className="h-3 w-3" />
+                Las facturas de tipo &quot;{OPERATION_TYPE_LABEL[operationType]}&quot; suelen ir sin IVA en factura (inversión del sujeto pasivo). Revisa el desglose.
+              </p>
+            )}
 
             {/* Factura rectificativa (abono / correccion).
                 Plegada por defecto (uso poco frecuente). El header es
                 clicable y muestra un badge cuando esta activa, asi
                 desde fuera se ve si la factura es rectificativa sin
                 tener que abrir. */}
-            <div className="rounded-xl border border-slate-100">
+            <div className="rounded-xl border border-slate-200 bg-white">
               <button
                 type="button"
                 onClick={() => setShowRectificativePanel((v) => !v)}
@@ -974,46 +972,104 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
               )}
             </div>
 
-            {/* Periodo contable */}
-            <fieldset className="rounded-xl border border-slate-100 p-3 space-y-2">
-              <legend className="px-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Periodo contable</legend>
-              <p className="text-[10px] text-slate-400 -mt-1">Si difiere del periodo de subida ({invoice.periodMonth}/{invoice.periodYear})</p>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="mb-1 block text-[11px] font-medium text-slate-500">Mes</label>
-                  <select id="accountingPeriodMonth" className={inputClass} defaultValue={invoice.accountingPeriodMonth ?? ""}>
-                    <option value="">Mismo que subida</option>
-                    {Array.from({ length: 12 }, (_, i) => (
-                      <option key={i + 1} value={i + 1}>
-                        {new Date(0, i).toLocaleString("es", { month: "long" })}
-                      </option>
-                    ))}
-                  </select>
+            {/* Periodo contable — plegado por defecto. El caso normal es
+                que coincida con el de subida (que ya se muestra en el
+                strip de arriba), asi que ocupar sitio para repetirlo es
+                ruido. El badge "abril 2026" en el header del panel da el
+                resumen sin abrir. Se auto-expande si el accountingPeriod
+                difiere — caso "el gestor ya lo cambio antes". */}
+            <div className="rounded-xl border border-slate-200 bg-white">
+              <button
+                type="button"
+                onClick={() => setShowAccountingPanel((v) => !v)}
+                className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left"
+              >
+                <span className="flex items-center gap-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                    Periodo contable
+                  </span>
+                  <span className={
+                    "inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider " +
+                    (accountingDiffers ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-500")
+                  }>
+                    {new Date(0, (invoice.accountingPeriodMonth ?? invoice.periodMonth) - 1).toLocaleString("es", { month: "long" })}
+                    {" "}
+                    {invoice.accountingPeriodYear ?? invoice.periodYear}
+                  </span>
+                </span>
+                <ChevronDown
+                  className={`h-3.5 w-3.5 text-slate-400 transition-transform duration-200 ${
+                    showAccountingPanel ? "rotate-0" : "-rotate-90"
+                  }`}
+                />
+              </button>
+              {showAccountingPanel && (
+                <div className="border-t border-slate-100 p-3 pt-2">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="mb-1 block text-[11px] font-medium text-slate-500">Mes</label>
+                      <select
+                        id="accountingPeriodMonth"
+                        className={inputClass}
+                        defaultValue={String(invoice.accountingPeriodMonth ?? invoice.periodMonth)}
+                      >
+                        {Array.from({ length: 12 }, (_, i) => (
+                          <option key={i + 1} value={i + 1}>
+                            {new Date(0, i).toLocaleString("es", { month: "long" })}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[11px] font-medium text-slate-500">Año</label>
+                      <select
+                        id="accountingPeriodYear"
+                        className={inputClass}
+                        defaultValue={String(invoice.accountingPeriodYear ?? invoice.periodYear)}
+                      >
+                        {Array.from({ length: 5 }, (_, i) => {
+                          const y = new Date().getFullYear() - 2 + i;
+                          return <option key={y} value={y}>{y}</option>;
+                        })}
+                      </select>
+                    </div>
+                  </div>
                 </div>
-                <div>
-                  <label className="mb-1 block text-[11px] font-medium text-slate-500">Año</label>
-                  <select id="accountingPeriodYear" className={inputClass} defaultValue={invoice.accountingPeriodYear ?? ""}>
-                    <option value="">Mismo que subida</option>
-                    {Array.from({ length: 5 }, (_, i) => {
-                      const y = new Date().getFullYear() - 2 + i;
-                      return <option key={y} value={y}>{y}</option>;
-                    })}
-                  </select>
-                </div>
-              </div>
-            </fieldset>
+              )}
+              {/* Hidden inputs cuando el panel esta cerrado: los selects
+                  no estan en el DOM y `buildFormData` lee del DOM via id.
+                  Garantizamos que siempre se envia un valor (el por
+                  defecto = periodo de subida) aunque el gestor nunca
+                  abra el panel. */}
+              {!showAccountingPanel && (
+                <>
+                  <input
+                    type="hidden"
+                    id="accountingPeriodMonth"
+                    value={String(invoice.accountingPeriodMonth ?? invoice.periodMonth)}
+                    readOnly
+                  />
+                  <input
+                    type="hidden"
+                    id="accountingPeriodYear"
+                    value={String(invoice.accountingPeriodYear ?? invoice.periodYear)}
+                    readOnly
+                  />
+                </>
+              )}
+            </div>
 
             {/* Importes — desglose de IVA. Una linea por tipo impositivo.
                 Las facturas con varios tipos (4% + 10% + 21%) usan varias
                 lineas; al exportar se emite una fila por cada una. */}
-            <fieldset className="rounded-xl border border-slate-100 p-3 space-y-2">
-              <legend className="px-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            <fieldset className="rounded-xl border border-slate-200 bg-white p-3 space-y-2">
+              <legend className="px-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 Desglose de IVA
               </legend>
 
               <div className="space-y-2">
                 {/* Cabecera */}
-                <div className="grid grid-cols-[1fr_100px_1fr_28px] gap-2 px-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                <div className="grid grid-cols-[1fr_90px_1fr_28px] gap-2 px-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
                   <span>Base imponible</span>
                   <span>% IVA</span>
                   <span>Cuota IVA</span>
@@ -1035,7 +1091,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                     else if (e.key === "3") { e.preventDefault(); updateVatLine(idx, "vatRate", "4"); }
                   };
                   return (
-                    <div key={idx} className="grid grid-cols-[1fr_100px_1fr_28px] gap-2 items-start">
+                    <div key={idx} className="grid grid-cols-[1fr_90px_1fr_28px] gap-2 items-start">
                       <input
                         type="number"
                         step="0.01"
@@ -1103,7 +1159,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                 })}
 
                 {/* Totales calculados */}
-                <div className="grid grid-cols-[1fr_100px_1fr_28px] gap-2 border-t border-slate-100 pt-2 text-[12px] font-medium text-slate-600">
+                <div className="grid grid-cols-[1fr_90px_1fr_28px] gap-2 border-t border-slate-200 pt-2 text-[12px] font-medium text-slate-600">
                   <div className="px-3 py-1 tabular-nums">{vatTotals.sumBase.toFixed(2)}</div>
                   <div className="px-1 py-1 text-[10px] uppercase text-slate-400">Suma</div>
                   <div className="px-3 py-1 tabular-nums">{vatTotals.sumAmount.toFixed(2)}</div>
@@ -1126,7 +1182,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                   en el mount via showRetentionPanel). El header muestra
                   un badge con el resumen cuando esta activa para no
                   tener que abrir solo para ver "tiene 15%". */}
-              <div className="border-t border-slate-100 pt-2">
+              <div className="border-t border-slate-200 pt-2">
                 <button
                   type="button"
                   onClick={() => setShowRetentionPanel((v) => !v)}
@@ -1216,27 +1272,33 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                 )}
               </div>
 
-              {/* Total factura — campo separado, no es la suma automatica
-                  porque puede incluir IRPF u otros conceptos no desglosados. */}
-              <div className="border-t border-slate-100 pt-3">
-                <label className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold text-slate-600">
+              {/* Total factura — fila compacta al pie del bloque
+                  desglose. Antes vivia como bloque ancho separado abajo;
+                  ahora es la "fila final" del IVA, alineada a la
+                  derecha y en negrita. Se mantiene editable porque
+                  puede incluir IRPF u otros conceptos no desglosados. */}
+              <div className="flex items-center justify-between gap-3 border-t-2 border-slate-300 pt-2.5 mt-1">
+                <label htmlFor="totalAmount" className="flex items-center gap-1.5 text-[12px] font-semibold uppercase tracking-wider text-slate-700">
                   Total factura
                   <ConfidenceHint score={confidence?.totalAmount ?? null} />
                 </label>
                 {(() => {
                   const props = fp("totalAmount");
                   return (
-                    <input
-                      id="totalAmount"
-                      type="number"
-                      step="0.01"
-                      min={isRectificative ? undefined : "0"}
-                      className={`${props.className} font-semibold`}
-                      tabIndex={props.tabIndex}
-                      value={totalAmount}
-                      onChange={e => setTotalAmount(e.target.value)}
-                      placeholder="1060.00"
-                    />
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        id="totalAmount"
+                        type="number"
+                        step="0.01"
+                        min={isRectificative ? undefined : "0"}
+                        className={`${props.className} w-36 text-right text-[14px] font-bold tabular-nums`}
+                        tabIndex={props.tabIndex}
+                        value={totalAmount}
+                        onChange={e => setTotalAmount(e.target.value)}
+                        placeholder="0.00"
+                      />
+                      <span className="text-[12px] text-slate-400">€</span>
+                    </div>
                   );
                 })()}
               </div>

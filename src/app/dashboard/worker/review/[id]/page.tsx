@@ -185,6 +185,7 @@ export default async function ReviewPage({
         avgOcrDurationMs={avgOcrDurationMs}
         sessionContext={{
           clientName: invoice.client.name,
+          clientCif: invoice.client.cif,
           periodMonth: invoice.periodMonth,
           periodYear: invoice.periodYear,
           type: invoice.type,
