@@ -90,14 +90,17 @@ async function main() {
     })
   ).map((c) => c.id);
 
-  await prisma.auditLog.deleteMany({ where: { invoice: { clientId: { in: clientIds } } } });
-  await prisma.invoiceIssue.deleteMany({ where: { invoice: { clientId: { in: clientIds } } } });
-  await prisma.invoiceStatusHistory.deleteMany({ where: { invoice: { clientId: { in: clientIds } } } });
-  await prisma.exportBatchItem.deleteMany({ where: { invoice: { clientId: { in: clientIds } } } });
-  await prisma.invoiceExtraction.deleteMany({ where: { invoice: { clientId: { in: clientIds } } } });
-  await prisma.invoice.updateMany({ where: { clientId: { in: clientIds } }, data: { exportBatchId: null } });
-  await prisma.exportBatch.deleteMany({});
-  await prisma.invoice.deleteMany({ where: { clientId: { in: clientIds } } });
+  await prisma.$transaction(async (tx) => {
+    await tx.$executeRawUnsafe(`SET LOCAL app.allow_audit_mutation = 'true'`);
+    await tx.auditLog.deleteMany({ where: { invoice: { clientId: { in: clientIds } } } });
+    await tx.invoiceIssue.deleteMany({ where: { invoice: { clientId: { in: clientIds } } } });
+    await tx.invoiceStatusHistory.deleteMany({ where: { invoice: { clientId: { in: clientIds } } } });
+    await tx.exportBatchItem.deleteMany({ where: { invoice: { clientId: { in: clientIds } } } });
+    await tx.invoiceExtraction.deleteMany({ where: { invoice: { clientId: { in: clientIds } } } });
+    await tx.invoice.updateMany({ where: { clientId: { in: clientIds } }, data: { exportBatchId: null } });
+    await tx.exportBatch.deleteMany({});
+    await tx.invoice.deleteMany({ where: { clientId: { in: clientIds } } });
+  });
   await prisma.document.deleteMany({ where: { clientId: { in: clientIds } } });
   await prisma.periodClosure.deleteMany({ where: { clientId: { in: clientIds } } });
   await prisma.accountEntry.deleteMany({ where: { clientId: { in: clientIds } } });

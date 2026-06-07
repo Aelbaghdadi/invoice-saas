@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition, useEffect, useCallback, useMemo } from "react";
+import { useState, useTransition, useEffect, useCallback, useMemo, useRef } from "react";
 import { useToast } from "@/components/ui/Toast";
 import {
   CheckCircle2, AlertTriangle, Save, ChevronLeft, ChevronRight, ChevronDown,
@@ -89,6 +89,20 @@ type VatLineInput = {
   vatAmount: string;
 };
 
+/** Etiquetas legibles de los campos para el hint del visor PDF. */
+const FIELD_LABELS: Record<string, string> = {
+  issuerName:   "Nombre emisor",
+  issuerCif:    "CIF emisor",
+  receiverName: "Nombre receptor",
+  receiverCif:  "CIF receptor",
+  invoiceNumber:"N° Factura",
+  invoiceDate:  "Fecha",
+  taxBase:      "Base imponible",
+  vatRate:      "% IVA",
+  vatAmount:    "Cuota IVA",
+  totalAmount:  "Total",
+};
+
 /** Tipos de IVA mas habituales en facturas espanolas. Se muestran como
  *  chips bajo el input %IVA y tienen atajos Alt+1/2/3. El gestor sigue
  *  pudiendo teclear cualquier valor (caso 5%, exenciones puntuales, etc). */
@@ -121,6 +135,65 @@ type Props = {
    *  no hay historial todavia o la factura no esta en procesamiento. */
   avgOcrDurationMs?: number | null;
 };
+
+// Convierte texto numérico del PDF (formato español) a número JS.
+// Ejemplos: "180,00 EUR" → 180, "1.234,56 €" → 1234.56
+function parseSpanishNumber(raw: string): number | null {
+  let s = raw.replace(/[€$£]/g, "").replace(/EUR/gi, "").trim();
+  if (s.includes(",") && s.includes(".")) {
+    // "1.234,56" → miles=punto decimal=coma
+    s = s.replace(/\./g, "").replace(",", ".");
+  } else if (s.includes(",")) {
+    s = s.replace(",", ".");
+  }
+  const n = parseFloat(s);
+  return isNaN(n) ? null : n;
+}
+
+// Para campos de importe: siempre 2 decimales ("180,00 EUR" → "180.00")
+function toAmount(raw: string): string {
+  const n = parseSpanishNumber(raw);
+  return n !== null ? n.toFixed(2) : raw.trim();
+}
+
+// Para campos sin decimales forzados (% IVA: "21,00%" → "21")
+function toNumeric(raw: string): string {
+  const n = parseSpanishNumber(raw);
+  return n !== null ? String(n) : raw.trim();
+}
+
+const MESES_ES: Record<string, string> = {
+  enero:"01", febrero:"02", marzo:"03", abril:"04",
+  mayo:"05", junio:"06", julio:"07", agosto:"08",
+  septiembre:"09", octubre:"10", noviembre:"11", diciembre:"12",
+};
+
+// Intenta parsear texto de fecha del PDF a formato YYYY-MM-DD.
+// Devuelve null si no reconoce el formato.
+function toDateInput(raw: string): string | null {
+  const s = raw.trim();
+  // Ya en formato ISO
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  // DD/MM/YYYY, DD-MM-YYYY, DD.MM.YYYY
+  const dmy = s.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})$/);
+  if (dmy) {
+    const d = dmy[1].padStart(2, "0");
+    const m = dmy[2].padStart(2, "0");
+    const y = dmy[3].length === 2 ? `20${dmy[3]}` : dmy[3];
+    return `${y}-${m}-${d}`;
+  }
+  // "17 de mayo de 2025" o "17 mayo 2025"
+  const textDate = s.toLowerCase().match(/^(\d{1,2})\s+(?:de\s+)?([a-záéíóú]+)(?:\s+de\s+|\s+)(\d{2,4})$/);
+  if (textDate) {
+    const mes = MESES_ES[textDate[2]];
+    if (mes) {
+      const d = textDate[1].padStart(2, "0");
+      const y = textDate[3].length === 2 ? `20${textDate[3]}` : textDate[3];
+      return `${y}-${mes}-${d}`;
+    }
+  }
+  return null;
+}
 
 function fmt(v: unknown) {
   if (v === null || v === undefined) return "";
@@ -289,6 +362,9 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
   const [rejectReason, setRejectReason]   = useState("");
   const [rejectCategory, setRejectCategory] = useState("");
   const [activeField, setActiveField] = useState<string | null>(null);
+  // Persiste el último campo enfocado aunque el usuario haga clic en el PDF
+  // (el onBlur del panel derecho limpia activeField, pero este ref aguanta).
+  const lastFocusedFieldRef = useRef<string | null>(null);
   const [showHelp, setShowHelp] = useState(false);
   const router = useRouter();
 
@@ -377,6 +453,36 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     }, 800);
     return () => clearTimeout(timer);
   }, [nextId]);
+
+  // Pega el texto seleccionado en el PDF en el último campo enfocado del form.
+  const injectTextToField = useCallback((text: string) => {
+    const field = lastFocusedFieldRef.current;
+    if (!field || !text) return;
+    const clean = text.trim();
+    const numeric = toNumeric(clean);
+    switch (field) {
+      case "issuerCif":    setEditableIssuerCif(clean); break;
+      case "receiverCif":  setEditableReceiverCif(clean); break;
+      case "totalAmount":  setTotalAmount(toAmount(clean)); break;
+      case "taxBase":      updateVatLine(0, "taxBase", toAmount(clean)); break;
+      case "vatAmount":    updateVatLine(0, "vatAmount", toAmount(clean)); break;
+      case "vatRate":      updateVatLine(0, "vatRate", toNumeric(clean)); break;
+      case "invoiceDate": {
+        const parsed = toDateInput(clean);
+        if (parsed) {
+          const el = document.getElementById("invoiceDate") as HTMLInputElement | null;
+          if (el) el.value = parsed;
+        }
+        break;
+      }
+      default: {
+        const el = document.getElementById(field) as HTMLInputElement | null;
+        if (el && el.type !== "hidden" && !el.readOnly) el.value = clean;
+      }
+    }
+    // Vuelve el foco al campo para confirmar visualmente la acción.
+    setTimeout(() => document.getElementById(field)?.focus(), 0);
+  }, [setEditableIssuerCif, setEditableReceiverCif, setTotalAmount, updateVatLine]);
 
   const buildFormData = useCallback((extra?: Record<string,string>) => {
     const fd = new FormData();
@@ -635,9 +741,11 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
               />
             ) : (
               <PdfViewer
-              url={previewUrl}
-              activeBox={activeField ? (boundingBoxes?.[activeField] ?? null) : null}
-            />
+                url={previewUrl}
+                activeBox={activeField ? (boundingBoxes?.[activeField] ?? null) : null}
+                onTextSelect={injectTextToField}
+                copyTargetLabel={lastFocusedFieldRef.current ? FIELD_LABELS[lastFocusedFieldRef.current] : undefined}
+              />
             )
           ) : (
             <div className="flex flex-1 flex-col items-center justify-center gap-3 text-slate-400">
@@ -659,6 +767,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
           className="flex w-[45%] flex-col overflow-y-auto bg-white"
           onFocus={(e) => {
             const id = (e.target as HTMLElement).id;
+            if (id) lastFocusedFieldRef.current = id;
             if (id && boundingBoxes?.[id]) setActiveField(id);
           }}
           onBlur={(e) => {
@@ -1108,6 +1217,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                           step="0.01"
                           min="0"
                           max="100"
+                          id={idx === 0 ? "vatRate" : undefined}
                           className={inputClass}
                           value={line.vatRate}
                           onChange={(e) => updateVatLine(idx, "vatRate", e.target.value)}

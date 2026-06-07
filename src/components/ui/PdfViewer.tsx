@@ -22,9 +22,16 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL(
 
 const ZOOM_STEPS = [0.5, 0.65, 0.75, 0.9, 1.0, 1.15, 1.25, 1.5, 1.75, 2.0];
 
-type Props = { url: string; activeBox?: BoundingBox | null };
+type Props = {
+  url: string;
+  activeBox?: BoundingBox | null;
+  /** Llamado cuando el usuario suelta el ratón con texto seleccionado. */
+  onTextSelect?: (text: string) => void;
+  /** Etiqueta del campo que recibirá el texto (para el hint en toolbar). */
+  copyTargetLabel?: string;
+};
 
-export default function PdfViewer({ url, activeBox }: Props) {
+export default function PdfViewer({ url, activeBox, onTextSelect, copyTargetLabel }: Props) {
   const [numPages, setNumPages] = useState<number>(0);
   const [page, setPage]         = useState(1);
   const [zoom, setZoom]         = useState(1.0);
@@ -93,6 +100,14 @@ export default function PdfViewer({ url, activeBox }: Props) {
           </button>
         </div>
 
+        {/* Hint campo destino */}
+        {copyTargetLabel && (
+          <div className="flex items-center gap-1.5 rounded-md bg-blue-500/20 px-2 py-1 text-[11px] text-blue-300">
+            <span className="font-mono">→</span>
+            <span>{copyTargetLabel}</span>
+          </div>
+        )}
+
         {/* Zoom */}
         <div className="flex items-center gap-1.5">
           <button
@@ -134,7 +149,14 @@ export default function PdfViewer({ url, activeBox }: Props) {
       </div>
 
       {/* PDF canvas */}
-      <div className="flex flex-1 items-start justify-center overflow-auto p-6">
+      <div
+        className="flex flex-1 items-start justify-center overflow-auto p-6"
+        onMouseUp={() => {
+          if (!onTextSelect) return;
+          const sel = window.getSelection()?.toString().trim();
+          if (sel) onTextSelect(sel);
+        }}
+      >
         {loading && (
           <div className="flex h-full items-center justify-center">
             <Loader2 className="h-8 w-8 animate-spin text-white/30" />
