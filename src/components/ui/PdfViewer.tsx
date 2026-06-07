@@ -45,7 +45,7 @@ export default function PdfViewer({ url, activeBox, onTextSelect, copyTargetLabe
   // otra página, no le arrancamos de allí.
   const prevActiveBoxRef = useRef<typeof activeBox>(null);
   useEffect(() => {
-    if (activeBox == null) { prevActiveBoxRef.current = null; return; }
+    if (activeBox == null) return; // No resetear — el usuario puede haber hecho clic en el PDF
     const prev = prevActiveBoxRef.current;
     const sameBox = prev != null
       && prev.page === activeBox.page
