@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
@@ -40,9 +40,19 @@ export default function PdfViewer({ url, activeBox, onTextSelect, copyTargetLabe
   // boca abajo o de lado. Se aplica a la pagina entera via react-pdf.
   const [rotation, setRotation] = useState(0);
 
-  // Navegar automáticamente a la página donde está el campo activo.
+  // Solo navegamos cuando el campo activo CAMBIA a uno diferente.
+  // Si el usuario re-enfoca el mismo campo y ya navegó manualmente a
+  // otra página, no le arrancamos de allí.
+  const prevActiveBoxRef = useRef<typeof activeBox>(null);
   useEffect(() => {
-    if (activeBox == null) return;
+    if (activeBox == null) { prevActiveBoxRef.current = null; return; }
+    const prev = prevActiveBoxRef.current;
+    const sameBox = prev != null
+      && prev.page === activeBox.page
+      && prev.x === activeBox.x
+      && prev.y === activeBox.y;
+    if (sameBox) return;
+    prevActiveBoxRef.current = activeBox;
     const target = activeBox.page + 1; // Document AI usa 0-indexed
     if (target >= 1 && target <= numPages) setPage(target);
   }, [activeBox, numPages]);
