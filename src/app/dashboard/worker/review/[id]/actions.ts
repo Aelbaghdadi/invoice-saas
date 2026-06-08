@@ -1,6 +1,7 @@
 "use server";
 
 import { after } from "next/server";
+import { createHash } from "crypto";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
@@ -15,6 +16,7 @@ import {
 import { appendAuditLogs } from "@/lib/auditLog";
 import { parseTaxId, isPersonaFisica } from "@/lib/validators";
 import { appError, type AppError } from "@/lib/errorCodes";
+import { createServerSupabase, sanitizeFilenameForStorage } from "@/lib/supabase";
 
 /** Resultado de las server actions de revision. El `error` puede ser:
  *  - AppError: cuando es un fallo "conocido" del dominio (tiene codigo)
@@ -615,6 +617,146 @@ export async function rejectInvoice(
   revalidatePath("/dashboard/admin/batch", "layout");
   if (nextId) {
     const suffix = queueToSearchParams({ bucket }).toString();
+    redirect(`/dashboard/worker/review/${nextId}${suffix ? `?${suffix}` : ""}`);
+  }
+  redirect("/dashboard/worker/invoices");
+}
+
+// ── División multi-ticket ──────────────────────────────────────────────────
+
+export type SplitTicket = {
+  /** Nombre descriptivo del ticket (ej: "ticket1"). */
+  name: string;
+  /** Data URL base64 del recorte (image/jpeg o image/png). */
+  dataUrl: string;
+};
+
+/**
+ * Divide una foto con múltiples tickets en sub-facturas independientes.
+ * Cada sub-factura se sube a Supabase, se inserta en BD y se lanza OCR.
+ * La factura original pasa a estado SPLIT_SOURCE y sale de la cola activa.
+ */
+export async function splitInvoice(
+  invoiceId: string,
+  tickets: SplitTicket[],
+  bucket: string,
+): Promise<{ error?: string }> {
+  const session = await auth();
+  if (!session?.user || !["ADMIN", "WORKER"].includes(session.user.role)) {
+    return { error: "No autorizado" };
+  }
+  if (!tickets.length || tickets.length > 20) {
+    return { error: "Número de tickets inválido (1-20)" };
+  }
+
+  const invoice = await prisma.invoice.findUnique({
+    where: { id: invoiceId },
+    include: { client: true },
+  });
+  if (!invoice) return { error: "Factura no encontrada" };
+
+  const accessErr = await assertWorkerAccess(session.user.id, session.user.role, invoice.clientId);
+  if (accessErr) return accessErr as { error: string };
+
+  const supabase = createServerSupabase();
+  const createdIds: string[] = [];
+
+  for (const ticket of tickets) {
+    // Extraer el buffer del data URL (data:[mime];base64,[data])
+    const match = ticket.dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+    if (!match) return { error: `Recorte inválido para "${ticket.name}"` };
+    const mime = match[1] as string;
+    const buffer = Buffer.from(match[2], "base64");
+
+    const ext = mime === "image/png" ? "png" : "jpg";
+    const safeName = sanitizeFilenameForStorage(`${ticket.name}.${ext}`);
+    const storageKey = `${invoice.clientId}/${invoice.periodYear}-${String(invoice.periodMonth).padStart(2, "0")}/${Date.now()}-split-${safeName}`;
+    const fileHash = createHash("sha256").update(buffer).digest("hex");
+
+    if (supabase) {
+      const { error: storageError } = await supabase.storage
+        .from("invoices")
+        .upload(storageKey, buffer, { contentType: mime, upsert: false });
+      if (storageError) {
+        return { error: `Error subiendo "${ticket.name}": ${storageError.message}` };
+      }
+    }
+
+    const filename = `${ticket.name}.${ext}`;
+    const document = await prisma.document.create({
+      data: {
+        filename,
+        storageKey: supabase ? storageKey : `pending/${filename}`,
+        fileType: mime,
+        fileHash,
+        sizeBytes: buffer.length,
+        uploadedBy: session.user.id,
+        clientId: invoice.clientId,
+      },
+    });
+
+    const child = await prisma.invoice.create({
+      data: {
+        filename,
+        storageKey: supabase ? storageKey : `pending/${filename}`,
+        fileType: mime,
+        fileHash,
+        type: invoice.type,
+        periodMonth: invoice.periodMonth,
+        periodYear: invoice.periodYear,
+        clientId: invoice.clientId,
+        documentId: document.id,
+        splitFromId: invoiceId,
+      },
+    });
+    createdIds.push(child.id);
+  }
+
+  // Marcar la original como dividida
+  await prisma.invoice.update({
+    where: { id: invoiceId },
+    data: { status: "SPLIT_SOURCE" },
+  });
+
+  await prisma.invoiceStatusHistory.create({
+    data: {
+      invoiceId,
+      fromStatus: invoice.status,
+      toStatus: "SPLIT_SOURCE",
+      changedBy: session.user.id,
+    },
+  });
+
+  await appendAuditLogs([{
+    invoiceId,
+    userId: session.user.id,
+    field: "status",
+    oldValue: invoice.status,
+    newValue: "SPLIT_SOURCE",
+  }]);
+
+  // OCR en segundo plano para las sub-facturas
+  const userId = session.user.id;
+  after(async () => {
+    const { processInvoice } = await import("@/lib/processInvoice");
+    for (const childId of createdIds) {
+      await processInvoice(childId, userId).catch((err) => {
+        console.error(`[splitInvoice/processInvoice] ${childId} falló:`, err);
+      });
+    }
+  });
+
+  // Calcular el siguiente pendiente en la cola y redirigir
+  const parsedBucket = parseBucket(bucket);
+  const filter = filterFromInvoice(invoice, parsedBucket);
+  const nextId = await getNextInQueue(invoiceId, filter);
+
+  revalidatePath("/dashboard/worker/invoices");
+  revalidatePath("/dashboard/worker/batch", "layout");
+  revalidatePath("/dashboard/admin/batch", "layout");
+
+  const suffix = queueToSearchParams({ bucket: parsedBucket }).toString();
+  if (nextId) {
     redirect(`/dashboard/worker/review/${nextId}${suffix ? `?${suffix}` : ""}`);
   }
   redirect("/dashboard/worker/invoices");

@@ -159,7 +159,8 @@ export default async function AdminDashboard() {
     UPLOADED: "Subida", ANALYZING: "En análisis", ANALYZED: "Analizada",
     OCR_ERROR: "Error OCR", VALIDATED: "Validada", REJECTED: "Rechazada",
     EXPORTED: "Exportada", PENDING_REVIEW: "Pte. revisión",
-    NEEDS_ATTENTION: "Con incidencias", PURCHASE: "Recibida", SALE: "Emitida",
+    NEEDS_ATTENTION: "Con incidencias", SPLIT_SOURCE: "Dividida",
+    PURCHASE: "Recibida", SALE: "Emitida",
   };
 
   // ── Clients with pending invoices (for "progress" section) ────────────

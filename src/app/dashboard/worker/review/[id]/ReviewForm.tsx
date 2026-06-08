@@ -6,9 +6,11 @@ import {
   CheckCircle2, AlertTriangle, Save, ChevronLeft, ChevronRight, ChevronDown,
   Loader2, AlertCircle, ExternalLink, FileText, Image as ImageIcon,
   XCircle, RefreshCw, CheckCheck, Plus, Trash2,
-  Globe,
+  Globe, Scissors,
 } from "lucide-react";
 import { saveInvoiceFields, validateInvoice, rejectInvoice, deferInvoice, type ReviewState } from "./actions";
+import dynamic from "next/dynamic";
+const SplitInvoiceModal = dynamic(() => import("./SplitInvoiceModal"), { ssr: false });
 import type { Invoice, IssueType, IssueStatus } from "@prisma/client";
 import {
   isValidNIF, parseTaxId,
@@ -108,8 +110,23 @@ const FIELD_LABELS: Record<string, string> = {
  *  pudiendo teclear cualquier valor (caso 5%, exenciones puntuales, etc). */
 const VAT_RATE_SHORTCUTS = [21, 10, 4] as const;
 
+// Los campos Decimal de Prisma se convierten a number en el Server Component
+// antes de cruzar la frontera Server → Client. Redefinimos esos campos aquí.
+type SerializedInvoice = Omit<
+  Invoice,
+  "taxBase" | "vatRate" | "vatAmount" | "irpfRate" | "irpfAmount" | "retentionBase" | "totalAmount"
+> & {
+  taxBase:       number | null;
+  vatRate:       number | null;
+  vatAmount:     number | null;
+  irpfRate:      number | null;
+  irpfAmount:    number | null;
+  retentionBase: number | null;
+  totalAmount:   number | null;
+};
+
 type Props = {
-  invoice: Invoice;
+  invoice: SerializedInvoice;
   /** Lineas de IVA iniciales (de InvoiceVatLine, o sintetizada desde los
    *  campos planos de la factura para datos legacy). Vacio si nunca se
    *  procesaron datos. */
@@ -361,6 +378,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [rejectReason, setRejectReason]   = useState("");
   const [rejectCategory, setRejectCategory] = useState("");
+  const [showSplitModal, setShowSplitModal] = useState(false);
   const [activeField, setActiveField] = useState<string | null>(null);
   // Persiste el último campo enfocado aunque el usuario haga clic en el PDF
   // (el onBlur del panel derecho limpia activeField, pero este ref aguanta).
@@ -611,7 +629,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     onNext: () => { if (nextId) router.push(`/dashboard/worker/review/${nextId}${queueSuffix}`); },
     onPrev: () => { if (prevId) router.push(`/dashboard/worker/review/${prevId}${queueSuffix}`); },
     onToggleHelp: () => setShowHelp((s) => !s),
-    isBlocked: () => showRejectModal || showHelp,
+    isBlocked: () => showRejectModal || showHelp || showSplitModal,
   });
 
   // Etiqueta del bucket activo en la sesion. Ayuda al gestor a saber
@@ -1468,6 +1486,17 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
               Guardar
               <kbd className="ml-1 rounded bg-slate-100 px-1 text-[10px] font-semibold text-slate-500">⌘S</kbd>
             </button>
+            {isImage && previewUrl && (
+              <button
+                type="button"
+                onClick={() => setShowSplitModal(true)}
+                title="Dividir esta foto en varios tickets"
+                className="flex items-center gap-1.5 rounded-lg border border-indigo-200 px-3.5 py-2 text-[13px] font-medium text-indigo-700 transition hover:bg-indigo-50"
+              >
+                <Scissors className="h-3.5 w-3.5" />
+                Dividir
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setShowRejectModal(true)}
@@ -1619,6 +1648,15 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
           )}
         </div>
       </div>
+
+      {showSplitModal && previewUrl && (
+        <SplitInvoiceModal
+          invoiceId={invoice.id}
+          imageUrl={previewUrl}
+          bucket={bucket ?? "all"}
+          onClose={() => setShowSplitModal(false)}
+        />
+      )}
     </div>
   );
 }

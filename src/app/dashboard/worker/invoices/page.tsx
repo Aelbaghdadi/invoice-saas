@@ -20,6 +20,7 @@ const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
   EXPORTED:        { label: "Exportada",      variant: "slate" },
   PENDING_REVIEW:  { label: "Pte. revisión",  variant: "blue" },
   NEEDS_ATTENTION: { label: "Con incidencias", variant: "yellow" },
+  SPLIT_SOURCE:    { label: "Dividida",        variant: "purple" },
 };
 
 type Bucket = "attention" | "clean" | "done" | "all";
@@ -58,7 +59,7 @@ function whereForBucket(
     };
   }
   if (bucket === "done") {
-    return { ...base, status: { in: ["VALIDATED", "REJECTED", "EXPORTED"] } };
+    return { ...base, status: { in: ["VALIDATED", "REJECTED", "EXPORTED", "SPLIT_SOURCE"] } };
   }
   return base; // all
 }

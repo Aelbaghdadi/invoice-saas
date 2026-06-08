@@ -17,6 +17,7 @@ const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
   EXPORTED:        { label: "Exportada",      variant: "slate" },
   PENDING_REVIEW:  { label: "Pte. revisión",  variant: "blue" },
   NEEDS_ATTENTION: { label: "Con incidencias", variant: "yellow" },
+  SPLIT_SOURCE:    { label: "Dividida",        variant: "purple" },
 };
 
 export default async function ClientDetailPage({ params }: { params: Promise<{ id: string }> }) {

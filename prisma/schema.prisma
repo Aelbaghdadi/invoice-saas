@@ -78,6 +78,9 @@ enum InvoiceStatus {
   VALIDATED
   REJECTED
   EXPORTED
+  /// Foto original que contenía varios tickets y fue dividida en sub-facturas.
+  /// Se excluye de la cola activa pero se conserva para referencia.
+  SPLIT_SOURCE
 }
 
 enum RejectionCategory {
@@ -255,6 +258,11 @@ model Invoice {
   replacesId String?  @unique
   replaces   Invoice? @relation("ReplacedBy", fields: [replacesId], references: [id])
   replacedBy Invoice? @relation("ReplacedBy")
+
+  // División multi-ticket: la sub-factura apunta a la foto original (SPLIT_SOURCE)
+  splitFromId String?
+  splitFrom   Invoice?  @relation("SplitFrom", fields: [splitFromId], references: [id])
+  splitInvoices Invoice[] @relation("SplitFrom")
 
   // Periodo contable (puede diferir del periodo de subida)
   accountingPeriodMonth Int?

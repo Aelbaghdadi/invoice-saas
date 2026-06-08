@@ -40,6 +40,8 @@ export const DONE_WORK: InvoiceStatus[] = [
   "REJECTED",
   // Legacy: EXPORTED equivale a VALIDATED + exportada. Contamos como "done".
   "EXPORTED",
+  // Foto con múltiples tickets que fue dividida en sub-facturas.
+  "SPLIT_SOURCE",
 ];
 
 /** Calcula el porcentaje completado de un conjunto. */
@@ -68,4 +70,5 @@ export const STATUS_LABELS: Record<InvoiceStatus, string> = {
   VALIDATED:        "Validada",
   REJECTED:         "Rechazada",
   EXPORTED:         "Exportada",        // legacy
+  SPLIT_SOURCE:     "Dividida",
 };

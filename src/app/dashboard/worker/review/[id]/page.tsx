@@ -164,7 +164,20 @@ export default async function ReviewPage({
 
   // El cliente recibe la factura sin las relaciones (el form ya tiene
   // sus campos planos). Quitamos vatLines de invoice para no duplicar.
-  const { vatLines: _vl, client: _c, ...invoiceForForm } = invoice;
+  // Convertimos los Decimal de Prisma a number para que Next.js pueda
+  // serializar el objeto al cruzar el límite Server → Client Component.
+  const toNum = (v: unknown) => (v == null ? null : Number(v));
+  const { vatLines: _vl, client: _c, ...invoiceRaw } = invoice;
+  const invoiceForForm = {
+    ...invoiceRaw,
+    taxBase:       toNum(invoiceRaw.taxBase),
+    vatRate:       toNum(invoiceRaw.vatRate),
+    vatAmount:     toNum(invoiceRaw.vatAmount),
+    irpfRate:      toNum(invoiceRaw.irpfRate),
+    irpfAmount:    toNum(invoiceRaw.irpfAmount),
+    retentionBase: toNum(invoiceRaw.retentionBase),
+    totalAmount:   toNum(invoiceRaw.totalAmount),
+  };
 
   return (
     <div className="-m-6 flex h-[calc(100vh-64px)] flex-col overflow-hidden">
