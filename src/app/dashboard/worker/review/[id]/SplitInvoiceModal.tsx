@@ -366,6 +366,7 @@ export default function SplitInvoiceModal({ invoiceId, imageUrl, bucket, onClose
                 Arrastra sobre la imagen para seleccionar la zona del{" "}
                 <strong className="text-slate-700">{tickets[currentIdx]?.name}</strong>.
               </p>
+              {/* Contenedor externo: centra la imagen */}
               <div className="relative flex flex-1 min-h-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-50 select-none">
                 {blobLoading && (
                   <div className="flex flex-col items-center gap-2 text-slate-400">
@@ -373,72 +374,76 @@ export default function SplitInvoiceModal({ invoiceId, imageUrl, bucket, onClose
                     <span className="text-[12px]">Cargando imagen…</span>
                   </div>
                 )}
-                {/* Usamos blobUrl (same-origin) para evitar tainted canvas cross-origin.
-                    La URL blob permite a drawImage exportar los píxeles sin bloqueo CORS. */}
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  ref={imgRef}
-                  src={blobUrl ?? undefined}
-                  alt="Factura original"
-                  className="block max-h-full max-w-full object-contain rounded-xl"
-                  style={{ display: blobUrl ? "block" : "none" }}
-                  draggable={false}
-                />
-                {/* Overlay de selección — encima de la imagen, mismo tamaño */}
+                {/* Wrapper que tiene exactamente el tamaño renderizado de la imagen.
+                    El overlay absolute inset-0 dentro de él cubre solo el área de
+                    la imagen, no el espacio vacío alrededor (letterbox). */}
                 <div
-                  ref={overlayRef}
-                  className={`absolute inset-0 ${blobUrl ? "cursor-crosshair" : "pointer-events-none"}`}
-                  onMouseDown={handleMouseDown}
-                  onMouseMove={handleMouseMove}
-                  onMouseUp={handleMouseUp}
-                  onMouseLeave={handleMouseUp}
-                  onTouchStart={handleTouchStart}
-                  onTouchMove={handleTouchMove}
-                  onTouchEnd={handleTouchEnd}
+                  className="relative max-h-full max-w-full"
+                  style={{ display: blobUrl ? "block" : "none", lineHeight: 0 }}
                 >
-                  {/* Rectángulo de selección del ticket actual.
-                      Azul mientras está sin confirmar, verde tras confirmarlo. */}
-                  {selectionPx && selectionPx.w > 0.005 && selectionPx.h > 0.005 && (
-                    <div
-                      className={`absolute pointer-events-none ${
-                        selectionConfirmed
-                          ? "border border-green-400 bg-green-300/10"
-                          : "border-2 border-indigo-500 bg-indigo-400/10"
-                      }`}
-                      style={{
-                        left:   `${selectionPx.x * 100}%`,
-                        top:    `${selectionPx.y * 100}%`,
-                        width:  `${selectionPx.w * 100}%`,
-                        height: `${selectionPx.h * 100}%`,
-                      }}
-                    >
-                      {selectionConfirmed && (
-                        <span className="absolute -top-5 left-0 rounded bg-green-600 px-1 py-0.5 text-[10px] font-medium text-white whitespace-nowrap">
-                          {tickets[currentIdx]?.name}
-                        </span>
-                      )}
-                    </div>
-                  )}
-                  {/* Recortes confirmados de los demás tickets (siempre verdes) */}
-                  {tickets.map((t, i) => {
-                    if (i === currentIdx || !t.crop || !dataUrls.current[i]) return null;
-                    return (
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    ref={imgRef}
+                    src={blobUrl ?? undefined}
+                    alt="Factura original"
+                    className="block max-h-full max-w-full object-contain rounded-xl"
+                    draggable={false}
+                  />
+                  {/* Overlay de selección — mismo tamaño que la imagen */}
+                  <div
+                    ref={overlayRef}
+                    className="absolute inset-0 cursor-crosshair"
+                    onMouseDown={handleMouseDown}
+                    onMouseMove={handleMouseMove}
+                    onMouseUp={handleMouseUp}
+                    onMouseLeave={handleMouseUp}
+                    onTouchStart={handleTouchStart}
+                    onTouchMove={handleTouchMove}
+                    onTouchEnd={handleTouchEnd}
+                  >
+                    {/* Rectángulo de selección del ticket actual */}
+                    {selectionPx && selectionPx.w > 0.005 && selectionPx.h > 0.005 && (
                       <div
-                        key={i}
-                        className="absolute border border-green-400 bg-green-300/10 pointer-events-none"
+                        className={`absolute pointer-events-none ${
+                          selectionConfirmed
+                            ? "border border-green-400 bg-green-300/10"
+                            : "border-2 border-indigo-500 bg-indigo-400/10"
+                        }`}
                         style={{
-                          left:   `${t.crop.x * 100}%`,
-                          top:    `${t.crop.y * 100}%`,
-                          width:  `${t.crop.w * 100}%`,
-                          height: `${t.crop.h * 100}%`,
+                          left:   `${selectionPx.x * 100}%`,
+                          top:    `${selectionPx.y * 100}%`,
+                          width:  `${selectionPx.w * 100}%`,
+                          height: `${selectionPx.h * 100}%`,
                         }}
                       >
-                        <span className="absolute -top-5 left-0 rounded bg-green-600 px-1 py-0.5 text-[10px] font-medium text-white whitespace-nowrap">
-                          {t.name}
-                        </span>
+                        {selectionConfirmed && (
+                          <span className="absolute -top-5 left-0 rounded bg-green-600 px-1 py-0.5 text-[10px] font-medium text-white whitespace-nowrap">
+                            {tickets[currentIdx]?.name}
+                          </span>
+                        )}
                       </div>
-                    );
-                  })}
+                    )}
+                    {/* Recortes confirmados de los demás tickets */}
+                    {tickets.map((t, i) => {
+                      if (i === currentIdx || !t.crop || !dataUrls.current[i]) return null;
+                      return (
+                        <div
+                          key={i}
+                          className="absolute border border-green-400 bg-green-300/10 pointer-events-none"
+                          style={{
+                            left:   `${t.crop.x * 100}%`,
+                            top:    `${t.crop.y * 100}%`,
+                            width:  `${t.crop.w * 100}%`,
+                            height: `${t.crop.h * 100}%`,
+                          }}
+                        >
+                          <span className="absolute -top-5 left-0 rounded bg-green-600 px-1 py-0.5 text-[10px] font-medium text-white whitespace-nowrap">
+                            {t.name}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
             </div>
