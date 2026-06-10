@@ -11,6 +11,7 @@ import {
 import { saveInvoiceFields, validateInvoice, rejectInvoice, deferInvoice, type ReviewState } from "./actions";
 import dynamic from "next/dynamic";
 const SplitInvoiceModal = dynamic(() => import("./SplitInvoiceModal"), { ssr: false });
+const SplitPdfModal = dynamic(() => import("./SplitPdfModal"), { ssr: false });
 import type { Invoice, IssueType, IssueStatus } from "@prisma/client";
 import {
   isValidNIF, parseTaxId,
@@ -21,6 +22,7 @@ import {
   type OperationTypeName,
   type RetentionTypeName,
 } from "@/lib/validators";
+import { dateMatchesPeriod, periodLabel, type PeriodTypeName } from "@/lib/period";
 
 const OPERATION_TYPE_OPTIONS: OperationTypeName[] = [
   "INTERIOR",
@@ -225,6 +227,7 @@ function fmtDate(d: Date | null | undefined) {
 export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position, batchTotal, backHref, extraction, issues, suggestedAccount, boundingBoxes, queueSuffix = "", bucket = "all", sessionContext, avgOcrDurationMs }: Props) {
   const { success, error } = useToast();
   const isImage = invoice.fileType.startsWith("image/");
+  const isPdf   = invoice.fileType === "application/pdf";
   const isXml   = invoice.fileType.includes("xml");
 
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -243,6 +246,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     }));
   });
   const [totalAmount, setTotalAmount] = useState(fmt(invoice.totalAmount));
+  const [invoiceDateVal, setInvoiceDateVal] = useState(fmtDate(invoice.invoiceDate));
   const [supplierAccountVal, setSupplierAccount] = useState(fmt(invoice.supplierAccount) || suggestedAccount?.supplierAccount || "");
   const [expenseAccountVal, setExpenseAccount]   = useState(fmt(invoice.expenseAccount) || suggestedAccount?.expenseAccount || "");
   const [operationType, setOperationType] = useState<OperationTypeName>(
@@ -379,6 +383,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
   const [rejectReason, setRejectReason]   = useState("");
   const [rejectCategory, setRejectCategory] = useState("");
   const [showSplitModal, setShowSplitModal] = useState(false);
+  const [showSplitPdfModal, setShowSplitPdfModal] = useState(false);
   const [activeField, setActiveField] = useState<string | null>(null);
   // Persiste el último campo enfocado aunque el usuario haga clic en el PDF
   // (el onBlur del panel derecho limpia activeField, pero este ref aguanta).
@@ -409,6 +414,15 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
   const calculated = Math.round((vatTotals.sumBase + vatTotals.sumAmount - retentionAmount) * 100);
   const actual     = Math.round(totalNum * 100);
   const mathOk     = hasValues ? Math.abs(calculated - actual) <= 2 : null;
+
+  // Aviso si la fecha de la factura no corresponde al periodo del lote.
+  const periodMismatch = useMemo(() => {
+    if (!invoiceDateVal) return false;
+    const d = new Date(invoiceDateVal);
+    if (isNaN(d.getTime())) return false;
+    const invPeriodType = ((invoice as any).periodType ?? "MONTHLY") as PeriodTypeName;
+    return !dateMatchesPeriod(d, invPeriodType, invoice.periodMonth, invoice.periodYear);
+  }, [invoiceDateVal, invoice]);
 
   // Load signed URL
   useEffect(() => {
@@ -487,10 +501,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
       case "vatRate":      updateVatLine(0, "vatRate", toNumeric(clean)); break;
       case "invoiceDate": {
         const parsed = toDateInput(clean);
-        if (parsed) {
-          const el = document.getElementById("invoiceDate") as HTMLInputElement | null;
-          if (el) el.value = parsed;
-        }
+        if (parsed) setInvoiceDateVal(parsed);
         break;
       }
       default: {
@@ -511,7 +522,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     fd.set("receiverName", (document.getElementById("receiverName") as HTMLInputElement)?.value ?? "");
     fd.set("receiverCif",  (document.getElementById("receiverCif")  as HTMLInputElement)?.value ?? "");
     fd.set("invoiceNumber",(document.getElementById("invoiceNumber")as HTMLInputElement)?.value ?? "");
-    fd.set("invoiceDate",  (document.getElementById("invoiceDate")  as HTMLInputElement)?.value ?? "");
+    fd.set("invoiceDate",  invoiceDateVal);
     // Lineas de IVA: serializadas como JSON. El server las reparte en
     // InvoiceVatLine y recalcula los totales denormalizados de Invoice.
     fd.set("vatLines", JSON.stringify(vatLines));
@@ -533,7 +544,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     fd.set("bucket", bucket);
     if (extra) Object.entries(extra).forEach(([k,v]) => fd.set(k,v));
     return fd;
-  }, [vatLines, totalAmount, supplierAccountVal, expenseAccountVal, operationType, retentionType, retentionBase, retentionRate, retentionAmount, isRectificative, rectifiedInvoiceSeries, rectifiedInvoiceNumber, rectificativeType, art80Tres, invoice.id, invoice.updatedAt, bucket]);
+  }, [vatLines, totalAmount, invoiceDateVal, supplierAccountVal, expenseAccountVal, operationType, retentionType, retentionBase, retentionRate, retentionAmount, isRectificative, rectifiedInvoiceSeries, rectifiedInvoiceNumber, rectificativeType, art80Tres, invoice.id, invoice.updatedAt, bucket]);
 
   const handleSave = () => {
     startSave(async () => {
@@ -629,7 +640,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     onNext: () => { if (nextId) router.push(`/dashboard/worker/review/${nextId}${queueSuffix}`); },
     onPrev: () => { if (prevId) router.push(`/dashboard/worker/review/${prevId}${queueSuffix}`); },
     onToggleHelp: () => setShowHelp((s) => !s),
-    isBlocked: () => showRejectModal || showHelp || showSplitModal,
+    isBlocked: () => showRejectModal || showHelp || showSplitModal || showSplitPdfModal,
   });
 
   // Etiqueta del bucket activo en la sesion. Ayuda al gestor a saber
@@ -961,7 +972,23 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                     Fecha
                     <ConfidenceHint score={confidence?.invoiceDate ?? null} />
                   </label>
-                  <input id="invoiceDate" type="date" {...fp("invoiceDate")} defaultValue={fmtDate(invoice.invoiceDate)} />
+                  <input
+                    id="invoiceDate"
+                    type="date"
+                    {...fp("invoiceDate")}
+                    value={invoiceDateVal}
+                    onChange={(e) => setInvoiceDateVal(e.target.value)}
+                  />
+                  {periodMismatch && (
+                    <p className="mt-1 flex items-center gap-1 text-[11px] text-amber-600">
+                      <AlertTriangle className="h-3 w-3 flex-shrink-0" />
+                      Fecha fuera del periodo del lote ({periodLabel(
+                        ((invoice as any).periodType ?? "MONTHLY") as PeriodTypeName,
+                        invoice.periodMonth,
+                        invoice.periodYear,
+                      )})
+                    </p>
+                  )}
                 </div>
                 <div>
                   <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
@@ -1497,6 +1524,17 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                 Dividir
               </button>
             )}
+            {isPdf && previewUrl && (
+              <button
+                type="button"
+                onClick={() => setShowSplitPdfModal(true)}
+                title="Dividir este PDF en varias facturas por páginas"
+                className="flex items-center gap-1.5 rounded-lg border border-indigo-200 px-3.5 py-2 text-[13px] font-medium text-indigo-700 transition hover:bg-indigo-50"
+              >
+                <Scissors className="h-3.5 w-3.5" />
+                Dividir
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setShowRejectModal(true)}
@@ -1655,6 +1693,14 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
           imageUrl={previewUrl}
           bucket={bucket ?? "all"}
           onClose={() => setShowSplitModal(false)}
+        />
+      )}
+      {showSplitPdfModal && previewUrl && (
+        <SplitPdfModal
+          invoiceId={invoice.id}
+          pdfUrl={previewUrl}
+          bucket={bucket ?? "all"}
+          onClose={() => setShowSplitPdfModal(false)}
         />
       )}
     </div>

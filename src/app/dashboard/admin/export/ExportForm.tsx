@@ -6,6 +6,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { Select } from "@/components/ui/Select";
+import { quarterStartMonth, QUARTER_OPTIONS } from "@/lib/period";
 
 type ClientOption = { id: string; name: string; cif: string };
 
@@ -34,11 +35,13 @@ const YEARS      = Array.from({ length: 5 }, (_, i) => THIS_YEAR - i);
 
 
 export function ExportForm({ clients }: Props) {
-  const [clientId, setClientId] = useState(clients[0]?.id ?? "");
-  const [month,    setMonth]    = useState(now.getMonth() + 1);
-  const [year,     setYear]     = useState(THIS_YEAR);
-  const [type,     setType]     = useState("ALL");
-  const [format,   setFormat]   = useState("a3excel");
+  const [clientId,   setClientId]   = useState(clients[0]?.id ?? "");
+  const [periodType, setPeriodType] = useState<"MONTHLY" | "QUARTERLY">("MONTHLY");
+  const [month,      setMonth]      = useState(now.getMonth() + 1);
+  const [quarter,    setQuarter]    = useState(Math.ceil((now.getMonth() + 1) / 3));
+  const [year,       setYear]       = useState(THIS_YEAR);
+  const [type,       setType]       = useState("ALL");
+  const [format,     setFormat]     = useState("a3excel");
 
   const [count,    setCount]    = useState<number | null>(null);
   const [counting, setCounting] = useState(false);
@@ -46,6 +49,8 @@ export function ExportForm({ clients }: Props) {
   const [error,    setError]    = useState<string | null>(null);
 
   // ── fetch preview count ─────────────────────────────────────────────────
+  const effectiveMonth = periodType === "QUARTERLY" ? quarterStartMonth(quarter) : month;
+
   const fetchCount = useCallback(async () => {
     if (!clientId) return;
     setCounting(true);
@@ -53,7 +58,10 @@ export function ExportForm({ clients }: Props) {
     setError(null);
     try {
       const sp = new URLSearchParams({
-        clientId, month: String(month), year: String(year),
+        clientId,
+        periodType,
+        month: String(effectiveMonth),
+        year: String(year),
         type, format, preview: "1",
       });
       const res  = await fetch(`/api/export?${sp}`);
@@ -64,7 +72,7 @@ export function ExportForm({ clients }: Props) {
     } finally {
       setCounting(false);
     }
-  }, [clientId, month, year, type, format]);
+  }, [clientId, periodType, effectiveMonth, year, type, format]);
 
   useEffect(() => { fetchCount(); }, [fetchCount]);
 
@@ -72,7 +80,7 @@ export function ExportForm({ clients }: Props) {
   const handleDownload = async () => {
     if (!count) return;
     const sp = new URLSearchParams({
-      clientId, month: String(month), year: String(year), type, format,
+      clientId, periodType, month: String(effectiveMonth), year: String(year), type, format,
     });
     // Trigger file download
     const a = document.createElement("a");
@@ -108,12 +116,37 @@ export function ExportForm({ clients }: Props) {
           <p className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
             Período
           </p>
+          {/* Toggle mensual / trimestral */}
+          <div className="mb-3 flex gap-2">
+            {(["MONTHLY", "QUARTERLY"] as const).map((pt) => (
+              <button
+                key={pt}
+                type="button"
+                onClick={() => setPeriodType(pt)}
+                className={`flex-1 rounded-lg border px-3 py-2 text-[12px] font-medium transition ${
+                  periodType === pt
+                    ? "border-blue-500 bg-blue-50 text-blue-700"
+                    : "border-slate-200 text-slate-500 hover:bg-slate-50"
+                }`}
+              >
+                {pt === "MONTHLY" ? "Mensual" : "Trimestral"}
+              </button>
+            ))}
+          </div>
           <div className="grid grid-cols-2 gap-3">
-            <Select
-              value={String(month)}
-              onChange={(v) => setMonth(Number(v))}
-              options={MONTHS.map((m) => ({ value: String(m.v), label: m.l }))}
-            />
+            {periodType === "MONTHLY" ? (
+              <Select
+                value={String(month)}
+                onChange={(v) => setMonth(Number(v))}
+                options={MONTHS.map((m) => ({ value: String(m.v), label: m.l }))}
+              />
+            ) : (
+              <Select
+                value={String(quarter)}
+                onChange={(v) => setQuarter(Number(v))}
+                options={QUARTER_OPTIONS.map((q) => ({ value: String(q.value), label: q.label }))}
+              />
+            )}
             <Select
               value={String(year)}
               onChange={(v) => setYear(Number(v))}
@@ -195,7 +228,11 @@ export function ExportForm({ clients }: Props) {
 
             <div className="space-y-3 text-[13px]">
               <Row label="Cliente"   value={selectedClient?.name ?? "—"} />
-              <Row label="Período"   value={`${MONTHS.find(m => m.v === month)?.l} ${year}`} />
+              <Row label="Período"   value={
+                periodType === "QUARTERLY"
+                  ? `T${quarter} ${year}`
+                  : `${MONTHS.find(m => m.v === month)?.l} ${year}`
+              } />
               <Row label="Tipo"      value={TYPES.find(t => t.v === type)?.l ?? "—"} />
               <Row label="Formato"   value={selectedFormat?.l ?? "—"} />
             </div>

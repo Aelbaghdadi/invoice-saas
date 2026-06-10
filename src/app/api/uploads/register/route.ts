@@ -7,7 +7,7 @@ import { processInvoice } from "@/lib/processInvoice";
 import { notifyWorkersNewUpload } from "@/lib/email";
 import { appError } from "@/lib/errorCodes";
 import { assertUploadClientAccess, assertUploadPeriodOpen } from "@/lib/uploadAccess";
-import type { InvoiceType } from "@prisma/client";
+import type { InvoiceType, PeriodType } from "@prisma/client";
 
 /**
  * Segunda fase de la subida directa: el cliente ya subio el binario al
@@ -25,6 +25,7 @@ import type { InvoiceType } from "@prisma/client";
 export const dynamic = "force-dynamic";
 
 const VALID_TYPES = new Set(["PURCHASE", "SALE"]);
+const VALID_PERIOD_TYPES = new Set(["MONTHLY", "QUARTERLY"]);
 
 export async function POST(req: Request) {
   const session = await auth();
@@ -38,11 +39,12 @@ export async function POST(req: Request) {
   }
 
   const {
-    clientId, periodMonth, periodYear, type,
+    clientId, periodType, periodMonth, periodYear, type,
     filename, fileType, fileSize, fileHash, storageKey,
   } = body as Record<string, unknown>;
 
   if (typeof clientId !== "string" || !clientId ||
+      typeof periodType !== "string" || !VALID_PERIOD_TYPES.has(periodType) ||
       typeof periodMonth !== "number" ||
       typeof periodYear !== "number" ||
       typeof type !== "string" || !VALID_TYPES.has(type) ||
@@ -100,6 +102,7 @@ export async function POST(req: Request) {
       fileType,
       fileHash,
       type: type as InvoiceType,
+      periodType: periodType as PeriodType,
       periodMonth,
       periodYear,
       clientId,

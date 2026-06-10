@@ -8,8 +8,9 @@ import {
   Layers, AlertTriangle, PenLine, ArrowRight, CheckCircle2, Loader2,
 } from "lucide-react";
 import Link from "next/link";
-import type { InvoiceType } from "@prisma/client";
+import type { InvoiceType, PeriodType } from "@prisma/client";
 import { completionPercent } from "@/lib/invoiceStatuses";
+import { periodLabel } from "@/lib/period";
 import { BatchActions } from "./BatchActions";
 import { getAccessibleClientIds } from "@/lib/accessibleClients";
 import { AutoRefresh } from "@/components/ui/AutoRefresh";
@@ -22,6 +23,7 @@ type BatchGroup = {
   clientId: string;
   clientName: string;
   clientCif: string;
+  periodType: PeriodType;
   periodMonth: number;
   periodYear: number;
   type: InvoiceType;
@@ -76,13 +78,14 @@ export default async function WorkerBatchPage() {
   const groupMap = new Map<string, BatchGroup>();
 
   for (const inv of invoices) {
-    const key = `${inv.clientId}-${inv.periodYear}-${inv.periodMonth}-${inv.type}`;
+    const key = `${inv.clientId}-${inv.periodYear}-${inv.periodMonth}-${inv.periodType}-${inv.type}`;
     let g = groupMap.get(key);
     if (!g) {
       g = {
         clientId: inv.clientId,
         clientName: inv.client.name,
         clientCif: inv.client.cif,
+        periodType: inv.periodType,
         periodMonth: inv.periodMonth,
         periodYear: inv.periodYear,
         type: inv.type,
@@ -188,8 +191,6 @@ export default async function WorkerBatchPage() {
     }
   }
 
-  const monthName = (m: number) =>
-    new Date(2000, m - 1).toLocaleString("es-ES", { month: "long" });
 
   // Ordenar: primero los que tienen incidencias (mas urgentes), luego los
   // que tienen clean listas, y al final los ya cerrados.
@@ -237,7 +238,7 @@ export default async function WorkerBatchPage() {
 
             return (
               <div
-                key={`${g.clientId}-${g.periodYear}-${g.periodMonth}-${g.type}`}
+                key={`${g.clientId}-${g.periodYear}-${g.periodMonth}-${g.periodType}-${g.type}`}
                 className={
                   "rounded-xl border bg-white p-5 shadow-sm " +
                   (closed
@@ -273,7 +274,7 @@ export default async function WorkerBatchPage() {
                       )}
                     </div>
                     <p className="mt-0.5 text-[12px] text-slate-400">
-                      {g.clientCif} · <span className="capitalize">{monthName(g.periodMonth)}</span> {g.periodYear} · {g.total} factura{g.total !== 1 ? "s" : ""}
+                      {g.clientCif} · {periodLabel(g.periodType, g.periodMonth, g.periodYear)} · {g.total} factura{g.total !== 1 ? "s" : ""}
                     </p>
                   </div>
 

@@ -68,6 +68,11 @@ enum RectificativeType {
   BY_SUBSTITUTION
 }
 
+enum PeriodType {
+  MONTHLY
+  QUARTERLY
+}
+
 enum InvoiceStatus {
   UPLOADED
   ANALYZING
@@ -202,6 +207,7 @@ model Invoice {
   /// Codigo ISO del pais del emisor ("ES", "DE", "FR"...) o null si
   /// no se detecto prefijo y se asume nacional.
   issuerCountry String?     @db.Char(2)
+  periodType  PeriodType @default(MONTHLY)
   periodMonth Int
   periodYear  Int
 
@@ -365,15 +371,16 @@ model InvoiceStatusHistory {
 }
 
 model ExportBatch {
-  id           String   @id @default(cuid())
-  format       String   // "sage50" | "contasol" | "a3con"
+  id           String     @id @default(cuid())
+  format       String     // "sage50" | "contasol" | "a3con"
   clientId     String?
+  periodType   PeriodType @default(MONTHLY)
   periodMonth  Int?
   periodYear   Int?
-  invoiceType  String?  // "ALL" | "PURCHASE" | "SALE"
+  invoiceType  String?    // "ALL" | "PURCHASE" | "SALE"
   invoiceCount Int
   userId       String
-  createdAt    DateTime @default(now())
+  createdAt    DateTime   @default(now())
 
   invoices Invoice[]
   items    ExportBatchItem[]

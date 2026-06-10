@@ -9,8 +9,9 @@ import {
   AlertTriangle, Eye, Upload, Loader2,
 } from "lucide-react";
 import Link from "next/link";
-import type { InvoiceType } from "@prisma/client";
+import type { InvoiceType, PeriodType } from "@prisma/client";
 import { PENDING_WORK, completionPercent } from "@/lib/invoiceStatuses";
+import { periodLabel } from "@/lib/period";
 import { AutoRefresh } from "@/components/ui/AutoRefresh";
 
 // La pagina muestra estados de OCR en curso — la marcamos dynamic para
@@ -21,6 +22,7 @@ type BatchGroup = {
   clientId: string;
   clientName: string;
   clientCif: string;
+  periodType: PeriodType;
   periodMonth: number;
   periodYear: number;
   type: InvoiceType;
@@ -56,13 +58,14 @@ export default async function BatchPage() {
   const pendingStatuses = new Set<string>(PENDING_WORK);
 
   for (const inv of invoices) {
-    const key = `${inv.clientId}-${inv.periodYear}-${inv.periodMonth}-${inv.type}`;
+    const key = `${inv.clientId}-${inv.periodYear}-${inv.periodMonth}-${inv.periodType}-${inv.type}`;
     let g = groupMap.get(key);
     if (!g) {
       g = {
         clientId: inv.clientId,
         clientName: inv.client.name,
         clientCif: inv.client.cif,
+        periodType: inv.periodType,
         periodMonth: inv.periodMonth,
         periodYear: inv.periodYear,
         type: inv.type,
@@ -115,8 +118,6 @@ export default async function BatchPage() {
     }
   }
 
-  const monthName = (m: number) =>
-    new Date(2000, m - 1).toLocaleString("es-ES", { month: "long" });
 
   return (
     <div>
@@ -151,7 +152,7 @@ export default async function BatchPage() {
 
             return (
               <div
-                key={`${g.clientId}-${g.periodYear}-${g.periodMonth}-${g.type}`}
+                key={`${g.clientId}-${g.periodYear}-${g.periodMonth}-${g.periodType}-${g.type}`}
                 className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
               >
                 {/* Header */}
@@ -179,7 +180,7 @@ export default async function BatchPage() {
                       )}
                     </div>
                     <p className="mt-0.5 text-[12px] text-slate-400">
-                      {g.clientCif} · <span className="capitalize">{monthName(g.periodMonth)}</span> {g.periodYear} · {g.total} factura{g.total !== 1 ? "s" : ""}
+                      {g.clientCif} · {periodLabel(g.periodType, g.periodMonth, g.periodYear)} · {g.total} factura{g.total !== 1 ? "s" : ""}
                     </p>
                   </div>
 

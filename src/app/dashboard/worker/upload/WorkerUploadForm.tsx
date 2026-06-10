@@ -20,6 +20,7 @@ import {
   type UploadStatus,
   type UploadResult,
 } from "@/lib/uploadDirectClient";
+import { quarterStartMonth, QUARTER_OPTIONS } from "@/lib/period";
 
 const MONTHS = [
   { value: "1", label: "Enero" },
@@ -70,7 +71,9 @@ export function WorkerUploadForm({ clients }: Props) {
   const now = new Date();
   const [items, setItems] = useState<Item[]>([]);
   const [clientId, setClientId] = useState(clients[0]?.id ?? "");
+  const [periodType, setPeriodType] = useState<"MONTHLY" | "QUARTERLY">("MONTHLY");
   const [month, setMonth] = useState(String(now.getMonth() + 1));
+  const [quarter, setQuarter] = useState(Math.ceil((now.getMonth() + 1) / 3));
   const [year, setYear] = useState(String(now.getFullYear()));
   const [type, setType] = useState<"PURCHASE" | "SALE">("PURCHASE");
   const [isDragging, setIsDragging] = useState(false);
@@ -129,11 +132,13 @@ export function WorkerUploadForm({ clients }: Props) {
       .map((it, idx) => ({ it, idx }))
       .filter(({ it }) => it.status !== "ok" && it.status !== "duplicate");
 
+    const effectivePeriodMonth = periodType === "QUARTERLY" ? quarterStartMonth(quarter) : Number(month);
     const results = await uploadFilesDirect(
       toUpload.map((x) => x.it.file),
       {
         clientId,
-        periodMonth: Number(month),
+        periodType,
+        periodMonth: effectivePeriodMonth,
         periodYear: Number(year),
         type,
       },
@@ -198,12 +203,43 @@ export function WorkerUploadForm({ clients }: Props) {
             />
           </div>
         </div>
+        {/* Toggle mensual / trimestral */}
+        <div className="mb-4">
+          <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            Agrupación del periodo
+          </label>
+          <div className="flex gap-2">
+            {(["MONTHLY", "QUARTERLY"] as const).map((pt) => (
+              <button
+                key={pt}
+                type="button"
+                onClick={() => setPeriodType(pt)}
+                className={`flex-1 rounded-lg border px-3 py-2 text-[12px] font-medium transition ${
+                  periodType === pt
+                    ? "border-blue-500 bg-blue-50 text-blue-700"
+                    : "border-slate-200 text-slate-500 hover:bg-slate-50"
+                }`}
+              >
+                {pt === "MONTHLY" ? "Mensual" : "Trimestral"}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div className="grid grid-cols-3 gap-4">
           <div>
             <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-              Mes
+              {periodType === "MONTHLY" ? "Mes" : "Trimestre"}
             </label>
-            <Select value={month} onChange={setMonth} options={MONTHS} />
+            {periodType === "MONTHLY" ? (
+              <Select value={month} onChange={setMonth} options={MONTHS} />
+            ) : (
+              <Select
+                value={String(quarter)}
+                onChange={(v) => setQuarter(Number(v))}
+                options={QUARTER_OPTIONS.map((q) => ({ value: String(q.value), label: q.label }))}
+              />
+            )}
           </div>
           <div>
             <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-400">

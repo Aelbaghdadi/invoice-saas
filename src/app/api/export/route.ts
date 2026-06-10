@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { generateCsv, generateA3Excel, suggestFilename, validateForA3Export, type ExportFormat, type ExportConfig } from "@/lib/exportFormats";
 import { appendAuditLogs } from "@/lib/auditLog";
 import { appError } from "@/lib/errorCodes";
-import type { InvoiceType, InvoiceStatus } from "@prisma/client";
+import type { InvoiceType, InvoiceStatus, PeriodType } from "@prisma/client";
 
 export async function GET(req: NextRequest) {
   const session = await auth();
@@ -12,12 +12,14 @@ export async function GET(req: NextRequest) {
     return new NextResponse("Unauthorized", { status: 401 });
   }
 
-  const sp       = req.nextUrl.searchParams;
-  const clientId = sp.get("clientId") || undefined;
-  const month    = parseInt(sp.get("month") ?? "0", 10) || undefined;
-  const year     = parseInt(sp.get("year")  ?? "0", 10) || undefined;
+  const sp         = req.nextUrl.searchParams;
+  const clientId   = sp.get("clientId") || undefined;
+  const month      = parseInt(sp.get("month") ?? "0", 10) || undefined;
+  const year       = parseInt(sp.get("year")  ?? "0", 10) || undefined;
+  const periodTypeParam = sp.get("periodType") ?? "MONTHLY";
   const VALID_FORMATS = ["a3excel"];
   const VALID_TYPES = ["ALL", "PURCHASE", "SALE"];
+  const VALID_PERIOD_TYPES = ["MONTHLY", "QUARTERLY"];
   const formatRaw = sp.get("format") ?? "a3excel";
   const typeParam = sp.get("type") ?? "ALL";
   if (!VALID_FORMATS.includes(formatRaw)) {
@@ -25,6 +27,9 @@ export async function GET(req: NextRequest) {
   }
   if (!VALID_TYPES.includes(typeParam)) {
     return new NextResponse("Tipo no válido", { status: 400 });
+  }
+  if (!VALID_PERIOD_TYPES.includes(periodTypeParam)) {
+    return new NextResponse("Tipo de periodo no válido", { status: 400 });
   }
   const format = formatRaw as ExportFormat;
   const preview  = sp.get("preview") === "1";
@@ -34,13 +39,23 @@ export async function GET(req: NextRequest) {
     return new NextResponse("Forbidden: missing advisory firm", { status: 403 });
   }
 
+  // Para trimestral: filtramos por rango de meses (mes inicial a mes inicial+2).
+  const monthFilter =
+    month && periodTypeParam === "QUARTERLY"
+      ? { gte: month, lte: month + 2 }
+      : month
+        ? month
+        : undefined;
+
   // Export only VALIDATED invoices scoped to the admin's firm
   const where = {
     status: "VALIDATED" as InvoiceStatus,
     client: { advisoryFirmId: firmId },
-    ...(clientId    ? { clientId }              : {}),
-    ...(month       ? { periodMonth: month }    : {}),
-    ...(year        ? { periodYear:  year }     : {}),
+    ...(clientId ? { clientId } : {}),
+    ...(monthFilter !== undefined
+      ? { periodMonth: monthFilter }
+      : {}),
+    ...(year ? { periodYear: year } : {}),
     ...(typeParam !== "ALL" ? { type: typeParam as InvoiceType } : {}),
   };
 
@@ -77,6 +92,7 @@ export async function GET(req: NextRequest) {
     data: {
       format,
       clientId: clientId ?? null,
+      periodType: periodTypeParam as PeriodType,
       periodMonth: month ?? null,
       periodYear: year ?? null,
       invoiceType: typeParam,

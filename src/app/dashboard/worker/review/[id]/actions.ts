@@ -762,6 +762,172 @@ export async function splitInvoice(
   redirect("/dashboard/worker/invoices");
 }
 
+// ── División PDF multi-factura ────────────────────────────────────────────────
+
+export type PdfSplitPart = {
+  /** Nombre descriptivo de la parte (ej: "factura1"). */
+  name: string;
+  /** Página inicial, 1-indexado. */
+  startPage: number;
+  /** Página final, 1-indexado, inclusive. */
+  endPage: number;
+};
+
+/**
+ * Divide un PDF con múltiples facturas en sub-facturas independientes
+ * extrayendo los rangos de páginas indicados.
+ * La factura original pasa a SPLIT_SOURCE y cada parte se lanza a OCR.
+ */
+export async function splitPdfInvoice(
+  invoiceId: string,
+  parts: PdfSplitPart[],
+  bucket: string,
+): Promise<{ error?: string }> {
+  const session = await auth();
+  if (!session?.user || !["ADMIN", "WORKER"].includes(session.user.role)) {
+    return { error: "No autorizado" };
+  }
+  if (parts.length < 2 || parts.length > 20) {
+    return { error: "Número de partes inválido (2-20)" };
+  }
+
+  const invoice = await prisma.invoice.findUnique({
+    where: { id: invoiceId },
+    include: { client: true },
+  });
+  if (!invoice) return { error: "Factura no encontrada" };
+
+  const accessErr = await assertWorkerAccess(session.user.id, session.user.role, invoice.clientId);
+  if (accessErr) return accessErr as { error: string };
+
+  const supabase = createServerSupabase();
+  if (!supabase) return { error: "Supabase no configurado" };
+
+  // Descargar el PDF original
+  const { data: blob, error: downloadErr } = await supabase.storage
+    .from("invoices")
+    .download(invoice.storageKey);
+  if (downloadErr || !blob) {
+    return { error: `No se pudo descargar el PDF: ${downloadErr?.message ?? "sin datos"}` };
+  }
+  const originalBytes = Buffer.from(await blob.arrayBuffer());
+
+  // Cargar con pdf-lib y validar rangos
+  const { PDFDocument } = await import("pdf-lib");
+  const srcDoc = await PDFDocument.load(originalBytes);
+  const totalPages = srcDoc.getPageCount();
+
+  for (const part of parts) {
+    if (!part.name.trim()) return { error: "Todas las partes deben tener un nombre." };
+    if (part.startPage < 1 || part.endPage > totalPages || part.startPage > part.endPage) {
+      return { error: `Rango inválido para "${part.name}": páginas ${part.startPage}-${part.endPage} (total: ${totalPages})` };
+    }
+  }
+
+  const createdIds: string[] = [];
+
+  for (const part of parts) {
+    const newDoc = await PDFDocument.create();
+    // copyPages devuelve las páginas en el mismo orden que el array de índices
+    const pageIndices = Array.from(
+      { length: part.endPage - part.startPage + 1 },
+      (_, i) => part.startPage - 1 + i,
+    );
+    const copiedPages = await newDoc.copyPages(srcDoc, pageIndices);
+    for (const p of copiedPages) newDoc.addPage(p);
+
+    const pdfBytes = Buffer.from(await newDoc.save());
+    const fileHash = createHash("sha256").update(pdfBytes).digest("hex");
+
+    const safeName = sanitizeFilenameForStorage(`${part.name}.pdf`);
+    const storageKey = `${invoice.clientId}/${invoice.periodYear}-${String(invoice.periodMonth).padStart(2, "0")}/${Date.now()}-split-${safeName}`;
+
+    const { error: storageError } = await supabase.storage
+      .from("invoices")
+      .upload(storageKey, pdfBytes, { contentType: "application/pdf", upsert: false });
+    if (storageError) {
+      return { error: `Error subiendo "${part.name}": ${storageError.message}` };
+    }
+
+    const filename = `${part.name}.pdf`;
+    const document = await prisma.document.create({
+      data: {
+        filename,
+        storageKey,
+        fileType: "application/pdf",
+        fileHash,
+        sizeBytes: pdfBytes.length,
+        uploadedBy: session.user.id,
+        clientId: invoice.clientId,
+      },
+    });
+
+    const child = await prisma.invoice.create({
+      data: {
+        filename,
+        storageKey,
+        fileType: "application/pdf",
+        fileHash,
+        type: invoice.type,
+        periodMonth: invoice.periodMonth,
+        periodYear: invoice.periodYear,
+        clientId: invoice.clientId,
+        documentId: document.id,
+        splitFromId: invoiceId,
+      },
+    });
+    createdIds.push(child.id);
+  }
+
+  // Marcar la original como dividida
+  await prisma.invoice.update({
+    where: { id: invoiceId },
+    data: { status: "SPLIT_SOURCE" },
+  });
+
+  await prisma.invoiceStatusHistory.create({
+    data: {
+      invoiceId,
+      fromStatus: invoice.status,
+      toStatus: "SPLIT_SOURCE",
+      changedBy: session.user.id,
+    },
+  });
+
+  await appendAuditLogs([{
+    invoiceId,
+    userId: session.user.id,
+    field: "status",
+    oldValue: invoice.status,
+    newValue: "SPLIT_SOURCE",
+  }]);
+
+  // OCR en segundo plano para las sub-facturas
+  const userId = session.user.id;
+  after(async () => {
+    const { processInvoice } = await import("@/lib/processInvoice");
+    for (const childId of createdIds) {
+      await processInvoice(childId, userId).catch((err) => {
+        console.error(`[splitPdfInvoice/processInvoice] ${childId} falló:`, err);
+      });
+    }
+  });
+
+  const parsedBucket = parseBucket(bucket);
+  const filter = filterFromInvoice(invoice, parsedBucket);
+  const nextId = await getNextInQueue(invoiceId, filter);
+
+  revalidatePath("/dashboard/worker/invoices");
+  revalidatePath("/dashboard/worker/batch", "layout");
+  revalidatePath("/dashboard/admin/batch", "layout");
+
+  const suffix = queueToSearchParams({ bucket: parsedBucket }).toString();
+  if (nextId) {
+    redirect(`/dashboard/worker/review/${nextId}${suffix ? `?${suffix}` : ""}`);
+  }
+  redirect("/dashboard/worker/invoices");
+}
+
 function extractFields(fd: FormData): FieldData {
   return {
     issuerName:    fd.get("issuerName")    as string ?? "",

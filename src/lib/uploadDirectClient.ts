@@ -26,6 +26,7 @@ export type UploadStatus =
 
 export type UploadMeta = {
   clientId: string;
+  periodType: "MONTHLY" | "QUARTERLY";
   periodMonth: number;
   periodYear: number;
   type: "PURCHASE" | "SALE";
@@ -78,6 +79,7 @@ export async function uploadFileDirect(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         clientId: meta.clientId,
+        periodType: meta.periodType,
         periodMonth: meta.periodMonth,
         periodYear: meta.periodYear,
         type: meta.type,
@@ -117,6 +119,7 @@ export async function uploadFileDirect(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         clientId: meta.clientId,
+        periodType: meta.periodType,
         periodMonth: meta.periodMonth,
         periodYear: meta.periodYear,
         type: meta.type,

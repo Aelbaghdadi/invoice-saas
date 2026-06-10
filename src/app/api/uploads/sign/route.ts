@@ -44,9 +44,11 @@ export async function POST(req: Request) {
   }
 
   const {
-    clientId, periodMonth, periodYear, type,
+    clientId, periodType, periodMonth, periodYear, type,
     filename, fileType, fileSize, fileHash, headBase64,
   } = body as Record<string, unknown>;
+
+  const VALID_PERIOD_TYPES = new Set(["MONTHLY", "QUARTERLY"]);
 
   // Validaciones de forma minimas (los detalles vienen del client UI).
   if (typeof clientId !== "string" || !clientId) {
@@ -54,6 +56,9 @@ export async function POST(req: Request) {
   }
   if (typeof periodMonth !== "number" || typeof periodYear !== "number") {
     return NextResponse.json({ error: appError("ERR-SYS-001", "periodo invalido") }, { status: 400 });
+  }
+  if (typeof periodType !== "string" || !VALID_PERIOD_TYPES.has(periodType)) {
+    return NextResponse.json({ error: appError("ERR-SYS-001", "periodType invalido") }, { status: 400 });
   }
   if (typeof type !== "string" || !VALID_TYPES.has(type)) {
     return NextResponse.json({ error: appError("ERR-SYS-001", "tipo invalido") }, { status: 400 });
@@ -110,7 +115,10 @@ export async function POST(req: Request) {
     );
   }
   const safeName = sanitizeFilenameForStorage(filename);
-  const storageKey = `${clientId}/${periodYear}-${String(periodMonth).padStart(2, "0")}/${Date.now()}-${safeName}`;
+  const periodSegment = periodType === "QUARTERLY"
+    ? `${periodYear}-T${Math.ceil((periodMonth as number) / 3)}`
+    : `${periodYear}-${String(periodMonth).padStart(2, "0")}`;
+  const storageKey = `${clientId}/${periodSegment}/${Date.now()}-${safeName}`;
   const signed = await supabase.storage.from("invoices").createSignedUploadUrl(storageKey);
   if (signed.error || !signed.data) {
     return NextResponse.json(
