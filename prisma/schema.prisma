@@ -86,6 +86,10 @@ enum InvoiceStatus {
   /// Foto original que contenía varios tickets y fue dividida en sub-facturas.
   /// Se excluye de la cola activa pero se conserva para referencia.
   SPLIT_SOURCE
+  /// Subida en modo "clasificar entre varios": pendiente de auto-ruteo por CIF
+  /// o de clasificación manual. Vive en el cliente buzón "Sin clasificar" hasta
+  /// que se asigna a su cliente real. Se excluye de colas/contadores normales.
+  PENDING_ROUTING
 }
 
 enum RejectionCategory {
@@ -119,6 +123,7 @@ model AdvisoryFirm {
 
   users   User[]
   clients Client[]
+  clientGroups ClientGroup[]
 }
 
 model User {
@@ -153,6 +158,10 @@ model Client {
   simplifiedSupplierAccount String?
   /// Cuenta de gasto por defecto para esas mismas facturas simplificadas.
   simplifiedExpenseAccount  String?
+  /// true solo para el cliente técnico "Sin clasificar" de cada asesoría, que
+  /// sostiene las facturas subidas en modo clasificar mientras se rutean. Se
+  /// excluye de selectores, listados, colas y exportación.
+  isUnclassifiedBucket Boolean @default(false)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -167,6 +176,35 @@ model Client {
   invoices        Invoice[]
   periodClosures  PeriodClosure[]
   accountEntries  AccountEntry[]
+  groupMemberships ClientGroupMember[]
+}
+
+/// Grupo de clientes (empresas) que un gestor sube juntos para auto-ruteo por
+/// CIF. Ej: un dueño con 3 restaurantes que pasa todas las facturas mezcladas.
+/// Cuelga de la asesoría (multitenancy).
+model ClientGroup {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  advisoryFirmId String
+  advisoryFirm   AdvisoryFirm @relation(fields: [advisoryFirmId], references: [id], onDelete: Cascade)
+
+  members ClientGroupMember[]
+
+  @@index([advisoryFirmId])
+}
+
+model ClientGroupMember {
+  id      String @id @default(cuid())
+  groupId String
+  group   ClientGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, clientId])
+  @@index([clientId])
 }
 
 model WorkerClientAssignment {
@@ -287,6 +325,13 @@ model Invoice {
   /// pospuestas al final, así no estorban al flujo principal. Se limpia
   /// automáticamente cuando alguien la edita o valida.
   deferredAt    DateTime?
+
+  /// Auto-ruteo multicliente: ids de los clientes candidatos del lote contra
+  /// cuyos CIF se intenta casar la factura. Solo tiene valor mientras está en
+  /// el buzón (PENDING_ROUTING); se limpia al rutear/clasificar.
+  routingCandidateIds String[] @default([])
+  /// Motivo por el que quedó "Por clasificar" (no_cif / no_match / ambiguous).
+  routingReason String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

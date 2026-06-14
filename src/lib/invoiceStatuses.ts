@@ -71,4 +71,8 @@ export const STATUS_LABELS: Record<InvoiceStatus, string> = {
   REJECTED:         "Rechazada",
   EXPORTED:         "Exportada",        // legacy
   SPLIT_SOURCE:     "Dividida",
+  // Subida en modo clasificar, pendiente de auto-ruteo/clasificación manual.
+  // No entra en PENDING_WORK/NEEDS_REVIEW/DONE_WORK: queda fuera de colas y
+  // contadores normales hasta que se asigna a su cliente real.
+  PENDING_ROUTING:  "Por clasificar",
 };

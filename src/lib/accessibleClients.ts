@@ -18,7 +18,9 @@ export async function getAccessibleClientIds(session: {
   if (role === "ADMIN") {
     if (!advisoryFirmId) return [];
     const clients = await prisma.client.findMany({
-      where: { advisoryFirmId },
+      // El cliente técnico "Sin clasificar" (buzón de auto-ruteo) no es un
+      // cliente real: se excluye de listados, colas y contadores.
+      where: { advisoryFirmId, isUnclassifiedBucket: false },
       select: { id: true },
     });
     return clients.map((c) => c.id);
