@@ -31,7 +31,7 @@ export default async function ClientsPage() {
   const firmId = session.user.advisoryFirmId ?? undefined;
 
   const clients = await prisma.client.findMany({
-    where: { advisoryFirmId: firmId },
+    where: { advisoryFirmId: firmId, isUnclassifiedBucket: false },
     orderBy: { createdAt: "desc" },
     include: {
       _count: { select: { invoices: true, assignedWorkers: true } },

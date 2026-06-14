@@ -72,25 +72,25 @@ export default async function AdminDashboard() {
     recentLogs,
     clientProgress,
   ] = await Promise.all([
-    prisma.invoice.count({ where: { client: { advisoryFirmId: firmId } } }),
-    prisma.invoice.count({ where: { status: { in: PENDING_WORK }, client: { advisoryFirmId: firmId } } }),
-    prisma.invoice.count({ where: { status: "VALIDATED", client: { advisoryFirmId: firmId } } }),
-    prisma.invoice.count({ where: { exportBatchId: { not: null }, client: { advisoryFirmId: firmId } } }),
-    prisma.client.count({ where: { advisoryFirmId: firmId } }),
+    prisma.invoice.count({ where: { client: { advisoryFirmId: firmId, isUnclassifiedBucket: false } } }),
+    prisma.invoice.count({ where: { status: { in: PENDING_WORK }, client: { advisoryFirmId: firmId, isUnclassifiedBucket: false } } }),
+    prisma.invoice.count({ where: { status: "VALIDATED", client: { advisoryFirmId: firmId, isUnclassifiedBucket: false } } }),
+    prisma.invoice.count({ where: { exportBatchId: { not: null }, client: { advisoryFirmId: firmId, isUnclassifiedBucket: false } } }),
+    prisma.client.count({ where: { advisoryFirmId: firmId, isUnclassifiedBucket: false } }),
     prisma.invoice.findMany({
-      where: { client: { advisoryFirmId: firmId } },
+      where: { client: { advisoryFirmId: firmId, isUnclassifiedBucket: false } },
       take: 5,
       orderBy: { createdAt: "desc" },
       include: { client: true },
     }),
     prisma.auditLog.findMany({
-      where: { invoice: { client: { advisoryFirmId: firmId } } },
+      where: { invoice: { client: { advisoryFirmId: firmId, isUnclassifiedBucket: false } } },
       take: 5,
       orderBy: { createdAt: "desc" },
       include: { user: true, invoice: { include: { client: true } } },
     }),
     prisma.client.findMany({
-      where: { advisoryFirmId: firmId },
+      where: { advisoryFirmId: firmId, isUnclassifiedBucket: false },
       include: {
         invoices: { select: { status: true } },
       },

@@ -19,6 +19,7 @@ export default async function ExportPage() {
 
   const [clients, exportHistory] = await Promise.all([
     prisma.client.findMany({
+      where: { isUnclassifiedBucket: false },
       orderBy: { name: "asc" },
       select: { id: true, name: true, cif: true },
     }),

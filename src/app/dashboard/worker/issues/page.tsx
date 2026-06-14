@@ -45,7 +45,7 @@ export default async function WorkerIssuesPage({
   if (session.user.role === "ADMIN") {
     const firmClients = session.user.advisoryFirmId
       ? await prisma.client.findMany({
-          where: { advisoryFirmId: session.user.advisoryFirmId },
+          where: { advisoryFirmId: session.user.advisoryFirmId, isUnclassifiedBucket: false },
           select: { id: true },
         })
       : [];

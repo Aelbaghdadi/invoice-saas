@@ -52,7 +52,8 @@ export default async function InvoicesPage({
 
   const invoices = await prisma.invoice.findMany({
     where: {
-      client: { advisoryFirmId: firmId },
+      // Excluir el buzón "Sin clasificar" (sus facturas son PENDING_ROUTING).
+      client: { advisoryFirmId: firmId, isUnclassifiedBucket: false },
       ...(statusFilter ? { status: statusFilter as InvoiceStatus } : {}),
       ...(typeFilter ? { type: typeFilter as InvoiceType } : {}),
       ...(clientIdFilter ? { clientId: clientIdFilter } : {}),
@@ -68,7 +69,7 @@ export default async function InvoicesPage({
 
   const counts = await prisma.invoice.groupBy({
     by: ["status"],
-    where: { client: { advisoryFirmId: firmId } },
+    where: { client: { advisoryFirmId: firmId, isUnclassifiedBucket: false } },
     _count: true,
   }).catch(() => []);
 

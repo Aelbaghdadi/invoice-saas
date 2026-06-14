@@ -18,12 +18,12 @@ export default async function ClosuresPage() {
 
   const [clients, closures] = await Promise.all([
     prisma.client.findMany({
-      where: { advisoryFirmId: firmId },
+      where: { advisoryFirmId: firmId, isUnclassifiedBucket: false },
       orderBy: { name: "asc" },
       select: { id: true, name: true, cif: true },
     }),
     prisma.periodClosure.findMany({
-      where: { client: { advisoryFirmId: firmId } },
+      where: { client: { advisoryFirmId: firmId, isUnclassifiedBucket: false } },
       orderBy: [{ year: "desc" }, { month: "desc" }],
       include: { client: { select: { name: true, cif: true } } },
       take: 100,

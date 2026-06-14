@@ -17,7 +17,7 @@ export default async function WorkerClientsPage() {
     ? await prisma.client
         .findMany({
           where: session.user.advisoryFirmId
-            ? { advisoryFirmId: session.user.advisoryFirmId }
+            ? { advisoryFirmId: session.user.advisoryFirmId, isUnclassifiedBucket: false }
             : { id: { in: [] } },
           include: { invoices: { orderBy: { createdAt: "desc" } } },
           orderBy: { name: "asc" },

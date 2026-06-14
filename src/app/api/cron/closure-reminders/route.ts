@@ -25,8 +25,10 @@ export async function GET(req: Request) {
   const targetMonth = now.getMonth() === 0 ? 12 : now.getMonth(); // previous month (1-12)
   const targetYear = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
 
-  // Find all clients
+  // Find all clients (excluyendo el buzón técnico "Sin clasificar", cuyo
+  // email es sintético y no debe recibir recordatorios).
   const clients = await prisma.client.findMany({
+    where: { isUnclassifiedBucket: false },
     select: { id: true, name: true, email: true },
   });
 
