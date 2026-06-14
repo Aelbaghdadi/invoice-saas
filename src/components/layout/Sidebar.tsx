@@ -18,6 +18,8 @@ import {
   LogOut,
   CalendarCheck,
   ChevronDown,
+  Inbox,
+  Boxes,
 } from "lucide-react";
 
 type NavItem = {
@@ -50,6 +52,7 @@ const NAV_SECTIONS: Record<Role, NavSection[]> = {
       items: [
         { href: "/dashboard/admin",         label: "Panel",           icon: LayoutDashboard },
         { href: "/dashboard/worker/upload", label: "Subir facturas",  icon: Upload },
+        { href: "/dashboard/worker/clasificar", label: "Por clasificar", icon: Inbox },
         { href: "/dashboard/admin/batch",   label: "Lotes",           icon: Layers },
         { href: "/dashboard/admin/export",  label: "Exportar",        icon: Download },
       ],
@@ -58,6 +61,7 @@ const NAV_SECTIONS: Record<Role, NavSection[]> = {
       label: "Otros",
       items: [
         { href: "/dashboard/admin/clients",  label: "Clientes",  icon: Building2 },
+        { href: "/dashboard/worker/groups",  label: "Grupos",    icon: Boxes },
         { href: "/dashboard/admin/workers",  label: "Gestores",  icon: Users },
         { href: "/dashboard/admin/invoices", label: "Facturas",  icon: FileText },
         { href: "/dashboard/admin/closures", label: "Cierres",   icon: CalendarCheck },
@@ -75,6 +79,8 @@ const NAV_SECTIONS: Record<Role, NavSection[]> = {
         { href: "/dashboard/worker/clients",  label: "Clientes",       icon: Building2 },
         { href: "/dashboard/worker/invoices", label: "Facturas",       icon: FileText },
         { href: "/dashboard/worker/upload",   label: "Subir facturas", icon: Upload },
+        { href: "/dashboard/worker/clasificar", label: "Por clasificar", icon: Inbox },
+        { href: "/dashboard/worker/groups",   label: "Grupos",         icon: Boxes },
         { href: "/dashboard/worker/batch",    label: "Lotes",          icon: Layers },
       ],
     },
