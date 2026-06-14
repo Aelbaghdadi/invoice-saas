@@ -196,6 +196,10 @@ export default async function ReviewPage({
         queueSuffix={queueSuffix}
         bucket={bucket}
         avgOcrDurationMs={avgOcrDurationMs}
+        genericAccounts={{
+          supplier: invoice.client.simplifiedSupplierAccount,
+          expense: invoice.client.simplifiedExpenseAccount,
+        }}
         sessionContext={{
           clientName: invoice.client.name,
           clientCif: invoice.client.cif,

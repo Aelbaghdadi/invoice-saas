@@ -6,6 +6,7 @@ import { ChevronLeft } from "lucide-react";
 import Link from "next/link";
 import { ImportButton } from "./ImportButton";
 import { AccountsTable } from "./AccountsTable";
+import { SimplifiedAccountsConfig } from "./SimplifiedAccountsConfig";
 
 export default async function AccountsPage({ params }: { params: Promise<{ id: string }> }) {
   const session = await auth();
@@ -34,6 +35,13 @@ export default async function AccountsPage({ params }: { params: Promise<{ id: s
       <PageHeader
         title="Plan de Cuentas"
         description={`${client.name} — ${client.accountEntries.length} cuentas registradas`}
+      />
+
+      {/* Cuenta genérica para simplificadas */}
+      <SimplifiedAccountsConfig
+        clientId={clientId}
+        initialSupplier={client.simplifiedSupplierAccount ?? ""}
+        initialExpense={client.simplifiedExpenseAccount ?? ""}
       />
 
       {/* Import + Add */}

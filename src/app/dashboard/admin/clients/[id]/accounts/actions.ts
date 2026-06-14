@@ -201,3 +201,36 @@ export async function deleteAccountEntry(entryId: string): Promise<ActionState> 
   await prisma.accountEntry.delete({ where: { id: entryId } });
   return { success: true };
 }
+
+// ─── Cuenta genérica para facturas simplificadas ──────────────────────────────
+
+/**
+ * Guarda la cuenta de proveedor (y opcionalmente de gasto) por defecto para
+ * facturas simplificadas / tickets sin datos suficientes de este cliente. El
+ * gestor la aplica luego manualmente desde revisión. Vacío = sin configurar.
+ */
+export async function updateSimplifiedAccounts(
+  clientId: string,
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const session = await auth();
+  if (!session?.user || session.user.role !== "ADMIN") return { error: "No autorizado" };
+  const firmId = session.user.advisoryFirmId ?? undefined;
+
+  const client = await prisma.client.findUnique({ where: { id: clientId } });
+  if (!client || client.advisoryFirmId !== firmId) return { error: "Cliente no encontrado" };
+
+  const supplier = ((formData.get("simplifiedSupplierAccount") as string) ?? "").trim();
+  const expense = ((formData.get("simplifiedExpenseAccount") as string) ?? "").trim();
+
+  await prisma.client.update({
+    where: { id: clientId },
+    data: {
+      simplifiedSupplierAccount: supplier || null,
+      simplifiedExpenseAccount: expense || null,
+    },
+  });
+
+  return { success: true };
+}

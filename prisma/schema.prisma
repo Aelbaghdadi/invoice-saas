@@ -147,6 +147,12 @@ model Client {
   email             String   @unique
   accountingProgram String?
   exportConfig      Json?     // { encoding, delimiter, dateFormat, accountLength }
+  /// Cuenta de proveedor por defecto para facturas simplificadas / tickets
+  /// sin datos suficientes (ej. "4999999"). El gestor la aplica manualmente
+  /// desde revisión para agrupar esos tickets en una sola cuenta.
+  simplifiedSupplierAccount String?
+  /// Cuenta de gasto por defecto para esas mismas facturas simplificadas.
+  simplifiedExpenseAccount  String?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 

@@ -153,6 +153,10 @@ type Props = {
    *  el banner de "procesando" para mostrar una ETA realista. null si
    *  no hay historial todavia o la factura no esta en procesamiento. */
   avgOcrDurationMs?: number | null;
+  /** Cuentas genéricas del cliente para facturas simplificadas (tickets sin
+   *  datos). Si hay cuenta proveedor configurada, se muestra el botón "Usar
+   *  cuenta genérica" que las vuelca a los campos de cuenta. */
+  genericAccounts?: { supplier: string | null; expense: string | null };
 };
 
 // Convierte texto numérico del PDF (formato español) a número JS.
@@ -224,7 +228,7 @@ function fmtDate(d: Date | null | undefined) {
   return new Date(d).toISOString().slice(0, 10);
 }
 
-export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position, batchTotal, backHref, extraction, issues, suggestedAccount, boundingBoxes, queueSuffix = "", bucket = "all", sessionContext, avgOcrDurationMs }: Props) {
+export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position, batchTotal, backHref, extraction, issues, suggestedAccount, boundingBoxes, queueSuffix = "", bucket = "all", sessionContext, avgOcrDurationMs, genericAccounts }: Props) {
   const { success, error } = useToast();
   const isImage = invoice.fileType.startsWith("image/");
   const isPdf   = invoice.fileType === "application/pdf";
@@ -1496,6 +1500,22 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                   />
                 </div>
               </div>
+              {/* Cuenta genérica para tickets/simplificadas sin datos: vuelca
+                  la cuenta configurada por cliente con un clic. */}
+              {genericAccounts?.supplier && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSupplierAccount(genericAccounts.supplier ?? "");
+                    if (genericAccounts.expense) setExpenseAccount(genericAccounts.expense);
+                  }}
+                  title="Asignar la cuenta genérica de facturas simplificadas de este cliente"
+                  className="mt-3 flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-[12px] font-medium text-slate-600 transition hover:bg-slate-50"
+                >
+                  <FileText className="h-3.5 w-3.5" />
+                  Usar cuenta genérica ({genericAccounts.supplier})
+                </button>
+              )}
             </fieldset>
 
           </div>
