@@ -15,6 +15,7 @@ import {
   type RetentionTypeName,
 } from "@/lib/validators";
 import { textMentionsRectificative, applyRectificativeSign } from "@/lib/rectificative";
+import { routeByCif, clientSideCif } from "@/lib/invoiceRouting";
 
 /**
  * Convierte el string de fecha del OCR a Date. Si el OCR devuelve algo
@@ -167,9 +168,59 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       },
     });
 
-    // Detect issues (duplicates, low confidence, math mismatch, etc.)
-    const issues = await detectIssues(invoiceId, extracted, invoice);
-    const targetStatus: InvoiceStatus = issues.length > 0 ? "NEEDS_ATTENTION" : "PENDING_REVIEW";
+    // ── Auto-ruteo multicliente ──────────────────────────────────────────────
+    // Si la factura se subió en modo "clasificar" (trae candidatos), decidimos
+    // su cliente real por el CIF del lado del cliente (receptor en compra,
+    // emisor en venta). Si casa, reasignamos invoice.clientId y el resto del
+    // pipeline opera con el cliente real (forzar parte conocida, aprendizaje,
+    // dedupe). Si no casa, queda "Por clasificar" (PENDING_ROUTING) en el buzón.
+    let routingReason: string | null = null;
+    const isRoutingUpload = invoice.routingCandidateIds.length > 0;
+    if (isRoutingUpload) {
+      const candidates = await prisma.client.findMany({
+        where: { id: { in: invoice.routingCandidateIds } },
+        select: { id: true, cif: true },
+      });
+      const sideCif = clientSideCif(invoice.type, {
+        issuerCif: extracted.issuerCif,
+        receiverCif: extracted.receiverCif,
+      });
+      const otherCif = invoice.type === "PURCHASE" ? extracted.issuerCif : extracted.receiverCif;
+      const routing = routeByCif(
+        candidates.map((c) => ({ clientId: c.id, cif: c.cif })),
+        sideCif,
+        otherCif,
+      );
+      if (routing.status === "routed") {
+        // No colar la factura en un periodo ya cerrado del cliente real: si lo
+        // está, la dejamos por clasificar para que el gestor decida (reabrir,
+        // cambiar periodo o rechazar).
+        const closure = await prisma.periodClosure.findUnique({
+          where: {
+            clientId_month_year: {
+              clientId: routing.clientId,
+              month: invoice.periodMonth,
+              year: invoice.periodYear,
+            },
+          },
+        });
+        if (closure && !closure.reopenedAt) {
+          routingReason = "periodo_cerrado";
+        } else {
+          invoice.clientId = routing.clientId; // reasignar al cliente real
+        }
+      } else {
+        routingReason = routing.reason;
+      }
+    }
+    const isUnclassified = isRoutingUpload && routingReason !== null;
+
+    // Detect issues (duplicates, low confidence, math mismatch, etc.). En las
+    // "Por clasificar" no tiene sentido (aún no hay cliente real).
+    const issues = isUnclassified ? [] : await detectIssues(invoiceId, extracted, invoice);
+    const targetStatus: InvoiceStatus = isUnclassified
+      ? "PENDING_ROUTING"
+      : issues.length > 0 ? "NEEDS_ATTENTION" : "PENDING_REVIEW";
 
     // vatRate denormalizado: solo significativo cuando hay una unica linea.
     // Multi-IVA -> null (el desglose vive en InvoiceVatLine).
@@ -189,10 +240,15 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     // Esos datos NO los necesita el OCR — los sabemos a priori. Forzamos
     // los campos del Client (nombre + CIF) ignorando lo que el OCR diga
     // de esa parte. El OCR solo es responsable de la "otra parte".
-    const clientRecord = await prisma.client.findUnique({
-      where: { id: invoice.clientId },
-      select: { name: true, cif: true },
-    });
+    // En "Por clasificar" no forzamos ninguna parte como cliente (no sabemos
+    // cuál es): se guardan los datos del OCR tal cual para mostrarlos al
+    // clasificar. Si está ruteada, invoice.clientId ya es el cliente real.
+    const clientRecord = isUnclassified
+      ? null
+      : await prisma.client.findUnique({
+          where: { id: invoice.clientId },
+          select: { name: true, cif: true },
+        });
 
     let finalIssuerName = extracted.issuerName;
     let finalIssuerCif  = issuerParsed.clean || null;
@@ -326,6 +382,12 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
         where: { id: invoiceId },
         data: {
           status: targetStatus,
+          // Si fue ruteada, clientId ya es el real; si quedó por clasificar,
+          // sigue en el buzón. routingCandidateIds se limpia al resolver y se
+          // conserva mientras está por clasificar (lo usa la pantalla).
+          clientId: invoice.clientId,
+          routingCandidateIds: isUnclassified ? invoice.routingCandidateIds : [],
+          routingReason,
           issuerName:    finalIssuerName,
           issuerCif:     finalIssuerCif,
           issuerCountry: finalIssuerCountry,
