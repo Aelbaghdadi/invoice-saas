@@ -64,13 +64,19 @@ type Item = {
 
 type Props = {
   clients: { id: string; name: string; cif: string }[];
+  groups: { id: string; name: string; clientIds: string[] }[];
 };
 
-export function WorkerUploadForm({ clients }: Props) {
+export function WorkerUploadForm({ clients, groups }: Props) {
   const { success, error: toastError, info } = useToast();
   const now = new Date();
   const [items, setItems] = useState<Item[]>([]);
   const [clientId, setClientId] = useState(clients[0]?.id ?? "");
+  // Modo de subida: "single" = un cliente; "classify" = clasificar por CIF
+  // entre varias empresas candidatas (grupo guardado o selección ad-hoc).
+  const [mode, setMode] = useState<"single" | "classify">("single");
+  const [candidateIds, setCandidateIds] = useState<Set<string>>(new Set());
+  const [groupId, setGroupId] = useState("");
   const [periodType, setPeriodType] = useState<"MONTHLY" | "QUARTERLY">("MONTHLY");
   const [month, setMonth] = useState(String(now.getMonth() + 1));
   const [quarter, setQuarter] = useState(Math.ceil((now.getMonth() + 1) / 3));
@@ -118,7 +124,9 @@ export function WorkerUploadForm({ clients }: Props) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!items.length || isPending || !clientId) return;
+    if (!items.length || isPending) return;
+    if (mode === "single" && !clientId) return;
+    if (mode === "classify" && candidateIds.size === 0) return;
 
     setIsPending(true);
     setItems((prev) =>
@@ -135,13 +143,21 @@ export function WorkerUploadForm({ clients }: Props) {
     const effectivePeriodMonth = periodType === "QUARTERLY" ? quarterStartMonth(quarter) : Number(month);
     const results = await uploadFilesDirect(
       toUpload.map((x) => x.it.file),
-      {
-        clientId,
-        periodType,
-        periodMonth: effectivePeriodMonth,
-        periodYear: Number(year),
-        type,
-      },
+      mode === "classify"
+        ? {
+            candidateClientIds: [...candidateIds],
+            periodType,
+            periodMonth: effectivePeriodMonth,
+            periodYear: Number(year),
+            type,
+          }
+        : {
+            clientId,
+            periodType,
+            periodMonth: effectivePeriodMonth,
+            periodYear: Number(year),
+            type,
+          },
       3,
       (uploadIdx, status) => {
         const realIdx = toUpload[uploadIdx]?.idx;
@@ -191,8 +207,30 @@ export function WorkerUploadForm({ clients }: Props) {
         <h2 className="mb-4 text-[14px] font-semibold text-slate-800">
           Configuración del lote
         </h2>
-        <div className="grid grid-cols-2 gap-4 mb-4">
-          <div className="col-span-2">
+        {/* Modo: un cliente vs clasificar entre varios por CIF */}
+        <div className="mb-4">
+          <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            Modo de subida
+          </label>
+          <div className="flex gap-2">
+            {([["single", "Un cliente"], ["classify", "Clasificar entre varios"]] as const).map(([m, label]) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setMode(m)}
+                disabled={m === "classify" && clients.length < 2}
+                className={`flex-1 rounded-lg border px-3 py-2 text-[12px] font-medium transition disabled:opacity-40 ${
+                  mode === m ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 text-slate-500 hover:bg-slate-50"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {mode === "single" ? (
+          <div className="mb-4">
             <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-400">
               Cliente
             </label>
@@ -202,7 +240,55 @@ export function WorkerUploadForm({ clients }: Props) {
               options={clients.map((c) => ({ value: c.id, label: `${c.name} (${c.cif})` }))}
             />
           </div>
-        </div>
+        ) : (
+          <div className="mb-4 space-y-2">
+            {groups.length > 0 && (
+              <div>
+                <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                  Grupo guardado
+                </label>
+                <Select
+                  value={groupId}
+                  onChange={(v) => {
+                    setGroupId(v);
+                    const g = groups.find((x) => x.id === v);
+                    setCandidateIds(new Set(g ? g.clientIds : []));
+                  }}
+                  options={[{ value: "", label: "— Selección manual —" }, ...groups.map((g) => ({ value: g.id, label: g.name }))]}
+                />
+              </div>
+            )}
+            <div>
+              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                Empresas candidatas ({candidateIds.size})
+              </label>
+              <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
+                {clients.map((c) => (
+                  <label key={c.id} className="flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[12px] text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={candidateIds.has(c.id)}
+                      onChange={() => {
+                        setGroupId("");
+                        setCandidateIds((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(c.id)) next.delete(c.id);
+                          else next.add(c.id);
+                          return next;
+                        });
+                      }}
+                      className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600"
+                    />
+                    <span className="truncate" title={`${c.name} (${c.cif})`}>{c.name}</span>
+                  </label>
+                ))}
+              </div>
+              <p className="mt-1.5 text-[11px] text-slate-400">
+                Cada factura se asigna a la empresa cuyo CIF aparezca (según el tipo de abajo); las que no casen quedan en “Por clasificar”.
+              </p>
+            </div>
+          </div>
+        )}
         {/* Toggle mensual / trimestral */}
         <div className="mb-4">
           <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-400">
@@ -331,7 +417,7 @@ export function WorkerUploadForm({ clients }: Props) {
         </p>
         <button
           type="submit"
-          disabled={!items.length || isPending || !clientId || pendingCount === 0}
+          disabled={!items.length || isPending || pendingCount === 0 || (mode === "single" ? !clientId : candidateIds.size === 0)}
           className="flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-[13px] font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}

@@ -7,6 +7,7 @@ import { processInvoice } from "@/lib/processInvoice";
 import { notifyWorkersNewUpload } from "@/lib/email";
 import { appError } from "@/lib/errorCodes";
 import { assertUploadClientAccess, assertUploadPeriodOpen } from "@/lib/uploadAccess";
+import { getOrCreateUnclassifiedClient } from "@/lib/unclassifiedClient";
 import type { InvoiceType, PeriodType } from "@prisma/client";
 
 /**
@@ -39,12 +40,11 @@ export async function POST(req: Request) {
   }
 
   const {
-    clientId, periodType, periodMonth, periodYear, type,
+    clientId, candidateClientIds, periodType, periodMonth, periodYear, type,
     filename, fileType, fileSize, fileHash, storageKey,
   } = body as Record<string, unknown>;
 
-  if (typeof clientId !== "string" || !clientId ||
-      typeof periodType !== "string" || !VALID_PERIOD_TYPES.has(periodType) ||
+  if (typeof periodType !== "string" || !VALID_PERIOD_TYPES.has(periodType) ||
       typeof periodMonth !== "number" ||
       typeof periodYear !== "number" ||
       typeof type !== "string" || !VALID_TYPES.has(type) ||
@@ -56,31 +56,61 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: appError("ERR-SYS-001", "metadata invalida") }, { status: 400 });
   }
 
-  // Defensa en profundidad: re-validamos aunque /sign ya lo hizo.
-  const access = await assertUploadClientAccess(session, clientId);
-  if (!access.ok) return NextResponse.json({ error: access.error }, { status: 403 });
-  const periodOk = await assertUploadPeriodOpen(clientId, periodMonth, periodYear);
-  if (!periodOk.ok) return NextResponse.json({ error: periodOk.error }, { status: 409 });
+  // Modo "clasificar entre varios" (gestor/admin) vs un-cliente. Defensa en
+  // profundidad: re-validamos aunque /sign ya lo hizo.
+  const routingMode = Array.isArray(candidateClientIds) && candidateClientIds.length > 0;
+  let effectiveClientId: string;
+  let routingCandidateIds: string[] = [];
+  let clientNameForNotify = "";
+  if (routingMode) {
+    if (!["ADMIN", "WORKER"].includes(session.user.role) || !session.user.advisoryFirmId) {
+      return NextResponse.json({ error: appError("ERR-UPLOAD-005", "modo clasificar no permitido") }, { status: 403 });
+    }
+    const ids: string[] = [];
+    for (const cid of candidateClientIds as unknown[]) {
+      if (typeof cid !== "string") {
+        return NextResponse.json({ error: appError("ERR-SYS-001", "candidato invalido") }, { status: 400 });
+      }
+      const acc = await assertUploadClientAccess(session, cid);
+      if (!acc.ok) return NextResponse.json({ error: acc.error }, { status: 403 });
+      ids.push(cid);
+    }
+    routingCandidateIds = ids;
+    const bucket = await getOrCreateUnclassifiedClient(session.user.advisoryFirmId);
+    effectiveClientId = bucket.id;
+  } else {
+    if (typeof clientId !== "string" || !clientId) {
+      return NextResponse.json({ error: appError("ERR-SYS-001", "metadata invalida") }, { status: 400 });
+    }
+    const access = await assertUploadClientAccess(session, clientId);
+    if (!access.ok) return NextResponse.json({ error: access.error }, { status: 403 });
+    const periodOk = await assertUploadPeriodOpen(clientId, periodMonth, periodYear);
+    if (!periodOk.ok) return NextResponse.json({ error: periodOk.error }, { status: 409 });
+    effectiveClientId = clientId;
+    clientNameForNotify = access.client.name;
+  }
 
-  // El storageKey DEBE empezar por `<clientId>/` — defiende contra que
+  // El storageKey DEBE empezar por `<effectiveClientId>/` — defiende contra que
   // alguien envie un storageKey de otra factura/firma.
-  if (!storageKey.startsWith(`${clientId}/`)) {
+  if (!storageKey.startsWith(`${effectiveClientId}/`)) {
     return NextResponse.json({ error: appError("ERR-UPLOAD-005", "storageKey fuera del cliente") }, { status: 403 });
   }
 
-  // Race-condition: chequeo final por hash. Si surgio un duplicado entre
-  // /sign y /register, borramos el blob y devolvemos duplicate. (No
-  // creamos la Invoice — equivalente a "el cliente quita el archivo".)
-  const existing = await prisma.invoice.findFirst({
-    where: { clientId, fileHash, status: { not: "REJECTED" } },
-    select: { filename: true },
-  });
-  if (existing) {
-    const supabase = createServerSupabase();
-    if (supabase) {
-      await supabase.storage.from("invoices").remove([storageKey]).catch(() => null);
+  // Race-condition: chequeo final por hash. En modo routing NO se deduplica
+  // por hash (el cliente real aún no se conoce; el duplicado real se detecta
+  // tras rutear via detectIssues). Solo aplica al modo un-cliente.
+  if (!routingMode) {
+    const existing = await prisma.invoice.findFirst({
+      where: { clientId: effectiveClientId, fileHash, status: { not: "REJECTED" } },
+      select: { filename: true },
+    });
+    if (existing) {
+      const supabase = createServerSupabase();
+      if (supabase) {
+        await supabase.storage.from("invoices").remove([storageKey]).catch(() => null);
+      }
+      return NextResponse.json({ duplicate: true, of: existing.filename });
     }
-    return NextResponse.json({ duplicate: true, of: existing.filename });
   }
 
   const document = await prisma.document.create({
@@ -91,7 +121,7 @@ export async function POST(req: Request) {
       fileHash,
       sizeBytes: fileSize,
       uploadedBy: session.user.id,
-      clientId,
+      clientId: effectiveClientId,
     },
   });
 
@@ -105,7 +135,8 @@ export async function POST(req: Request) {
       periodType: periodType as PeriodType,
       periodMonth,
       periodYear,
-      clientId,
+      clientId: effectiveClientId,
+      routingCandidateIds,
       documentId: document.id,
     },
   });
@@ -127,14 +158,14 @@ export async function POST(req: Request) {
     after(async () => {
       try {
         const assignments = await prisma.workerClientAssignment.findMany({
-          where: { clientId },
+          where: { clientId: effectiveClientId },
           include: { worker: { select: { email: true } } },
         });
         const emails = assignments.map((a) => a.worker.email);
         if (emails.length) {
           await notifyWorkersNewUpload({
             workerEmails: emails,
-            clientName: access.client.name,
+            clientName: clientNameForNotify,
             count: 1,
             periodMonth,
             periodYear,

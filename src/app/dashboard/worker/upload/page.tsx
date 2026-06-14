@@ -10,10 +10,12 @@ export default async function WorkerUploadPage() {
     redirect("/login");
   }
 
-  // Get assigned clients (workers see assigned, admins see all)
+  // Get assigned clients (workers see assigned, admins see all). Excluimos el
+  // cliente técnico "Sin clasificar" (buzón de auto-ruteo) de los selectores.
   let clients;
   if (session.user.role === "ADMIN") {
     clients = await prisma.client.findMany({
+      where: { isUnclassifiedBucket: false },
       orderBy: { name: "asc" },
       select: { id: true, name: true, cif: true },
     });
@@ -24,6 +26,17 @@ export default async function WorkerUploadPage() {
     });
     clients = assignments.map((a) => a.client);
   }
+
+  // Grupos de empresas de la firma (para el modo "clasificar entre varios").
+  const firmId = session.user.advisoryFirmId ?? undefined;
+  const groupsRaw = firmId
+    ? await prisma.clientGroup.findMany({
+        where: { advisoryFirmId: firmId },
+        orderBy: { name: "asc" },
+        include: { members: { select: { clientId: true } } },
+      })
+    : [];
+  const groups = groupsRaw.map((g) => ({ id: g.id, name: g.name, clientIds: g.members.map((m) => m.clientId) }));
 
   if (clients.length === 0) {
     return (
@@ -47,7 +60,7 @@ export default async function WorkerUploadPage() {
         description="Sube facturas en nombre de un cliente."
       />
       <div className="max-w-2xl">
-        <WorkerUploadForm clients={clients} />
+        <WorkerUploadForm clients={clients} groups={groups} />
       </div>
     </div>
   );

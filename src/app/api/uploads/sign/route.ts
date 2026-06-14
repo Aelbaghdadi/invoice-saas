@@ -5,6 +5,7 @@ import { createServerSupabase, sanitizeFilenameForStorage } from "@/lib/supabase
 import { appError } from "@/lib/errorCodes";
 import { validateUploadedFile, canonicalMime } from "@/lib/fileValidation";
 import { assertUploadClientAccess, assertUploadPeriodOpen } from "@/lib/uploadAccess";
+import { getOrCreateUnclassifiedClient } from "@/lib/unclassifiedClient";
 
 /**
  * Pre-autoriza una subida directa del cliente a Supabase Storage.
@@ -44,16 +45,13 @@ export async function POST(req: Request) {
   }
 
   const {
-    clientId, periodType, periodMonth, periodYear, type,
+    clientId, candidateClientIds, periodType, periodMonth, periodYear, type,
     filename, fileType, fileSize, fileHash, headBase64,
   } = body as Record<string, unknown>;
 
   const VALID_PERIOD_TYPES = new Set(["MONTHLY", "QUARTERLY"]);
 
-  // Validaciones de forma minimas (los detalles vienen del client UI).
-  if (typeof clientId !== "string" || !clientId) {
-    return NextResponse.json({ error: appError("ERR-UPLOAD-005", "clientId vacio") }, { status: 400 });
-  }
+  // Validaciones de forma comunes a ambos modos.
   if (typeof periodMonth !== "number" || typeof periodYear !== "number") {
     return NextResponse.json({ error: appError("ERR-SYS-001", "periodo invalido") }, { status: 400 });
   }
@@ -73,11 +71,34 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: appError("ERR-UPLOAD-001", `${filename} (${fileSize} bytes)`) }, { status: 413 });
   }
 
-  // Tenancy + periodo abierto.
-  const access = await assertUploadClientAccess(session, clientId);
-  if (!access.ok) return NextResponse.json({ error: access.error }, { status: 403 });
-  const periodOk = await assertUploadPeriodOpen(clientId, periodMonth, periodYear);
-  if (!periodOk.ok) return NextResponse.json({ error: periodOk.error }, { status: 409 });
+  // Modo "clasificar entre varios" (solo gestor/admin): el archivo va al buzón
+  // "Sin clasificar" de la firma y se rutea por CIF tras el OCR. El periodo se
+  // valida al rutear (cuando se conoce el cliente real). Si no, modo un-cliente.
+  const routingMode = Array.isArray(candidateClientIds) && candidateClientIds.length > 0;
+  let effectiveClientId: string;
+  if (routingMode) {
+    if (!["ADMIN", "WORKER"].includes(session.user.role) || !session.user.advisoryFirmId) {
+      return NextResponse.json({ error: appError("ERR-UPLOAD-005", "modo clasificar no permitido") }, { status: 403 });
+    }
+    for (const cid of candidateClientIds as unknown[]) {
+      if (typeof cid !== "string") {
+        return NextResponse.json({ error: appError("ERR-SYS-001", "candidato invalido") }, { status: 400 });
+      }
+      const acc = await assertUploadClientAccess(session, cid);
+      if (!acc.ok) return NextResponse.json({ error: acc.error }, { status: 403 });
+    }
+    const bucket = await getOrCreateUnclassifiedClient(session.user.advisoryFirmId);
+    effectiveClientId = bucket.id;
+  } else {
+    if (typeof clientId !== "string" || !clientId) {
+      return NextResponse.json({ error: appError("ERR-UPLOAD-005", "clientId vacio") }, { status: 400 });
+    }
+    const access = await assertUploadClientAccess(session, clientId);
+    if (!access.ok) return NextResponse.json({ error: access.error }, { status: 403 });
+    const periodOk = await assertUploadPeriodOpen(clientId, periodMonth, periodYear);
+    if (!periodOk.ok) return NextResponse.json({ error: periodOk.error }, { status: 409 });
+    effectiveClientId = clientId;
+  }
 
   // Magic bytes — usa los primeros 32B que mando el cliente. Validacion
   // defensiva contra archivos disguised que pasen el filtro client-side.
@@ -97,13 +118,19 @@ export async function POST(req: Request) {
 
   // Dedupe pre-subida: si ya existe una factura activa con el mismo hash
   // del cliente, no firmamos URL. El cliente quita el archivo y muestra
-  // "duplicado de X" sin que el gestor haga nada.
-  const existing = await prisma.invoice.findFirst({
-    where: { clientId, fileHash, status: { not: "REJECTED" } },
-    select: { filename: true },
-  });
-  if (existing) {
-    return NextResponse.json({ duplicate: true, of: existing.filename });
+  // "duplicado de X" sin que el gestor haga nada. En modo routing NO se
+  // deduplica por hash aquí: el cliente real aún no se conoce (todas viven en
+  // el buzón) y compararlas entre sí daría falsos positivos cruzados entre
+  // empresas distintas. El duplicado real se detecta tras rutear via
+  // detectIssues (CIF + nº factura) contra el cliente ya asignado.
+  if (!routingMode) {
+    const existing = await prisma.invoice.findFirst({
+      where: { clientId: effectiveClientId, fileHash, status: { not: "REJECTED" } },
+      select: { filename: true },
+    });
+    if (existing) {
+      return NextResponse.json({ duplicate: true, of: existing.filename });
+    }
   }
 
   // Genera storageKey y signed upload URL.
@@ -118,7 +145,7 @@ export async function POST(req: Request) {
   const periodSegment = periodType === "QUARTERLY"
     ? `${periodYear}-T${Math.ceil((periodMonth as number) / 3)}`
     : `${periodYear}-${String(periodMonth).padStart(2, "0")}`;
-  const storageKey = `${clientId}/${periodSegment}/${Date.now()}-${safeName}`;
+  const storageKey = `${effectiveClientId}/${periodSegment}/${Date.now()}-${safeName}`;
   const signed = await supabase.storage.from("invoices").createSignedUploadUrl(storageKey);
   if (signed.error || !signed.data) {
     return NextResponse.json(

@@ -25,7 +25,11 @@ export type UploadStatus =
   | "error";
 
 export type UploadMeta = {
-  clientId: string;
+  /** Modo un-cliente: id del cliente destino. */
+  clientId?: string;
+  /** Modo "clasificar entre varios": ids de empresas candidatas. El server
+   *  sube al buzón "Sin clasificar" y rutea por CIF tras el OCR. */
+  candidateClientIds?: string[];
   periodType: "MONTHLY" | "QUARTERLY";
   periodMonth: number;
   periodYear: number;
@@ -79,6 +83,7 @@ export async function uploadFileDirect(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         clientId: meta.clientId,
+        candidateClientIds: meta.candidateClientIds,
         periodType: meta.periodType,
         periodMonth: meta.periodMonth,
         periodYear: meta.periodYear,
@@ -119,6 +124,7 @@ export async function uploadFileDirect(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         clientId: meta.clientId,
+        candidateClientIds: meta.candidateClientIds,
         periodType: meta.periodType,
         periodMonth: meta.periodMonth,
         periodYear: meta.periodYear,
