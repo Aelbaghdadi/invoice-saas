@@ -14,6 +14,7 @@ import {
   RETENTION_DEFAULT_RATE,
   type RetentionTypeName,
 } from "@/lib/validators";
+import { textMentionsRectificative, applyRectificativeSign } from "@/lib/rectificative";
 
 /**
  * Convierte el string de fecha del OCR a Date. Si el OCR devuelve algo
@@ -277,20 +278,42 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
 
     // ── Detección rectificativa (abono / corrección) ───────────────────
     //
-    // Si alguna línea de IVA tiene base negativa, O el total negativo,
-    // marcamos la factura como rectificativa. El gestor puede confirmar
-    // o desmarcar en revisión y rellenar el número de factura original.
+    // Se marca rectificativa si alguna línea/total viene negativo O si el
+    // texto del documento lo dice ("rectificativa", "nota de crédito",
+    // "factura de abono"). El gestor puede confirmar o desmarcar en revisión.
     const hasNegativeLine = vatLines.some((l) => l.taxBase < 0 || l.vatAmount < 0);
     const hasNegativeTotal = (extracted.totalAmount ?? 0) < 0;
-    const isRectificative = hasNegativeLine || hasNegativeTotal;
+    const isRectificative =
+      hasNegativeLine || hasNegativeTotal || textMentionsRectificative(ocrResult.rawText);
+
+    // Si es rectificativa y vino en positivo, pasamos los importes a negativo
+    // (abono). Misma regla que en revisión (lib/rectificative). Si ya trae
+    // signos mixtos/negativos, se respetan.
+    const signed = isRectificative
+      ? applyRectificativeSign({
+          lines: vatLines,
+          taxBase: extracted.taxBase,
+          vatAmount: extracted.vatAmount,
+          totalAmount: extracted.totalAmount,
+          irpfAmount: finalIrpfAmount,
+          retentionBase,
+        })
+      : {
+          lines: vatLines,
+          taxBase: extracted.taxBase,
+          vatAmount: extracted.vatAmount,
+          totalAmount: extracted.totalAmount,
+          irpfAmount: finalIrpfAmount,
+          retentionBase,
+        };
 
     // Copy OCR data to Invoice (datos finales — gestor los editará)
     await prisma.$transaction([
       // Reemplazar lineas previas (idempotente: si reproceso, borra y mete).
       prisma.invoiceVatLine.deleteMany({ where: { invoiceId } }),
-      ...(vatLines.length > 0
+      ...(signed.lines.length > 0
         ? [prisma.invoiceVatLine.createMany({
-            data: vatLines.map((l, i) => ({
+            data: signed.lines.map((l, i) => ({
               invoiceId,
               position:  i,
               taxBase:   l.taxBase,
@@ -311,15 +334,15 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
           receiverCif:   finalReceiverCif,
           invoiceNumber: extracted.invoiceNumber,
           invoiceDate:   safeParseDate(extracted.invoiceDate),
-          taxBase:       extracted.taxBase,
+          taxBase:       signed.taxBase,
           vatRate:       extracted.vatRate ?? denormVatRate,
-          vatAmount:     extracted.vatAmount,
+          vatAmount:     signed.vatAmount,
           irpfRate:      finalIrpfRate,
-          irpfAmount:    finalIrpfAmount,
+          irpfAmount:    signed.irpfAmount,
           retentionType,
-          retentionBase,
+          retentionBase: signed.retentionBase,
           isRectificative,
-          totalAmount:   extracted.totalAmount,
+          totalAmount:   signed.totalAmount,
           isValid,
           lastOcrError:  null,
         },

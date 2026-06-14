@@ -15,6 +15,7 @@ import {
 } from "@/lib/reviewQueue";
 import { appendAuditLogs } from "@/lib/auditLog";
 import { parseTaxId, isPersonaFisica } from "@/lib/validators";
+import { applyRectificativeSign } from "@/lib/rectificative";
 import { appError, type AppError } from "@/lib/errorCodes";
 import { createServerSupabase, sanitizeFilenameForStorage } from "@/lib/supabase";
 
@@ -246,10 +247,34 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     return { error: "El total no puede ser negativo (marca como rectificativa si es un abono)" };
   }
 
-  // Math validation: Sigma(bases) + Sigma(cuotas) - IRPF = Total
+  // Rectificativa: si el gestor la marca y los importes vienen en positivo,
+  // los pasamos a negativo (abono). Misma regla que processInvoice
+  // (lib/rectificative): si ya hay signos mixtos/negativos, se respetan.
+  // Reflejamos el signo en newData y en las lineas que se persisten para que
+  // calculo, auditoria y BD usen los mismos valores.
+  const signedLines = isRectificativeFlag
+    ? applyRectificativeSign({
+        lines: vatLines,
+        taxBase: newData.taxBase,
+        vatAmount: newData.vatAmount,
+        totalAmount: newData.totalAmount,
+        irpfAmount: newData.irpfAmount,
+        retentionBase: newData.retentionBase,
+      })
+    : { lines: vatLines, taxBase: newData.taxBase, vatAmount: newData.vatAmount, totalAmount: newData.totalAmount, irpfAmount: newData.irpfAmount, retentionBase: newData.retentionBase };
+  newData.taxBase       = signedLines.taxBase;
+  newData.vatAmount     = signedLines.vatAmount;
+  newData.totalAmount   = signedLines.totalAmount;
+  newData.irpfAmount    = signedLines.irpfAmount;
+  newData.retentionBase = signedLines.retentionBase;
+
+  // Math validation: Sigma(bases) + Sigma(cuotas) - IRPF = Total (el signo es
+  // invariante: negar ambos lados no cambia la diferencia).
   let isValid: boolean | null = null;
-  if (vatLines.length > 0 && newData.totalAmount !== null) {
-    const expected = sumBase + sumAmount - (newData.irpfAmount ?? 0);
+  if (signedLines.lines.length > 0 && newData.totalAmount !== null) {
+    const sBase = signedLines.lines.reduce((s, l) => s + l.taxBase, 0);
+    const sAmount = signedLines.lines.reduce((s, l) => s + l.vatAmount, 0);
+    const expected = sBase + sAmount - (newData.irpfAmount ?? 0);
     const diff = Math.abs(
       Math.round(expected * 100) - Math.round(newData.totalAmount * 100)
     );
@@ -290,9 +315,9 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
   // previas y reinsertamos: la UI envia el array completo.
   await prisma.$transaction([
     prisma.invoiceVatLine.deleteMany({ where: { invoiceId } }),
-    ...(vatLines.length > 0
+    ...(signedLines.lines.length > 0
       ? [prisma.invoiceVatLine.createMany({
-          data: vatLines.map((l, i) => ({
+          data: signedLines.lines.map((l, i) => ({
             invoiceId,
             position:  i,
             taxBase:   l.taxBase,
