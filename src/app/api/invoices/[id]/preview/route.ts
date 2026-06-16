@@ -26,7 +26,17 @@ export async function GET(
         },
       },
     });
-    if (!assignment) return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+    // Las facturas "por clasificar" viven en el cliente buzón (sin asignación
+    // a ningún gestor). Permitimos verlas si el gestor tiene acceso a alguno
+    // de los clientes candidatos del lote — la misma regla que la cola.
+    let allowed = Boolean(assignment);
+    if (!allowed && invoice.routingCandidateIds.length > 0) {
+      const candidate = await prisma.workerClientAssignment.findFirst({
+        where: { workerId: session.user.id, clientId: { in: invoice.routingCandidateIds } },
+      });
+      allowed = Boolean(candidate);
+    }
+    if (!allowed) return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
   } else if (session.user.role === "CLIENT") {
     const client = await prisma.client.findUnique({
       where: { userId: session.user.id },
