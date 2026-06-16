@@ -16,6 +16,7 @@ import {
 } from "@/lib/validators";
 import { textMentionsRectificative, applyRectificativeSign } from "@/lib/rectificative";
 import { routeByCif, clientSideCif } from "@/lib/invoiceRouting";
+import { lookupProviderClient } from "@/lib/providerRouting";
 
 /**
  * Convierte el string de fecha del OCR a Date. Si el OCR devuelve algo
@@ -179,7 +180,7 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     if (isRoutingUpload) {
       const candidates = await prisma.client.findMany({
         where: { id: { in: invoice.routingCandidateIds } },
-        select: { id: true, cif: true },
+        select: { id: true, cif: true, advisoryFirmId: true },
       });
       const sideCif = clientSideCif(invoice.type, {
         issuerCif: extracted.issuerCif,
@@ -191,14 +192,31 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
         sideCif,
         otherCif,
       );
+
+      // 1) match por CIF del cliente. 2) si no casa, regla aprendida por
+      // proveedor (otra parte): si ese proveedor ya se clasificó antes a una de
+      // las empresas candidatas, lo auto-ruteamos ahí.
+      let resolvedClientId: string | null = null;
       if (routing.status === "routed") {
+        resolvedClientId = routing.clientId;
+      } else {
+        routingReason = routing.reason;
+        const firmId = candidates[0]?.advisoryFirmId;
+        if (firmId) {
+          const learned = await lookupProviderClient(firmId, otherCif);
+          if (learned && candidates.some((c) => c.id === learned)) {
+            resolvedClientId = learned;
+          }
+        }
+      }
+
+      if (resolvedClientId) {
         // No colar la factura en un periodo ya cerrado del cliente real: si lo
-        // está, la dejamos por clasificar para que el gestor decida (reabrir,
-        // cambiar periodo o rechazar).
+        // está, la dejamos por clasificar para que el gestor decida.
         const closure = await prisma.periodClosure.findUnique({
           where: {
             clientId_month_year: {
-              clientId: routing.clientId,
+              clientId: resolvedClientId,
               month: invoice.periodMonth,
               year: invoice.periodYear,
             },
@@ -207,10 +225,9 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
         if (closure && !closure.reopenedAt) {
           routingReason = "periodo_cerrado";
         } else {
-          invoice.clientId = routing.clientId; // reasignar al cliente real
+          invoice.clientId = resolvedClientId; // reasignar al cliente real
+          routingReason = null;
         }
-      } else {
-        routingReason = routing.reason;
       }
     }
     const isUnclassified = isRoutingUpload && routingReason !== null;

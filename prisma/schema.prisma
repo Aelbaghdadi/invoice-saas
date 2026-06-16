@@ -124,6 +124,7 @@ model AdvisoryFirm {
   users   User[]
   clients Client[]
   clientGroups ClientGroup[]
+  providerRoutingRules ProviderRoutingRule[]
 }
 
 model User {
@@ -177,6 +178,30 @@ model Client {
   periodClosures  PeriodClosure[]
   accountEntries  AccountEntry[]
   groupMemberships ClientGroupMember[]
+  providerRoutingRules ProviderRoutingRule[]
+}
+
+/// Aprendizaje de ruteo por proveedor. Cuando el gestor clasifica a mano una
+/// factura "por clasificar" cuyo OTRO lado (proveedor en compras / cliente en
+/// ventas) tiene CIF, se recuerda a qué empresa la asignó, para auto-rutear las
+/// siguientes de ese mismo proveedor. Si el mismo proveedor se clasifica a dos
+/// empresas distintas, se marca `ambiguous` y deja de auto-rutear.
+model ProviderRoutingRule {
+  id             String   @id @default(cuid())
+  advisoryFirmId String
+  advisoryFirm   AdvisoryFirm @relation(fields: [advisoryFirmId], references: [id], onDelete: Cascade)
+  /// CIF de la otra parte (proveedor), normalizado (sin prefijo país ni separadores).
+  providerNif    String
+  clientId       String
+  client         Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  /// true si el proveedor se ha visto en >1 empresa: ya no auto-rutea.
+  ambiguous      Boolean  @default(false)
+  hitCount       Int      @default(1)
+  lastSeenAt     DateTime @default(now())
+
+  @@unique([advisoryFirmId, providerNif])
+  @@index([advisoryFirmId])
+  @@index([clientId])
 }
 
 /// Grupo de clientes (empresas) que un gestor sube juntos para auto-ruteo por

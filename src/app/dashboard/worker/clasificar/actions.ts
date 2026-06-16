@@ -4,6 +4,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { canAccessClient } from "@/lib/accessibleClients";
 import { appendAuditLogs } from "@/lib/auditLog";
+import { learnProviderRule } from "@/lib/providerRouting";
 import { revalidatePath } from "next/cache";
 
 export type ClassifyState = { ok?: boolean; error?: string } | null;
@@ -43,7 +44,7 @@ export async function classifyInvoice(invoiceId: string, clientId: string): Prom
 
   const client = await prisma.client.findUnique({
     where: { id: clientId },
-    select: { name: true, cif: true },
+    select: { name: true, cif: true, advisoryFirmId: true },
   });
   if (!client) return { error: "Cliente no encontrado" };
 
@@ -111,6 +112,10 @@ export async function classifyInvoice(invoiceId: string, clientId: string): Prom
     oldValue: "PENDING_ROUTING",
     newValue: targetStatus,
   }]);
+
+  // Aprender: este proveedor (otra parte) va a esta empresa, para auto-rutear
+  // las siguientes facturas suyas. No-op si no se leyó el CIF del proveedor.
+  await learnProviderRule(client.advisoryFirmId, otherCif, clientId);
 
   revalidatePath("/dashboard/worker/clasificar");
   revalidatePath("/dashboard/worker/invoices");
