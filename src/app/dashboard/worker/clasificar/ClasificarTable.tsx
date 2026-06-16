@@ -7,6 +7,8 @@ import {
   ChevronLeft, ChevronRight, Zap,
 } from "lucide-react";
 import { useToast } from "@/components/ui/Toast";
+import PdfViewer from "@/components/ui/PdfViewerDynamic";
+import ImageViewer from "@/components/ui/ImageViewer";
 import { classifyInvoice, discardUnclassified } from "./actions";
 
 type Candidate = { id: string; name: string };
@@ -268,16 +270,23 @@ function ChainOverlay({
       </div>
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Documento */}
-        <div className="flex flex-1 items-center justify-center overflow-hidden bg-slate-100">
+        {/* Documento — mismo visor que la pantalla de revisión (react-pdf /
+            ImageViewer). NO usar <iframe>: la CSP (default-src 'self', sin
+            frame-src) bloquea cargar el PDF de Supabase en un iframe. */}
+        <div className="flex flex-1 min-h-0 overflow-hidden">
           {previewLoading ? (
-            <Loader2 className="h-8 w-8 animate-spin text-slate-300" />
+            <div className="flex flex-1 items-center justify-center bg-slate-100">
+              <Loader2 className="h-8 w-8 animate-spin text-slate-300" />
+            </div>
           ) : !url ? (
-            <div className="flex flex-col items-center gap-2 text-slate-400"><FileText className="h-10 w-10" /><p className="text-[13px]">Vista previa no disponible</p></div>
+            <div className="flex flex-1 flex-col items-center justify-center gap-2 bg-slate-100 text-slate-400">
+              <FileText className="h-10 w-10" />
+              <p className="text-[13px]">Vista previa no disponible</p>
+            </div>
           ) : isImage ? (
-            <img src={url} alt={row.filename} className="max-h-full max-w-full object-contain" />
+            <ImageViewer url={url} alt={row.filename} />
           ) : (
-            <iframe src={url} title={row.filename} className="h-full w-full border-0" />
+            <PdfViewer url={url} />
           )}
         </div>
 
