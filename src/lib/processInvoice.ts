@@ -6,6 +6,10 @@ import {
   extractInvoiceFromImage,
   extractInvoiceFromXml,
 } from "@/lib/ocr";
+import {
+  extractFromPdfTextWithGemini,
+  extractFromDocumentWithGemini,
+} from "@/lib/ocrLlm";
 import { detectIssues } from "@/lib/issueDetector";
 import { appendAuditLogs } from "@/lib/auditLog";
 import {
@@ -81,11 +85,30 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       const base64 = Buffer.from(buffer).toString("base64");
 
       if (ft === "application/pdf" || invoice.filename.endsWith(".pdf")) {
-        source = "document_ai";
-        ocrResult = await extractInvoiceFromPdf(base64);
+        if (process.env.GEMINI_API_KEY) {
+          try {
+            source = "gemini_text";
+            ocrResult = await extractFromPdfTextWithGemini(base64);
+          } catch (e) {
+            if (e instanceof Error && e.message === "PDF_ESCANEADO") {
+              source = "gemini_multimodal";
+              ocrResult = await extractFromDocumentWithGemini(base64, "application/pdf");
+            } else {
+              throw e;
+            }
+          }
+        } else {
+          source = "document_ai";
+          ocrResult = await extractInvoiceFromPdf(base64);
+        }
       } else {
-        source = "document_ai";
-        ocrResult = await extractInvoiceFromImage(base64, ft || "image/jpeg");
+        if (process.env.GEMINI_API_KEY) {
+          source = "gemini_multimodal";
+          ocrResult = await extractFromDocumentWithGemini(base64, ft || "image/jpeg");
+        } else {
+          source = "document_ai";
+          ocrResult = await extractInvoiceFromImage(base64, ft || "image/jpeg");
+        }
       }
     }
 
