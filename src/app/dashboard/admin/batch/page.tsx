@@ -13,6 +13,7 @@ import type { InvoiceType, PeriodType } from "@prisma/client";
 import { PENDING_WORK, completionPercent } from "@/lib/invoiceStatuses";
 import { periodLabel } from "@/lib/period";
 import { AutoRefresh } from "@/components/ui/AutoRefresh";
+import { BatchFilters } from "@/components/batch/BatchFilters";
 
 // La pagina muestra estados de OCR en curso — la marcamos dynamic para
 // que el conteo no quede cacheado entre cargas.
@@ -39,13 +40,39 @@ type BatchGroup = {
   firstPendingId: string | null;
 };
 
-export default async function BatchPage() {
+export default async function BatchPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ clientId?: string; year?: string; month?: string; type?: string; estado?: string }>;
+}) {
   const session = await auth();
   if (!session?.user || session.user.role !== "ADMIN") redirect("/login");
   const firmId = session.user.advisoryFirmId ?? undefined;
 
+  // Filtros (URL): cliente / año / mes / tipo / estado.
+  const sp = (await searchParams) ?? {};
+  const estado = sp.estado ?? "pendientes";
+  const yearNum = sp.year ? parseInt(sp.year, 10) : null;
+  const monthNum = sp.month ? parseInt(sp.month, 10) : null;
+  const typeParam = sp.type === "PURCHASE" || sp.type === "SALE" ? sp.type : null;
+
+  // Clientes de la firma para el desplegable de filtros.
+  const clientOptions = await prisma.client.findMany({
+    where: { advisoryFirmId: firmId, isUnclassifiedBucket: false },
+    select: { id: true, name: true },
+    orderBy: { name: "asc" },
+  });
+  const requestedClient =
+    sp.clientId && clientOptions.some((c) => c.id === sp.clientId) ? sp.clientId : null;
+
   const invoices = await prisma.invoice.findMany({
-    where: { client: { advisoryFirmId: firmId } },
+    where: {
+      client: { advisoryFirmId: firmId },
+      ...(requestedClient ? { clientId: requestedClient } : {}),
+      ...(yearNum ? { periodYear: yearNum } : {}),
+      ...(monthNum ? { periodMonth: monthNum } : {}),
+      ...(typeParam ? { type: typeParam } : {}),
+    },
     include: { client: { select: { id: true, name: true, cif: true } } },
     // createdAt asc para que `firstPendingId` sea la mas vieja del lote
     // y coincida con el orden de la cola de revision (que tambien usa
@@ -118,6 +145,43 @@ export default async function BatchPage() {
     }
   }
 
+  // Cierre de periodos: para pintar "cerrado" y poder filtrar por estado.
+  const closures = groups.length
+    ? await prisma.periodClosure.findMany({
+        where: {
+          OR: groups.map((g) => ({
+            clientId: g.clientId,
+            month: g.periodMonth,
+            year: g.periodYear,
+          })),
+        },
+        select: { clientId: true, month: true, year: true, reopenedAt: true },
+      })
+    : [];
+  const closedSet = new Set(
+    closures
+      .filter((c) => !c.reopenedAt)
+      .map((c) => `${c.clientId}-${c.year}-${c.month}`),
+  );
+
+  // Filtro de estado (por defecto "pendientes": oculta completados y cerrados).
+  const visibleGroups = groups.filter((g) => {
+    const allDone = g.validated + g.rejected + g.exported === g.total;
+    const closed = closedSet.has(`${g.clientId}-${g.periodYear}-${g.periodMonth}`);
+    if (estado === "todos") return true;
+    if (estado === "cerrados") return closed;
+    if (estado === "por_cerrar") return !closed && allDone;
+    return !closed && !allDone; // pendientes
+  });
+  const hiddenCount = groups.length - visibleGroups.length;
+
+  const verTodosParams = new URLSearchParams();
+  if (requestedClient) verTodosParams.set("clientId", requestedClient);
+  if (yearNum) verTodosParams.set("year", String(yearNum));
+  if (monthNum) verTodosParams.set("month", String(monthNum));
+  if (typeParam) verTodosParams.set("type", typeParam);
+  verTodosParams.set("estado", "todos");
+  const verTodosHref = `/dashboard/admin/batch?${verTodosParams.toString()}`;
 
   return (
     <div>
@@ -127,15 +191,27 @@ export default async function BatchPage() {
         description="Facturas agrupadas por cliente y periodo mensual"
       />
 
+      <BatchFilters clients={clientOptions} basePath="/dashboard/admin/batch" />
+
       {groups.length === 0 ? (
         <EmptyState
           icon={Layers}
           title="Sin lotes"
           description="Cuando se suban facturas, los lotes aparecerán aquí agrupados por cliente y mes."
         />
+      ) : visibleGroups.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-slate-200 bg-white p-8 text-center text-[13px] text-slate-500">
+          No hay lotes que coincidan con este filtro.{" "}
+          {hiddenCount > 0 && (
+            <Link href={verTodosHref} className="font-medium text-blue-600 hover:underline">
+              Ver todos ({groups.length})
+            </Link>
+          )}
+        </div>
       ) : (
+        <>
         <div className="space-y-3">
-          {groups.map((g) => {
+          {visibleGroups.map((g) => {
             // REJECTED tambien cuenta como trabajo resuelto: el gestor ya
             // decidio que no entra en los libros. Incluirlo refleja el esfuerzo real.
             const done = g.validated + g.rejected + g.exported;
@@ -147,6 +223,7 @@ export default async function BatchPage() {
             });
             const pending = g.uploaded + g.analyzed + g.pendingReview + g.needsAttention;
             const allDone = done === g.total;
+            const closed = closedSet.has(`${g.clientId}-${g.periodYear}-${g.periodMonth}`);
             const hasErrors = g.ocrError > 0;
             const hasIssues = g.needsAttention > 0;
 
@@ -165,9 +242,13 @@ export default async function BatchPage() {
                       <Badge variant={g.type === "PURCHASE" ? "blue" : "purple"}>
                         {g.type === "PURCHASE" ? "Recibidas" : "Emitidas"}
                       </Badge>
-                      <Badge variant={allDone ? "green" : pending > 0 ? "blue" : "slate"}>
-                        {allDone ? "Completado" : pending > 0 ? "En proceso" : "Parcial"}
-                      </Badge>
+                      {closed ? (
+                        <Badge variant="slate">Periodo cerrado</Badge>
+                      ) : (
+                        <Badge variant={allDone ? "green" : pending > 0 ? "blue" : "slate"}>
+                          {allDone ? "Completado" : pending > 0 ? "En proceso" : "Parcial"}
+                        </Badge>
+                      )}
                       {hasErrors && (
                         <Badge variant="red">
                           {g.ocrError} error{g.ocrError !== 1 ? "es" : ""} OCR
@@ -284,6 +365,13 @@ export default async function BatchPage() {
             );
           })}
         </div>
+        {hiddenCount > 0 && estado === "pendientes" && (
+          <p className="mt-3 text-center text-[12px] text-slate-400">
+            {hiddenCount} lote{hiddenCount !== 1 ? "s" : ""} completado/cerrado oculto{hiddenCount !== 1 ? "s" : ""}.{" "}
+            <Link href={verTodosHref} className="font-medium text-blue-600 hover:underline">Ver todos</Link>
+          </p>
+        )}
+        </>
       )}
     </div>
   );

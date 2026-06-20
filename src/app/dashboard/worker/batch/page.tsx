@@ -14,6 +14,7 @@ import { periodLabel } from "@/lib/period";
 import { BatchActions } from "./BatchActions";
 import { getAccessibleClientIds } from "@/lib/accessibleClients";
 import { AutoRefresh } from "@/components/ui/AutoRefresh";
+import { BatchFilters } from "@/components/batch/BatchFilters";
 
 // Esta pagina muta visualmente cada vez que avanza el OCR de fondo —
 // la marcamos dynamic para que no quede cacheada entre cargas.
@@ -40,7 +41,11 @@ type BatchGroup = {
   firstCleanId: string | null;
 };
 
-export default async function WorkerBatchPage() {
+export default async function WorkerBatchPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ clientId?: string; year?: string; month?: string; type?: string; estado?: string }>;
+}) {
   const session = await auth();
   if (!session?.user || !["ADMIN", "WORKER"].includes(session.user.role)) redirect("/login");
 
@@ -63,10 +68,30 @@ export default async function WorkerBatchPage() {
     );
   }
 
-  // Cargamos facturas + issues abiertas + extractions para poder decidir
-  // que va a que bucket sin una segunda query.
+  // Filtros (URL): cliente / año / mes / tipo / estado. El cliente, año,
+  // mes y tipo se aplican en la query; el estado tras agrupar.
+  const sp = (await searchParams) ?? {};
+  const estado = sp.estado ?? "pendientes";
+  const requestedClient = sp.clientId && clientIds.includes(sp.clientId) ? sp.clientId : null;
+  const yearNum = sp.year ? parseInt(sp.year, 10) : null;
+  const monthNum = sp.month ? parseInt(sp.month, 10) : null;
+  const typeParam = sp.type === "PURCHASE" || sp.type === "SALE" ? sp.type : null;
+
+  // Clientes para el desplegable de filtros (los asignados al gestor).
+  const clientOptions = await prisma.client.findMany({
+    where: { id: { in: clientIds }, isUnclassifiedBucket: false },
+    select: { id: true, name: true },
+    orderBy: { name: "asc" },
+  });
+
+  // Cargamos facturas + issues abiertas para decidir buckets sin 2ª query.
   const invoices = await prisma.invoice.findMany({
-    where: { clientId: { in: clientIds } },
+    where: {
+      clientId: requestedClient ? requestedClient : { in: clientIds },
+      ...(yearNum ? { periodYear: yearNum } : {}),
+      ...(monthNum ? { periodMonth: monthNum } : {}),
+      ...(typeParam ? { type: typeParam } : {}),
+    },
     include: {
       client: { select: { id: true, name: true, cif: true } },
       issues: { where: { status: "OPEN" }, select: { id: true } },
@@ -203,6 +228,27 @@ export default async function WorkerBatchPage() {
     return `${b.periodYear}-${b.periodMonth}`.localeCompare(`${a.periodYear}-${a.periodMonth}`);
   });
 
+  // Filtro de estado (por defecto "pendientes": oculta completados y cerrados).
+  // "por_cerrar" = el tipo está completo pero el periodo sigue abierto.
+  const visibleGroups = groups.filter((g) => {
+    const allDone = g.validated + g.rejected + g.exported === g.total;
+    const closed = closedSet.has(`${g.clientId}-${g.periodYear}-${g.periodMonth}`);
+    if (estado === "todos") return true;
+    if (estado === "cerrados") return closed;
+    if (estado === "por_cerrar") return !closed && allDone;
+    return !closed && !allDone; // pendientes
+  });
+  const hiddenCount = groups.length - visibleGroups.length;
+
+  // "Ver todos" conserva los filtros activos y solo cambia el estado.
+  const verTodosParams = new URLSearchParams();
+  if (requestedClient) verTodosParams.set("clientId", requestedClient);
+  if (yearNum) verTodosParams.set("year", String(yearNum));
+  if (monthNum) verTodosParams.set("month", String(monthNum));
+  if (typeParam) verTodosParams.set("type", typeParam);
+  verTodosParams.set("estado", "todos");
+  const verTodosHref = `/dashboard/worker/batch?${verTodosParams.toString()}`;
+
   return (
     <div>
       {/* Auto-refresh cada 5s si hay alguna factura en analisis OCR,
@@ -213,15 +259,27 @@ export default async function WorkerBatchPage() {
         description="Sesiones de trabajo agrupadas por cliente y periodo — empieza por los que tienen incidencias"
       />
 
+      <BatchFilters clients={clientOptions} basePath="/dashboard/worker/batch" />
+
       {groups.length === 0 ? (
         <EmptyState
           icon={Layers}
           title="Sin lotes pendientes"
           description="Tus clientes no tienen facturas para procesar."
         />
+      ) : visibleGroups.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-slate-200 bg-white p-8 text-center text-[13px] text-slate-500">
+          No hay lotes que coincidan con este filtro.{" "}
+          {hiddenCount > 0 && (
+            <Link href={verTodosHref} className="font-medium text-blue-600 hover:underline">
+              Ver todos ({groups.length})
+            </Link>
+          )}
+        </div>
       ) : (
+        <>
         <div className="space-y-3">
-          {groups.map((g) => {
+          {visibleGroups.map((g) => {
             const done = g.validated + g.rejected + g.exported;
             const pct = completionPercent({
               total: g.total,
@@ -410,6 +468,13 @@ export default async function WorkerBatchPage() {
             );
           })}
         </div>
+        {hiddenCount > 0 && estado === "pendientes" && (
+          <p className="mt-3 text-center text-[12px] text-slate-400">
+            {hiddenCount} lote{hiddenCount !== 1 ? "s" : ""} completado/cerrado oculto{hiddenCount !== 1 ? "s" : ""}.{" "}
+            <Link href={verTodosHref} className="font-medium text-blue-600 hover:underline">Ver todos</Link>
+          </p>
+        )}
+        </>
       )}
     </div>
   );
