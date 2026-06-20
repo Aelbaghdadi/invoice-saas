@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { routeByCif, clientSideCif, type RoutingCandidate } from "@/lib/invoiceRouting";
+import {
+  routeByCif,
+  clientSideCif,
+  routeByText,
+  type RoutingCandidate,
+  type TextRoutingCandidate,
+} from "@/lib/invoiceRouting";
 
 // CIFs con dígito de control VÁLIDO (el ruteo exige checksum correcto).
 const CANDIDATES: RoutingCandidate[] = [
@@ -59,5 +65,53 @@ describe("routeByCif", () => {
 
   it("rutea normal si el otro lado NO es candidato", () => {
     expect(routeByCif(CANDIDATES, "B12345674", "12345678Z")).toEqual({ status: "routed", clientId: "rest-a" });
+  });
+});
+
+describe("routeByText", () => {
+  const CANDS: TextRoutingCandidate[] = [
+    { clientId: "rest-a", cif: "B12345674", name: "Restaurante La Plaza" },
+    { clientId: "rest-b", cif: "A58818501", name: "Bar Central" },
+    { clientId: "rest-c", cif: "G28029643", name: "Cafetería Sol" },
+  ];
+
+  it("rutea por CIF presente en el texto (con separadores)", () => {
+    const txt = "FACTURA\nNIF cliente: B-12345674\nTotal 100€";
+    expect(routeByText(txt, CANDS)).toEqual({ clientId: "rest-a", via: "cif" });
+  });
+
+  it("el CIF tiene prioridad sobre el nombre", () => {
+    const txt = "Cliente B12345674 — emitida por Bar Central";
+    expect(routeByText(txt, CANDS)).toEqual({ clientId: "rest-a", via: "cif" });
+  });
+
+  it("rutea por nombre cuando no hay CIF de ningún candidato", () => {
+    const txt = "FACTURA\nCliente: Restaurante La Plaza\nBase 80 IVA 21";
+    expect(routeByText(txt, CANDS)).toEqual({ clientId: "rest-a", via: "name" });
+  });
+
+  it("el nombre casa sin tildes ni puntuación", () => {
+    const txt = "Factura para CAFETERIA SOL S.L.";
+    expect(routeByText(txt, CANDS)).toEqual({ clientId: "rest-c", via: "name" });
+  });
+
+  it("null si aparecen los CIF de dos candidatos (intragrupo / ambiguo)", () => {
+    const txt = "De B12345674 a A58818501 por servicios";
+    expect(routeByText(txt, CANDS)).toBeNull();
+  });
+
+  it("null si aparecen los nombres de dos candidatos", () => {
+    const txt = "Restaurante La Plaza y Bar Central, mismo grupo";
+    expect(routeByText(txt, CANDS)).toBeNull();
+  });
+
+  it("null si no casa nada", () => {
+    expect(routeByText("Ferretería Pepe, NIF 12345678Z", CANDS)).toBeNull();
+  });
+
+  it("null si el texto está vacío o no hay candidatos", () => {
+    expect(routeByText(null, CANDS)).toBeNull();
+    expect(routeByText("", CANDS)).toBeNull();
+    expect(routeByText("B12345674", [])).toBeNull();
   });
 });

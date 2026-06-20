@@ -15,7 +15,7 @@ import {
   type RetentionTypeName,
 } from "@/lib/validators";
 import { textMentionsRectificative, applyRectificativeSign } from "@/lib/rectificative";
-import { routeByCif, clientSideCif } from "@/lib/invoiceRouting";
+import { routeByCif, clientSideCif, routeByText } from "@/lib/invoiceRouting";
 import { lookupProviderClient } from "@/lib/providerRouting";
 
 /**
@@ -180,7 +180,7 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     if (isRoutingUpload) {
       const candidates = await prisma.client.findMany({
         where: { id: { in: invoice.routingCandidateIds } },
-        select: { id: true, cif: true, advisoryFirmId: true },
+        select: { id: true, cif: true, name: true, advisoryFirmId: true },
       });
       const sideCif = clientSideCif(invoice.type, {
         issuerCif: extracted.issuerCif,
@@ -207,6 +207,17 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
           if (learned && candidates.some((c) => c.id === learned)) {
             resolvedClientId = learned;
           }
+        }
+        // 3) Fallback por texto crudo del OCR: Document AI a veces no rellena
+        // el CIF estructurado aunque el CIF/nombre del cliente esté en el
+        // documento. Buscamos el CIF de un candidato en el texto, y si no, su
+        // nombre. Solo rutea si casa exactamente uno (intragrupo → manual).
+        if (!resolvedClientId) {
+          const byText = routeByText(
+            ocrResult.rawText,
+            candidates.map((c) => ({ clientId: c.id, cif: c.cif, name: c.name })),
+          );
+          if (byText) resolvedClientId = byText.clientId;
         }
       }
 

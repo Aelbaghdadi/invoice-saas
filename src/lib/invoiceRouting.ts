@@ -79,3 +79,53 @@ export function routeByCif(
 
   return { status: "routed", clientId: matches[0].clientId };
 }
+
+export type TextRoutingCandidate = { clientId: string; cif: string; name: string };
+
+/** Normaliza un nombre para comparar contra el texto del OCR: sin tildes,
+ *  en mayúsculas y sin puntuación (espacios colapsados). Así "Bar Pepe, S.L."
+ *  del alta casa con "BAR PEPE S L" que pueda leer el OCR. */
+function normalizeName(raw: string): string {
+  return raw
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "") // quitar tildes/diacriticos
+    .toUpperCase()
+    .replace(/[^A-Z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Fallback de ruteo por el TEXTO CRUDO del OCR, para cuando la extracción
+ * estructurada no logró casar el CIF (Document AI a veces no rellena el campo
+ * aunque el dato esté claramente en el documento). Busca, en cascada:
+ *   1) el CIF (normalizado y con dígito de control válido) de un candidato;
+ *   2) si no, el nombre del candidato.
+ * Solo rutea si EXACTAMENTE un candidato casa; si casan varios (p.ej. factura
+ * intragrupo donde aparecen dos empresas) devuelve null y se queda manual.
+ */
+export function routeByText(
+  rawText: string | null | undefined,
+  candidates: TextRoutingCandidate[],
+): { clientId: string; via: "cif" | "name" } | null {
+  if (!rawText || candidates.length === 0) return null;
+
+  // Texto compacto (sin separadores) para encontrar el CIF aunque el OCR lo
+  // escriba como "B-12345674" o "ES B12345674".
+  const compact = rawText.toUpperCase().replace(/[\s.\-/]/g, "");
+  const byCif = candidates.filter((c) => {
+    const cif = normalizeCif(c.cif);
+    return cif.length >= 8 && isValidNIF(cif) && compact.includes(cif);
+  });
+  if (byCif.length === 1) return { clientId: byCif[0].clientId, via: "cif" };
+  if (byCif.length > 1) return null; // varios CIF de candidatos en el texto → ambiguo
+
+  // Texto normalizado (sin tildes ni puntuación) para buscar el nombre.
+  const normText = normalizeName(rawText);
+  const byName = candidates.filter((c) => {
+    const name = normalizeName(c.name);
+    return name.length >= 4 && normText.includes(name);
+  });
+  if (byName.length === 1) return { clientId: byName[0].clientId, via: "name" };
+  return null;
+}
