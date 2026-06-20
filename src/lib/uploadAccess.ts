@@ -33,6 +33,13 @@ export async function assertUploadClientAccess(
       where: { workerId_clientId: { workerId: session.user.id, clientId } },
     });
     if (!a) return { ok: false, error: appError("ERR-UPLOAD-005", "worker sin asignacion") };
+    // Defensa multitenant: la asignacion por si sola no garantiza que el
+    // cliente sea de la firma del gestor (dato corrupto / migracion). Lo
+    // exigimos explicitamente, igual que en la rama ADMIN. Asi todo candidato
+    // de routingCandidateIds queda acotado a la firma ya en el limite.
+    if (!session.user.advisoryFirmId || client.advisoryFirmId !== session.user.advisoryFirmId) {
+      return { ok: false, error: appError("ERR-UPLOAD-005", "cliente fuera de la firma del gestor") };
+    }
   } else if (role === "ADMIN") {
     if (!session.user.advisoryFirmId || client.advisoryFirmId !== session.user.advisoryFirmId) {
       return { ok: false, error: appError("ERR-UPLOAD-005", "cliente fuera de la firma del admin") };

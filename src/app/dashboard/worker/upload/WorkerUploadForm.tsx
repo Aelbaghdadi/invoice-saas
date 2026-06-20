@@ -86,6 +86,13 @@ export function WorkerUploadForm({ clients, groups }: Props) {
   const [isPending, setIsPending] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Empresas del grupo que este usuario puede ver/subir: un gestor puede no
+  // tener asignadas todas las del grupo (que es de la firma). Filtramos el
+  // desplegable y la preselección a lo accesible para no marcar empresas que
+  // no salen en los checkboxes y que el backend rechazaría (403).
+  const accessibleClientIds = new Set(clients.map((c) => c.id));
+  const visibleGroups = groups.filter((g) => g.clientIds.some((cid) => accessibleClientIds.has(cid)));
+
   const addFiles = (incoming: FileList | File[]) => {
     const valid = Array.from(incoming).filter((f) => {
       const ext = f.name.split(".").pop()?.toLowerCase() ?? "";
@@ -242,7 +249,7 @@ export function WorkerUploadForm({ clients, groups }: Props) {
           </div>
         ) : (
           <div className="mb-4 space-y-2">
-            {groups.length > 0 && (
+            {visibleGroups.length > 0 && (
               <div>
                 <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-400">
                   Grupo guardado
@@ -251,10 +258,11 @@ export function WorkerUploadForm({ clients, groups }: Props) {
                   value={groupId}
                   onChange={(v) => {
                     setGroupId(v);
-                    const g = groups.find((x) => x.id === v);
-                    setCandidateIds(new Set(g ? g.clientIds : []));
+                    const g = visibleGroups.find((x) => x.id === v);
+                    // Solo las empresas del grupo que este usuario puede subir.
+                    setCandidateIds(new Set(g ? g.clientIds.filter((cid) => accessibleClientIds.has(cid)) : []));
                   }}
-                  options={[{ value: "", label: "— Selección manual —" }, ...groups.map((g) => ({ value: g.id, label: g.name }))]}
+                  options={[{ value: "", label: "— Selección manual —" }, ...visibleGroups.map((g) => ({ value: g.id, label: g.name }))]}
                 />
               </div>
             )}
@@ -284,7 +292,7 @@ export function WorkerUploadForm({ clients, groups }: Props) {
                 ))}
               </div>
               <p className="mt-1.5 text-[11px] text-slate-400">
-                Cada factura se asigna a la empresa cuyo CIF aparezca (según el tipo de abajo); las que no casen quedan en “Por clasificar”.
+                Cada factura se asigna automáticamente a su empresa por el CIF —y si no, por el nombre— que aparezca en el documento (según el tipo de abajo); las que no casen con claridad quedan en “Por clasificar”.
               </p>
             </div>
           </div>
