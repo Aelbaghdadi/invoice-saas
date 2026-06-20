@@ -148,18 +148,12 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
   const vatLines = parseVatLines(data.vatLines);
   const isRectificativeFlag = data.isRectificative === "1";
 
-  // Validacion de cada linea de IVA antes de calcular nada. En facturas
-  // rectificativas permitimos negativos (abonos), en facturas normales
-  // solo valores >= 0.
+  // Validacion de cada linea de IVA antes de calcular nada. Permitimos
+  // importes negativos (abonos / rectificativas) sin exigir marcar el check:
+  // una rectificativa es, de momento, simplemente una factura en negativo.
   for (const line of vatLines) {
     if (line.vatRate < 0 || line.vatRate > 100) {
       return { error: "El % IVA debe estar entre 0 y 100 en todas las lineas" };
-    }
-    if (!isRectificativeFlag && line.taxBase < 0) {
-      return { error: "La base imponible no puede ser negativa (marca como rectificativa si es un abono)" };
-    }
-    if (!isRectificativeFlag && line.vatAmount < 0) {
-      return { error: "La cuota IVA no puede ser negativa (marca como rectificativa si es un abono)" };
     }
   }
 
@@ -243,9 +237,7 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     art80Tres:              isRectificativeFlag && data.art80Tres === "1",
   };
 
-  if (!isRectificativeFlag && newData.totalAmount !== null && newData.totalAmount < 0) {
-    return { error: "El total no puede ser negativo (marca como rectificativa si es un abono)" };
-  }
+  // El total puede ser negativo (abono) sin necesidad de marcar el check.
 
   // Rectificativa: si el gestor la marca y los importes vienen en positivo,
   // los pasamos a negativo (abono). Misma regla que processInvoice

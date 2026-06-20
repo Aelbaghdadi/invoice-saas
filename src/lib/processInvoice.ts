@@ -349,20 +349,22 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     const finalIrpfRate = retentionRate ?? extracted.irpfRate ?? null;
     const finalIrpfAmount = computedIrpfAmount;
 
-    // ── Detección rectificativa (abono / corrección) ───────────────────
+    // ── Rectificativa / abono: solo poner el importe en NEGATIVO ───────
     //
-    // Se marca rectificativa si alguna línea/total viene negativo O si el
-    // texto del documento lo dice ("rectificativa", "nota de crédito",
-    // "factura de abono"). El gestor puede confirmar o desmarcar en revisión.
+    // Si el documento dice "rectificativa" / "nota de crédito" / "factura de
+    // abono" (o ya trae importes negativos), guardamos los importes en negativo.
+    // NO marcamos el flag isRectificative ni el sufijo _R del export: ese
+    // comportamiento queda encapsulado al check, que el gestor activa a mano
+    // si en el futuro se quiere (serie rectificada, tipo, _R, etc.).
     const hasNegativeLine = vatLines.some((l) => l.taxBase < 0 || l.vatAmount < 0);
     const hasNegativeTotal = (extracted.totalAmount ?? 0) < 0;
-    const isRectificative =
+    const looksRectificative =
       hasNegativeLine || hasNegativeTotal || textMentionsRectificative(ocrResult.rawText);
 
-    // Si es rectificativa y vino en positivo, pasamos los importes a negativo
-    // (abono). Misma regla que en revisión (lib/rectificative). Si ya trae
-    // signos mixtos/negativos, se respetan.
-    const signed = isRectificative
+    // Si parece abono y vino en positivo, pasamos los importes a negativo.
+    // Misma regla que en revisión (lib/rectificative): si ya trae signos
+    // mixtos/negativos, se respetan.
+    const signed = looksRectificative
       ? applyRectificativeSign({
           lines: vatLines,
           taxBase: extracted.taxBase,
@@ -420,7 +422,6 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
           irpfAmount:    signed.irpfAmount,
           retentionType,
           retentionBase: signed.retentionBase,
-          isRectificative,
           totalAmount:   signed.totalAmount,
           isValid,
           lastOcrError:  null,
