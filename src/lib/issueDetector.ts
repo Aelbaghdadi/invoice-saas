@@ -109,17 +109,23 @@ export async function detectIssues(
       }
     }
 
-    // Strategy B: CIF + total + date (only if Strategy A didn't match)
+    // Strategy B: CIF + total + date (only if Strategy A didn't match).
+    // Protegemos la fecha: el OCR a veces devuelve un RANGO (facturas de
+    // suministros, p.ej. "14-jul-25 / 10-set-25") que produce un Date inválido,
+    // y Prisma lo rechaza con un error crudo que dejaba la factura en Error OCR
+    // sin posible recuperación. Si no es parseable, saltamos esta estrategia.
+    const parsedDate = extraction.invoiceDate ? new Date(extraction.invoiceDate) : null;
+    const validDate = parsedDate && !isNaN(parsedDate.getTime()) ? parsedDate : null;
     if (
       !issues.some((i) => i.type === "POSSIBLE_DUPLICATE") &&
       extraction.totalAmount != null &&
-      extraction.invoiceDate
+      validDate
     ) {
       const dupByFields = await prisma.invoice.findFirst({
         where: {
           ...baseWhere,
           totalAmount: extraction.totalAmount,
-          invoiceDate: new Date(extraction.invoiceDate),
+          invoiceDate: validDate,
         },
         select: { id: true, filename: true },
       });

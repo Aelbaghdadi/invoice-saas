@@ -50,15 +50,22 @@ export default async function InvoicesPage({
       }).catch(() => null)
     : null;
 
+  // WHERE base SIN el filtro de estado: lo comparten la lista y los contadores
+  // de las pestañas, así los números cuadran (antes los contadores eran
+  // globales y un sub-conteo podía superar al total o contar con lista vacía).
+  // Excluye el buzón "Sin clasificar" (sus facturas son PENDING_ROUTING).
+  const baseWhere = {
+    client: { advisoryFirmId: firmId, isUnclassifiedBucket: false },
+    ...(typeFilter ? { type: typeFilter as InvoiceType } : {}),
+    ...(clientIdFilter ? { clientId: clientIdFilter } : {}),
+    ...(monthFilter ? { periodMonth: monthFilter } : {}),
+    ...(yearFilter ? { periodYear: yearFilter } : {}),
+  };
+
   const invoices = await prisma.invoice.findMany({
     where: {
-      // Excluir el buzón "Sin clasificar" (sus facturas son PENDING_ROUTING).
-      client: { advisoryFirmId: firmId, isUnclassifiedBucket: false },
+      ...baseWhere,
       ...(statusFilter ? { status: statusFilter as InvoiceStatus } : {}),
-      ...(typeFilter ? { type: typeFilter as InvoiceType } : {}),
-      ...(clientIdFilter ? { clientId: clientIdFilter } : {}),
-      ...(monthFilter ? { periodMonth: monthFilter } : {}),
-      ...(yearFilter ? { periodYear: yearFilter } : {}),
     },
     orderBy: { createdAt: "desc" },
     include: {
@@ -67,16 +74,18 @@ export default async function InvoicesPage({
     },
   }).catch(() => []);
 
+  // Contadores por estado con el MISMO baseWhere que la lista (cliente/periodo/tipo).
   const counts = await prisma.invoice.groupBy({
     by: ["status"],
-    where: { client: { advisoryFirmId: firmId, isUnclassifiedBucket: false } },
+    where: baseWhere,
     _count: true,
   }).catch(() => []);
 
   const countMap = Object.fromEntries(counts.map(c => [c.status, c._count]));
+  const totalCount = counts.reduce((sum, c) => sum + (typeof c._count === "number" ? c._count : 0), 0);
 
   const filters = [
-    { label: "Todas", value: "", count: invoices.length },
+    { label: "Todas", value: "", count: totalCount },
     { label: "Subidas", value: "UPLOADED", count: countMap.UPLOADED ?? 0 },
     { label: "En análisis", value: "ANALYZING", count: countMap.ANALYZING ?? 0 },
     { label: "Pte. revisión", value: "PENDING_REVIEW", count: countMap.PENDING_REVIEW ?? 0 },
