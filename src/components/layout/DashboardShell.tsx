@@ -13,12 +13,15 @@ type Props = {
   role: Role;
   userName: string;
   userEmail?: string | null;
+  /** Marca de la asesoría para la barra lateral (arriba a la izquierda). */
+  firmName?: string | null;
+  firmLogo?: string | null;
   children: React.ReactNode;
 };
 
 const COLLAPSED_KEY = "facturocr.sidebar.collapsed";
 
-export function DashboardShell({ role, userName, userEmail, children }: Props) {
+export function DashboardShell({ role, userName, userEmail, firmName, firmLogo, children }: Props) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   // Modo "solo iconos" — persistido en localStorage. Solo aplica en
   // desktop; en movil el sidebar siempre se abre completo como overlay.
@@ -101,7 +104,7 @@ export function DashboardShell({ role, userName, userEmail, children }: Props) {
           <X className="h-5 w-5" />
         </button>
 
-        <Sidebar role={role} userName={userName} userEmail={userEmail} collapsed={collapsed} />
+        <Sidebar role={role} userName={userName} userEmail={userEmail} firmName={firmName} firmLogo={firmLogo} collapsed={collapsed} />
 
         {/* Edge toggle (desktop). Aparece "encajado" sobre el borde
             derecho del sidebar, centrado verticalmente. Sutilmente

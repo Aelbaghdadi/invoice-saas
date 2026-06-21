@@ -129,3 +129,22 @@ export function routeByText(
   if (byName.length === 1) return { clientId: byName[0].clientId, via: "name" };
   return null;
 }
+
+/**
+ * Detecta el tipo (compra/venta) de una factura "sin determinar" por el lado
+ * donde aparece el CIF del cliente: si el cliente es el RECEPTOR -> compra
+ * (recibida); si es el EMISOR -> venta (emitida). Devuelve null si el CIF del
+ * cliente no casa con exactamente un lado (OCR ilegible, o aparece en ambos).
+ */
+export function detectInvoiceType(
+  clientCif: string | null | undefined,
+  extracted: { issuerCif: string | null | undefined; receiverCif: string | null | undefined },
+): "PURCHASE" | "SALE" | null {
+  const c = normalizeCif(clientCif);
+  if (!c) return null;
+  const isReceiver = normalizeCif(extracted.receiverCif) === c;
+  const isIssuer = normalizeCif(extracted.issuerCif) === c;
+  if (isReceiver && !isIssuer) return "PURCHASE";
+  if (isIssuer && !isReceiver) return "SALE";
+  return null;
+}

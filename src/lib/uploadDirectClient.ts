@@ -33,7 +33,9 @@ export type UploadMeta = {
   periodType: "MONTHLY" | "QUARTERLY";
   periodMonth: number;
   periodYear: number;
-  type: "PURCHASE" | "SALE";
+  /** "UNKNOWN" = subido como "No lo sé": el OCR detecta el tipo y el gestor
+   *  lo confirma en la revisión. */
+  type: "PURCHASE" | "SALE" | "UNKNOWN";
 };
 
 export type UploadResult =

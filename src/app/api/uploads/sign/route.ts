@@ -31,7 +31,8 @@ import { getOrCreateUnclassifiedClient } from "@/lib/unclassifiedClient";
 export const dynamic = "force-dynamic";
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
-const VALID_TYPES = new Set(["PURCHASE", "SALE"]);
+// UNKNOWN = "No lo sé": el tipo se detecta tras el OCR y se confirma en revisión.
+const VALID_TYPES = new Set(["PURCHASE", "SALE", "UNKNOWN"]);
 
 export async function POST(req: Request) {
   const session = await auth();

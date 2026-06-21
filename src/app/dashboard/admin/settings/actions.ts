@@ -2,6 +2,7 @@
 
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { revalidatePath } from "next/cache";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 
@@ -42,6 +43,55 @@ export async function updateFirm(_prev: ActionState, fd: FormData): Promise<Acti
     return { error: "Ese CIF ya está registrado." };
   }
 
+  return { success: true };
+}
+
+// ─── logo de la asesoría ──────────────────────────────────────────────────────
+
+// El logo se guarda como data URL ya redimensionado en cliente (~320px). Tope
+// de seguridad por si llega algo grande: ~512KB en base64.
+const LOGO_MAX_LEN = 700_000;
+
+export async function updateFirmLogo(dataUrl: string): Promise<ActionState> {
+  const session = await auth();
+  if (!session?.user || session.user.role !== "ADMIN") return { error: "No autorizado" };
+
+  if (typeof dataUrl !== "string" || !/^data:image\/(png|jpe?g|webp);base64,/.test(dataUrl)) {
+    return { error: "Imagen no válida (usa PNG, JPG o WEBP)" };
+  }
+  if (dataUrl.length > LOGO_MAX_LEN) {
+    return { error: "La imagen es demasiado grande. Prueba con una más ligera." };
+  }
+
+  const firm = await prisma.advisoryFirm.findFirst({
+    where: { users: { some: { id: session.user.id } } },
+  });
+  if (!firm) return { error: "Asesoría no encontrada" };
+
+  await prisma.advisoryFirm.update({
+    where: { id: firm.id },
+    data: { logoDataUrl: dataUrl },
+  });
+  // El logo vive en la barra lateral (layout): revalidamos el layout para que
+  // se actualice sin recargar a mano.
+  revalidatePath("/dashboard", "layout");
+  return { success: true };
+}
+
+export async function removeFirmLogo(): Promise<ActionState> {
+  const session = await auth();
+  if (!session?.user || session.user.role !== "ADMIN") return { error: "No autorizado" };
+
+  const firm = await prisma.advisoryFirm.findFirst({
+    where: { users: { some: { id: session.user.id } } },
+  });
+  if (!firm) return { error: "Asesoría no encontrada" };
+
+  await prisma.advisoryFirm.update({
+    where: { id: firm.id },
+    data: { logoDataUrl: null },
+  });
+  revalidatePath("/dashboard", "layout");
   return { success: true };
 }
 

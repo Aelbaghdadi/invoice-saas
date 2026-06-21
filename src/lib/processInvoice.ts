@@ -19,7 +19,7 @@ import {
   type RetentionTypeName,
 } from "@/lib/validators";
 import { textMentionsRectificative, applyRectificativeSign } from "@/lib/rectificative";
-import { routeByCif, clientSideCif, routeByText } from "@/lib/invoiceRouting";
+import { routeByCif, clientSideCif, routeByText, detectInvoiceType } from "@/lib/invoiceRouting";
 import { lookupProviderClient } from "@/lib/providerRouting";
 
 /**
@@ -72,43 +72,58 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     let ocrResult;
     const ft = invoice.fileType;
 
-    if (ft.includes("xml")) {
-      source = "xml_parse";
-      const { data, error } = await supabase.storage.from("invoices").download(invoice.storageKey);
-      if (error) throw new Error(error.message);
-      const xmlText = await data.text();
-      ocrResult = await extractInvoiceFromXml(xmlText);
-    } else {
-      const { data, error } = await supabase.storage.from("invoices").download(invoice.storageKey);
-      if (error) throw new Error(error.message);
-      const buffer = await data.arrayBuffer();
-      const base64 = Buffer.from(buffer).toString("base64");
+    // Reintento ante fallos TRANSITORIOS del OCR (timeout, rate limit, red): el
+    // proveedor (Gemini/Document AI) falla a veces de forma puntual y al
+    // reprocesar va — lo automatizamos para no dejar la factura en Error OCR
+    // por un hipo. Los fallos deterministas (archivo inválido) no se reintentan.
+    const MAX_OCR_ATTEMPTS = 3;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        if (ft.includes("xml")) {
+          source = "xml_parse";
+          const { data, error } = await supabase.storage.from("invoices").download(invoice.storageKey);
+          if (error) throw new Error(error.message);
+          const xmlText = await data.text();
+          ocrResult = await extractInvoiceFromXml(xmlText);
+        } else {
+          const { data, error } = await supabase.storage.from("invoices").download(invoice.storageKey);
+          if (error) throw new Error(error.message);
+          const buffer = await data.arrayBuffer();
+          const base64 = Buffer.from(buffer).toString("base64");
 
-      if (ft === "application/pdf" || invoice.filename.endsWith(".pdf")) {
-        if (process.env.GEMINI_API_KEY) {
-          try {
-            source = "gemini_text";
-            ocrResult = await extractFromPdfTextWithGemini(base64);
-          } catch (e) {
-            if (e instanceof Error && e.message === "PDF_ESCANEADO") {
-              source = "gemini_multimodal";
-              ocrResult = await extractFromDocumentWithGemini(base64, "application/pdf");
+          if (ft === "application/pdf" || invoice.filename.endsWith(".pdf")) {
+            if (process.env.GEMINI_API_KEY) {
+              try {
+                source = "gemini_text";
+                ocrResult = await extractFromPdfTextWithGemini(base64);
+              } catch (e) {
+                if (e instanceof Error && e.message === "PDF_ESCANEADO") {
+                  source = "gemini_multimodal";
+                  ocrResult = await extractFromDocumentWithGemini(base64, "application/pdf");
+                } else {
+                  throw e;
+                }
+              }
             } else {
-              throw e;
+              source = "document_ai";
+              ocrResult = await extractInvoiceFromPdf(base64);
+            }
+          } else {
+            if (process.env.GEMINI_API_KEY) {
+              source = "gemini_multimodal";
+              ocrResult = await extractFromDocumentWithGemini(base64, ft || "image/jpeg");
+            } else {
+              source = "document_ai";
+              ocrResult = await extractInvoiceFromImage(base64, ft || "image/jpeg");
             }
           }
-        } else {
-          source = "document_ai";
-          ocrResult = await extractInvoiceFromPdf(base64);
         }
-      } else {
-        if (process.env.GEMINI_API_KEY) {
-          source = "gemini_multimodal";
-          ocrResult = await extractFromDocumentWithGemini(base64, ft || "image/jpeg");
-        } else {
-          source = "document_ai";
-          ocrResult = await extractInvoiceFromImage(base64, ft || "image/jpeg");
-        }
+        break; // OCR completado
+      } catch (ocrErr) {
+        const m = ocrErr instanceof Error ? ocrErr.message : String(ocrErr);
+        if (attempt >= MAX_OCR_ATTEMPTS || !isTransientOcrError(m)) throw ocrErr;
+        // Backoff corto antes de reintentar (1.2s, 2.4s).
+        await new Promise((r) => setTimeout(r, 1200 * attempt));
       }
     }
 
@@ -270,11 +285,29 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
           select: { name: true, cif: true },
         });
 
-    let finalIssuerName     = extracted.issuerName;
-    let finalIssuerCif      = issuerParsed.clean || null;
-    let finalIssuerCountry  = issuerParsed.countryCode;
-    let finalReceiverName   = extracted.receiverName;
-    let finalReceiverCif    = receiverParsed.clean || null;
+    // ── Detección del tipo cuando se subió como "No lo sé" ─────────────
+    // El lado donde aparece el CIF del cliente decide: receptor -> compra,
+    // emisor -> venta. Si casa con claridad, fijamos el tipo y limpiamos el
+    // flag; si no, queda provisional y el gestor lo confirma en la revisión.
+    // Tiene que ir ANTES de la lógica que usa invoice.type (parte conocida,
+    // operationType, retención).
+    let typeUnconfirmed = invoice.typeUnconfirmed;
+    if (typeUnconfirmed && clientRecord) {
+      const detected = detectInvoiceType(clientRecord.cif, {
+        issuerCif: extracted.issuerCif,
+        receiverCif: extracted.receiverCif,
+      });
+      if (detected) {
+        invoice.type = detected;
+        typeUnconfirmed = false;
+      }
+    }
+
+    let finalIssuerName      = extracted.issuerName;
+    let finalIssuerCif       = issuerParsed.clean || null;
+    let finalIssuerCountry   = issuerParsed.countryCode;
+    let finalReceiverName    = extracted.receiverName;
+    let finalReceiverCif     = receiverParsed.clean || null;
     let finalReceiverCountry = receiverParsed.countryCode;
 
     if (clientRecord) {
@@ -405,6 +438,10 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
         where: { id: invoiceId },
         data: {
           status: targetStatus,
+          // Tipo detectado (si se subió como "No lo sé" y el OCR lo resolvió);
+          // si no se pudo, queda el placeholder con typeUnconfirmed=true.
+          type: invoice.type,
+          typeUnconfirmed,
           // Si fue ruteada, clientId ya es el real; si quedó por clasificar,
           // sigue en el buzón. routingCandidateIds se limpia al resolver y se
           // conserva mientras está por clasificar (lo usa la pantalla).
@@ -449,12 +486,14 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     // prefijo "[ERR-OCR-XXX] mensaje tecnico" para que la UI pueda
     // separarlos y mostrar el chip de codigo.
     const code = classifyOcrError(errorMsg);
-    const taggedMsg = `[${code}] ${errorMsg}`;
+    // Mensaje LIMPIO para el gestor (nada de stacks de Prisma en la UI). El
+    // detalle técnico completo se queda en el log para depuración.
+    const userMsg = `[${code}] ${userMessageForOcrError(code)}`;
     await prisma.invoice.update({
       where: { id: invoiceId },
-      data: { status: "OCR_ERROR", lastOcrError: taggedMsg },
+      data: { status: "OCR_ERROR", lastOcrError: userMsg },
     });
-    await transitionStatus(invoiceId, "ANALYZING", "OCR_ERROR", triggeredByUserId, taggedMsg);
+    await transitionStatus(invoiceId, "ANALYZING", "OCR_ERROR", triggeredByUserId, userMsg);
     console.error(`[processInvoice] ${code}:`, err);
   }
 }
@@ -468,4 +507,25 @@ function classifyOcrError(msg: string): "ERR-OCR-001" | "ERR-OCR-002" | "ERR-OCR
   if (lower.includes("download") || lower.includes("storage") || lower.includes("404")) return "ERR-OCR-004";
   if (lower.includes("invalid") || lower.includes("corrupt") || lower.includes("malformed")) return "ERR-OCR-002";
   return "ERR-OCR-001";
+}
+
+/** ¿El fallo de OCR es transitorio (merece reintento) o determinista? Los
+ *  deterministas (archivo inválido/corrupto) no se reintentan: fallarían igual.
+ *  Solo reintentamos patrones claramente transitorios (timeout, rate limit,
+ *  red, 5xx) para no malgastar llamadas en errores que no se van a recuperar. */
+function isTransientOcrError(msg: string): boolean {
+  const m = msg.toLowerCase();
+  if (m.includes("invalid") || m.includes("corrupt") || m.includes("malformed")) return false;
+  return /timeout|timed out|rate limit|too many requests|429|econnreset|etimedout|enotfound|fetch failed|network|socket hang up|503|502|500|unavailable|overloaded/.test(m);
+}
+
+/** Mensaje en español, apto para el gestor, según el código de error. El stack
+ *  técnico nunca se muestra en la UI (va al log). */
+function userMessageForOcrError(code: "ERR-OCR-001" | "ERR-OCR-002" | "ERR-OCR-003" | "ERR-OCR-004"): string {
+  switch (code) {
+    case "ERR-OCR-003": return "El análisis tardó demasiado. Vuelve a procesarla.";
+    case "ERR-OCR-004": return "No se pudo descargar el archivo. Vuelve a procesarla.";
+    case "ERR-OCR-002": return "No se pudieron leer los datos del documento (ilegible o con formato no válido). Revísala manualmente.";
+    default:            return "No se pudo procesar la factura. Vuelve a intentarlo o revísala manualmente.";
+  }
 }

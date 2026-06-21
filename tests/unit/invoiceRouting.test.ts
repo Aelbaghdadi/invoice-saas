@@ -3,6 +3,7 @@ import {
   routeByCif,
   clientSideCif,
   routeByText,
+  detectInvoiceType,
   type RoutingCandidate,
   type TextRoutingCandidate,
 } from "@/lib/invoiceRouting";
@@ -113,5 +114,23 @@ describe("routeByText", () => {
     expect(routeByText(null, CANDS)).toBeNull();
     expect(routeByText("", CANDS)).toBeNull();
     expect(routeByText("B12345674", [])).toBeNull();
+  });
+});
+
+describe("detectInvoiceType", () => {
+  it("compra si el cliente es el receptor", () => {
+    expect(detectInvoiceType("B12345674", { issuerCif: "A58818501", receiverCif: "B12345674" })).toBe("PURCHASE");
+  });
+  it("venta si el cliente es el emisor", () => {
+    expect(detectInvoiceType("B12345674", { issuerCif: "B-12345674", receiverCif: "A58818501" })).toBe("SALE");
+  });
+  it("null si el CIF del cliente no aparece en ningún lado", () => {
+    expect(detectInvoiceType("G28029643", { issuerCif: "A58818501", receiverCif: "B12345674" })).toBeNull();
+  });
+  it("null si falta el CIF del cliente", () => {
+    expect(detectInvoiceType(null, { issuerCif: "A58818501", receiverCif: "B12345674" })).toBeNull();
+  });
+  it("null si el mismo CIF aparece en ambos lados (ambiguo)", () => {
+    expect(detectInvoiceType("B12345674", { issuerCif: "B12345674", receiverCif: "B12345674" })).toBeNull();
   });
 });

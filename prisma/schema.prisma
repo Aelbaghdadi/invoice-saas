@@ -118,6 +118,10 @@ model AdvisoryFirm {
   id        String   @id @default(cuid())
   name      String
   cif       String   @unique
+  /// Logo de la asesoría como data URL (PNG, redimensionado en cliente a
+  /// ~320px para que pese poco). Se muestra arriba a la izquierda en la barra
+  /// lateral. null = se usa la marca por defecto (FacturOCR).
+  logoDataUrl String? @db.Text
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -268,6 +272,11 @@ model Invoice {
   fileType    String
   fileHash    String?
   type        InvoiceType
+  /// true si la factura se subió como "No lo sé" (tipo sin determinar). El
+  /// OCR intenta detectarlo por el lado donde aparece el CIF del cliente
+  /// (receptor -> compra, emisor -> venta) y el gestor lo confirma en la
+  /// revisión. Mientras tanto `type` es un valor provisional (placeholder).
+  typeUnconfirmed Boolean @default(false)
   status      InvoiceStatus @default(UPLOADED)
   /// Tipo de operación fiscal. Determina la columna G del Excel A3.
   /// Por defecto INTERIOR; se cambia automáticamente si el NIF del

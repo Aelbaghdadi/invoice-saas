@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { canAccessClient } from "@/lib/accessibleClients";
 import { appendAuditLogs } from "@/lib/auditLog";
 import { learnProviderRule } from "@/lib/providerRouting";
+import { detectInvoiceType } from "@/lib/invoiceRouting";
 import { revalidatePath } from "next/cache";
 
 export type ClassifyState = { ok?: boolean; error?: string } | null;
@@ -48,8 +49,24 @@ export async function classifyInvoice(invoiceId: string, clientId: string): Prom
   });
   if (!client) return { error: "Cliente no encontrado" };
 
+  // Si el tipo se subió como "No lo sé", lo detectamos ahora que conocemos el
+  // cliente: el lado donde aparece su CIF decide (receptor->compra, emisor->venta).
+  // Si no se puede, queda sin confirmar y el gestor lo fija en la revisión.
+  let effectiveType = invoice.type;
+  let typeStillUnconfirmed = invoice.typeUnconfirmed;
+  if (invoice.typeUnconfirmed) {
+    const detected = detectInvoiceType(client.cif, {
+      issuerCif: invoice.issuerCif,
+      receiverCif: invoice.receiverCif,
+    });
+    if (detected) {
+      effectiveType = detected;
+      typeStillUnconfirmed = false;
+    }
+  }
+
   // Forzar la parte conocida del cliente según el tipo (igual que el pipeline).
-  const isPurchase = invoice.type === "PURCHASE";
+  const isPurchase = effectiveType === "PURCHASE";
   const clientSide = isPurchase
     ? { receiverName: client.name, receiverCif: client.cif }
     : { issuerName: client.name, issuerCif: client.cif, issuerCountry: null };
@@ -61,7 +78,7 @@ export async function classifyInvoice(invoiceId: string, clientId: string): Prom
     const dup = await prisma.invoice.findFirst({
       where: {
         clientId,
-        type: invoice.type,
+        type: effectiveType,
         id: { not: invoiceId },
         status: { notIn: ["REJECTED", "PENDING_ROUTING"] },
         issuerCif: isPurchase ? otherCif : undefined,
@@ -89,6 +106,8 @@ export async function classifyInvoice(invoiceId: string, clientId: string): Prom
     data: {
       clientId,
       ...clientSide,
+      type: effectiveType,
+      typeUnconfirmed: typeStillUnconfirmed,
       status: targetStatus,
       routingCandidateIds: [],
       routingReason: null,

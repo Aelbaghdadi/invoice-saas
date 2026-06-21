@@ -81,7 +81,7 @@ export function WorkerUploadForm({ clients, groups }: Props) {
   const [month, setMonth] = useState(String(now.getMonth() + 1));
   const [quarter, setQuarter] = useState(Math.ceil((now.getMonth() + 1) / 3));
   const [year, setYear] = useState(String(now.getFullYear()));
-  const [type, setType] = useState<"PURCHASE" | "SALE">("PURCHASE");
+  const [type, setType] = useState<"PURCHASE" | "SALE" | "UNKNOWN">("PURCHASE");
   const [isDragging, setIsDragging] = useState(false);
   const [isPending, setIsPending] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -347,10 +347,11 @@ export function WorkerUploadForm({ clients, groups }: Props) {
             </label>
             <Select
               value={type}
-              onChange={(v) => setType(v as "PURCHASE" | "SALE")}
+              onChange={(v) => setType(v as "PURCHASE" | "SALE" | "UNKNOWN")}
               options={[
                 { value: "PURCHASE", label: "Facturas recibidas" },
                 { value: "SALE", label: "Facturas emitidas" },
+                { value: "UNKNOWN", label: "Detectar automáticamente" },
               ]}
             />
           </div>

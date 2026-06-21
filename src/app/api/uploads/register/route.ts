@@ -25,7 +25,8 @@ import type { InvoiceType, PeriodType } from "@prisma/client";
  */
 export const dynamic = "force-dynamic";
 
-const VALID_TYPES = new Set(["PURCHASE", "SALE"]);
+// UNKNOWN = "No lo sé": el tipo se detecta tras el OCR y se confirma en revisión.
+const VALID_TYPES = new Set(["PURCHASE", "SALE", "UNKNOWN"]);
 const VALID_PERIOD_TYPES = new Set(["MONTHLY", "QUARTERLY"]);
 
 export async function POST(req: Request) {
@@ -125,13 +126,20 @@ export async function POST(req: Request) {
     },
   });
 
+  // Tipo "UNKNOWN" = subido como "No lo sé": guardamos un placeholder
+  // (PURCHASE) y marcamos typeUnconfirmed para que el OCR lo detecte y el
+  // gestor lo confirme en la revisión.
+  const typeUnconfirmed = type === "UNKNOWN";
+  const storedType: InvoiceType = type === "SALE" ? "SALE" : "PURCHASE";
+
   const invoice = await prisma.invoice.create({
     data: {
       filename,
       storageKey,
       fileType,
       fileHash,
-      type: type as InvoiceType,
+      type: storedType,
+      typeUnconfirmed,
       periodType: periodType as PeriodType,
       periodMonth,
       periodYear,
