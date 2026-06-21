@@ -14,6 +14,7 @@ import { PENDING_WORK, completionPercent } from "@/lib/invoiceStatuses";
 import { periodLabel } from "@/lib/period";
 import { AutoRefresh } from "@/components/ui/AutoRefresh";
 import { BatchFilters } from "@/components/batch/BatchFilters";
+import { ClientAccordionSection } from "@/components/batch/ClientAccordionSection";
 
 // La pagina muestra estados de OCR en curso — la marcamos dynamic para
 // que el conteo no quede cacheado entre cargas.
@@ -67,7 +68,9 @@ export default async function BatchPage({
 
   const invoices = await prisma.invoice.findMany({
     where: {
-      client: { advisoryFirmId: firmId },
+      // Excluir el buzón "Sin clasificar" (sus facturas son PENDING_ROUTING):
+      // no es un cliente real, no debe aparecer como un lote más.
+      client: { advisoryFirmId: firmId, isUnclassifiedBucket: false },
       ...(requestedClient ? { clientId: requestedClient } : {}),
       ...(yearNum ? { periodYear: yearNum } : {}),
       ...(monthNum ? { periodMonth: monthNum } : {}),
@@ -183,6 +186,27 @@ export default async function BatchPage({
   verTodosParams.set("estado", "todos");
   const verTodosHref = `/dashboard/admin/batch?${verTodosParams.toString()}`;
 
+  // Agrupar los lotes visibles por cliente para la vista en acordeón.
+  const clientGroupsMap = new Map<string, {
+    clientId: string; clientName: string; clientCif: string;
+    lotes: typeof visibleGroups; attentionSum: number; invoiceSum: number; allDone: boolean;
+  }>();
+  for (const g of visibleGroups) {
+    let cg = clientGroupsMap.get(g.clientId);
+    if (!cg) {
+      cg = { clientId: g.clientId, clientName: g.clientName, clientCif: g.clientCif, lotes: [], attentionSum: 0, invoiceSum: 0, allDone: true };
+      clientGroupsMap.set(g.clientId, cg);
+    }
+    cg.lotes.push(g);
+    cg.attentionSum += g.needsAttention;
+    cg.invoiceSum += g.total;
+    if (g.validated + g.rejected + g.exported !== g.total) cg.allDone = false;
+  }
+  const clientGroups = Array.from(clientGroupsMap.values());
+  clientGroups.sort((a, b) =>
+    a.attentionSum !== b.attentionSum ? b.attentionSum - a.attentionSum : a.clientName.localeCompare(b.clientName),
+  );
+
   return (
     <div>
       {anyProcessing && <AutoRefresh intervalMs={5000} />}
@@ -211,7 +235,18 @@ export default async function BatchPage({
       ) : (
         <>
         <div className="space-y-3">
-          {visibleGroups.map((g) => {
+          {clientGroups.map((cg) => (
+            <ClientAccordionSection
+              key={cg.clientId}
+              name={cg.clientName}
+              cif={cg.clientCif}
+              loteCount={cg.lotes.length}
+              invoiceCount={cg.invoiceSum}
+              attentionCount={cg.attentionSum}
+              allDone={cg.allDone}
+              defaultOpen={clientGroups.length === 1}
+            >
+          {cg.lotes.map((g) => {
             // REJECTED tambien cuenta como trabajo resuelto: el gestor ya
             // decidio que no entra en los libros. Incluirlo refleja el esfuerzo real.
             const done = g.validated + g.rejected + g.exported;
@@ -364,6 +399,8 @@ export default async function BatchPage({
               </div>
             );
           })}
+            </ClientAccordionSection>
+          ))}
         </div>
         {hiddenCount > 0 && estado === "pendientes" && (
           <p className="mt-3 text-center text-[12px] text-slate-400">

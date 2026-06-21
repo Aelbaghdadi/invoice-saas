@@ -15,6 +15,7 @@ import { BatchActions } from "./BatchActions";
 import { getAccessibleClientIds } from "@/lib/accessibleClients";
 import { AutoRefresh } from "@/components/ui/AutoRefresh";
 import { BatchFilters } from "@/components/batch/BatchFilters";
+import { ClientAccordionSection } from "@/components/batch/ClientAccordionSection";
 
 // Esta pagina muta visualmente cada vez que avanza el OCR de fondo —
 // la marcamos dynamic para que no quede cacheada entre cargas.
@@ -249,6 +250,28 @@ export default async function WorkerBatchPage({
   verTodosParams.set("estado", "todos");
   const verTodosHref = `/dashboard/worker/batch?${verTodosParams.toString()}`;
 
+  // Agrupar los lotes visibles por cliente para la vista en acordeón: la
+  // pantalla muestra los clientes con lote activo y, al pulsar, sus lotes.
+  const clientGroupsMap = new Map<string, {
+    clientId: string; clientName: string; clientCif: string;
+    lotes: typeof visibleGroups; attentionSum: number; invoiceSum: number; allDone: boolean;
+  }>();
+  for (const g of visibleGroups) {
+    let cg = clientGroupsMap.get(g.clientId);
+    if (!cg) {
+      cg = { clientId: g.clientId, clientName: g.clientName, clientCif: g.clientCif, lotes: [], attentionSum: 0, invoiceSum: 0, allDone: true };
+      clientGroupsMap.set(g.clientId, cg);
+    }
+    cg.lotes.push(g);
+    cg.attentionSum += g.attentionCount;
+    cg.invoiceSum += g.total;
+    if (g.validated + g.rejected + g.exported !== g.total) cg.allDone = false;
+  }
+  const clientGroups = Array.from(clientGroupsMap.values());
+  clientGroups.sort((a, b) =>
+    a.attentionSum !== b.attentionSum ? b.attentionSum - a.attentionSum : a.clientName.localeCompare(b.clientName),
+  );
+
   return (
     <div>
       {/* Auto-refresh cada 5s si hay alguna factura en analisis OCR,
@@ -279,7 +302,18 @@ export default async function WorkerBatchPage({
       ) : (
         <>
         <div className="space-y-3">
-          {visibleGroups.map((g) => {
+          {clientGroups.map((cg) => (
+            <ClientAccordionSection
+              key={cg.clientId}
+              name={cg.clientName}
+              cif={cg.clientCif}
+              loteCount={cg.lotes.length}
+              invoiceCount={cg.invoiceSum}
+              attentionCount={cg.attentionSum}
+              allDone={cg.allDone}
+              defaultOpen={clientGroups.length === 1}
+            >
+          {cg.lotes.map((g) => {
             const done = g.validated + g.rejected + g.exported;
             const pct = completionPercent({
               total: g.total,
@@ -467,6 +501,8 @@ export default async function WorkerBatchPage({
               </div>
             );
           })}
+            </ClientAccordionSection>
+          ))}
         </div>
         {hiddenCount > 0 && estado === "pendientes" && (
           <p className="mt-3 text-center text-[12px] text-slate-400">
