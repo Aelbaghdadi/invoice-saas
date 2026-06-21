@@ -275,7 +275,9 @@ model Invoice {
   operationType OperationType @default(INTERIOR)
   /// Codigo ISO del pais del emisor ("ES", "DE", "FR"...) o null si
   /// no se detecto prefijo y se asume nacional.
-  issuerCountry String?     @db.Char(2)
+  issuerCountry   String?   @db.Char(2)
+  /// Codigo ISO del pais del receptor, analogo a issuerCountry.
+  receiverCountry String?   @db.Char(2)
   periodType  PeriodType @default(MONTHLY)
   periodMonth Int
   periodYear  Int

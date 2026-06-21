@@ -284,8 +284,19 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
   // colision con el CIF del cliente (lado bloqueado): si OCR puso el
   // CIF del cliente en los dos lados, o el gestor lo teclea por error,
   // estamos contabilizando una factura del cliente consigo mismo.
-  const [editableIssuerCif, setEditableIssuerCif] = useState(invoice.issuerCif ?? "");
-  const [editableReceiverCif, setEditableReceiverCif] = useState(invoice.receiverCif ?? "");
+  // Para NIFs internacionales mostramos el prefijo de país (p.ej. "DE123456789")
+  // para que el gestor lo vea claramente. La action parseTaxId lo volverá a separar.
+  const cifWithPrefix = (cif: string | null, country: string | null) => {
+    if (!cif) return "";
+    if (!country || country === "ES") return cif;
+    return country + cif;
+  };
+  const [editableIssuerCif, setEditableIssuerCif] = useState(
+    cifWithPrefix(invoice.issuerCif, invoice.issuerCountry),
+  );
+  const [editableReceiverCif, setEditableReceiverCif] = useState(
+    cifWithPrefix(invoice.receiverCif, invoice.receiverCountry),
+  );
 
   // Estado de bloques plegables: Retencion y Rectificativa. Por defecto
   // plegados (uso poco frecuente); auto-expandidos si la factura ya
@@ -775,6 +786,21 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
             ) : (
               <PdfViewer
                 url={previewUrl}
+                fieldValues={{
+                  issuerName:    invoice.issuerName,
+                  issuerCif:     invoice.issuerCif,
+                  receiverName:  invoice.receiverName,
+                  receiverCif:   invoice.receiverCif,
+                  invoiceNumber: invoice.invoiceNumber,
+                  invoiceDate:   invoice.invoiceDate
+                    ? new Date(invoice.invoiceDate).toISOString().slice(0, 10)
+                    : null,
+                  taxBase:     invoice.taxBase,
+                  vatRate:     invoice.vatRate,
+                  vatAmount:   invoice.vatAmount,
+                  totalAmount: invoice.totalAmount,
+                }}
+                activeFieldId={activeField}
                 activeBox={activeField ? (boundingBoxes?.[activeField] ?? null) : null}
                 onTextSelect={injectTextToField}
                 copyTargetLabel={lastFocusedFieldRef.current ? FIELD_LABELS[lastFocusedFieldRef.current] : undefined}
@@ -801,7 +827,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
           onFocus={(e) => {
             const id = (e.target as HTMLElement).id;
             if (id) lastFocusedFieldRef.current = id;
-            if (id && boundingBoxes?.[id]) setActiveField(id);
+            if (id) setActiveField(id);
           }}
           onBlur={(e) => {
             if (!e.currentTarget.contains(e.relatedTarget as Node)) {

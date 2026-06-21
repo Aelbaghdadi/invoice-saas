@@ -112,37 +112,6 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       }
     }
 
-    // Rechazo temprano: albaranes y notas de entrega no son facturas.
-    // Solo aplica a PDF/imagen (rawText undefined en XML, que es siempre factura legal).
-    if (ocrResult.rawText != null) {
-      const norm = ocrResult.rawText
-        .toLowerCase()
-        .normalize("NFD")
-        .replace(/[̀-ͯ]/g, "");
-      const hasDeliveryNote = /\balbaran\b|\bnota de entrega\b|\bdelivery note\b/.test(norm);
-      const hasInvoice = /\bfactura\b|\binvoice\b/.test(norm);
-      if (hasDeliveryNote && !hasInvoice) {
-        await prisma.invoice.update({
-          where: { id: invoiceId },
-          data: {
-            status: "REJECTED",
-            rejectionCategory: "OTHER",
-            rejectionReason: "Documento rechazado automáticamente: parece un albarán, no una factura.",
-          },
-        });
-        await transitionStatus(invoiceId, "ANALYZING", "REJECTED", triggeredByUserId,
-          "Albarán detectado automáticamente");
-        await appendAuditLogs([{
-          invoiceId,
-          userId: triggeredByUserId,
-          field: "status",
-          oldValue: "ANALYZING",
-          newValue: "REJECTED",
-        }]);
-        return;
-      }
-    }
-
     const extracted = ocrResult.extracted;
     // rawResponse ahora es la respuesta CRUDA del proveedor (entities +
     // text para Doc AI; XML literal para Facturae). Antes guardabamos el
@@ -301,21 +270,22 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
           select: { name: true, cif: true },
         });
 
-    let finalIssuerName = extracted.issuerName;
-    let finalIssuerCif  = issuerParsed.clean || null;
-    let finalIssuerCountry = issuerParsed.countryCode;
-    let finalReceiverName = extracted.receiverName;
-    let finalReceiverCif  = receiverParsed.clean || null;
+    let finalIssuerName     = extracted.issuerName;
+    let finalIssuerCif      = issuerParsed.clean || null;
+    let finalIssuerCountry  = issuerParsed.countryCode;
+    let finalReceiverName   = extracted.receiverName;
+    let finalReceiverCif    = receiverParsed.clean || null;
+    let finalReceiverCountry = receiverParsed.countryCode;
 
     if (clientRecord) {
       if (invoice.type === "PURCHASE") {
-        finalReceiverName = clientRecord.name;
-        finalReceiverCif  = clientRecord.cif;
+        finalReceiverName    = clientRecord.name;
+        finalReceiverCif     = clientRecord.cif;
+        // El cliente siempre es español; no tiene prefijo de país.
+        finalReceiverCountry = null;
       } else {
-        finalIssuerName = clientRecord.name;
-        finalIssuerCif  = clientRecord.cif;
-        // Cliente es espanol por definicion (esta en una asesoria ES);
-        // no le ponemos issuerCountry para que quede null = nacional.
+        finalIssuerName    = clientRecord.name;
+        finalIssuerCif     = clientRecord.cif;
         finalIssuerCountry = null;
       }
     }
@@ -445,8 +415,9 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
           issuerCif:     finalIssuerCif,
           issuerCountry: finalIssuerCountry,
           operationType,
-          receiverName:  finalReceiverName,
-          receiverCif:   finalReceiverCif,
+          receiverName:    finalReceiverName,
+          receiverCif:     finalReceiverCif,
+          receiverCountry: finalReceiverCountry,
           invoiceNumber: extracted.invoiceNumber,
           invoiceDate:   safeParseDate(extracted.invoiceDate),
           taxBase:       signed.taxBase,

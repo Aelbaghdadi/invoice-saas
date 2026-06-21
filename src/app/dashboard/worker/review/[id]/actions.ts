@@ -174,11 +174,12 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
   // Asi el gestor ni siquiera con devtools puede sustituir los datos
   // del Client por otros distintos.
   const isPurchase = invoice.type === "PURCHASE";
-  const finalIssuerName    = isPurchase ? (data.issuerName || null)              : invoice.client.name;
-  const finalIssuerCif     = isPurchase ? (issuerParsed.clean || null)           : invoice.client.cif;
-  const finalIssuerCountry = isPurchase ? issuerParsed.countryCode               : null;
-  const finalReceiverName  = isPurchase ? invoice.client.name                    : (data.receiverName || null);
-  const finalReceiverCif   = isPurchase ? invoice.client.cif                     : (receiverParsed.clean || null);
+  const finalIssuerName     = isPurchase ? (data.issuerName || null)    : invoice.client.name;
+  const finalIssuerCif      = isPurchase ? (issuerParsed.clean || null) : invoice.client.cif;
+  const finalIssuerCountry  = isPurchase ? issuerParsed.countryCode     : null;
+  const finalReceiverName   = isPurchase ? invoice.client.name          : (data.receiverName || null);
+  const finalReceiverCif    = isPurchase ? invoice.client.cif           : (receiverParsed.clean || null);
+  const finalReceiverCountry = isPurchase ? null                        : receiverParsed.countryCode;
 
   // Coherencia: el CIF de emisor y receptor no pueden ser iguales (seria
   // una factura del cliente consigo mismo). Sucede a menudo cuando el
@@ -209,8 +210,9 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     issuerName:    finalIssuerName,
     issuerCif:     finalIssuerCif,
     issuerCountry: finalIssuerCountry,
-    receiverName:  finalReceiverName,
-    receiverCif:   finalReceiverCif,
+    receiverName:    finalReceiverName,
+    receiverCif:     finalReceiverCif,
+    receiverCountry: finalReceiverCountry,
     invoiceNumber: data.invoiceNumber || null,
     invoiceDate:   parseDate(data.invoiceDate),
     taxBase:       vatLines.length > 0 ? sumBase   : null,

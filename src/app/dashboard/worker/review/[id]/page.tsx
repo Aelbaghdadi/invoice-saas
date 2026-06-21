@@ -9,6 +9,7 @@ import {
   queueToSearchParams,
 } from "@/lib/reviewQueue";
 import { extractBoundingBoxes } from "@/lib/boundingBoxes";
+import { extractGeminiBoundingBoxes } from "@/lib/ocrLlm";
 
 // La cola se calcula en cada render — el conteo cambia segun otro
 // gestor valide/rechace facturas. Forzamos dinamico para que el "X de N"
@@ -80,11 +81,19 @@ export default async function ReviewPage({
       ? `/dashboard/admin/invoices`
       : `/dashboard/worker/invoices`;
 
-  // Bounding boxes: solo Document AI devuelve coordenadas (XML no tiene imagen)
-  const boundingBoxes =
-    latestExtraction?.rawResponse && latestExtraction.source !== "xml_parse"
-      ? extractBoundingBoxes(latestExtraction.rawResponse)
-      : {};
+  // Bounding boxes: cada extractor guarda coordenadas en formato diferente.
+  // document_ai       → formato entities de Document AI.
+  // gemini_text       → JSON con boundingBoxes por campo (posiciones de pdfjs).
+  // gemini_multimodal → mismo JSON propio pero coordenadas de Gemini multimodal.
+  // xml_parse         → sin coordenadas.
+  const boundingBoxes = (() => {
+    if (!latestExtraction?.rawResponse) return {};
+    if (latestExtraction.source === "document_ai")
+      return extractBoundingBoxes(latestExtraction.rawResponse);
+    if (latestExtraction.source === "gemini_text" || latestExtraction.source === "gemini_multimodal")
+      return extractGeminiBoundingBoxes(latestExtraction.rawResponse);
+    return {};
+  })();
 
   // Serialize extraction for client component
   const extractionData = latestExtraction ? {
