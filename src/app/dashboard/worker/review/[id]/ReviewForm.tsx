@@ -257,6 +257,13 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     (invoice.operationType as OperationTypeName | undefined) ?? "INTERIOR",
   );
 
+  // Tipo emitida/recibida — editable en la revisión. Si la factura se subió
+  // como "No lo sé" (typeUnconfirmed), el OCR intentó detectarlo y aquí se
+  // confirma o corrige. Cambiarlo conmuta qué lado es el cliente (lockedSide).
+  const [type, setType] = useState<"PURCHASE" | "SALE">(
+    invoice.type === "SALE" ? "SALE" : "PURCHASE",
+  );
+
   // Retencion IRPF (Modelo 111 / 115). Si no hay tipo no aplica retencion.
   const [retentionType, setRetentionType] = useState<RetentionTypeName | "">(
     (invoice.retentionType as RetentionTypeName | null) ?? "",
@@ -338,7 +345,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
   // En facturas RECIBIDAS el cliente es el RECEPTOR, en EMITIDAS el EMISOR.
   // Esa parte queda bloqueada (read-only) porque la fija el sistema, pero
   // sin etiquetas adicionales — el fondo gris ya indica que no se edita.
-  const lockedSide: "issuer" | "receiver" = invoice.type === "PURCHASE" ? "receiver" : "issuer";
+  const lockedSide: "issuer" | "receiver" = type === "PURCHASE" ? "receiver" : "issuer";
   const lockedInputClass = "w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-[13px] text-slate-600 cursor-not-allowed";
 
   // Conflicto de CIF: emisor == receptor (despues de normalizar). Tipicamente
@@ -521,6 +528,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     const fd = new FormData();
     fd.set("invoiceId",    invoice.id);
     fd.set("updatedAt",    new Date(invoice.updatedAt).toISOString());
+    fd.set("type",         type);
     fd.set("issuerName",   (document.getElementById("issuerName")   as HTMLInputElement)?.value ?? "");
     fd.set("issuerCif",    (document.getElementById("issuerCif")    as HTMLInputElement)?.value ?? "");
     fd.set("receiverName", (document.getElementById("receiverName") as HTMLInputElement)?.value ?? "");
@@ -548,7 +556,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     fd.set("bucket", bucket);
     if (extra) Object.entries(extra).forEach(([k,v]) => fd.set(k,v));
     return fd;
-  }, [vatLines, totalAmount, invoiceDateVal, supplierAccountVal, expenseAccountVal, operationType, retentionType, retentionBase, retentionRate, retentionAmount, isRectificative, rectifiedInvoiceSeries, rectifiedInvoiceNumber, rectificativeType, art80Tres, invoice.id, invoice.updatedAt, bucket]);
+  }, [type, vatLines, totalAmount, invoiceDateVal, supplierAccountVal, expenseAccountVal, operationType, retentionType, retentionBase, retentionRate, retentionAmount, isRectificative, rectifiedInvoiceSeries, rectifiedInvoiceNumber, rectificativeType, art80Tres, invoice.id, invoice.updatedAt, bucket]);
 
   const handleSave = () => {
     startSave(async () => {
@@ -725,7 +733,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
             <span className="text-slate-300">·</span>
             <span className="capitalize">{monthLabel} {sessionContext.periodYear}</span>
             <span className="text-slate-300">·</span>
-            <span>{sessionContext.type === "PURCHASE" ? "Recibidas" : "Emitidas"}</span>
+            <span>{type === "PURCHASE" ? "Recibidas" : "Emitidas"}</span>
             {bucketLabel && (
               <>
                 <span className="text-slate-300">·</span>
@@ -890,11 +898,13 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                 (de todas formas los fuerza al cliente, pero los
                 enviamos para no romper buildFormData). */}
             <input
+              key={`locked-name-${lockedSide}`}
               type="hidden"
               id={lockedSide === "issuer" ? "issuerName" : "receiverName"}
               defaultValue={lockedSide === "issuer" ? (invoice.issuerName ?? "") : (invoice.receiverName ?? "")}
             />
             <input
+              key={`locked-cif-${lockedSide}`}
               type="hidden"
               id={lockedSide === "issuer" ? "issuerCif" : "receiverCif"}
               defaultValue={lockedSide === "issuer" ? (invoice.issuerCif ?? "") : (invoice.receiverCif ?? "")}
@@ -902,8 +912,10 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
 
             <div className="grid grid-cols-2 gap-2.5">
               {/* Lado editable: Emisor en PURCHASE, Receptor en SALE.
-                  Es siempre la "otra parte" — la que NO es el cliente. */}
-              <fieldset className="rounded-xl border border-slate-200 bg-white p-3 space-y-2">
+                  Es siempre la "otra parte" — la que NO es el cliente. El key
+                  por lockedSide fuerza remontar los inputs al cambiar el tipo,
+                  así el campo no controlado (nombre) se resetea al lado nuevo. */}
+              <fieldset key={`editable-${lockedSide}`} className="rounded-xl border border-slate-200 bg-white p-3 space-y-2">
                 <legend className="px-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                   {lockedSide === "receiver" ? "Emisor" : "Receptor"}
                 </legend>
@@ -964,6 +976,29 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                 <legend className="px-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                   Factura
                 </legend>
+                <div>
+                  <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
+                    Tipo
+                    {invoice.typeUnconfirmed && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-700">
+                        <AlertTriangle className="h-2.5 w-2.5" /> Confirma
+                      </span>
+                    )}
+                  </label>
+                  <select
+                    className={inputClass}
+                    value={type}
+                    onChange={(e) => setType(e.target.value as "PURCHASE" | "SALE")}
+                  >
+                    <option value="PURCHASE">Recibida (compra)</option>
+                    <option value="SALE">Emitida (venta)</option>
+                  </select>
+                  {invoice.typeUnconfirmed && (
+                    <p className="mt-1 text-[11px] text-amber-600">
+                      Tipo sin determinar automáticamente — indica si es emitida o recibida.
+                    </p>
+                  )}
+                </div>
                 <div>
                   <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
                     N factura

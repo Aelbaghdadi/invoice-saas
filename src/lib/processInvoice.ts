@@ -19,7 +19,7 @@ import {
   type RetentionTypeName,
 } from "@/lib/validators";
 import { textMentionsRectificative, applyRectificativeSign } from "@/lib/rectificative";
-import { routeByCif, clientSideCif, routeByText } from "@/lib/invoiceRouting";
+import { routeByCif, clientSideCif, routeByText, detectInvoiceType } from "@/lib/invoiceRouting";
 import { lookupProviderClient } from "@/lib/providerRouting";
 
 /**
@@ -301,6 +301,24 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
           select: { name: true, cif: true },
         });
 
+    // ── Detección del tipo cuando se subió como "No lo sé" ─────────────
+    // El lado donde aparece el CIF del cliente decide: receptor -> compra,
+    // emisor -> venta. Si casa con claridad, fijamos el tipo y limpiamos el
+    // flag; si no, queda provisional y el gestor lo confirma en la revisión.
+    // Tiene que ir ANTES de la lógica que usa invoice.type (parte conocida,
+    // operationType, retención).
+    let typeUnconfirmed = invoice.typeUnconfirmed;
+    if (typeUnconfirmed && clientRecord) {
+      const detected = detectInvoiceType(clientRecord.cif, {
+        issuerCif: extracted.issuerCif,
+        receiverCif: extracted.receiverCif,
+      });
+      if (detected) {
+        invoice.type = detected;
+        typeUnconfirmed = false;
+      }
+    }
+
     let finalIssuerName = extracted.issuerName;
     let finalIssuerCif  = issuerParsed.clean || null;
     let finalIssuerCountry = issuerParsed.countryCode;
@@ -435,6 +453,10 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
         where: { id: invoiceId },
         data: {
           status: targetStatus,
+          // Tipo detectado (si se subió como "No lo sé" y el OCR lo resolvió);
+          // si no se pudo, queda el placeholder con typeUnconfirmed=true.
+          type: invoice.type,
+          typeUnconfirmed,
           // Si fue ruteada, clientId ya es el real; si quedó por clasificar,
           // sigue en el buzón. routingCandidateIds se limpia al resolver y se
           // conserva mientras está por clasificar (lo usa la pantalla).

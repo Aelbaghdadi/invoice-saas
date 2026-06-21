@@ -39,6 +39,8 @@ type FieldData = {
   issuerCif:     string;
   receiverName:  string;
   receiverCif:   string;
+  /** "PURCHASE" | "SALE" | "" — tipo confirmado en la revisión. */
+  type:          string;
   invoiceNumber: string;
   invoiceDate:   string;
   /** JSON-encoded array de lineas: [{taxBase,vatRate,vatAmount}]. */
@@ -169,11 +171,20 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
   const issuerParsed   = parseTaxId(data.issuerCif);
   const receiverParsed = parseTaxId(data.receiverCif);
 
+  // Tipo confirmado en la revisión (desplegable). Si la factura se subió como
+  // "No lo sé", aquí queda fijado; al validar exigimos un tipo concreto.
+  const submittedType = data.type === "PURCHASE" || data.type === "SALE" ? data.type : null;
+  if (validate && !submittedType && invoice.typeUnconfirmed) {
+    return { error: "Indica si la factura es emitida o recibida." };
+  }
+  const effectiveType: "PURCHASE" | "SALE" =
+    submittedType ?? (invoice.type === "SALE" ? "SALE" : "PURCHASE");
+
   // Parte conocida (cliente) — la fuerza el sistema, no se acepta lo
   // que envie el form. PURCHASE: cliente = receptor; SALE: cliente = emisor.
   // Asi el gestor ni siquiera con devtools puede sustituir los datos
   // del Client por otros distintos.
-  const isPurchase = invoice.type === "PURCHASE";
+  const isPurchase = effectiveType === "PURCHASE";
   const finalIssuerName    = isPurchase ? (data.issuerName || null)              : invoice.client.name;
   const finalIssuerCif     = isPurchase ? (issuerParsed.clean || null)           : invoice.client.cif;
   const finalIssuerCountry = isPurchase ? issuerParsed.countryCode               : null;
@@ -206,6 +217,10 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     : null;
 
   const newData = {
+    type:          effectiveType,
+    // Al guardar con un tipo concreto, queda confirmado; si no se tocó y
+    // seguía sin confirmar (guardar borrador), se mantiene el flag.
+    typeUnconfirmed: submittedType ? false : invoice.typeUnconfirmed,
     issuerName:    finalIssuerName,
     issuerCif:     finalIssuerCif,
     issuerCountry: finalIssuerCountry,
@@ -276,6 +291,7 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
   // Build audit log entries for changed fields
   const auditEntries: { field: string; oldValue: string | null; newValue: string | null }[] = [];
   const trackedFields = [
+    "type",
     "issuerName","issuerCif","receiverName","receiverCif",
     "invoiceNumber","taxBase","vatRate","vatAmount","irpfRate","irpfAmount","totalAmount",
     "operationType",
@@ -951,6 +967,7 @@ function extractFields(fd: FormData): FieldData {
     issuerCif:     fd.get("issuerCif")     as string ?? "",
     receiverName:  fd.get("receiverName")  as string ?? "",
     receiverCif:   fd.get("receiverCif")   as string ?? "",
+    type:          fd.get("type")          as string ?? "",
     invoiceNumber: fd.get("invoiceNumber") as string ?? "",
     invoiceDate:   fd.get("invoiceDate")   as string ?? "",
     vatLines:      fd.get("vatLines")      as string ?? "",
