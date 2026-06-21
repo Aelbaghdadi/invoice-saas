@@ -40,6 +40,7 @@ export default async function SettingsPage() {
         firm={{
           name: firm?.name ?? "",
           cif: firm?.cif ?? "",
+          logoDataUrl: firm?.logoDataUrl ?? null,
         }}
         profile={{
           name: user?.name ?? "",

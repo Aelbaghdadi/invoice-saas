@@ -118,6 +118,10 @@ model AdvisoryFirm {
   id        String   @id @default(cuid())
   name      String
   cif       String   @unique
+  /// Logo de la asesoría como data URL (PNG, redimensionado en cliente a
+  /// ~320px para que pese poco). Se muestra arriba a la izquierda en la barra
+  /// lateral. null = se usa la marca por defecto (FacturOCR).
+  logoDataUrl String? @db.Text
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

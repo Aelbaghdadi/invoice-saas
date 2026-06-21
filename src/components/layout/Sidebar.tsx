@@ -106,6 +106,10 @@ type SidebarProps = {
   role: Role;
   userName: string;
   userEmail?: string | null;
+  /** Marca de la asesoría (configurable en Ajustes). Si hay logo se muestra
+   *  arriba a la izquierda; si no, la marca por defecto (FacturOCR). */
+  firmName?: string | null;
+  firmLogo?: string | null;
   /** Modo "solo iconos" en desktop. Controlado por DashboardShell, que
    *  tambien renderiza el boton de toggle como pestania en el borde. */
   collapsed?: boolean;
@@ -119,7 +123,7 @@ const BATCH_LINKS: Record<Role, { href: string; label: string }> = {
 
 const STORAGE_KEY = "facturocr.sidebar.openSections";
 
-export function Sidebar({ role, userName, collapsed = false }: SidebarProps) {
+export function Sidebar({ role, userName, firmName, firmLogo, collapsed = false }: SidebarProps) {
   const pathname = usePathname();
   const sections = NAV_SECTIONS[role];
   const batchLink = BATCH_LINKS[role];
@@ -205,13 +209,26 @@ export function Sidebar({ role, userName, collapsed = false }: SidebarProps) {
       <div className={`flex h-12 flex-shrink-0 items-center border-b border-slate-200/70 ${
         collapsed ? "justify-center px-2" : "gap-2.5 px-4"
       }`}>
-        <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md bg-slate-900 text-white">
-          <span className="text-[9px] font-bold tracking-wider">OCR</span>
-        </div>
-        {!collapsed && (
-          <p className="text-[13px] font-semibold text-slate-800 tracking-tight">
-            FacturOCR
-          </p>
+        {firmLogo ? (
+          // Logo de la asesoría configurado en Ajustes. object-contain para que
+          // entre cualquier proporción dentro de la altura de la cabecera.
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={firmLogo}
+            alt={firmName ?? "Logo"}
+            className={collapsed ? "h-7 w-7 object-contain" : "h-8 max-w-[160px] object-contain"}
+          />
+        ) : (
+          <>
+            <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md bg-slate-900 text-white">
+              <span className="text-[9px] font-bold tracking-wider">OCR</span>
+            </div>
+            {!collapsed && (
+              <p className="text-[13px] font-semibold text-slate-800 tracking-tight">
+                FacturOCR
+              </p>
+            )}
+          </>
         )}
       </div>
 

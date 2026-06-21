@@ -1,17 +1,49 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, useRef } from "react";
+import { useRouter } from "next/navigation";
 import {
   Building2, Lock, User, CheckCircle2, AlertCircle, Loader2,
   Mail, Shield, Users, RefreshCw, AlertTriangle, Database,
+  Image as ImageIcon, Trash2,
 } from "lucide-react";
 import {
-  updateFirm, changePassword, updateProfile,
+  updateFirm, changePassword, updateProfile, updateFirmLogo, removeFirmLogo,
   type ActionState,
 } from "./actions";
 import { useToast } from "@/components/ui/Toast";
 
-type FirmData = { name: string; cif: string };
+type FirmData = { name: string; cif: string; logoDataUrl: string | null };
+
+/**
+ * Redimensiona una imagen en el cliente a un ancho máximo y la devuelve como
+ * data URL PNG (conserva transparencia). Así el logo pesa poco (se carga en la
+ * barra lateral en cada página) sin tocar el servidor con un binario grande.
+ */
+function downscaleImage(file: File, maxW: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new window.Image();
+      img.onload = () => {
+        const scale = Math.min(1, maxW / img.width);
+        const w = Math.max(1, Math.round(img.width * scale));
+        const h = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) { reject(new Error("canvas")); return; }
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL("image/png"));
+      };
+      img.onerror = () => reject(new Error("img"));
+      img.src = reader.result as string;
+    };
+    reader.onerror = () => reject(new Error("read"));
+    reader.readAsDataURL(file);
+  });
+}
 type ProfileData = { name: string; email: string };
 type TeamMember = { id: string; name: string; email: string; role: string; createdAt: string };
 
@@ -323,6 +355,10 @@ function FirmTab({ firm }: { firm: FirmData }) {
 
       <StatusBanner state={state} />
 
+      <LogoSection initialLogo={firm.logoDataUrl} />
+
+      <div className="my-5 border-t border-slate-100" />
+
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
           <label className={labelClass}>Nombre / Razón social</label>
@@ -343,6 +379,103 @@ function FirmTab({ firm }: { firm: FirmData }) {
           </button>
         </div>
       </form>
+    </div>
+  );
+}
+
+// ─── Logo de la asesoría ──────────────────────────────────────────────────────
+
+function LogoSection({ initialLogo }: { initialLogo: string | null }) {
+  const { success, error: toastError } = useToast();
+  const router = useRouter();
+  const [logo, setLogo] = useState<string | null>(initialLogo);
+  const [pending, start] = useTransition();
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const handleFile = async (file: File) => {
+    if (!file.type.startsWith("image/")) { toastError("Selecciona una imagen"); return; }
+    if (file.size > 4 * 1024 * 1024) { toastError("Imagen demasiado grande (máx 4 MB)"); return; }
+    let dataUrl: string;
+    try {
+      dataUrl = await downscaleImage(file, 320);
+    } catch {
+      toastError("No se pudo procesar la imagen");
+      return;
+    }
+    start(async () => {
+      const res = await updateFirmLogo(dataUrl);
+      if (res?.success) {
+        setLogo(dataUrl);
+        success("Logo actualizado");
+        router.refresh();
+      } else {
+        toastError(res?.error ?? "Error al guardar el logo");
+      }
+    });
+  };
+
+  const handleRemove = () => {
+    start(async () => {
+      const res = await removeFirmLogo();
+      if (res?.success) {
+        setLogo(null);
+        success("Logo eliminado");
+        router.refresh();
+      } else {
+        toastError(res?.error ?? "Error al eliminar el logo");
+      }
+    });
+  };
+
+  return (
+    <div>
+      <label className={labelClass}>Logo de la asesoría</label>
+      <div className="flex items-center gap-4">
+        <div className="flex h-16 w-36 flex-shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
+          {logo ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={logo} alt="Logo de la asesoría" className="max-h-full max-w-full object-contain" />
+          ) : (
+            <span className="text-[11px] text-slate-300">Sin logo</span>
+          )}
+        </div>
+        <div className="flex flex-col items-start gap-2">
+          <input
+            ref={inputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) handleFile(f);
+              e.target.value = "";
+            }}
+          />
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => inputRef.current?.click()}
+            className="flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2 text-[13px] font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+          >
+            {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImageIcon className="h-4 w-4" />}
+            {logo ? "Cambiar logo" : "Subir logo"}
+          </button>
+          {logo && (
+            <button
+              type="button"
+              disabled={pending}
+              onClick={handleRemove}
+              className="flex items-center gap-1.5 text-[12px] font-medium text-slate-400 transition hover:text-red-600 disabled:opacity-50"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Quitar
+            </button>
+          )}
+        </div>
+      </div>
+      <p className="mt-2 text-[11px] text-slate-400">
+        PNG con fondo transparente recomendado. Se mostrará arriba a la izquierda en la barra lateral.
+      </p>
     </div>
   );
 }
