@@ -67,8 +67,9 @@ Las explica en detalle [.env.example](.env.example). Resumen:
 | `DATABASE_URL` | Conexión a Postgres |
 | `AUTH_SECRET` | Firma de JWTs de NextAuth |
 | `NEXTAUTH_URL` | URL pública (emails, callbacks) |
-| `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` | Storage de PDFs |
-| `GOOGLE_APPLICATION_CREDENTIALS_JSON`, `GOOGLE_CLOUD_PROJECT_ID`, `GOOGLE_DOCUMENT_AI_PROCESSOR_ID`, `GOOGLE_DOCUMENT_AI_LOCATION` | Document AI |
+| `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_FORCE_PATH_STYLE` | Storage de PDFs (Garage / S3-compatible) |
+| `GEMINI_API_KEY`, `GEMINI_MODEL` | OCR principal (Gemini) |
+| `GOOGLE_APPLICATION_CREDENTIALS_JSON`, `GOOGLE_CLOUD_PROJECT_ID`, `GOOGLE_DOCUMENT_AI_PROCESSOR_ID`, `GOOGLE_DOCUMENT_AI_LOCATION` | OCR fallback (Document AI) |
 | `RESEND_API_KEY`, `EMAIL_FROM` | Emails transaccionales |
 | `CRON_SECRET` | Protege endpoints `/api/cron/*` |
 

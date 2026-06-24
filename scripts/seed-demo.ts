@@ -1,8 +1,8 @@
 /**
  * Seed de demo (simplificado) — borra datos no-admin y siembra 2 clientes
  * (uno por gestor) con 3 facturas cada uno (estados variados), cada una
- * con un PDF real generado y subido a Supabase Storage al path real
- *   invoices/{clientId}/{YYYY-MM}/{timestamp}-{filename}
+ * con un PDF real generado y subido a Garage (S3) al path real
+ *   {clientId}/{YYYY-MM}/{timestamp}-{filename}
  *
  * Ademas genera 3 PDFs en scripts/demo-pdfs/ (sin subir) para probar
  * el flujo de upload manualmente durante la demo.
@@ -13,7 +13,7 @@
 
 import { PrismaClient, type InvoiceStatus, type InvoiceType } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { createClient } from "@supabase/supabase-js";
+import { S3Client, PutObjectCommand, ListObjectsV2Command, DeleteObjectsCommand } from "@aws-sdk/client-s3";
 import bcrypt from "bcryptjs";
 import fs from "node:fs";
 import os from "node:os";
@@ -123,25 +123,31 @@ async function main() {
   await prisma.passwordResetToken.deleteMany({});
   console.log("✓ Limpieza completada");
 
-  // ── Supabase client ───────────────────────────────────────────────────
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  const supabase = url && key ? createClient(url, key, { auth: { persistSession: false } }) : null;
-  if (!supabase) {
-    console.warn("⚠️  Supabase vars faltan — los PDFs no se subiran (storageKey sera placeholder).");
+  // ── Almacenamiento (Garage / S3) ──────────────────────────────────────
+  const s3 = process.env.S3_ENDPOINT && process.env.S3_ACCESS_KEY && process.env.S3_SECRET_KEY
+    ? new S3Client({
+        endpoint: process.env.S3_ENDPOINT,
+        region: process.env.S3_REGION || "garage",
+        credentials: { accessKeyId: process.env.S3_ACCESS_KEY, secretAccessKey: process.env.S3_SECRET_KEY },
+        forcePathStyle: true,
+        requestChecksumCalculation: "WHEN_REQUIRED",
+        responseChecksumValidation: "WHEN_REQUIRED",
+      })
+    : null;
+  const S3_BUCKET = process.env.S3_BUCKET || "facturas";
+  if (!s3) {
+    console.warn("⚠️  Vars S3/Garage faltan — los PDFs no se subiran (storageKey sera placeholder).");
   } else {
     // Borrar PDFs previos del bucket para los clientIds que vamos a borrar
     try {
       for (const cid of clientIds) {
-        const { data: folders } = await supabase.storage.from("invoices").list(cid);
-        if (!folders) continue;
-        for (const f of folders) {
-          const { data: files } = await supabase.storage.from("invoices").list(`${cid}/${f.name}`);
-          if (files && files.length) {
-            await supabase.storage
-              .from("invoices")
-              .remove(files.map((x) => `${cid}/${f.name}/${x.name}`));
-          }
+        const list = await s3.send(new ListObjectsV2Command({ Bucket: S3_BUCKET, Prefix: `${cid}/` }));
+        const objs = (list.Contents ?? [])
+          .map((o) => o.Key)
+          .filter((k): k is string => Boolean(k))
+          .map((Key) => ({ Key }));
+        if (objs.length) {
+          await s3.send(new DeleteObjectsCommand({ Bucket: S3_BUCKET, Delete: { Objects: objs } }));
         }
       }
       console.log("✓ PDFs previos eliminados de Storage");
@@ -351,13 +357,12 @@ async function main() {
     const storageKey = `${d.client.id}/${periodFolder}/${Date.now()}-${d.filename}`;
 
     let finalKey = storageKey;
-    if (supabase) {
+    if (s3) {
       const buf = fs.readFileSync(localPdf);
-      const { error } = await supabase.storage
-        .from("invoices")
-        .upload(storageKey, buf, { contentType: "application/pdf", upsert: true });
-      if (error) {
-        console.warn(`   ⚠️  upload ${d.filename}: ${error.message}`);
+      try {
+        await s3.send(new PutObjectCommand({ Bucket: S3_BUCKET, Key: storageKey, Body: buf, ContentType: "application/pdf" }));
+      } catch (e) {
+        console.warn(`   ⚠️  upload ${d.filename}: ${(e as Error).message}`);
         finalKey = `pending/${d.filename}`;
       }
     } else {
