@@ -34,6 +34,25 @@ Automáticas: el contenedor ejecuta `prisma migrate deploy` en el arranque
 ([`docker-entrypoint.sh`](docker-entrypoint.sh)) antes de levantar Next. Es
 idempotente; en una BD nueva crea todo el esquema. No hay pasos manuales.
 
+El historial se **regeneró a un baseline limpio** (`00000000000000_init` =
+esquema completo + `00000000000001_audit_immutability` = triggers de auditoría),
+porque el historial antiguo tenía deriva (4 tablas creadas con `db push` que no
+estaban en ninguna migración → fallaba al aplicar desde cero con 42P01/P3009).
+
+### Si la BD quedó en estado fallido (P3009 / P3018)
+
+Le pasó al primer deploy: aplicó migraciones a medias y dejó una marcada como
+fallida. Como la BD **no tiene datos reales**, resetéala y vuelve a desplegar.
+En la terminal del contenedor de la app (DATABASE_URL ya está en el entorno):
+
+```sh
+npx prisma migrate reset --force --skip-seed
+```
+
+(Borra el esquema y re-aplica las 2 migraciones limpias.) Luego un deploy normal
+ya es no-op. Alternativa equivalente: borrar y recrear el recurso Postgres en
+Coolify (BD nueva vacía) y redeploy.
+
 ## 4. Primer admin (BD nueva)
 
 Una BD recién creada no tiene usuarios. Tras el primer deploy, ejecuta UNA vez
