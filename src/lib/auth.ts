@@ -14,6 +14,11 @@ const LOCK_ATTEMPTS = 3;
 const LOCK_DURATION_MS = 15 * 60 * 1000; // 15 minutes
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
+  // Detrás del proxy de Coolify/Traefik (TLS terminado en el proxy): hay que
+  // confiar en el Host reenviado. Sin esto, NextAuth v5 rechaza las callbacks
+  // en producción con "UntrustedHost" y el login deja de funcionar. En Vercel
+  // era automático; al autoalojar hay que declararlo (o AUTH_TRUST_HOST=true).
+  trustHost: true,
   session: {
     strategy: "jwt",
     maxAge: 8 * 60 * 60,       // 8h absolute

@@ -1,0 +1,17 @@
+node_modules
+.next
+.git
+.gitignore
+.env*
+*.md
+docs
+coverage
+test-results
+playwright-report
+tmp
+.vscode
+.idea
+*.tsbuildinfo
+npm-debug.log*
+Dockerfile
+.dockerignore
