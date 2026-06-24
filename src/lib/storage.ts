@@ -35,6 +35,11 @@ function getClient(): S3Client | null {
       region,
       credentials: { accessKeyId, secretAccessKey },
       forcePathStyle,
+      // Garage (y otros S3-compatibles) suelen rechazar los checksums CRC32 que
+      // el SDK v3 añade por defecto a cada PutObject ("WHEN_SUPPORTED"), lo que
+      // hace fallar las subidas. Los limitamos a cuando son obligatorios.
+      requestChecksumCalculation: "WHEN_REQUIRED",
+      responseChecksumValidation: "WHEN_REQUIRED",
     });
   }
   return _client;
