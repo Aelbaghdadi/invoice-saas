@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { createServerSupabase } from "@/lib/supabase";
+import { getObjectBytes, isStorageConfigured } from "@/lib/storage";
 import type { InvoiceStatus } from "@prisma/client";
 import {
   extractInvoiceFromPdf,
@@ -65,8 +65,7 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
   const ocrStartedAt = new Date();
 
   try {
-    const supabase = createServerSupabase();
-    if (!supabase) throw new Error("Storage not configured");
+    if (!isStorageConfigured()) throw new Error("Almacenamiento (S3) no configurado");
 
     let source: string;
     let ocrResult;
@@ -81,15 +80,10 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       try {
         if (ft.includes("xml")) {
           source = "xml_parse";
-          const { data, error } = await supabase.storage.from("invoices").download(invoice.storageKey);
-          if (error) throw new Error(error.message);
-          const xmlText = await data.text();
+          const xmlText = (await getObjectBytes(invoice.storageKey)).toString("utf-8");
           ocrResult = await extractInvoiceFromXml(xmlText);
         } else {
-          const { data, error } = await supabase.storage.from("invoices").download(invoice.storageKey);
-          if (error) throw new Error(error.message);
-          const buffer = await data.arrayBuffer();
-          const base64 = Buffer.from(buffer).toString("base64");
+          const base64 = (await getObjectBytes(invoice.storageKey)).toString("base64");
 
           if (ft === "application/pdf" || invoice.filename.endsWith(".pdf")) {
             if (process.env.GEMINI_API_KEY) {

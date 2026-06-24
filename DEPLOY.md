@@ -20,8 +20,10 @@ arrancar:
 - `AUTH_SECRET` — `openssl rand -base64 32`.
 - `NEXTAUTH_URL` — la URL autogenerada por Coolify (luego el dominio).
 - `GEMINI_API_KEY` — extractor OCR principal.
-- Almacenamiento (estado actual, Supabase): `NEXT_PUBLIC_SUPABASE_URL`,
-  `SUPABASE_SERVICE_ROLE_KEY`.
+- Almacenamiento (Garage): `S3_ENDPOINT` (`http://garage:3900`), `S3_REGION`
+  (`garage`), `S3_BUCKET` (`facturas`), `S3_ACCESS_KEY`, `S3_SECRET_KEY`,
+  `S3_FORCE_PATH_STYLE=true`. Requiere "Connect To Predefined Network: ON"
+  para que `garage` resuelva en la red interna.
 
 Opcionales: `RESEND_API_KEY` + `EMAIL_FROM` (emails; sin clave son no-op),
 Document AI (`GOOGLE_*`, fallback de OCR), `CRON_SECRET` (ver §5).
@@ -61,28 +63,29 @@ con una **Scheduled Task** de Coolify (o cron externo) con la cabecera
 Si no configuras los crons, la app funciona; solo no se ejecutan esas tareas
 periódicas.
 
-## 6. Almacenamiento: Supabase → Garage (pendiente)
+## 6. Almacenamiento (Garage)
 
-**Hoy** la app usa **Supabase Storage** (bucket `invoices`), con subida directa
-navegador→Supabase mediante URL firmada. Para usar **Garage** (S3-compatible,
-interno) hace falta una migración dedicada, no solo cambiar credenciales:
+La app usa **Garage** (S3-compatible, red interna) vía `@aws-sdk/client-s3`
+([`src/lib/storage.ts`](src/lib/storage.ts), `forcePathStyle: true`). Como
+Garage no es público, todo pasa por la app:
 
-1. Añadir `@aws-sdk/client-s3` y una capa `lib/storage.ts` que lea
-   `S3_ENDPOINT/REGION/BUCKET/ACCESS_KEY/SECRET_KEY` con `forcePathStyle: true`.
-2. **Re-arquitectura de la subida**: como Garage es interno (el navegador no
-   llega a `garage:3900`), la subida directa por URL firmada deja de servir.
-   Hay que subir **a través de la app** (un route que hace stream a Garage).
-3. Servir/descargar facturas **por proxy** desde la app (valida permisos y hace
-   stream), nunca exponiendo Garage públicamente.
-4. Sustituir las llamadas Supabase en `processInvoice`, sign/register, preview y
-   `demoSeed` por las de S3.
+- **Subida**: el navegador envía el binario a `POST /api/uploads` y la app lo
+  sube a Garage (proxy). Ya no hay subida directa navegador→storage.
+- **Servir/descargar**: `GET /api/invoices/<id>/preview` devuelve una URL
+  same-origin `/api/invoices/<id>/raw`, que valida permisos y hace stream del
+  fichero desde Garage. Garage nunca se expone público.
+- OCR (`processInvoice`), splits, re-subida de cliente y el seed de demo
+  leen/escriben por la misma capa.
 
-Mientras tanto se puede desplegar manteniendo Supabase Storage (rápido y de bajo
-riesgo) y migrar a Garage en una pasada aparte.
+Requiere el bucket `facturas` (privado) + credenciales `S3_*` (§2) y la red
+interna ("Connect To Predefined Network: ON" para que `garage` resuelva).
+
+> Smoke test tras el primer deploy: sube una factura, ábrela en revisión
+> (debe verse el PDF), y comprueba que el OCR la procesa. Eso valida
+> subida + stream + descarga contra Garage de punta a punta.
 
 ## 7. Pendiente después del primer deploy
 
 - Dominio + HTTPS (Coolify + Let's Encrypt) cuando se decida el nombre →
   actualizar `NEXTAUTH_URL`.
-- Migración de almacenamiento a Garage (§6).
-- Backup offsite del bucket de facturas.
+- Backup offsite del bucket de facturas (Garage).

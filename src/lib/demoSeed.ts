@@ -13,7 +13,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import bcrypt from "bcryptjs";
-import { createClient } from "@supabase/supabase-js";
+import { putObject, deletePrefix, isStorageConfigured } from "@/lib/storage";
 import { prisma } from "@/lib/prisma";
 import {
   SEED_INVOICE_DEFS,
@@ -118,23 +118,11 @@ export async function reseedDemo(
   await prisma.passwordResetToken.deleteMany({});
 
   // ── 3. Limpiar storage de los clientIds antiguos ─────────────────────
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  const supabase = url && key ? createClient(url, key, { auth: { persistSession: false } }) : null;
-
-  if (supabase && clientIds.length > 0) {
+  const storageReady = isStorageConfigured();
+  if (storageReady && clientIds.length > 0) {
     try {
       for (const cid of clientIds) {
-        const { data: folders } = await supabase.storage.from("invoices").list(cid);
-        if (!folders) continue;
-        for (const f of folders) {
-          const { data: files } = await supabase.storage.from("invoices").list(`${cid}/${f.name}`);
-          if (files && files.length) {
-            await supabase.storage
-              .from("invoices")
-              .remove(files.map((x) => `${cid}/${f.name}/${x.name}`));
-          }
-        }
+        await deletePrefix(`${cid}/`);
       }
     } catch {
       // Si falla la limpieza de storage no abortamos: los archivos
@@ -208,11 +196,12 @@ export async function reseedDemo(
     const storageKey = `${c.id}/${periodFolder}/${Date.now()}-${def.filename}`;
 
     let finalKey = storageKey;
-    if (supabase) {
-      const { error } = await supabase.storage
-        .from("invoices")
-        .upload(storageKey, buf, { contentType: "application/pdf", upsert: true });
-      if (error) finalKey = `pending/${def.filename}`;
+    if (storageReady) {
+      try {
+        await putObject(storageKey, buf, "application/pdf");
+      } catch {
+        finalKey = `pending/${def.filename}`;
+      }
     } else {
       finalKey = `pending/${def.filename}`;
     }

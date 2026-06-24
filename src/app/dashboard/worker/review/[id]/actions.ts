@@ -17,7 +17,7 @@ import { appendAuditLogs } from "@/lib/auditLog";
 import { parseTaxId, isPersonaFisica } from "@/lib/validators";
 import { applyRectificativeSign } from "@/lib/rectificative";
 import { appError, type AppError } from "@/lib/errorCodes";
-import { createServerSupabase, sanitizeFilenameForStorage } from "@/lib/supabase";
+import { putObject, getObjectBytes, sanitizeFilenameForStorage, isStorageConfigured } from "@/lib/storage";
 
 /** Resultado de las server actions de revision. El `error` puede ser:
  *  - AppError: cuando es un fallo "conocido" del dominio (tiene codigo)
@@ -693,7 +693,7 @@ export async function splitInvoice(
   const accessErr = await assertWorkerAccess(session.user.id, session.user.role, invoice.clientId);
   if (accessErr) return accessErr as { error: string };
 
-  const supabase = createServerSupabase();
+  if (!isStorageConfigured()) return { error: "Almacenamiento no configurado" };
   const createdIds: string[] = [];
 
   for (const ticket of tickets) {
@@ -708,20 +708,17 @@ export async function splitInvoice(
     const storageKey = `${invoice.clientId}/${invoice.periodYear}-${String(invoice.periodMonth).padStart(2, "0")}/${Date.now()}-split-${safeName}`;
     const fileHash = createHash("sha256").update(buffer).digest("hex");
 
-    if (supabase) {
-      const { error: storageError } = await supabase.storage
-        .from("invoices")
-        .upload(storageKey, buffer, { contentType: mime, upsert: false });
-      if (storageError) {
-        return { error: `Error subiendo "${ticket.name}": ${storageError.message}` };
-      }
+    try {
+      await putObject(storageKey, buffer, mime);
+    } catch (e) {
+      return { error: `Error subiendo "${ticket.name}": ${e instanceof Error ? e.message : "fallo"}` };
     }
 
     const filename = `${ticket.name}.${ext}`;
     const document = await prisma.document.create({
       data: {
         filename,
-        storageKey: supabase ? storageKey : `pending/${filename}`,
+        storageKey,
         fileType: mime,
         fileHash,
         sizeBytes: buffer.length,
@@ -733,7 +730,7 @@ export async function splitInvoice(
     const child = await prisma.invoice.create({
       data: {
         filename,
-        storageKey: supabase ? storageKey : `pending/${filename}`,
+        storageKey,
         fileType: mime,
         fileHash,
         type: invoice.type,
@@ -835,17 +832,15 @@ export async function splitPdfInvoice(
   const accessErr = await assertWorkerAccess(session.user.id, session.user.role, invoice.clientId);
   if (accessErr) return accessErr as { error: string };
 
-  const supabase = createServerSupabase();
-  if (!supabase) return { error: "Supabase no configurado" };
+  if (!isStorageConfigured()) return { error: "Almacenamiento no configurado" };
 
-  // Descargar el PDF original
-  const { data: blob, error: downloadErr } = await supabase.storage
-    .from("invoices")
-    .download(invoice.storageKey);
-  if (downloadErr || !blob) {
-    return { error: `No se pudo descargar el PDF: ${downloadErr?.message ?? "sin datos"}` };
+  // Descargar el PDF original desde Garage
+  let originalBytes: Buffer;
+  try {
+    originalBytes = await getObjectBytes(invoice.storageKey);
+  } catch (e) {
+    return { error: `No se pudo descargar el PDF: ${e instanceof Error ? e.message : "sin datos"}` };
   }
-  const originalBytes = Buffer.from(await blob.arrayBuffer());
 
   // Cargar con pdf-lib y validar rangos
   const { PDFDocument } = await import("pdf-lib");
@@ -877,11 +872,10 @@ export async function splitPdfInvoice(
     const safeName = sanitizeFilenameForStorage(`${part.name}.pdf`);
     const storageKey = `${invoice.clientId}/${invoice.periodYear}-${String(invoice.periodMonth).padStart(2, "0")}/${Date.now()}-split-${safeName}`;
 
-    const { error: storageError } = await supabase.storage
-      .from("invoices")
-      .upload(storageKey, pdfBytes, { contentType: "application/pdf", upsert: false });
-    if (storageError) {
-      return { error: `Error subiendo "${part.name}": ${storageError.message}` };
+    try {
+      await putObject(storageKey, pdfBytes, "application/pdf");
+    } catch (e) {
+      return { error: `Error subiendo "${part.name}": ${e instanceof Error ? e.message : "fallo"}` };
     }
 
     const filename = `${part.name}.pdf`;

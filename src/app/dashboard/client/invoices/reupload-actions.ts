@@ -5,7 +5,7 @@ import { createHash } from "crypto";
 import { revalidatePath } from "next/cache";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { createServerSupabase, sanitizeFilenameForStorage } from "@/lib/supabase";
+import { putObject, sanitizeFilenameForStorage, isStorageConfigured } from "@/lib/storage";
 import { processInvoice } from "@/lib/processInvoice";
 
 export type ReuploadState = {
@@ -68,24 +68,20 @@ export async function reuploadInvoiceAction(
     return { error: "El archivo es idéntico al rechazado. Sube una versión corregida." };
   }
 
-  const supabase = createServerSupabase();
+  if (!isStorageConfigured()) return { error: "Almacenamiento no configurado." };
   const safeName = sanitizeFilenameForStorage(file.name);
   const storageKey = `${client.id}/${rejected.periodYear}-${String(rejected.periodMonth).padStart(2, "0")}/reupload-${Date.now()}-${safeName}`;
 
-  if (supabase) {
-    const { error: storageError } = await supabase.storage
-      .from("invoices")
-      .upload(storageKey, bytes, {
-        contentType: realMime,
-        upsert: false,
-      });
-    if (storageError) return { error: `Error al subir: ${storageError.message}` };
+  try {
+    await putObject(storageKey, Buffer.from(bytes), realMime);
+  } catch (e) {
+    return { error: `Error al subir: ${e instanceof Error ? e.message : "fallo"}` };
   }
 
   const document = await prisma.document.create({
     data: {
       filename: file.name,
-      storageKey: supabase ? storageKey : `pending/${file.name}`,
+      storageKey,
       fileType: realMime,
       fileHash,
       sizeBytes: file.size,
@@ -97,7 +93,7 @@ export async function reuploadInvoiceAction(
   const newInvoice = await prisma.invoice.create({
     data: {
       filename: file.name,
-      storageKey: supabase ? storageKey : `pending/${file.name}`,
+      storageKey,
       fileType: realMime,
       fileHash,
       type: rejected.type,

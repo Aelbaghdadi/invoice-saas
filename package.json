@@ -13,9 +13,9 @@
     "clear-invoices": "node --env-file=.env scripts/clear-invoices.mjs"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1075.0",
     "@prisma/adapter-pg": "^7.5.0",
     "@prisma/client": "^7.5.0",
-    "@supabase/supabase-js": "^2.99.3",
     "bcryptjs": "^3.0.3",
     "dotenv": "^17.3.1",
     "fast-xml-parser": "^5.5.10",
