@@ -15,6 +15,13 @@ export const dynamic = "force-dynamic";
  * para evitar disparos accidentales por curl o link compartido.
  */
 export async function POST(req: NextRequest) {
+  // Endpoint destructivo (borra todos los datos no-admin de la firma).
+  // Deshabilitado salvo activación EXPLÍCITA por entorno: en producción no se
+  // expone y el botón de Ajustes se quitó. Para dev/staging: ALLOW_DEMO_RESET=true.
+  if (process.env.ALLOW_DEMO_RESET !== "true") {
+    return NextResponse.json({ error: "No encontrado" }, { status: 404 });
+  }
+
   const session = await auth();
   if (!session?.user || session.user.role !== "ADMIN") {
     return NextResponse.json({ error: "Solo administradores" }, { status: 403 });
