@@ -72,12 +72,10 @@ export function Topbar({ userName, onMenuClick }: TopbarProps) {
         </h1>
       </div>
 
-      {/* Avatar del usuario. Sin dropdown — la sesion se cierra desde el
-          sidebar (no duplicamos affordances). */}
+      {/* Avatar del usuario. El nombre completo vive solo en el bloque de
+          perfil del sidebar (abajo-izquierda); aqui no lo repetimos. Sin
+          dropdown — la sesion se cierra desde el sidebar. */}
       <div className="flex items-center gap-2">
-        <span className="hidden text-[12px] text-slate-500 sm:inline">
-          {userName}
-        </span>
         <div
           className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-blue-600 text-[10px] font-bold text-white"
           title={userName}

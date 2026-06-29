@@ -121,6 +121,13 @@ const BATCH_LINKS: Record<Role, { href: string; label: string }> = {
   CLIENT: { href: "/dashboard/client/upload", label: "Subir facturas" },
 };
 
+/** Rol en formato legible (no exponemos el valor del enum en la UI). */
+const ROLE_LABELS: Record<Role, string> = {
+  ADMIN: "Administrador",
+  WORKER: "Gestor",
+  CLIENT: "Cliente",
+};
+
 const STORAGE_KEY = "facturocr.sidebar.openSections";
 
 export function Sidebar({ role, userName, firmName, firmLogo, collapsed = false }: SidebarProps) {
@@ -288,7 +295,7 @@ export function Sidebar({ role, userName, firmName, firmLogo, collapsed = false 
           {!collapsed && (
             <div className="min-w-0 flex-1">
               <p className="truncate text-[12px] font-semibold text-slate-800">{userName}</p>
-              <p className="text-[10px] text-slate-400 capitalize">{role.toLowerCase()}</p>
+              <p className="text-[10px] text-slate-400">{ROLE_LABELS[role]}</p>
             </div>
           )}
         </div>
@@ -313,6 +320,14 @@ export function Sidebar({ role, userName, firmName, firmLogo, collapsed = false 
           <LogOut className="h-3.5 w-3.5" />
           {!collapsed && "Cerrar sesión"}
         </button>
+
+        {/* Co-branding discreto: el logo del tenant es el protagonista arriba;
+            aquí abajo, una firma tenue del producto. */}
+        {!collapsed && (
+          <p className="pt-1 text-center text-[10px] tracking-wide text-slate-300">
+            Powered by <span className="font-semibold text-slate-400">Faktury</span>
+          </p>
+        )}
       </div>
     </aside>
   );
