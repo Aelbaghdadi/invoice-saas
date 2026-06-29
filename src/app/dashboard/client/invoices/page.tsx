@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/Badge";
 import { FileText, Upload } from "lucide-react";
 import Link from "next/link";
 import { ReuploadButton } from "./ReuploadButton";
+import { formatDateEs } from "@/lib/dates";
 
 const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
   UPLOADED:  { label: "Subida",       variant: "blue" },
@@ -127,7 +128,7 @@ export default async function ClientInvoicesPage() {
                       <Badge variant={s.variant}>{s.label}</Badge>
                     </td>
                     <td className="px-5 py-3 text-[12px] text-slate-400 whitespace-nowrap">
-                      {inv.createdAt.toISOString().slice(0, 10)}
+                      {formatDateEs(inv.createdAt)}
                     </td>
                   </tr>
                 );

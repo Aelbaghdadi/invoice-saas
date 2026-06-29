@@ -5,14 +5,18 @@
 //   node scripts/bootstrap-admin.mjs
 //
 // Parametrizable por variables de entorno (con valores por defecto de demo):
-//   ADMIN_EMAIL, ADMIN_PASSWORD, ADMIN_NAME, FIRM_NAME, FIRM_CIF
+//   ADMIN_USERNAME, ADMIN_EMAIL, ADMIN_PASSWORD, ADMIN_NAME, FIRM_NAME, FIRM_CIF
 //
-// Es idempotente: si el admin ya existe, no hace nada.
+// El login es por `username` (no por email). Si no se pasa ADMIN_USERNAME se
+// deriva de la parte local del email (admin@empresa.com -> "admin").
+//
+// Es idempotente: si el admin ya existe (mismo email), no hace nada.
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import bcrypt from "bcryptjs";
 
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? process.env.DEMO_ADMIN_EMAIL ?? "admin@demo.com";
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME ?? ADMIN_EMAIL.split("@")[0];
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "Demo1234!";
 const ADMIN_NAME = process.env.ADMIN_NAME ?? "Administrador";
 const FIRM_NAME = process.env.FIRM_NAME ?? "Asesoría";
@@ -37,6 +41,7 @@ async function main() {
   const passwordHash = await bcrypt.hash(ADMIN_PASSWORD, 12);
   const admin = await prisma.user.create({
     data: {
+      username: ADMIN_USERNAME,
       email: ADMIN_EMAIL,
       name: ADMIN_NAME,
       passwordHash,
@@ -47,6 +52,7 @@ async function main() {
 
   console.log(`✓ Asesoría: ${firm.name} (${firm.cif})`);
   console.log(`✓ Admin:    ${admin.email}`);
+  console.log(`✓ Usuario de acceso: ${admin.username}  (se inicia sesión con esto, no con el email)`);
   if (ADMIN_PASSWORD === "Demo1234!") {
     console.log("⚠ Estás usando la contraseña por defecto (Demo1234!). Cámbiala YA");
     console.log("  desde Ajustes → Contraseña, o define ADMIN_PASSWORD antes de ejecutar.");

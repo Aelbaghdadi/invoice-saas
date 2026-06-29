@@ -19,6 +19,7 @@ async function main() {
     where: { email: "admin@demo.com" },
     update: {},
     create: {
+      username: "admin",
       email: "admin@demo.com",
       name: "Admin Demo",
       passwordHash: hash,
@@ -30,7 +31,7 @@ async function main() {
   console.log("✓ Firma creada:", firm.name);
   console.log("✓ Admin creado:", admin.email);
   console.log("\nCredenciales:");
-  console.log("  Email:    admin@demo.com");
+  console.log("  Usuario:  admin");
   console.log("  Password: Demo1234!");
 }
 

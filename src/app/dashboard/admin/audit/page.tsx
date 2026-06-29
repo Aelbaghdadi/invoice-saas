@@ -6,6 +6,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { ClipboardList, ArrowRight } from "lucide-react";
 import { AuditFilters } from "./AuditFilters";
 import { IntegrityCheck } from "./IntegrityCheck";
+import { formatAuditValue } from "@/lib/invoiceStatuses";
 
 const FIELD_LABELS: Record<string, string> = {
   status: "Estado", issuerName: "Emisor", issuerCif: "CIF emisor",
@@ -15,19 +16,6 @@ const FIELD_LABELS: Record<string, string> = {
   irpfRate: "% IRPF", irpfAmount: "Cuota IRPF", totalAmount: "Total",
   export: "Exportación", duplicate_warning: "Duplicado",
 };
-
-const VALUE_LABELS: Record<string, string> = {
-  UPLOADED: "Subida", ANALYZING: "En análisis", ANALYZED: "Analizada",
-  OCR_ERROR: "Error OCR", VALIDATED: "Validada", REJECTED: "Rechazada",
-  EXPORTED: "Exportada", PENDING_REVIEW: "Pte. revisión",
-  NEEDS_ATTENTION: "Con incidencias", SPLIT_SOURCE: "Dividida",
-  PURCHASE: "Recibida", SALE: "Emitida",
-};
-
-function fmtVal(v: string | null): string {
-  if (!v) return "—";
-  return VALUE_LABELS[v] ?? v;
-}
 
 function initials(name: string) {
   return name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase();
@@ -172,9 +160,9 @@ export default async function AuditLogPage({ searchParams }: Props) {
                     </td>
                     <td className="px-5 py-3">
                       <div className="flex items-center gap-1.5 text-[12px]">
-                        <span className="rounded bg-red-50 px-1.5 py-0.5 text-red-500 line-through">{fmtVal(log.oldValue)}</span>
+                        <span className="rounded bg-red-50 px-1.5 py-0.5 text-red-500 line-through">{formatAuditValue(log.oldValue)}</span>
                         <ArrowRight className="h-3 w-3 flex-shrink-0 text-slate-300" />
-                        <span className="rounded bg-green-50 px-1.5 py-0.5 font-medium text-green-700">{fmtVal(log.newValue)}</span>
+                        <span className="rounded bg-green-50 px-1.5 py-0.5 font-medium text-green-700">{formatAuditValue(log.newValue)}</span>
                       </div>
                     </td>
                   </tr>

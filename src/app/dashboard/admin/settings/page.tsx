@@ -2,6 +2,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
 import { SettingsForm } from "./SettingsForm";
+import { formatDateEs } from "@/lib/dates";
 
 export default async function SettingsPage() {
   const session = await auth();
@@ -51,7 +52,7 @@ export default async function SettingsPage() {
           name: u.name,
           email: u.email,
           role: u.role,
-          createdAt: u.createdAt.toISOString().slice(0, 10),
+          createdAt: formatDateEs(u.createdAt),
         }))}
       />
     </div>

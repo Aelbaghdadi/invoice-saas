@@ -58,6 +58,8 @@ export async function createClient(_prev: State, formData: FormData): Promise<St
       // Create portal user
       const user = await tx.user.create({
         data: {
+          // El cliente inicia sesión con su username; por defecto = su email.
+          username: parsed.data.email,
           email: parsed.data.email,
           passwordHash,
           name: parsed.data.contactName,

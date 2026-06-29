@@ -1,5 +1,5 @@
 /**
- * Catálogo centralizado de códigos de error de FacturOCR.
+ * Catálogo centralizado de códigos de error de Faktury.
  *
  * Cada error que se muestra al usuario lleva asociado un código corto
  * (ERR-XXX-NNN) que el gestor puede copiar al soporte. El backend logea

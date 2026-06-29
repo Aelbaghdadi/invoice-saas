@@ -7,7 +7,7 @@ export default function LegalPage() {
         <section>
           <h2 className="text-lg font-semibold text-slate-700">Naturaleza del servicio</h2>
           <p className="mt-2">
-            FacturOCR es una herramienta de <strong>asistencia a la productividad</strong> para
+            Faktury es una herramienta de <strong>asistencia a la productividad</strong> para
             despachos de asesoría fiscal y contable. El sistema utiliza tecnología de reconocimiento
             óptico de caracteres (OCR) basada en inteligencia artificial para extraer datos de
             facturas y facilitar su gestión.
@@ -19,7 +19,7 @@ export default function LegalPage() {
           <p className="mt-2">
             Los datos extraídos automáticamente por el motor OCR son <strong>orientativos</strong> y
             deben ser siempre revisados y validados por un profesional cualificado antes de su uso
-            contable o fiscal. FacturOCR no sustituye el criterio profesional del asesor.
+            contable o fiscal. Faktury no sustituye el criterio profesional del asesor.
           </p>
           <p className="mt-2">
             El usuario es el único responsable de verificar la exactitud de los datos antes de

@@ -76,3 +76,28 @@ export const STATUS_LABELS: Record<InvoiceStatus, string> = {
   // contadores normales hasta que se asigna a su cliente real.
   PENDING_ROUTING:  "Por clasificar",
 };
+
+/** Tipo de operación (emitida/recibida) para la UI. */
+export const OPERATION_LABELS: Record<string, string> = {
+  PURCHASE: "Recibida",
+  SALE: "Emitida",
+  UNKNOWN: "Sin determinar",
+};
+
+/**
+ * Traduce un valor almacenado en AuditLog (`oldValue` / `newValue`) al español
+ * para mostrarlo en la UI. Cubre los estados de factura, el tipo de operación
+ * y el compuesto "<ESTADO> (reprocess)" que escribe el reproceso manual. Los
+ * valores libres (importes, nombres, CIFs...) se devuelven tal cual.
+ */
+export function formatAuditValue(value: string | null | undefined): string {
+  if (value == null || value === "") return "—";
+  const reproc = value.match(/^(.+?)\s*\(reprocess\)$/i);
+  if (reproc) {
+    const base = reproc[1];
+    const label =
+      STATUS_LABELS[base as InvoiceStatus] ?? OPERATION_LABELS[base] ?? base;
+    return `${label} (reprocesar)`;
+  }
+  return STATUS_LABELS[value as InvoiceStatus] ?? OPERATION_LABELS[value] ?? value;
+}

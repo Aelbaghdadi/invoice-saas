@@ -3,7 +3,7 @@ import { Receipt } from "lucide-react";
 import Link from "next/link";
 
 export const metadata = {
-  title: "¿Olvidaste tu contraseña? — FacturOCR",
+  title: "¿Olvidaste tu contraseña? — Faktury",
 };
 
 export default function ForgotPasswordPage() {
@@ -17,7 +17,7 @@ export default function ForgotPasswordPage() {
               <Receipt className="h-4 w-4 text-white" />
             </div>
             <span className="text-[15px] font-semibold text-slate-900">
-              FacturOCR
+              Faktury
             </span>
           </Link>
         </div>

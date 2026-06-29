@@ -134,16 +134,16 @@ export async function reseedDemo(
   const passwordHash = await bcrypt.hash(DEMO_PASSWORD, 12);
 
   const ana = await prisma.user.create({
-    data: { email: "ana.gestor@demo.com", name: "Ana Martínez", passwordHash, role: "WORKER", advisoryFirmId: firmId },
+    data: { username: "ana.gestor@demo.com", email: "ana.gestor@demo.com", name: "Ana Martínez", passwordHash, role: "WORKER", advisoryFirmId: firmId },
   });
   const pedro = await prisma.user.create({
-    data: { email: "pedro.gestor@demo.com", name: "Pedro Sánchez", passwordHash, role: "WORKER", advisoryFirmId: firmId },
+    data: { username: "pedro.gestor@demo.com", email: "pedro.gestor@demo.com", name: "Pedro Sánchez", passwordHash, role: "WORKER", advisoryFirmId: firmId },
   });
   const userPanaderia = await prisma.user.create({
-    data: { email: "cliente.panaderia@demo.com", name: "Luisa Fernández", passwordHash, role: "CLIENT" },
+    data: { username: "cliente.panaderia@demo.com", email: "cliente.panaderia@demo.com", name: "Luisa Fernández", passwordHash, role: "CLIENT" },
   });
   const userTaller = await prisma.user.create({
-    data: { email: "cliente.taller@demo.com", name: "Javier Pérez", passwordHash, role: "CLIENT" },
+    data: { username: "cliente.taller@demo.com", email: "cliente.taller@demo.com", name: "Javier Pérez", passwordHash, role: "CLIENT" },
   });
 
   const panaderia = await prisma.client.create({

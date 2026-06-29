@@ -120,7 +120,7 @@ model AdvisoryFirm {
   cif       String   @unique
   /// Logo de la asesoría como data URL (PNG, redimensionado en cliente a
   /// ~320px para que pese poco). Se muestra arriba a la izquierda en la barra
-  /// lateral. null = se usa la marca por defecto (FacturOCR).
+  /// lateral. null = se usa la marca por defecto (Faktury).
   logoDataUrl String? @db.Text
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -133,6 +133,8 @@ model AdvisoryFirm {
 
 model User {
   id             String    @id @default(cuid())
+  /// Identificador de acceso. Se inicia sesión con `username`, no con email.
+  username       String    @unique
   email          String    @unique
   passwordHash   String
   name           String

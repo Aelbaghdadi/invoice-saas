@@ -41,6 +41,9 @@ export async function createWorker(_prev: State, formData: FormData): Promise<St
     await prisma.user.create({
       data: {
         name: parsed.data.name,
+        // El gestor inicia sesión con su username; por defecto = su email
+        // (único), hasta que exista un campo de usuario propio en el alta.
+        username: parsed.data.email,
         email: parsed.data.email,
         passwordHash,
         role: "WORKER",

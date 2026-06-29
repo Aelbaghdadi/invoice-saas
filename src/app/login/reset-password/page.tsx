@@ -4,7 +4,7 @@ import { Receipt, AlertTriangle } from "lucide-react";
 import Link from "next/link";
 
 export const metadata = {
-  title: "Restablecer contraseña — FacturOCR",
+  title: "Restablecer contraseña — Faktury",
 };
 
 interface ResetPasswordPageProps {
@@ -46,7 +46,7 @@ export default async function ResetPasswordPage({
               <Receipt className="h-4 w-4 text-white" />
             </div>
             <span className="text-[15px] font-semibold text-slate-900">
-              FacturOCR
+              Faktury
             </span>
           </Link>
         </div>

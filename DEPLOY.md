@@ -59,6 +59,7 @@ Una BD recién creada no tiene usuarios. Tras el primer deploy, ejecuta UNA vez
 en el contenedor (Coolify → Terminal/Execute Command):
 
 ```sh
+ADMIN_USERNAME="admin" \
 ADMIN_EMAIL="admin@msassessors.com" \
 ADMIN_PASSWORD="<una-contraseña-fuerte>" \
 ADMIN_NAME="Admin" \
@@ -67,8 +68,11 @@ FIRM_CIF="<CIF real>" \
 node scripts/bootstrap-admin.mjs
 ```
 
-(Si no pasas variables, crea `admin@demo.com` / `Demo1234!` — cámbiala enseguida
-desde Ajustes → Contraseña.) El script es idempotente.
+El **login es por `username`** (no por email). `ADMIN_USERNAME` es con lo que se
+inicia sesión; si lo omites, se deriva de la parte local del email
+(`admin@msassessors.com` → `admin`). El email se conserva para recuperación de
+contraseña. (Si no pasas variables, crea usuario `admin` / `Demo1234!` —
+cámbiala enseguida desde Ajustes → Contraseña.) El script es idempotente.
 
 ## 5. Crons
 

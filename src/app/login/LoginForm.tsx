@@ -17,19 +17,19 @@ export function LoginForm() {
     <form action={action} className="space-y-4">
       <div>
         <label
-          htmlFor="email"
+          htmlFor="username"
           className="block text-sm font-medium text-slate-700"
         >
-          Email
+          Usuario
         </label>
         <input
-          id="email"
-          name="email"
-          type="email"
+          id="username"
+          name="username"
+          type="text"
           required
-          autoComplete="email"
+          autoComplete="username"
           className="mt-1.5 block w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder-slate-400 outline-none ring-0 transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-          placeholder="tu@empresa.com"
+          placeholder="Introduce tu usuario"
         />
       </div>
 
@@ -67,7 +67,7 @@ export function LoginForm() {
               ? "Cuenta bloqueada por demasiados intentos. Inténtalo en 15 minutos."
               : state.error === "RATE_LIMITED"
                 ? "Demasiados intentos. Espera unos minutos antes de volver a probar."
-                : "Email o contraseña incorrectos."}
+                : "Usuario o contraseña incorrectos."}
           </span>
         </div>
       )}

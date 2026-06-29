@@ -6,6 +6,8 @@ import { ChevronLeft, Building2, Calendar, Hash, Euro, Percent, User } from "luc
 import Link from "next/link";
 import { AdminInvoiceViewer } from "./AdminInvoiceViewer";
 import { ReprocesarButton } from "./ReprocesarButton";
+import { formatAuditValue } from "@/lib/invoiceStatuses";
+import { formatDateEs } from "@/lib/dates";
 
 const STATUS_LABELS: Record<string, string> = {
   UPLOADED: "Subida",
@@ -131,7 +133,7 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
                           <p className="mt-0.5 text-[12px] text-slate-500">{entry.reason}</p>
                         )}
                         <p className="mt-0.5 text-[11px] text-slate-400">
-                          {entry.createdAt.toLocaleDateString("es-ES")}
+                          {formatDateEs(entry.createdAt)}
                         </p>
                       </div>
                     </div>
@@ -159,11 +161,11 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
                         <span className="font-mono text-[12px] text-slate-500">{log.field}</span>
                       </p>
                       <p className="text-[12px] text-slate-400">
-                        {log.oldValue ?? "—"} → {log.newValue ?? "—"}
+                        {formatAuditValue(log.oldValue)} → {formatAuditValue(log.newValue)}
                       </p>
                     </div>
                     <p className="flex-shrink-0 text-[11px] text-slate-400">
-                      {log.createdAt.toISOString().slice(0, 10)}
+                      {formatDateEs(log.createdAt)}
                     </p>
                   </li>
                 ))}
@@ -180,7 +182,7 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
               <Field label="Nº Factura" value={invoice.invoiceNumber} icon={Hash} />
               <Field
                 label="Fecha factura"
-                value={invoice.invoiceDate ? invoice.invoiceDate.toISOString().slice(0, 10) : null}
+                value={invoice.invoiceDate ? formatDateEs(invoice.invoiceDate) : null}
                 icon={Calendar}
               />
               <Field label="Período" value={`${new Date(0, invoice.periodMonth - 1).toLocaleString("es", { month: "long" })} ${invoice.periodYear}`} icon={Calendar} />

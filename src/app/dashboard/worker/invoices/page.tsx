@@ -9,6 +9,7 @@ import Link from "next/link";
 import type { InvoiceType, Prisma } from "@prisma/client";
 import { DuplicateRowActions } from "./DuplicateRowActions";
 import { getAccessibleClientIds } from "@/lib/accessibleClients";
+import { formatDateEs } from "@/lib/dates";
 
 const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
   UPLOADED:  { label: "Subida",       variant: "blue" },
@@ -290,7 +291,7 @@ export default async function WorkerInvoicesPage({
                       <Badge variant={s.variant}>{s.label}</Badge>
                     </td>
                     <td className="px-5 py-3 text-[12px] text-slate-400 whitespace-nowrap">
-                      {inv.createdAt.toISOString().slice(0, 10)}
+                      {formatDateEs(inv.createdAt)}
                     </td>
                     <td className="px-5 py-3">
                       <div className="flex items-center justify-end gap-2">

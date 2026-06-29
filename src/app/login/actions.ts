@@ -14,12 +14,12 @@ export async function loginAction(
   _prevState: FormState,
   formData: FormData
 ): Promise<FormState> {
-  const email = (formData.get("email") as string)?.toLowerCase().trim() ?? "";
+  const username = (formData.get("username") as string)?.trim() ?? "";
   const password = formData.get("password") as string;
 
-  // Rate limit por IP + email (previene credential stuffing y bloqueo por terceros)
+  // Rate limit por IP + usuario (previene credential stuffing y bloqueo por terceros)
   const ip = getClientIp(await headers());
-  const rlKey = `login:${ip}:${email}`;
+  const rlKey = `login:${ip}:${username}`;
   const rl = loginRateLimit.check(rlKey);
   if (!rl.allowed) {
     return { error: "RATE_LIMITED" };
@@ -27,7 +27,7 @@ export async function loginAction(
 
   try {
     await signIn("credentials", {
-      email,
+      username,
       password,
       redirect: false,
     });

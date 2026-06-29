@@ -8,6 +8,7 @@ import bcrypt from "bcryptjs";
 import "dotenv/config";
 
 const ADMIN_EMAIL = process.env.DEMO_ADMIN_EMAIL ?? "admin@demo.com";
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME ?? ADMIN_EMAIL.split("@")[0];
 const ADMIN_PASSWORD = "Demo1234!";
 const FIRM_NAME = "Asesoría Demo S.L.";
 const FIRM_CIF = "B99999999";
@@ -31,6 +32,7 @@ async function main() {
   const passwordHash = await bcrypt.hash(ADMIN_PASSWORD, 12);
   const admin = await prisma.user.create({
     data: {
+      username: ADMIN_USERNAME,
       email: ADMIN_EMAIL,
       name: "Admin Demo",
       passwordHash,
@@ -40,7 +42,7 @@ async function main() {
   });
 
   console.log(`✓ AdvisoryFirm: ${firm.name} (${firm.id})`);
-  console.log(`✓ Admin creado: ${admin.email} / ${ADMIN_PASSWORD}`);
+  console.log(`✓ Admin creado: usuario "${admin.username}" / ${ADMIN_PASSWORD} (email: ${admin.email})`);
 }
 
 main()

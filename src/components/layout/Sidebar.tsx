@@ -107,7 +107,7 @@ type SidebarProps = {
   userName: string;
   userEmail?: string | null;
   /** Marca de la asesoría (configurable en Ajustes). Si hay logo se muestra
-   *  arriba a la izquierda; si no, la marca por defecto (FacturOCR). */
+   *  arriba a la izquierda; si no, la marca por defecto (Faktury). */
   firmName?: string | null;
   firmLogo?: string | null;
   /** Modo "solo iconos" en desktop. Controlado por DashboardShell, que
@@ -221,11 +221,11 @@ export function Sidebar({ role, userName, firmName, firmLogo, collapsed = false 
         ) : (
           <>
             <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md bg-slate-900 text-white">
-              <span className="text-[9px] font-bold tracking-wider">OCR</span>
+              <span className="text-[11px] font-bold tracking-tight">Fk</span>
             </div>
             {!collapsed && (
               <p className="text-[13px] font-semibold text-slate-800 tracking-tight">
-                FacturOCR
+                Faktury
               </p>
             )}
           </>

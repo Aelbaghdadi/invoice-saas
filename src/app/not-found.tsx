@@ -8,7 +8,7 @@ export default function NotFound() {
         <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600">
           <Receipt className="h-4 w-4 text-white" />
         </div>
-        <span className="text-[17px] font-bold text-slate-800">FacturOCR</span>
+        <span className="text-[17px] font-bold text-slate-800">Faktury</span>
       </div>
 
       <p className="text-7xl font-extrabold text-blue-600">404</p>

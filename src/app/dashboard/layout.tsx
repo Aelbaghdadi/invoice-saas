@@ -15,7 +15,7 @@ export default async function DashboardLayout({
   const role = session.user.role as Role;
 
   // Logo + nombre de la asesoría para la marca de la barra lateral (arriba a la
-  // izquierda). null -> se usa la marca por defecto (FacturOCR).
+  // izquierda). null -> se usa la marca por defecto (Faktury).
   const firm = session.user.advisoryFirmId
     ? await prisma.advisoryFirm.findUnique({
         where: { id: session.user.advisoryFirmId },

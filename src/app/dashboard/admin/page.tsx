@@ -13,7 +13,8 @@ import {
   Clock,
 } from "lucide-react";
 import Link from "next/link";
-import { PENDING_WORK, completionPercent } from "@/lib/invoiceStatuses";
+import { PENDING_WORK, completionPercent, formatAuditValue } from "@/lib/invoiceStatuses";
+import { formatDateEs } from "@/lib/dates";
 
 const STATUS_STYLES: Record<string, { label: string; className: string }> = {
   UPLOADED:   { label: "Subida",      className: "bg-blue-50 text-blue-700 border border-blue-200" },
@@ -155,14 +156,6 @@ export default async function AdminDashboard() {
     irpfRate: "% IRPF", irpfAmount: "cuota IRPF", totalAmount: "total",
   };
 
-  const VALUE_LABELS: Record<string, string> = {
-    UPLOADED: "Subida", ANALYZING: "En análisis", ANALYZED: "Analizada",
-    OCR_ERROR: "Error OCR", VALIDATED: "Validada", REJECTED: "Rechazada",
-    EXPORTED: "Exportada", PENDING_REVIEW: "Pte. revisión",
-    NEEDS_ATTENTION: "Con incidencias", SPLIT_SOURCE: "Dividida",
-    PURCHASE: "Recibida", SALE: "Emitida",
-  };
-
   // ── Clients with pending invoices (for "progress" section) ────────────
   const clientsWithWork = (clientProgress as any[])
     .map((c: any) => {
@@ -267,7 +260,7 @@ export default async function AdminDashboard() {
                       </span>
                     </td>
                     <td className="hidden 2xl:table-cell px-6 py-3.5 text-[13px] text-slate-500">
-                      {inv.createdAt.toISOString().slice(0, 10)}
+                      {formatDateEs(inv.createdAt)}
                     </td>
                     <td className="px-6 py-3.5">
                       <Link
@@ -326,7 +319,7 @@ export default async function AdminDashboard() {
                         <span className="font-medium">{log.invoice.filename}</span>
                       </p>
                       <p className="mt-0.5 text-[12px] text-slate-400">
-                        {log.invoice.client.name} · {VALUE_LABELS[log.oldValue] ?? log.oldValue ?? "—"} → {VALUE_LABELS[log.newValue] ?? log.newValue ?? "—"}
+                        {log.invoice.client.name} · {formatAuditValue(log.oldValue)} → {formatAuditValue(log.newValue)}
                       </p>
                       <p className="mt-0.5 flex items-center gap-1 text-[11px] text-slate-400">
                         <Clock className="h-3 w-3" />

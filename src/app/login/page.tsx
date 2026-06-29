@@ -39,10 +39,10 @@ export default async function LoginPage() {
           {/* Brand block */}
           <div className="mb-10 flex items-center gap-2.5">
             <div className="flex h-8 w-8 items-center justify-center rounded-md bg-slate-900 text-white">
-              <span className="text-[10px] font-bold tracking-wider">OCR</span>
+              <span className="text-[11px] font-bold tracking-tight">Fk</span>
             </div>
             <span className="text-[16px] font-semibold text-slate-900 tracking-tight">
-              FacturOCR
+              Faktury
             </span>
           </div>
 
