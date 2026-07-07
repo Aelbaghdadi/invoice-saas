@@ -36,14 +36,16 @@ export default async function LoginPage() {
           ocupa el resto del viewport. */}
       <div className="relative z-10 flex w-full lg:w-[440px] lg:flex-shrink-0 items-center justify-center px-6 py-10 sm:px-10 lg:px-12">
         <div className="w-full max-w-sm">
-          {/* Brand block */}
-          <div className="mb-10 flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-md bg-slate-900 text-white">
-              <span className="text-[11px] font-bold tracking-tight">Fk</span>
-            </div>
-            <span className="text-[16px] font-semibold text-slate-900 tracking-tight">
-              Faktury
-            </span>
+          {/* Brand — logo horizontal de Faktury (isotipo + wordmark). */}
+          <div className="mb-10">
+            <Image
+              src="/brand/faktury-logo.svg"
+              alt="Faktury"
+              width={180}
+              height={60}
+              priority
+              className="h-9 w-auto"
+            />
           </div>
 
           <h1 className="text-[26px] font-bold tracking-tight text-slate-900">

@@ -322,11 +322,13 @@ export function Sidebar({ role, userName, firmName, firmLogo, collapsed = false 
         </button>
 
         {/* Co-branding discreto: el logo del tenant es el protagonista arriba;
-            aquí abajo, una firma tenue del producto. */}
+            aquí abajo, una firma tenue del producto (isotipo + texto). */}
         {!collapsed && (
-          <p className="pt-1 text-center text-[10px] tracking-wide text-slate-300">
-            Powered by <span className="font-semibold text-slate-400">Faktury</span>
-          </p>
+          <div className="flex items-center justify-center gap-1.5 pt-1 text-[10px] tracking-wide text-slate-300">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/brand/faktury-isotipo.svg" alt="" className="h-3.5 w-3.5 opacity-70" />
+            <span>Powered by <span className="font-semibold text-slate-400">Faktury</span></span>
+          </div>
         )}
       </div>
     </aside>
