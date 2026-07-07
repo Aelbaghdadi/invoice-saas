@@ -227,11 +227,16 @@ export function Sidebar({ role, userName, firmName, firmLogo, collapsed = false 
           />
         ) : (
           <>
-            <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md bg-slate-900 text-white">
-              <span className="text-[11px] font-bold tracking-tight">Fk</span>
-            </div>
+            {/* Marca por defecto: isotipo real de Faktury (SVG, nítido a
+                cualquier tamaño), nada de chips de texto. */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/brand/faktury-icon.svg"
+              alt="Faktury"
+              className={collapsed ? "h-7 w-7 flex-shrink-0" : "h-8 w-8 flex-shrink-0"}
+            />
             {!collapsed && (
-              <p className="text-[13px] font-semibold text-slate-800 tracking-tight">
+              <p className="text-[14px] font-semibold text-slate-800 tracking-tight">
                 Faktury
               </p>
             )}
@@ -322,13 +327,12 @@ export function Sidebar({ role, userName, firmName, firmLogo, collapsed = false 
         </button>
 
         {/* Co-branding discreto: el logo del tenant es el protagonista arriba;
-            aquí abajo, una firma tenue del producto (isotipo + texto). */}
+            aquí abajo, una firma tenue del producto. Solo texto: a este
+            tamaño un isotipo no se lee y ensucia más que aporta. */}
         {!collapsed && (
-          <div className="flex items-center justify-center gap-1.5 pt-1 text-[10px] tracking-wide text-slate-300">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/brand/faktury-isotipo.svg" alt="" className="h-3.5 w-3.5 opacity-70" />
-            <span>Powered by <span className="font-semibold text-slate-400">Faktury</span></span>
-          </div>
+          <p className="pt-1 text-center text-[10px] tracking-wide text-slate-300">
+            Powered by <span className="font-semibold text-slate-400">Faktury</span>
+          </p>
         )}
       </div>
     </aside>

@@ -36,15 +36,19 @@ export default async function LoginPage() {
           ocupa el resto del viewport. */}
       <div className="relative z-10 flex w-full lg:w-[440px] lg:flex-shrink-0 items-center justify-center px-6 py-10 sm:px-10 lg:px-12">
         <div className="w-full max-w-sm">
-          {/* Brand — logo horizontal de Faktury (isotipo + wordmark). */}
-          <div className="mb-10">
+          {/* Brand — logo horizontal de Faktury (isotipo + wordmark), con
+              presencia: ocupa buena parte del ancho del formulario. Alineado
+              a la izquierda, pegado al borde del bloque como el resto. */}
+          {/* -ml-6 compensa el lienzo vacío a la izquierda del SVG (~9%)
+              para que el isotipo quede alineado con los campos del form. */}
+          <div className="mb-8 -ml-6">
             <Image
               src="/brand/faktury-logo.svg"
               alt="Faktury"
-              width={180}
-              height={60}
+              width={288}
+              height={96}
               priority
-              className="h-9 w-auto"
+              className="h-24 w-auto"
             />
           </div>
 
