@@ -32,7 +32,7 @@ export function fieldPropsFromConfidence(score: number | null | undefined): {
       return {
         level,
         tabIndex: -1,
-        className: `${base} border-slate-100 text-slate-500 focus:border-blue-400 focus:ring-blue-100 focus:text-slate-800`,
+        className: `${base} border-slate-100 text-slate-500 focus:border-accent-500 focus:ring-accent-100 focus:text-slate-800`,
       };
     case "critical":
       return {

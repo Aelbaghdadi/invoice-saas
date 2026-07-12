@@ -160,7 +160,7 @@ function GroupForm({
         value={name}
         onChange={(e) => setName(e.target.value)}
         placeholder="Nombre del grupo (ej. Restaurantes Pepe)"
-        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-100"
       />
       <div className="mt-3 grid grid-cols-2 gap-1.5 sm:grid-cols-3">
         {clients.map((c) => (

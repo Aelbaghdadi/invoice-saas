@@ -135,7 +135,7 @@ export default function SplitPdfModal({ invoiceId, pdfUrl, bucket, onClose }: Pr
         {/* Cabecera */}
         <div className="flex flex-shrink-0 items-center justify-between border-b border-slate-100 px-5 py-4">
           <div className="flex items-center gap-2.5">
-            <Scissors className="h-4.5 w-4.5 text-indigo-600" />
+            <Scissors className="h-4.5 w-4.5 text-blue-600" />
             <span className="text-[15px] font-semibold text-slate-800">
               Dividir PDF en facturas
             </span>
@@ -178,7 +178,7 @@ export default function SplitPdfModal({ invoiceId, pdfUrl, bucket, onClose }: Pr
               max={20}
               value={count}
               onChange={(e) => updateCount(parseInt(e.target.value, 10) || 2)}
-              className="w-20 rounded-lg border border-slate-200 px-3 py-1.5 text-[13px] focus:outline-none focus:ring-2 focus:ring-indigo-300"
+              className="w-20 rounded-lg border border-slate-200 px-3 py-1.5 text-[13px] focus:outline-none focus:ring-2 focus:ring-accent-200"
             />
           </div>
 
@@ -196,7 +196,7 @@ export default function SplitPdfModal({ invoiceId, pdfUrl, bucket, onClose }: Pr
                   <input
                     value={p.name}
                     onChange={(e) => updatePart(i, "name", e.target.value)}
-                    className="flex-1 rounded-lg border border-slate-200 px-3 py-1.5 text-[13px] focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                    className="flex-1 rounded-lg border border-slate-200 px-3 py-1.5 text-[13px] focus:outline-none focus:ring-2 focus:ring-accent-200"
                   />
                 </div>
                 <input
@@ -205,7 +205,7 @@ export default function SplitPdfModal({ invoiceId, pdfUrl, bucket, onClose }: Pr
                   max={totalPages || 999}
                   value={p.startPage}
                   onChange={(e) => updatePart(i, "startPage", parseInt(e.target.value, 10) || 1)}
-                  className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-center text-[13px] focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                  className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-center text-[13px] focus:outline-none focus:ring-2 focus:ring-accent-200"
                 />
                 <input
                   type="number"
@@ -213,7 +213,7 @@ export default function SplitPdfModal({ invoiceId, pdfUrl, bucket, onClose }: Pr
                   max={totalPages || 999}
                   value={p.endPage}
                   onChange={(e) => updatePart(i, "endPage", parseInt(e.target.value, 10) || 1)}
-                  className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-center text-[13px] focus:outline-none focus:ring-2 focus:ring-indigo-300"
+                  className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-center text-[13px] focus:outline-none focus:ring-2 focus:ring-accent-200"
                 />
               </div>
             ))}
@@ -238,7 +238,7 @@ export default function SplitPdfModal({ invoiceId, pdfUrl, bucket, onClose }: Pr
           <button
             onClick={handleSubmit}
             disabled={isPending || loadingPdf}
-            className="flex items-center gap-1.5 rounded-lg bg-indigo-600 px-4 py-2 text-[13px] font-semibold text-white hover:bg-indigo-700 disabled:opacity-40"
+            className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-[13px] font-semibold text-white hover:bg-blue-700 disabled:opacity-40"
           >
             {isPending
               ? <Loader2 className="h-4 w-4 animate-spin" />

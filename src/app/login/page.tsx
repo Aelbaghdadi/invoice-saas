@@ -2,6 +2,7 @@ import { LoginForm } from "./LoginForm";
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import Image from "next/image";
+import { ShieldCheck } from "lucide-react";
 
 export default async function LoginPage() {
   const session = await auth();
@@ -52,10 +53,10 @@ export default async function LoginPage() {
             />
           </div>
 
-          <h1 className="text-[26px] font-bold tracking-tight text-slate-900">
+          <h1 className="text-[28px] font-bold tracking-tight text-slate-900">
             Bienvenido de nuevo
           </h1>
-          <p className="mt-2 text-[14px] text-slate-500">
+          <p className="mt-2 text-[14px] leading-relaxed text-slate-500">
             Introduce tus credenciales para acceder.
           </p>
 
@@ -64,14 +65,15 @@ export default async function LoginPage() {
           </div>
 
           {/* Linea de confianza tras el CTA. */}
-          <div className="mt-7 flex items-center justify-center gap-2 text-[11px] text-slate-400">
+          <div className="mt-7 flex items-center justify-center gap-2.5 text-[11px] text-slate-400">
             <span>OCR inteligente</span>
-            <span className="text-slate-300">·</span>
+            <span className="h-1 w-1 rounded-full bg-accent-400" />
             <span>Validación manual</span>
-            <span className="text-slate-300">·</span>
+            <span className="h-1 w-1 rounded-full bg-accent-400" />
             <span>Exportación contable</span>
           </div>
-          <p className="mt-2 text-center text-[11px] text-slate-400">
+          <p className="mt-2.5 flex items-center justify-center gap-1.5 text-[11px] text-slate-400">
+            <ShieldCheck className="h-3.5 w-3.5 text-accent-600" strokeWidth={1.8} />
             Plataforma segura para asesorías y gestores.
           </p>
         </div>

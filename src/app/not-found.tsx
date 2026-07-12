@@ -5,7 +5,7 @@ export default function NotFound() {
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-white px-4">
       <div className="flex items-center gap-2.5 mb-8">
-        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-600">
+        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-600">
           <Receipt className="h-4 w-4 text-white" />
         </div>
         <span className="text-[17px] font-bold text-slate-800">Faktury</span>
@@ -21,7 +21,7 @@ export default function NotFound() {
 
       <Link
         href="/login"
-        className="mt-8 rounded-xl bg-blue-600 px-6 py-2.5 text-[13px] font-semibold text-white transition hover:bg-blue-700"
+        className="mt-8 rounded-lg bg-blue-600 px-6 py-2.5 text-[13px] font-semibold text-white transition hover:bg-blue-700"
       >
         Volver al inicio
       </Link>

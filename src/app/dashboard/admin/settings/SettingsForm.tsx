@@ -62,16 +62,26 @@ const TABS = [
 
 type TabId = (typeof TABS)[number]["id"];
 
+/* Tokens de formulario — mismos que login/dashboard: borde suave, focus
+   turquesa de marca, radius consistente. */
 const inputClass =
-  "w-full rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-[13px] text-slate-700 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100";
-const labelClass = "mb-1.5 block text-[12px] font-medium text-slate-500";
+  "w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-[13px] text-slate-800 placeholder-slate-400 shadow-[0_1px_2px_rgb(2_15_40_/_0.03)] outline-none transition focus:border-accent-500 focus:ring-2 focus:ring-accent-100";
+const labelClass = "mb-1.5 block text-[12px] font-medium text-slate-600";
+const submitClass =
+  "flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-[13px] font-semibold text-white shadow-sm transition hover:bg-blue-700 active:translate-y-px disabled:opacity-50";
+/* Pie de formulario: el botón queda anclado al bloque con un separador,
+   no perdido en la esquina de una card gigante. */
+const footerClass = "mt-1 flex justify-end border-t border-slate-100 pt-4";
+/* Chip de icono de cabecera de card — unificado en navy como el dashboard. */
+const headerChipClass =
+  "flex h-9 w-9 items-center justify-center rounded-lg bg-blue-50/80 ring-1 ring-inset ring-blue-100/70";
 
 function StatusBanner({ state }: { state: ActionState }) {
   if (!state) return null;
   return (
-    <div className={`mb-4 flex items-center gap-2 rounded-xl px-4 py-3 text-[13px] font-medium ${
+    <div className={`mb-4 flex items-center gap-2 rounded-lg px-4 py-3 text-[13px] font-medium ${
       state.success
-        ? "bg-green-50 text-green-700"
+        ? "bg-emerald-50 text-emerald-700"
         : "bg-red-50 text-red-600"
     }`}>
       {state.success ? <CheckCircle2 className="h-4 w-4" /> : <AlertCircle className="h-4 w-4" />}
@@ -80,20 +90,24 @@ function StatusBanner({ state }: { state: ActionState }) {
   );
 }
 
-const ROLE_BADGE: Record<string, { label: string; color: string }> = {
-  ADMIN:  { label: "Admin",  color: "bg-purple-50 text-purple-700" },
-  WORKER: { label: "Gestor", color: "bg-blue-50 text-blue-700" },
-  CLIENT: { label: "Cliente", color: "bg-slate-100 text-slate-600" },
+/* Badges de rol con el mismo lenguaje que el Badge de estados (tinte suave +
+   borde + punto). Admin en navy (autoridad), resto en neutro. */
+const ROLE_BADGE: Record<string, { label: string; color: string; dot: string }> = {
+  ADMIN:  { label: "Administrador", color: "bg-blue-50/80 text-blue-700 border border-blue-200/70",   dot: "bg-blue-500" },
+  WORKER: { label: "Gestor",  color: "bg-slate-100/80 text-slate-600 border border-slate-200/70", dot: "bg-slate-400" },
+  CLIENT: { label: "Cliente", color: "bg-slate-100/80 text-slate-600 border border-slate-200/70", dot: "bg-slate-300" },
 };
 
 export function SettingsForm({ firm, profile, team }: Props) {
   const [tab, setTab] = useState<TabId>("firm");
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-4 gap-6">
-      {/* Sidebar tabs */}
-      <div className="sm:col-span-1">
-        <nav className="space-y-1">
+    // Columna fija de tabs + contenido: navegación y formulario se leen como
+    // un solo bloque. Separador vertical sutil entre ambos en desktop.
+    <div className="grid grid-cols-1 gap-6 sm:grid-cols-[190px_1fr]">
+      {/* Tabs: horizontales con scroll en móvil, verticales en desktop. */}
+      <div className="sm:border-r sm:border-slate-200/60 sm:pr-4">
+        <nav className="flex gap-1 overflow-x-auto sm:flex-col sm:gap-0 sm:space-y-1">
           {TABS.map((t) => {
             const Icon = t.icon;
             const active = tab === t.id;
@@ -102,13 +116,17 @@ export function SettingsForm({ firm, profile, team }: Props) {
                 key={t.id}
                 type="button"
                 onClick={() => setTab(t.id)}
-                className={`flex w-full items-center gap-3 rounded-xl px-4 py-2.5 text-[13px] font-medium transition ${
+                className={`relative flex flex-shrink-0 items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] transition-colors duration-150 sm:w-full ${
                   active
-                    ? "bg-blue-50 text-blue-700"
-                    : "text-slate-500 hover:bg-slate-50 hover:text-slate-700"
+                    ? "bg-blue-50 font-semibold text-blue-800"
+                    : "font-medium text-slate-500 hover:bg-slate-50 hover:text-slate-700"
                 }`}
               >
-                <Icon className={`h-4 w-4 ${active ? "text-blue-600" : "text-slate-400"}`} />
+                {/* Mismo indicador turquesa que el sidebar principal. */}
+                {active && (
+                  <span className="absolute left-0 top-1/2 hidden h-4 w-[3px] -translate-y-1/2 rounded-r-full bg-accent-500 sm:block" />
+                )}
+                <Icon className={`h-4 w-4 ${active ? "text-blue-700" : "text-slate-400"}`} strokeWidth={1.8} />
                 {t.label}
               </button>
             );
@@ -117,7 +135,7 @@ export function SettingsForm({ firm, profile, team }: Props) {
       </div>
 
       {/* Content */}
-      <div className="sm:col-span-3">
+      <div className="min-w-0">
         {tab === "firm"     && <FirmTab firm={firm} />}
         {tab === "profile"  && <ProfileTab profile={profile} />}
         {tab === "password" && <PasswordTab />}
@@ -149,14 +167,14 @@ function FirmTab({ firm }: { firm: FirmData }) {
   };
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+    <div className="rounded-2xl border border-slate-200/80 bg-white p-6 shadow-sm">
       <div className="mb-5 flex items-center gap-3">
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50">
-          <Building2 className="h-5 w-5 text-blue-600" />
+        <div className={headerChipClass}>
+          <Building2 className="h-4 w-4 text-blue-600" strokeWidth={1.8} />
         </div>
         <div>
           <h2 className="text-[15px] font-semibold text-slate-800">Datos de la asesoría</h2>
-          <p className="text-[12px] text-slate-400">Información fiscal de tu empresa</p>
+          <p className="text-[12px] text-slate-500">Información fiscal de tu empresa</p>
         </div>
       </div>
 
@@ -164,23 +182,22 @@ function FirmTab({ firm }: { firm: FirmData }) {
 
       <LogoSection initialLogo={firm.logoDataUrl} />
 
-      <div className="my-5 border-t border-slate-100" />
+      <div className="my-6 border-t border-slate-100" />
 
       <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label className={labelClass}>Nombre / Razón social</label>
-          <input name="name" className={inputClass} defaultValue={firm.name} required />
+        {/* Campos acotados: inputs a ancho de lectura, no de card. */}
+        <div className="max-w-[520px] space-y-4">
+          <div>
+            <label className={labelClass}>Nombre / Razón social</label>
+            <input name="name" className={inputClass} defaultValue={firm.name} required />
+          </div>
+          <div>
+            <label className={labelClass}>CIF / NIF</label>
+            <input name="cif" className={inputClass} defaultValue={firm.cif} required placeholder="B12345678" />
+          </div>
         </div>
-        <div>
-          <label className={labelClass}>CIF / NIF</label>
-          <input name="cif" className={inputClass} defaultValue={firm.cif} required placeholder="B12345678" />
-        </div>
-        <div className="flex justify-end pt-2">
-          <button
-            type="submit"
-            disabled={pending}
-            className="flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-[13px] font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
-          >
+        <div className={footerClass}>
+          <button type="submit" disabled={pending} className={submitClass}>
             {pending && <Loader2 className="h-4 w-4 animate-spin" />}
             Guardar cambios
           </button>
@@ -238,12 +255,16 @@ function LogoSection({ initialLogo }: { initialLogo: string | null }) {
     <div>
       <label className={labelClass}>Logo de la asesoría</label>
       <div className="flex items-center gap-4">
-        <div className="flex h-16 w-36 flex-shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
+        <div className={`flex h-16 w-36 flex-shrink-0 items-center justify-center overflow-hidden rounded-lg p-2 ${
+          logo
+            ? "border border-slate-200 bg-white"
+            : "border border-dashed border-slate-300 bg-slate-50/60"
+        }`}>
           {logo ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={logo} alt="Logo de la asesoría" className="max-h-full max-w-full object-contain" />
           ) : (
-            <span className="text-[11px] text-slate-300">Sin logo</span>
+            <span className="text-[11px] text-slate-400">Sin logo</span>
           )}
         </div>
         <div className="flex flex-col items-start gap-2">
@@ -262,7 +283,7 @@ function LogoSection({ initialLogo }: { initialLogo: string | null }) {
             type="button"
             disabled={pending}
             onClick={() => inputRef.current?.click()}
-            className="flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2 text-[13px] font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+            className="flex items-center gap-2 rounded-lg border border-slate-200 px-4 py-2 text-[13px] font-medium text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 disabled:opacity-50"
           >
             {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImageIcon className="h-4 w-4" />}
             {logo ? "Cambiar logo" : "Subir logo"}
@@ -309,34 +330,32 @@ function ProfileTab({ profile }: { profile: ProfileData }) {
   };
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+    <div className="rounded-2xl border border-slate-200/80 bg-white p-6 shadow-sm">
       <div className="mb-5 flex items-center gap-3">
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-green-50">
-          <User className="h-5 w-5 text-green-600" />
+        <div className={headerChipClass}>
+          <User className="h-4 w-4 text-blue-600" strokeWidth={1.8} />
         </div>
         <div>
           <h2 className="text-[15px] font-semibold text-slate-800">Mi perfil</h2>
-          <p className="text-[12px] text-slate-400">Tu información personal de administrador</p>
+          <p className="text-[12px] text-slate-500">Tu información personal de administrador</p>
         </div>
       </div>
 
       <StatusBanner state={state} />
 
       <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label className={labelClass}>Nombre</label>
-          <input name="name" className={inputClass} defaultValue={profile.name} required />
+        <div className="max-w-[520px] space-y-4">
+          <div>
+            <label className={labelClass}>Nombre</label>
+            <input name="name" className={inputClass} defaultValue={profile.name} required />
+          </div>
+          <div>
+            <label className={labelClass}>Email</label>
+            <input name="email" type="email" className={inputClass} defaultValue={profile.email} required />
+          </div>
         </div>
-        <div>
-          <label className={labelClass}>Email</label>
-          <input name="email" type="email" className={inputClass} defaultValue={profile.email} required />
-        </div>
-        <div className="flex justify-end pt-2">
-          <button
-            type="submit"
-            disabled={pending}
-            className="flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-[13px] font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
-          >
+        <div className={footerClass}>
+          <button type="submit" disabled={pending} className={submitClass}>
             {pending && <Loader2 className="h-4 w-4 animate-spin" />}
             Guardar perfil
           </button>
@@ -369,38 +388,36 @@ function PasswordTab() {
   };
 
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+    <div className="rounded-2xl border border-slate-200/80 bg-white p-6 shadow-sm">
       <div className="mb-5 flex items-center gap-3">
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50">
-          <Shield className="h-5 w-5 text-amber-600" />
+        <div className={headerChipClass}>
+          <Shield className="h-4 w-4 text-blue-600" strokeWidth={1.8} />
         </div>
         <div>
           <h2 className="text-[15px] font-semibold text-slate-800">Cambiar contraseña</h2>
-          <p className="text-[12px] text-slate-400">Actualiza tu contraseña de acceso</p>
+          <p className="text-[12px] text-slate-500">Actualiza tu contraseña de acceso</p>
         </div>
       </div>
 
       <StatusBanner state={state} />
 
       <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label className={labelClass}>Contraseña actual</label>
-          <input name="current" type="password" className={inputClass} required />
+        <div className="max-w-[520px] space-y-4">
+          <div>
+            <label className={labelClass}>Contraseña actual</label>
+            <input name="current" type="password" className={inputClass} required />
+          </div>
+          <div>
+            <label className={labelClass}>Nueva contraseña</label>
+            <input name="password" type="password" className={inputClass} required minLength={8} placeholder="Mínimo 8 caracteres" />
+          </div>
+          <div>
+            <label className={labelClass}>Confirmar nueva contraseña</label>
+            <input name="confirm" type="password" className={inputClass} required />
+          </div>
         </div>
-        <div>
-          <label className={labelClass}>Nueva contraseña</label>
-          <input name="password" type="password" className={inputClass} required minLength={8} placeholder="Mínimo 8 caracteres" />
-        </div>
-        <div>
-          <label className={labelClass}>Confirmar nueva contraseña</label>
-          <input name="confirm" type="password" className={inputClass} required />
-        </div>
-        <div className="flex justify-end pt-2">
-          <button
-            type="submit"
-            disabled={pending}
-            className="flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-[13px] font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
-          >
+        <div className={footerClass}>
+          <button type="submit" disabled={pending} className={submitClass}>
             {pending && <Loader2 className="h-4 w-4 animate-spin" />}
             Cambiar contraseña
           </button>
@@ -414,14 +431,14 @@ function PasswordTab() {
 
 function TeamTab({ team }: { team: TeamMember[] }) {
   return (
-    <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-      <div className="flex items-center gap-3 border-b border-slate-100 px-6 py-5">
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-purple-50">
-          <Users className="h-5 w-5 text-purple-600" />
+    <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-sm">
+      <div className="flex items-center gap-3 border-b border-slate-100 px-6 py-4">
+        <div className={headerChipClass}>
+          <Users className="h-4 w-4 text-blue-600" strokeWidth={1.8} />
         </div>
         <div>
           <h2 className="text-[15px] font-semibold text-slate-800">Equipo</h2>
-          <p className="text-[12px] text-slate-400">{team.length} miembros en la asesoría</p>
+          <p className="text-[12px] text-slate-500">{team.length} miembros en la asesoría</p>
         </div>
       </div>
 
@@ -429,23 +446,24 @@ function TeamTab({ team }: { team: TeamMember[] }) {
         {team.map((m) => {
           const badge = ROLE_BADGE[m.role] ?? ROLE_BADGE.WORKER;
           return (
-            <li key={m.id} className="flex items-center gap-4 px-6 py-4">
-              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100">
-                <span className="text-[12px] font-bold text-slate-500">
+            <li key={m.id} className="flex items-center gap-4 px-6 py-3.5 transition-colors hover:bg-slate-50/60">
+              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-100">
+                <span className="text-[11px] font-bold text-blue-700">
                   {m.name.charAt(0).toUpperCase()}
                 </span>
               </div>
               <div className="min-w-0 flex-1">
                 <p className="text-[13px] font-semibold text-slate-800 truncate">{m.name}</p>
-                <p className="flex items-center gap-1.5 text-[12px] text-slate-400 truncate">
-                  <Mail className="h-3 w-3" />
+                <p className="flex items-center gap-1.5 text-[12px] text-slate-500 truncate">
+                  <Mail className="h-3 w-3" strokeWidth={1.8} />
                   {m.email}
                 </p>
               </div>
-              <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${badge.color}`}>
+              <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-[3px] text-[11px] font-semibold ${badge.color}`}>
+                <span className={`h-1.5 w-1.5 flex-shrink-0 rounded-full opacity-80 ${badge.dot}`} />
                 {badge.label}
               </span>
-              <span className="text-[11px] text-slate-300">
+              <span className="w-[72px] text-right text-[11px] tabular-nums text-slate-400">
                 {m.createdAt}
               </span>
             </li>

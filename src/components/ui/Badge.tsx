@@ -19,8 +19,8 @@ export function Badge({
 }) {
   const { badge, dot } = VARIANTS[variant];
   return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-semibold tracking-wide ${badge}`}>
-      <span className={`h-1.5 w-1.5 rounded-full ${dot} opacity-80`} />
+    <span className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-[3px] text-[11px] font-semibold ${badge}`}>
+      <span className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${dot} opacity-80`} />
       {children}
     </span>
   );

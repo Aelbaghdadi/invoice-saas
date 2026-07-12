@@ -642,7 +642,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     });
   };
 
-  const inputClass = "w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[13px] text-slate-800 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100";
+  const inputClass = "w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[13px] text-slate-800 outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-100";
 
   // Props de estilo + tabIndex en funcion de la confianza OCR de cada campo.
   // Campos "seguros" (score alto) reciben tabIndex={-1} y color apagado:
@@ -1131,7 +1131,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                       type="checkbox"
                       checked={isRectificative}
                       onChange={(e) => setIsRectificative(e.target.checked)}
-                      className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                      className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-accent-400"
                     />
                   </label>
 
@@ -1181,7 +1181,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                           type="checkbox"
                           checked={art80Tres}
                           onChange={(e) => setArt80Tres(e.target.checked)}
-                          className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                          className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-accent-400"
                         />
                         Art. 80.Tres (concurso de acreedores / crédito incobrable)
                       </label>
@@ -1526,7 +1526,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
 
             {/* Cuentas contables */}
             <fieldset className="rounded-xl border border-slate-200 bg-white p-3">
-              <legend className="px-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+              <legend className="px-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 Cuentas Contables
               </legend>
               {suggestedAccount && !invoice.supplierAccount && (
@@ -1599,7 +1599,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                 type="button"
                 onClick={() => setShowSplitModal(true)}
                 title="Dividir esta foto en varios tickets"
-                className="flex items-center gap-1.5 rounded-lg border border-indigo-200 px-3.5 py-2 text-[13px] font-medium text-indigo-700 transition hover:bg-indigo-50"
+                className="flex items-center gap-1.5 rounded-lg border border-blue-200 px-3.5 py-2 text-[13px] font-medium text-blue-700 transition hover:bg-blue-50"
               >
                 <Scissors className="h-3.5 w-3.5" />
                 Dividir
@@ -1610,7 +1610,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                 type="button"
                 onClick={() => setShowSplitPdfModal(true)}
                 title="Dividir este PDF en varias facturas por páginas"
-                className="flex items-center gap-1.5 rounded-lg border border-indigo-200 px-3.5 py-2 text-[13px] font-medium text-indigo-700 transition hover:bg-indigo-50"
+                className="flex items-center gap-1.5 rounded-lg border border-blue-200 px-3.5 py-2 text-[13px] font-medium text-blue-700 transition hover:bg-blue-50"
               >
                 <Scissors className="h-3.5 w-3.5" />
                 Dividir

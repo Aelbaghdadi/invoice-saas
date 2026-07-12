@@ -1,11 +1,44 @@
 @import "tailwindcss";
 
+/* ── Tokens de marca Faktury ─────────────────────────────────────────────
+   La app usa `blue-*` como color de acción en todos los componentes.
+   Redefinimos esa escala hacia el navy de Faktury (#062A63) para que todo
+   el producto herede la marca sin tocar cada clase. `accent-*` es el
+   turquesa del logo: acento premium (focus, validación, detalles OCR),
+   nunca color dominante — regla 70% neutros / 20% navy / 10% turquesa. */
+@theme {
+  /* Navy Faktury (sustituye al azul genérico de Tailwind) */
+  --color-blue-50:  #F2F6FC;
+  --color-blue-100: #E3EBF7;
+  --color-blue-200: #C9D8EE;
+  --color-blue-300: #9FB9DE;
+  --color-blue-400: #6B90C7;
+  --color-blue-500: #2F5CA8;
+  --color-blue-600: #062A63; /* navy principal — acciones, marca */
+  --color-blue-700: #041C46; /* hover */
+  --color-blue-800: #031536;
+  --color-blue-900: #020F28;
+  --color-blue-950: #010918;
+
+  /* Turquesa Faktury */
+  --color-accent-50:  #EFFCFB;
+  --color-accent-100: #D7F8F6;
+  --color-accent-200: #B0F1ED;
+  --color-accent-300: #7FEAE6;
+  --color-accent-400: #4BE0DA;
+  --color-accent-500: #22D6D0; /* acento */
+  --color-accent-600: #14ADA8;
+  --color-accent-700: #0F8683;
+  --color-accent-800: #0D6A68;
+  --color-accent-900: #0B5352;
+}
+
 :root {
   --background: #f8fafc;
   --foreground: #0f172a;
   --card: #ffffff;
-  --border: #e8ecf1;
-  --accent: #3b82f6;
+  --border: #e6ecf3;
+  --accent: #062a63;
   --muted: #94a3b8;
 }
 
@@ -16,9 +49,26 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  /* Geist se carga en layout.tsx via next/font (variable). Antes pedíamos
+     "Inter" sin cargarla y caíamos en la fuente del sistema. */
+  font-family: var(--font-geist-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Selección de texto con tinte de marca, sutil. */
+::selection {
+  background: #d7f8f6;
+  color: #041c46;
+}
+
+/* Focus accesible por teclado (no afecta al focus de ratón en inputs,
+   que tienen su propio estilo). Turquesa = señal de foco de la marca. */
+button:focus-visible,
+a:focus-visible,
+select:focus-visible {
+  outline: 2px solid rgb(34 214 208 / 0.7);
+  outline-offset: 2px;
 }
 
 /* ── Scrollbar ─────────────────────────────────────────────────────────── */
@@ -36,11 +86,11 @@ body {
   font-size: 0.8125rem;
   color: #1e293b;
   outline: none;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgb(59 130 246 / 0.1);
+  border-color: #14ada8;
+  box-shadow: 0 0 0 3px rgb(34 214 208 / 0.15);
 }
 .input::placeholder { color: var(--muted); }
 
@@ -66,11 +116,11 @@ body {
 
 /* ── Card hover ────────────────────────────────────────────────────────── */
 .card-hover {
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
 }
 .card-hover:hover {
-  box-shadow: 0 8px 25px -5px rgb(0 0 0 / 0.06), 0 2px 6px rgb(0 0 0 / 0.03);
-  transform: translateY(-2px);
+  box-shadow: 0 4px 16px -4px rgb(2 15 40 / 0.06), 0 1px 3px rgb(2 15 40 / 0.04);
+  transform: translateY(-1px);
 }
 
 /* ── Table rows ────────────────────────────────────────────────────────── */

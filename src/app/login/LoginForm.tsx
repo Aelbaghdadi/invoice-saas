@@ -28,7 +28,7 @@ export function LoginForm() {
           type="text"
           required
           autoComplete="username"
-          className="mt-1.5 block w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder-slate-400 outline-none ring-0 transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+          className="mt-1.5 block w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder-slate-400 shadow-[0_1px_2px_rgb(2_15_40_/_0.03)] outline-none ring-0 transition focus:border-accent-500 focus:ring-2 focus:ring-accent-100"
           placeholder="Introduce tu usuario"
         />
       </div>
@@ -54,7 +54,7 @@ export function LoginForm() {
           type="password"
           required
           autoComplete="current-password"
-          className="mt-1.5 block w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder-slate-400 outline-none ring-0 transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+          className="mt-1.5 block w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder-slate-400 shadow-[0_1px_2px_rgb(2_15_40_/_0.03)] outline-none ring-0 transition focus:border-accent-500 focus:ring-2 focus:ring-accent-100"
           placeholder="••••••••"
         />
       </div>
@@ -75,7 +75,7 @@ export function LoginForm() {
       <button
         type="submit"
         disabled={pending}
-        className="flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-3 text-[14px] font-semibold text-white shadow-sm shadow-blue-500/10 transition hover:bg-blue-700 hover:shadow-md hover:shadow-blue-500/25 active:translate-y-px disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:shadow-sm"
+        className="flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-3 text-[14px] font-semibold text-white shadow-sm transition hover:bg-blue-700 active:translate-y-px disabled:cursor-not-allowed disabled:opacity-60"
       >
         {pending && <Loader2 className="h-4 w-4 animate-spin" />}
         {pending ? "Accediendo..." : "Acceder al panel"}

@@ -155,7 +155,7 @@ export function ClasificarTable({ rows }: { rows: Row[] }) {
       <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
         <table className="w-full">
           <thead>
-            <tr className="border-b border-slate-100 bg-slate-50/50 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            <tr className="border-b border-slate-100 bg-slate-50/80 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">
               <th className="px-4 py-3">Archivo</th>
               <th className="px-4 py-3">Tipo</th>
               <th className="px-4 py-3">CIF detectado</th>
@@ -302,7 +302,7 @@ function ChainOverlay({
             </div>
           </div>
 
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">¿A qué empresa?</p>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">¿A qué empresa?</p>
           <div className="space-y-1.5">
             {row.candidates.map((c, i) => {
               const suggested = c.id === row.suggestedClientId;

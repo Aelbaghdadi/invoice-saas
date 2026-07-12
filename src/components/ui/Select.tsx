@@ -36,7 +36,7 @@ export function Select({ options, value, onChange, placeholder, className = "", 
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="flex w-full items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-[13px] text-slate-700 outline-none transition hover:border-slate-300 focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+        className="flex w-full items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-[13px] text-slate-700 outline-none transition hover:border-slate-300 focus:border-accent-500 focus:ring-2 focus:ring-accent-100"
       >
         <span className={selected ? "text-slate-700" : "text-slate-400"}>
           {selected?.label ?? placeholder ?? "Seleccionar..."}

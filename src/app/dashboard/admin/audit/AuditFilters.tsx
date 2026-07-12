@@ -71,7 +71,7 @@ export function AuditFilters({ users, fields }: Props) {
               onChange={(e) => setSearch(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && apply()}
               placeholder="Archivo, cliente..."
-              className="w-full rounded-lg border border-slate-200 py-2 pl-8 pr-3 text-[12px] text-slate-700 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100"
+              className="w-full rounded-lg border border-slate-200 py-2 pl-8 pr-3 text-[12px] text-slate-700 outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-100"
             />
           </div>
         </div>
@@ -82,7 +82,7 @@ export function AuditFilters({ users, fields }: Props) {
           <select
             value={userId}
             onChange={(e) => setUserId(e.target.value)}
-            className="w-full rounded-lg border border-slate-200 py-2 px-3 text-[12px] text-slate-700 outline-none focus:border-blue-400"
+            className="w-full rounded-lg border border-slate-200 py-2 px-3 text-[12px] text-slate-700 outline-none focus:border-accent-500"
           >
             <option value="">Todos</option>
             {users.map((u) => (
@@ -97,7 +97,7 @@ export function AuditFilters({ users, fields }: Props) {
           <select
             value={field}
             onChange={(e) => setField(e.target.value)}
-            className="w-full rounded-lg border border-slate-200 py-2 px-3 text-[12px] text-slate-700 outline-none focus:border-blue-400"
+            className="w-full rounded-lg border border-slate-200 py-2 px-3 text-[12px] text-slate-700 outline-none focus:border-accent-500"
           >
             <option value="">Todos</option>
             {fields.map((f) => (
@@ -113,7 +113,7 @@ export function AuditFilters({ users, fields }: Props) {
             type="date"
             value={dateFrom}
             onChange={(e) => setDateFrom(e.target.value)}
-            className="w-full rounded-lg border border-slate-200 py-2 px-3 text-[12px] text-slate-700 outline-none focus:border-blue-400"
+            className="w-full rounded-lg border border-slate-200 py-2 px-3 text-[12px] text-slate-700 outline-none focus:border-accent-500"
           />
         </div>
 
@@ -124,7 +124,7 @@ export function AuditFilters({ users, fields }: Props) {
             type="date"
             value={dateTo}
             onChange={(e) => setDateTo(e.target.value)}
-            className="w-full rounded-lg border border-slate-200 py-2 px-3 text-[12px] text-slate-700 outline-none focus:border-blue-400"
+            className="w-full rounded-lg border border-slate-200 py-2 px-3 text-[12px] text-slate-700 outline-none focus:border-accent-500"
           />
         </div>
       </div>

@@ -176,7 +176,7 @@ export function UploadForm({ clientId }: Props) {
 
         {/* Toggle mensual / trimestral */}
         <div className="mb-4">
-          <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+          <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
             Agrupación del periodo
           </label>
           <div className="flex gap-2">
@@ -199,7 +199,7 @@ export function UploadForm({ clientId }: Props) {
 
         <div className="grid grid-cols-3 gap-4">
           <div>
-            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
               {periodType === "MONTHLY" ? "Mes" : "Trimestre"}
             </label>
             {periodType === "MONTHLY" ? (
@@ -217,7 +217,7 @@ export function UploadForm({ clientId }: Props) {
             )}
           </div>
           <div>
-            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
               Año
             </label>
             <Select
@@ -227,7 +227,7 @@ export function UploadForm({ clientId }: Props) {
             />
           </div>
           <div>
-            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
               Tipo
             </label>
             <Select

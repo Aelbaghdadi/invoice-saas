@@ -101,7 +101,7 @@ export function ExportForm({ clients }: Props) {
 
         {/* Client */}
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+          <p className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
             Cliente
           </p>
           <Select
@@ -113,7 +113,7 @@ export function ExportForm({ clients }: Props) {
 
         {/* Period */}
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+          <p className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
             Período
           </p>
           {/* Toggle mensual / trimestral */}
@@ -157,7 +157,7 @@ export function ExportForm({ clients }: Props) {
 
         {/* Type */}
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+          <p className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
             Tipo de factura
           </p>
           <div className="flex gap-2">
@@ -180,7 +180,7 @@ export function ExportForm({ clients }: Props) {
 
         {/* Format */}
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+          <p className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
             Software contable destino
           </p>
           <div className="space-y-2">
@@ -279,7 +279,7 @@ export function ExportForm({ clients }: Props) {
             type="button"
             onClick={handleDownload}
             disabled={!count || counting || count === 0}
-            className="flex w-full items-center justify-center gap-2.5 rounded-xl bg-blue-600 px-5 py-3.5 text-[14px] font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
+            className="flex w-full items-center justify-center gap-2.5 rounded-lg bg-blue-600 px-5 py-3.5 text-[14px] font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
           >
             <Download className="h-4 w-4" />
             Descargar Excel

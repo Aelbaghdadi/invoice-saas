@@ -61,7 +61,7 @@ export default async function ClientsPage() {
           <input
             type="text"
             placeholder="Buscar clientes..."
-            className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-4 text-[13px] text-slate-700 placeholder-slate-400 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+            className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-4 text-[13px] text-slate-700 placeholder-slate-400 outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-100"
           />
         </div>
       </div>
@@ -88,7 +88,7 @@ export default async function ClientsPage() {
             <thead>
               <tr className="border-b border-slate-100">
                 {["Cliente", "CIF", "Software contable", "Facturas", "Gestores", "Acciones"].map((h) => (
-                  <th key={h} className="px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                  <th key={h} className="px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                     {h}
                   </th>
                 ))}

@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
 import { SettingsForm } from "./SettingsForm";
 import { formatDateEs } from "@/lib/dates";
+import { PageHeader } from "@/components/ui/PageHeader";
 
 export default async function SettingsPage() {
   const session = await auth();
@@ -29,13 +30,13 @@ export default async function SettingsPage() {
     : [];
 
   return (
-    <div>
-      <div className="mb-6">
-        <h1 className="text-[20px] font-bold text-slate-900">Ajustes</h1>
-        <p className="mt-1 text-[13px] text-slate-400">
-          Configura los datos de tu asesoría, perfil y equipo
-        </p>
-      </div>
+    // Ancho contenido: tabs (200px) + formulario (~730px). Sin esto la card
+    // se estira por toda la pantalla y el contenido queda perdido.
+    <div className="max-w-[980px]">
+      <PageHeader
+        title="Ajustes"
+        description="Configura los datos de tu asesoría, perfil y equipo"
+      />
 
       <SettingsForm
         firm={{

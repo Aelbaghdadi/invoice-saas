@@ -58,7 +58,7 @@ export function BatchFilters({ clients, basePath }: Props) {
 
   const hasFilters = clientId || year || month || type || estado !== "pendientes";
   const inputCls =
-    "w-full rounded-lg border border-slate-200 py-2 px-3 text-[12px] text-slate-700 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-100";
+    "w-full rounded-lg border border-slate-200 py-2 px-3 text-[12px] text-slate-700 outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-100";
 
   return (
     <div className="mb-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">

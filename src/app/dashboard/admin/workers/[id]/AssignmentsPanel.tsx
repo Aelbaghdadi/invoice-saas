@@ -59,7 +59,7 @@ export function AssignmentsPanel({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Buscar cliente por nombre o CIF..."
-          className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-4 text-[13px] placeholder-slate-400 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+          className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-4 text-[13px] placeholder-slate-400 outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-100"
         />
       </div>
 

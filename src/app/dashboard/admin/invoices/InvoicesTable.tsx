@@ -183,7 +183,7 @@ export function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
             value={search}
             onChange={(e) => { setSearch(e.target.value); setPage(0); }}
             placeholder="Buscar por cliente, CIF o factura..."
-            className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-4 text-[13px] placeholder-slate-400 outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+            className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-4 text-[13px] placeholder-slate-400 outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-100"
           />
         </div>
 
@@ -224,20 +224,20 @@ export function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead>
-              <tr className="border-b border-slate-100 bg-slate-50/50">
+              <tr className="border-b border-slate-100 bg-slate-50/80">
                 <th className="w-10 px-3 py-3">
                   <input
                     type="checkbox"
                     checked={paginated.length > 0 && paginated.every((i) => selected.has(i.id))}
                     onChange={toggleAll}
-                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-accent-400 cursor-pointer"
                   />
                 </th>
                 {columns.map((col) => (
                   <th
                     key={col.key}
                     onClick={() => toggleSort(col.key)}
-                    className={`px-3 md:px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-400 cursor-pointer hover:text-slate-600 select-none ${col.hideMobile ? "hidden md:table-cell" : ""}`}
+                    className={`px-3 md:px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500 cursor-pointer hover:text-slate-600 select-none ${col.hideMobile ? "hidden md:table-cell" : ""}`}
                   >
                     <span className="inline-flex items-center gap-1">
                       {col.label}
@@ -245,7 +245,7 @@ export function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
                     </span>
                   </th>
                 ))}
-                <th className="px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                <th className="px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                   Acciones
                 </th>
               </tr>
@@ -264,7 +264,7 @@ export function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
                         type="checkbox"
                         checked={isChecked}
                         onChange={() => toggleOne(inv.id)}
-                        className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                        className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-accent-400 cursor-pointer"
                       />
                     </td>
                     <td className="px-3 md:px-5 py-3.5">

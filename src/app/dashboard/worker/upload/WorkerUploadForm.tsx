@@ -216,7 +216,7 @@ export function WorkerUploadForm({ clients, groups }: Props) {
         </h2>
         {/* Modo: un cliente vs clasificar entre varios por CIF */}
         <div className="mb-4">
-          <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+          <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
             Modo de subida
           </label>
           <div className="flex gap-2">
@@ -238,7 +238,7 @@ export function WorkerUploadForm({ clients, groups }: Props) {
 
         {mode === "single" ? (
           <div className="mb-4">
-            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
               Cliente
             </label>
             <Select
@@ -251,7 +251,7 @@ export function WorkerUploadForm({ clients, groups }: Props) {
           <div className="mb-4 space-y-2">
             {visibleGroups.length > 0 && (
               <div>
-                <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                   Grupo guardado
                 </label>
                 <Select
@@ -267,7 +267,7 @@ export function WorkerUploadForm({ clients, groups }: Props) {
               </div>
             )}
             <div>
-              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 Empresas candidatas ({candidateIds.size})
               </label>
               <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
@@ -299,7 +299,7 @@ export function WorkerUploadForm({ clients, groups }: Props) {
         )}
         {/* Toggle mensual / trimestral */}
         <div className="mb-4">
-          <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+          <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
             Agrupación del periodo
           </label>
           <div className="flex gap-2">
@@ -322,7 +322,7 @@ export function WorkerUploadForm({ clients, groups }: Props) {
 
         <div className="grid grid-cols-3 gap-4">
           <div>
-            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
               {periodType === "MONTHLY" ? "Mes" : "Trimestre"}
             </label>
             {periodType === "MONTHLY" ? (
@@ -336,13 +336,13 @@ export function WorkerUploadForm({ clients, groups }: Props) {
             )}
           </div>
           <div>
-            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
               Año
             </label>
             <Select value={year} onChange={setYear} options={YEARS} />
           </div>
           <div>
-            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
               Tipo
             </label>
             <Select

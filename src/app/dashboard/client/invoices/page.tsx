@@ -82,7 +82,7 @@ export default async function ClientInvoicesPage() {
                 {["Archivo", "Período", "Tipo", "Estado", "Fecha"].map((h) => (
                   <th
                     key={h}
-                    className="px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-400"
+                    className="px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500"
                   >
                     {h}
                   </th>

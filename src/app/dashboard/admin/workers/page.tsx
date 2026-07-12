@@ -68,7 +68,7 @@ export default async function WorkersPage() {
             <thead>
               <tr className="border-b border-slate-100">
                 {["Gestor", "Email", "Rol", "Clientes asignados", "Acciones"].map((h) => (
-                  <th key={h} className="px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                  <th key={h} className="px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                     {h}
                   </th>
                 ))}

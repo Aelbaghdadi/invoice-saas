@@ -72,7 +72,7 @@ export function AccountsTable({ entries, clientId }: Props) {
             placeholder="Buscar por NIF o nombre..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="rounded-lg border border-slate-200 py-2 pl-9 pr-4 text-[13px] focus:border-blue-300 focus:outline-none focus:ring-1 focus:ring-blue-300"
+            className="rounded-lg border border-slate-200 py-2 pl-9 pr-4 text-[13px] focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-200"
           />
         </div>
         <button
@@ -102,7 +102,7 @@ export function AccountsTable({ entries, clientId }: Props) {
               { label: "IVA %", hide: true },
               { label: "", hide: false },
             ].map((h) => (
-              <th key={h.label} className={`px-3 md:px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-400 ${h.hide ? "hidden md:table-cell" : ""}`}>
+              <th key={h.label} className={`px-3 md:px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500 ${h.hide ? "hidden md:table-cell" : ""}`}>
                 {h.label}
               </th>
             ))}
@@ -202,7 +202,7 @@ function InlineForm({
   };
 
   const inputCls =
-    "w-full rounded border border-slate-200 px-2 py-1.5 text-[13px] font-mono focus:border-blue-300 focus:outline-none focus:ring-1 focus:ring-blue-300";
+    "w-full rounded border border-slate-200 px-2 py-1.5 text-[13px] font-mono focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-200";
 
   return (
     <tr className="bg-blue-50/40">

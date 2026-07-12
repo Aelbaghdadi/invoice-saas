@@ -64,7 +64,7 @@ export function ClosuresClient({ clients }: Props) {
       </h2>
       <div className="grid grid-cols-4 gap-4">
         <div>
-          <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+          <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
             Cliente
           </label>
           <Select
@@ -74,13 +74,13 @@ export function ClosuresClient({ clients }: Props) {
           />
         </div>
         <div>
-          <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+          <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
             Mes
           </label>
           <Select value={month} onChange={setMonth} options={MONTHS} />
         </div>
         <div>
-          <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+          <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
             Año
           </label>
           <Select value={year} onChange={setYear} options={YEARS} />

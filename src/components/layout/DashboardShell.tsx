@@ -133,7 +133,11 @@ export function DashboardShell({ role, userName, userEmail, firmName, firmLogo, 
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <Topbar userName={userName} onMenuClick={() => setSidebarOpen(true)} />
         <main className="flex-1 overflow-y-auto overflow-x-hidden bg-slate-50/50 p-4 sm:p-6 shadow-[inset_0_2px_8px_0_rgba(15,23,42,0.04)]">
-          {children}
+          {/* Contener el ancho en pantallas muy grandes: el contenido no se
+              estira sin límite (sensación de vacío) sino que queda compuesto. */}
+          <div className="mx-auto w-full max-w-[1600px]">
+            {children}
+          </div>
         </main>
         <LegalDisclaimer />
       </div>

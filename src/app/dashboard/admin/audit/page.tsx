@@ -127,9 +127,9 @@ export default async function AuditLogPage({ searchParams }: Props) {
             </div>
             <table className="w-full">
               <thead>
-                <tr className="border-b border-slate-100 bg-slate-50/50">
+                <tr className="border-b border-slate-100 bg-slate-50/80">
                   {["Fecha", "Usuario", "Factura", "Cliente", "Campo", "Cambio"].map((h) => (
-                    <th key={h} className="px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-400">{h}</th>
+                    <th key={h} className="px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">{h}</th>
                   ))}
                 </tr>
               </thead>

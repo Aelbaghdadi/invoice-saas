@@ -191,15 +191,19 @@ export function Sidebar({ role, userName, firmName, firmLogo, collapsed = false 
         <Link
           href={item.href}
           title={collapsed ? item.label : undefined}
-          className={`flex items-center rounded-xl text-[13px] font-medium transition-all duration-200 ${
-            collapsed ? "justify-center px-2 py-2.5" : "gap-3 px-3 py-2.5"
+          className={`relative flex items-center rounded-lg text-[13px] transition-colors duration-150 ${
+            collapsed ? "justify-center px-2 py-2.5" : "gap-3 px-3 py-2"
           } ${
             active
-              ? "bg-gradient-to-r from-blue-600 to-blue-500 text-white shadow-md shadow-blue-500/20"
-              : "text-slate-600 hover:bg-slate-100/70 hover:text-slate-900"
+              ? "bg-blue-50 font-semibold text-blue-800"
+              : "font-medium text-slate-600 hover:bg-slate-100/70 hover:text-slate-900"
           }`}
         >
-          <Icon className={`h-[18px] w-[18px] flex-shrink-0 ${active ? "text-white" : "text-slate-400"}`} />
+          {/* Indicador de activo: línea turquesa fina, firma de la marca. */}
+          {active && !collapsed && (
+            <span className="absolute left-0 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-r-full bg-accent-500" />
+          )}
+          <Icon className={`h-[18px] w-[18px] flex-shrink-0 ${active ? "text-blue-700" : "text-slate-400"}`} strokeWidth={1.8} />
           {!collapsed && item.label}
         </Link>
       </li>
@@ -208,12 +212,11 @@ export function Sidebar({ role, userName, firmName, firmLogo, collapsed = false 
 
   return (
     <aside className="flex h-full w-full flex-col border-r border-slate-200/80 bg-white">
-      {/* Logo. Altura alineada con la Topbar (h-12 = 48px) para que
-          quede una linea horizontal continua entre las dos zonas.
-          Marca sobria: chip slate-900 sin sombra colorida.
+      {/* Logo. Altura alineada con la Topbar (h-14) para que quede una
+          linea horizontal continua entre las dos zonas.
           El toggle plegar/expandir vive como pestania en el borde
           derecho (renderizado por DashboardShell) + atajo Ctrl+B. */}
-      <div className={`flex h-12 flex-shrink-0 items-center border-b border-slate-200/70 ${
+      <div className={`flex h-14 flex-shrink-0 items-center border-b border-slate-200/70 ${
         collapsed ? "justify-center px-2" : "gap-2.5 px-4"
       }`}>
         {firmLogo ? (
@@ -245,7 +248,7 @@ export function Sidebar({ role, userName, firmName, firmLogo, collapsed = false 
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 overflow-y-auto px-2 py-3">
+      <nav className="flex-1 overflow-y-auto px-2.5 py-4">
         {sections.map((section, idx) => {
           // Sin label -> lista plana (sin cabecera ni desplegable).
           if (!section.label) {
@@ -269,7 +272,7 @@ export function Sidebar({ role, userName, firmName, firmLogo, collapsed = false 
           }
           const isOpen = openSections.has(section.label);
           return (
-            <div key={section.label} className={idx > 0 ? "mt-3" : ""}>
+            <div key={section.label} className={idx > 0 ? "mt-4" : ""}>
               <button
                 type="button"
                 onClick={() => toggleSection(section.label!)}
@@ -292,15 +295,15 @@ export function Sidebar({ role, userName, firmName, firmLogo, collapsed = false 
 
       {/* Bottom actions — en colapsado: solo iconos centrados. */}
       <div className={`border-t border-slate-100 ${collapsed ? "px-2 py-2 space-y-1" : "p-3 space-y-1.5"}`}>
-        {/* User section */}
-        <div className={`flex items-center rounded-xl ${collapsed ? "justify-center py-1.5" : "gap-2.5 px-2 py-2 mb-2"}`}>
-          <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-orange-100 text-[11px] font-bold text-orange-600 ring-2 ring-white shadow-sm">
+        {/* User section — panel suave para que se lea como "centro de cuenta" */}
+        <div className={`flex items-center ${collapsed ? "justify-center py-1.5" : "gap-2.5 rounded-lg bg-slate-50/80 px-2.5 py-2 mb-2"}`}>
+          <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-blue-100 text-[11px] font-bold text-blue-700">
             {initials}
           </div>
           {!collapsed && (
             <div className="min-w-0 flex-1">
               <p className="truncate text-[12px] font-semibold text-slate-800">{userName}</p>
-              <p className="text-[10px] text-slate-400">{ROLE_LABELS[role]}</p>
+              <p className="text-[10px] text-slate-500">{ROLE_LABELS[role]}</p>
             </div>
           )}
         </div>
@@ -308,17 +311,17 @@ export function Sidebar({ role, userName, firmName, firmLogo, collapsed = false 
         <Link
           href={batchLink.href}
           title={collapsed ? batchLink.label : undefined}
-          className={`flex w-full items-center justify-center rounded-xl bg-gradient-to-r from-blue-600 to-blue-500 text-[13px] font-semibold text-white shadow-sm shadow-blue-500/25 transition-all duration-200 hover:from-blue-700 hover:to-blue-600 hover:shadow-md hover:shadow-blue-500/30 ${
+          className={`flex w-full items-center justify-center rounded-lg bg-blue-600 text-[13px] font-semibold text-white shadow-sm transition-colors duration-150 hover:bg-blue-700 ${
             collapsed ? "px-2 py-2.5" : "gap-2 px-4 py-2.5"
           }`}
         >
-          <Upload className="h-4 w-4" />
+          <Upload className="h-4 w-4" strokeWidth={1.8} />
           {!collapsed && batchLink.label}
         </Link>
         <button
           onClick={() => signOut({ callbackUrl: "/login" })}
           title={collapsed ? "Cerrar sesión" : undefined}
-          className={`flex w-full items-center justify-center rounded-xl text-[12px] font-medium text-slate-400 transition-all duration-200 hover:bg-slate-100/70 hover:text-slate-600 ${
+          className={`flex w-full items-center justify-center rounded-lg text-[12px] font-medium text-slate-400 transition-colors duration-150 hover:bg-slate-100/70 hover:text-slate-600 ${
             collapsed ? "px-2 py-2" : "gap-2 px-4 py-2"
           }`}
         >
@@ -327,11 +330,11 @@ export function Sidebar({ role, userName, firmName, firmLogo, collapsed = false 
         </button>
 
         {/* Co-branding discreto: el logo del tenant es el protagonista arriba;
-            aquí abajo, una firma tenue del producto. Solo texto: a este
-            tamaño un isotipo no se lee y ensucia más que aporta. */}
+            aquí abajo, una firma tenue del producto, integrada tras un
+            separador fino. Solo texto: a este tamaño un isotipo no se lee. */}
         {!collapsed && (
-          <p className="pt-1 text-center text-[10px] tracking-wide text-slate-300">
-            Powered by <span className="font-semibold text-slate-400">Faktury</span>
+          <p className="mt-1 border-t border-slate-100 pt-2 text-center text-[9px] font-medium uppercase tracking-[0.14em] text-slate-300">
+            Powered by <span className="text-slate-400">Faktury</span>
           </p>
         )}
       </div>

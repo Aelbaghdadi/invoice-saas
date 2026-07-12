@@ -62,7 +62,7 @@ export default async function ClosuresPage() {
           <div className="overflow-x-auto">
             <table className="w-full text-left text-[13px]">
               <thead>
-                <tr className="border-b border-slate-100 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                <tr className="border-b border-slate-100 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                   <th className="px-5 py-3">Cliente</th>
                   <th className="px-5 py-3">Periodo</th>
                   <th className="px-5 py-3">Cerrado</th>
@@ -121,7 +121,7 @@ export default async function ClosuresPage() {
           <div className="overflow-x-auto">
             <table className="w-full text-left text-[13px]">
               <thead>
-                <tr className="border-b border-slate-100 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                <tr className="border-b border-slate-100 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                   <th className="px-5 py-3">Cliente</th>
                   <th className="px-5 py-3">Periodo</th>
                   <th className="px-5 py-3">Estado</th>

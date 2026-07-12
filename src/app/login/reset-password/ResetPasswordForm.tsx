@@ -55,7 +55,7 @@ export function ResetPasswordForm({ token }: ResetPasswordFormProps) {
           required
           minLength={6}
           autoComplete="new-password"
-          className="mt-1.5 block w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder-slate-400 outline-none ring-0 transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+          className="mt-1.5 block w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder-slate-400 outline-none ring-0 transition focus:border-accent-500 focus:ring-2 focus:ring-accent-100"
           placeholder="Mínimo 6 caracteres"
         />
       </div>
@@ -74,7 +74,7 @@ export function ResetPasswordForm({ token }: ResetPasswordFormProps) {
           required
           minLength={6}
           autoComplete="new-password"
-          className="mt-1.5 block w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder-slate-400 outline-none ring-0 transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+          className="mt-1.5 block w-full rounded-lg border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-900 placeholder-slate-400 outline-none ring-0 transition focus:border-accent-500 focus:ring-2 focus:ring-accent-100"
           placeholder="Repite la contraseña"
         />
       </div>

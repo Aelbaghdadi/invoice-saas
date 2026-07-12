@@ -122,7 +122,7 @@ export default async function ClientDetailPage({ params }: { params: Promise<{ i
               <thead>
                 <tr className="border-b border-slate-100">
                   {["Archivo", "Período", "Tipo", "Estado", ""].map((h) => (
-                    <th key={h} className="px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-400">{h}</th>
+                    <th key={h} className="px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">{h}</th>
                   ))}
                 </tr>
               </thead>

@@ -60,7 +60,7 @@ export default async function WorkerClientsPage() {
                 {["Cliente", "CIF", "Facturas", "Pendientes", "Acciones"].map((h) => (
                   <th
                     key={h}
-                    className="px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-400"
+                    className="px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500"
                   >
                     {h}
                   </th>

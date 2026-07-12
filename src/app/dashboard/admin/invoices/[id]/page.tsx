@@ -6,20 +6,8 @@ import { ChevronLeft, Building2, Calendar, Hash, Euro, Percent, User } from "luc
 import Link from "next/link";
 import { AdminInvoiceViewer } from "./AdminInvoiceViewer";
 import { ReprocesarButton } from "./ReprocesarButton";
-import { formatAuditValue } from "@/lib/invoiceStatuses";
+import { formatAuditValue, STATUS_LABELS } from "@/lib/invoiceStatuses";
 import { formatDateEs } from "@/lib/dates";
-
-const STATUS_LABELS: Record<string, string> = {
-  UPLOADED: "Subida",
-  ANALYZING: "En analisis",
-  ANALYZED: "Analizada",
-  OCR_ERROR: "Error OCR",
-  VALIDATED: "Validada",
-  REJECTED: "Rechazada",
-  EXPORTED: "Exportada",
-  PENDING_REVIEW: "Pte. revisión",
-  NEEDS_ATTENTION: "Con incidencias",
-};
 
 const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
   UPLOADED:  { label: "Subida",      variant: "blue" },
@@ -37,7 +25,7 @@ const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
 function Field({ label, value, icon: Icon }: { label: string; value?: string | null; icon?: any }) {
   return (
     <div>
-      <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+      <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
         {Icon && <Icon className="h-3.5 w-3.5" />}
         {label}
       </p>
