@@ -6,6 +6,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { FileText, X } from "lucide-react";
 import Link from "next/link";
 import { InvoicesTable } from "./InvoicesTable";
+import { ReprocessAllErrorsButton } from "./ReprocessAllErrorsButton";
 import type { InvoiceStatus, InvoiceType } from "@prisma/client";
 
 const STATUS_BADGE: Record<string, { label: string }> = {
@@ -176,6 +177,10 @@ export default async function InvoicesPage({
           );
         })}
       </div>
+
+      {statusFilter === "OCR_ERROR" && (
+        <ReprocessAllErrorsButton count={countMap.OCR_ERROR ?? 0} />
+      )}
 
       {invoices.length === 0 ? (
         <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
