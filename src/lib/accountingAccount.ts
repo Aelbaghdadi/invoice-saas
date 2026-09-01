@@ -24,18 +24,22 @@ export function sanitizeAccountingAccountInput(raw: string): string {
 }
 
 /**
- * Al salir del campo, si hay un punto, rellena la subcuenta con ceros a la
- * izquierda hasta completar 8 dígitos en total (igual que los programas de
- * contabilidad: "430.1" -> "430.00001").
+ * Al salir del campo, completa la cuenta hasta los 8 dígitos rellenando con
+ * ceros, como hacen los programas de contabilidad. El punto es solo un atajo
+ * para teclear y no se conserva en el valor final:
+ *
+ *   "600"   -> "60000000"   (sin punto, la cuenta crece hacia la derecha)
+ *   "4.22"  -> "40000022"   (con punto, la subcuenta queda pegada al final)
+ *   "430.1" -> "43000001"
  */
 export function padAccountingAccount(value: string): string {
   const dotIndex = value.indexOf(".");
-  if (dotIndex === -1) return value;
+  const group = dotIndex === -1 ? value : value.slice(0, dotIndex);
+  const subaccount = dotIndex === -1 ? "" : value.slice(dotIndex + 1);
 
-  const group = value.slice(0, dotIndex);
-  const subaccount = value.slice(dotIndex + 1);
-  const targetLength = MAX_DIGITS - group.length;
-  if (targetLength <= 0) return group;
+  // Sin ningun digito no hay nada que completar: campo vacio o un punto suelto.
+  if (group.length + subaccount.length === 0) return "";
 
-  return `${group}.${subaccount.padStart(targetLength, "0")}`;
+  const zeros = Math.max(0, MAX_DIGITS - group.length - subaccount.length);
+  return `${group}${"0".repeat(zeros)}${subaccount}`;
 }

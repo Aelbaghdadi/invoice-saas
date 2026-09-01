@@ -1550,7 +1550,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                     value={supplierAccountVal}
                     onChange={(e) => setSupplierAccount(sanitizeAccountingAccountInput(e.target.value))}
                     onBlur={(e) => setSupplierAccount(padAccountingAccount(e.target.value))}
-                    placeholder="400.00001"
+                    placeholder="40000001"
                   />
                 </div>
                 <div>
@@ -1560,7 +1560,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                     value={expenseAccountVal}
                     onChange={(e) => setExpenseAccount(sanitizeAccountingAccountInput(e.target.value))}
                     onBlur={(e) => setExpenseAccount(padAccountingAccount(e.target.value))}
-                    placeholder="629.00000"
+                    placeholder="62900000"
                   />
                 </div>
               </div>
