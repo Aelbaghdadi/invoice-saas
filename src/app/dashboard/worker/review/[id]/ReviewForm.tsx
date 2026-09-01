@@ -23,6 +23,7 @@ import {
   type RetentionTypeName,
 } from "@/lib/validators";
 import { dateMatchesPeriod, periodLabel, type PeriodTypeName } from "@/lib/period";
+import { sanitizeAccountingAccountInput, padAccountingAccount } from "@/lib/accountingAccount";
 
 const OPERATION_TYPE_OPTIONS: OperationTypeName[] = [
   "INTERIOR",
@@ -1547,7 +1548,8 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                   <input
                     className={inputClass}
                     value={supplierAccountVal}
-                    onChange={(e) => setSupplierAccount(e.target.value)}
+                    onChange={(e) => setSupplierAccount(sanitizeAccountingAccountInput(e.target.value))}
+                    onBlur={(e) => setSupplierAccount(padAccountingAccount(e.target.value))}
                     placeholder="400.00001"
                   />
                 </div>
@@ -1556,7 +1558,8 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                   <input
                     className={inputClass}
                     value={expenseAccountVal}
-                    onChange={(e) => setExpenseAccount(e.target.value)}
+                    onChange={(e) => setExpenseAccount(sanitizeAccountingAccountInput(e.target.value))}
+                    onBlur={(e) => setExpenseAccount(padAccountingAccount(e.target.value))}
                     placeholder="629.00000"
                   />
                 </div>
