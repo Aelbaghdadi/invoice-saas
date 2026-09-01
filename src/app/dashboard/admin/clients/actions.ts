@@ -1,6 +1,7 @@
 "use server";
 
 import { prisma } from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import { after } from "next/server";
@@ -21,6 +22,25 @@ const schema = z.object({
 });
 
 type State = { error?: string; errors?: Record<string, string[]> } | undefined;
+
+/**
+ * Traduce un P2002 (constraint unique violada) al campo real que chocó,
+ * mirando `meta.target`. Sin esto, cualquier duplicado (CIF, email del
+ * cliente o email del usuario del portal) mostraba el mismo mensaje
+ * generico y confundia sobre cual era el campo repetido de verdad.
+ */
+function duplicateFieldMessage(err: unknown): string {
+  if (
+    err instanceof Prisma.PrismaClientKnownRequestError &&
+    err.code === "P2002"
+  ) {
+    const target = err.meta?.target;
+    const fields = Array.isArray(target) ? target.join(",") : String(target ?? "");
+    if (fields.includes("cif")) return "Ya existe un cliente con ese CIF.";
+    if (fields.includes("email")) return "Ya existe un cliente o usuario con ese email.";
+  }
+  return "Ya existe un cliente con ese CIF o email.";
+}
 
 export async function createClient(_prev: State, formData: FormData): Promise<State> {
   const session = await auth();
@@ -93,8 +113,8 @@ export async function createClient(_prev: State, formData: FormData): Promise<St
       inviteToken = token;
       userEmail = parsed.data.email;
     });
-  } catch {
-    return { error: "Ya existe un cliente con ese CIF o email." };
+  } catch (err) {
+    return { error: duplicateFieldMessage(err) };
   }
 
   // Send invitation email after the response is sent
