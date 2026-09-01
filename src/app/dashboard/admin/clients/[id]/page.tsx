@@ -74,7 +74,7 @@ export default async function ClientDetailPage({ params }: { params: Promise<{ i
           <div className="space-y-3 text-[13px]">
             <div className="flex items-center gap-2 text-slate-500">
               <Mail className="h-4 w-4 text-slate-300" />
-              {client.email}
+              {client.email ?? <span className="italic text-slate-300">Sin acceso al portal</span>}
             </div>
             <div className="flex items-center gap-2 text-slate-500">
               <Building2 className="h-4 w-4 text-slate-300" />

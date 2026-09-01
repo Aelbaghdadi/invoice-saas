@@ -104,7 +104,7 @@ export default async function ClientsPage() {
                       </div>
                       <div>
                         <p className="text-[13px] font-semibold text-slate-800">{client.name}</p>
-                        <p className="text-[11px] text-slate-400">{client.email}</p>
+                        <p className="text-[11px] text-slate-400">{client.email ?? <span className="italic text-slate-300">Sin acceso al portal</span>}</p>
                       </div>
                     </div>
                   </td>

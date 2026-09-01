@@ -26,9 +26,10 @@ export async function GET(req: Request) {
   const targetYear = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
 
   // Find all clients (excluyendo el buzón técnico "Sin clasificar", cuyo
-  // email es sintético y no debe recibir recordatorios).
+  // email es sintético y no debe recibir recordatorios, y los clientes sin
+  // acceso al portal, que no tienen email al que avisar).
   const clients = await prisma.client.findMany({
-    where: { isUnclassifiedBucket: false },
+    where: { isUnclassifiedBucket: false, email: { not: null } },
     select: { id: true, name: true, email: true },
   });
 
@@ -50,7 +51,7 @@ export async function GET(req: Request) {
     if (closure && !closure.reopenedAt) continue;
 
     await sendClosureReminder({
-      clientEmail: client.email,
+      clientEmail: client.email!,
       clientName: client.name,
       month: targetMonth,
       year: targetYear,

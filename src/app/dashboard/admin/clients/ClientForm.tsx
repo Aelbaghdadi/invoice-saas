@@ -15,6 +15,10 @@ export function ClientForm() {
   const { success, error: toastError } = useToast();
   const [state, action, pending] = useActionState<State, FormData>(createClient, undefined);
   const [program, setProgram] = useState("");
+  // El email decide si se crea usuario de portal, asi que gobierna tambien
+  // que se le pida el nombre de contacto y que aviso se muestra abajo.
+  const [email, setEmail] = useState("");
+  const daPortal = email.trim() !== "";
 
   useEffect(() => {
     if (!state) return;
@@ -66,12 +70,14 @@ export function ClientForm() {
 
         <div>
           <label className="block text-[13px] font-medium text-slate-700">
-            Email de acceso *
+            Email de acceso{" "}
+            <span className="font-normal text-slate-400">(opcional)</span>
           </label>
           <input
             name="email"
             type="email"
-            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
             className="input mt-1.5 w-full"
             placeholder="contacto@empresa.com"
           />
@@ -82,12 +88,13 @@ export function ClientForm() {
 
         <div className="col-span-2">
           <label className="block text-[13px] font-medium text-slate-700">
-            Nombre del contacto *
+            Nombre del contacto{daPortal ? " *" : ""}
           </label>
           <input
             name="contactName"
-            required
-            className="input mt-1.5 w-full"
+            required={daPortal}
+            disabled={!daPortal}
+            className="input mt-1.5 w-full disabled:bg-slate-50 disabled:text-slate-400"
             placeholder="María García"
           />
           {state?.errors?.contactName && (
@@ -110,12 +117,13 @@ export function ClientForm() {
         </div>
       </div>
 
-      {/* Password info */}
+      {/* Que implica rellenar o no el email de acceso */}
       <div className="flex items-start gap-2.5 rounded-lg border border-blue-100 bg-blue-50 px-3.5 py-3">
         <Info className="mt-0.5 h-4 w-4 flex-shrink-0 text-blue-500" />
         <p className="text-[12px] text-blue-700">
-          Se creará automáticamente una cuenta de portal para el cliente. La contraseña inicial será los últimos 6 dígitos del CIF seguidos de{" "}
-          <code className="font-mono font-semibold">!</code>
+          {daPortal
+            ? "Se creará una cuenta de portal para el cliente y se le enviará una invitación por email para que ponga su contraseña. El enlace caduca en 72 horas."
+            : "Sin email no se crea acceso al portal: el cliente existirá solo para que le subas tú las facturas."}
         </p>
       </div>
 

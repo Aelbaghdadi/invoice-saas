@@ -156,7 +156,9 @@ model Client {
   id                String   @id @default(cuid())
   name              String
   cif               String   @unique
-  email             String   @unique
+  /// Solo si el cliente tiene acceso al portal. Sin acceso no hay email y la
+  /// columna queda a NULL (el unique de Postgres admite varios NULL).
+  email             String?  @unique
   accountingProgram String?
   exportConfig      Json?     // { encoding, delimiter, dateFormat, accountLength }
   /// Cuenta de proveedor por defecto para facturas simplificadas / tickets
