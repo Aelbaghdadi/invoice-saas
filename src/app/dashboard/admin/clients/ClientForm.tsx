@@ -2,7 +2,7 @@
 
 import { useActionState, useEffect, useState } from "react";
 import { createClient } from "./actions";
-import { Loader2, AlertCircle, Info } from "lucide-react";
+import { Loader2, AlertCircle } from "lucide-react";
 import Link from "next/link";
 import { useToast } from "@/components/ui/Toast";
 import { Select } from "@/components/ui/Select";
@@ -115,16 +115,6 @@ export function ClientForm() {
             options={PROGRAMS.map((p) => ({ value: p, label: p }))}
           />
         </div>
-      </div>
-
-      {/* Que implica rellenar o no el email de acceso */}
-      <div className="flex items-start gap-2.5 rounded-lg border border-blue-100 bg-blue-50 px-3.5 py-3">
-        <Info className="mt-0.5 h-4 w-4 flex-shrink-0 text-blue-500" />
-        <p className="text-[12px] text-blue-700">
-          {daPortal
-            ? "Se creará una cuenta de portal para el cliente y se le enviará una invitación por email para que ponga su contraseña. El enlace caduca en 72 horas."
-            : "Sin email no se crea acceso al portal: el cliente existirá solo para que le subas tú las facturas."}
-        </p>
       </div>
 
       <div className="flex items-center gap-3 border-t border-slate-100 pt-4">
