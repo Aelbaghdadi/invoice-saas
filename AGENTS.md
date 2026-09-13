@@ -11,10 +11,6 @@ commits). Mantenedlo así; no traduzcáis a inglés cosas existentes.
 
 ## Lo que NO debéis tocar
 
-- **`src/lib/ocr.ts`** y todo lo relacionado con la extracción Document AI
-  (incluido `src/lib/boundingBoxes.ts`). Ese código lo mantiene otro
-  miembro del equipo. Si necesitáis modificar el comportamiento OCR
-  → hacedlo en la capa de orquestación (`src/lib/processInvoice.ts`).
 - **El typo "Cutoa Rec. Equiv." en `exportFormats.ts`** — viene de la
   plantilla oficial A3 Asesor. No lo "corrijáis".
 - **Las migraciones aplicadas** en `prisma/migrations/`. Si necesitáis
@@ -74,7 +70,8 @@ linter no lo detecta — está en vuestra responsabilidad.
 - ¿Cola "siguiente factura"? → [src/lib/reviewQueue.ts](src/lib/reviewQueue.ts)
 - ¿Exportar a A3? → [src/lib/exportFormats.ts](src/lib/exportFormats.ts)
 - ¿Auditoría inmutable? → [src/lib/auditLog.ts](src/lib/auditLog.ts) +
-  `prisma/migrations/20260507120000_audit_hash_chain/`
+  `prisma/migrations/00000000000001_audit_immutability/`
 - ¿Reset demo? → [src/lib/demoSeed.ts](src/lib/demoSeed.ts) +
-  `prisma/migrations/20260507160000_audit_bypass_for_demo_reset/`
+  `src/app/api/admin/reset-demo/` (el bypass de auditoría está en la
+  misma migración de inmutabilidad)
 - ¿Glosario fiscal? → [ARCHITECTURE.md#glosario-fiscal-m%C3%ADnimo-para-devs-no-espa%C3%B1oles](ARCHITECTURE.md)
