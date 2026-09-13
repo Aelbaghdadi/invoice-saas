@@ -2,6 +2,7 @@
 
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { PERIOD_BLOCKING_STATUSES } from "@/lib/invoiceStatuses";
 import { revalidatePath } from "next/cache";
 import type { InvoiceType } from "@prisma/client";
 
@@ -66,9 +67,7 @@ export async function closePeriodFromBatch(
       clientId: parsed.clientId,
       periodMonth: parsed.month,
       periodYear: parsed.year,
-      status: {
-        in: ["UPLOADED", "ANALYZING", "ANALYZED", "PENDING_REVIEW", "NEEDS_ATTENTION", "OCR_ERROR"],
-      },
+      status: { in: PERIOD_BLOCKING_STATUSES },
     },
   });
   if (pending > 0) {

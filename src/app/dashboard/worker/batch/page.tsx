@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import type { InvoiceType, PeriodType } from "@prisma/client";
-import { completionPercent } from "@/lib/invoiceStatuses";
+import { completionPercent, PERIOD_BLOCKING_STATUSES } from "@/lib/invoiceStatuses";
 import { periodLabel } from "@/lib/period";
 import { BatchActions } from "./BatchActions";
 import { getAccessibleClientIds } from "@/lib/accessibleClients";
@@ -104,6 +104,10 @@ export default async function WorkerBatchPage({
   const groupMap = new Map<string, BatchGroup>();
 
   for (const inv of invoices) {
+    // La original de una division no es una factura mas: sus hijas ya estan
+    // en la lista. Contarla la dejaba "en analisis OCR" para siempre y el lote
+    // no llegaba nunca a "por cerrar".
+    if (inv.status === "SPLIT_SOURCE") continue;
     const key = `${inv.clientId}-${inv.periodYear}-${inv.periodMonth}-${inv.periodType}-${inv.type}`;
     let g = groupMap.get(key);
     if (!g) {
@@ -203,13 +207,26 @@ export default async function WorkerBatchPage({
   // Para saber si un lote puede "cerrar periodo" hay que mirar que todo
   // el periodo (no solo ese tipo) este done. Calculamos pendientes por
   // (clientId, month, year) en total.
+  //
+  // Con filtro de tipo, `invoices` solo trae ese tipo: sin esta consulta
+  // aparte se ofrecia "Cerrar periodo" mirando solo las ventas aunque hubiera
+  // compras pendientes (la accion lo revalida y lo rechaza, pero confunde).
+  const periodInvoices = typeParam
+    ? await prisma.invoice.findMany({
+        where: {
+          clientId: requestedClient ? requestedClient : { in: clientIds },
+          ...(yearNum ? { periodYear: yearNum } : {}),
+          ...(monthNum ? { periodMonth: monthNum } : {}),
+        },
+        select: { clientId: true, periodYear: true, periodMonth: true, status: true },
+      })
+    : invoices;
   const pendingByPeriod = new Map<string, number>();
-  for (const inv of invoices) {
+  for (const inv of periodInvoices) {
     const key = `${inv.clientId}-${inv.periodYear}-${inv.periodMonth}`;
-    const pending =
-      inv.status !== "VALIDATED" &&
-      inv.status !== "REJECTED" &&
-      inv.status !== "EXPORTED";
+    // Mismo criterio que la accion de cerrar periodo: con uno distinto el
+    // boton no salia si en el periodo habia una factura dividida (SPLIT_SOURCE).
+    const pending = PERIOD_BLOCKING_STATUSES.includes(inv.status);
     if (pending) {
       pendingByPeriod.set(key, (pendingByPeriod.get(key) ?? 0) + 1);
     } else if (!pendingByPeriod.has(key)) {

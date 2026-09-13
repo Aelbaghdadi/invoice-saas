@@ -101,3 +101,10 @@ export function formatAuditValue(value: string | null | undefined): string {
   }
   return STATUS_LABELS[value as InvoiceStatus] ?? OPERATION_LABELS[value] ?? value;
 }
+
+/** Estados que impiden cerrar un periodo: facturas aun sin procesar del todo.
+ *  La pagina de lotes y la accion de cerrar periodo usan esta misma lista; con
+ *  criterios distintos el boton aparecia o desaparecia sin motivo. */
+export const PERIOD_BLOCKING_STATUSES: InvoiceStatus[] = [
+  "UPLOADED", "ANALYZING", "ANALYZED", "PENDING_REVIEW", "NEEDS_ATTENTION", "OCR_ERROR",
+];
