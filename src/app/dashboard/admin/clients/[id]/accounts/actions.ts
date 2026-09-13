@@ -88,7 +88,13 @@ export async function importAccountsFromExcel(
   }
 
   if (entries.size === 0) {
-    return { error: errors[0] ?? "No se encontraron cuentas v\u00e1lidas en el archivo. Formato esperado: Cuenta | Descripci\u00f3n | NIF", errors: errors.length > 0 ? errors : undefined };
+    // El primer motivo va como error principal y la lista lleva solo el resto:
+    // antes el primero salia repetido en los dos sitios.
+    const [primerError, ...restoErrores] = errors;
+    return {
+      error: primerError ?? "No se encontraron cuentas v\u00e1lidas en el archivo. Formato esperado: Cuenta | Descripci\u00f3n | NIF",
+      errors: restoErrores.length > 0 ? restoErrores : undefined,
+    };
   }
 
   // Upsert all entries
