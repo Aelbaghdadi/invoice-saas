@@ -3,8 +3,9 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   Download, FileDown, CheckCircle2, AlertCircle,
-  Loader2,
+  Loader2, AlertTriangle,
 } from "lucide-react";
+import type { A3ValidationWarning as A3Warning } from "@/lib/exportFormats";
 import { Select } from "@/components/ui/Select";
 import { quarterStartMonth, QUARTER_OPTIONS } from "@/lib/period";
 
@@ -44,6 +45,10 @@ export function ExportForm({ clients }: Props) {
   const [format,     setFormat]     = useState("a3excel");
 
   const [count,    setCount]    = useState<number | null>(null);
+  // Avisos de validacion A3 (NIF vacio, descuadres, tipo de operacion que no
+  // corresponde al sentido...). Se recortan a 20 en el servidor.
+  const [warnings,     setWarnings]     = useState<A3Warning[]>([]);
+  const [warningCount, setWarningCount] = useState(0);
   const [counting, setCounting] = useState(false);
   const [success,  setSuccess]  = useState(false);
   const [error,    setError]    = useState<string | null>(null);
@@ -67,8 +72,12 @@ export function ExportForm({ clients }: Props) {
       const res  = await fetch(`/api/export?${sp}`);
       const data = await res.json();
       setCount(data.count ?? 0);
+      setWarnings(data.warnings ?? []);
+      setWarningCount(data.warningCount ?? 0);
     } catch {
       setCount(null);
+      setWarnings([]);
+      setWarningCount(0);
     } finally {
       setCounting(false);
     }
@@ -259,6 +268,33 @@ export function ExportForm({ clients }: Props) {
               </p>
             )}
           </div>
+
+          {/* Avisos de validación A3: la última oportunidad de ver un error
+              antes de que el fichero entre en la contabilidad del cliente. */}
+          {warningCount > 0 && !counting && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+              <p className="flex items-center gap-2 text-[13px] font-semibold text-amber-800">
+                <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                {warningCount === 1
+                  ? "1 factura con avisos"
+                  : `${warningCount} facturas con avisos`}
+              </p>
+              <ul className="mt-2 space-y-1.5">
+                {warnings.map((w) => (
+                  <li key={w.invoiceId} className="text-[12px] text-amber-700">
+                    <span className="font-medium">{w.invoiceNumber || "Sin número"}</span>
+                    {" — "}
+                    {w.warnings.join("; ")}
+                  </li>
+                ))}
+              </ul>
+              {warningCount > warnings.length && (
+                <p className="mt-2 text-[11px] text-amber-600">
+                  Y {warningCount - warnings.length} más. Se exportan igualmente: los avisos no bloquean.
+                </p>
+              )}
+            </div>
+          )}
 
           {/* Status messages */}
           {success && (

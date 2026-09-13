@@ -59,10 +59,26 @@ export async function GET(req: NextRequest) {
     ...(typeParam !== "ALL" ? { type: typeParam as InvoiceType } : {}),
   };
 
-  // Preview mode: just return count
+  // Preview mode: recuento + avisos de validacion.
+  //
+  // validateForA3Export existia pero no la llamaba nadie: se calculaban los
+  // avisos (NIF vacio, descuadres, total cero, tipo de operacion incompatible
+  // con el sentido) y se tiraban. Es el unico punto donde un error fiscal se
+  // puede ver ANTES de que el fichero entre en la contabilidad del cliente.
   if (preview) {
-    const count = await prisma.invoice.count({ where });
-    return NextResponse.json({ count });
+    const previewInvoices = await prisma.invoice.findMany({
+      where,
+      include: { client: true, vatLines: { orderBy: { position: "asc" } } },
+      orderBy: [{ periodYear: "asc" }, { periodMonth: "asc" }, { invoiceDate: "asc" }],
+    });
+    const allWarnings = validateForA3Export(previewInvoices);
+    return NextResponse.json({
+      count: previewInvoices.length,
+      warningCount: allWarnings.length,
+      // Se recorta la lista: con un lote grande no tiene sentido volcar
+      // cientos de avisos al navegador, el gestor arranca por los primeros.
+      warnings: allWarnings.slice(0, 20),
+    });
   }
 
   // Download mode — incluimos vatLines para que el exportador pueda emitir

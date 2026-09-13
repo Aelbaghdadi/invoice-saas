@@ -2,6 +2,8 @@ import type { Invoice, Client, InvoiceVatLine } from "@prisma/client";
 import * as XLSX from "xlsx";
 import {
   OPERATION_TYPE_CODE,
+  OPERATION_TYPE_LABEL,
+  OPERATION_TYPE_OPTIONS,
   type OperationTypeName,
 } from "@/lib/validators";
 
@@ -256,6 +258,20 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
     const nif = isPurchase ? inv.issuerCif : inv.receiverCif;
 
     if (!nif) warnings.push("NIF vacío");
+
+    // El codigo de la columna G sale de un mapa unico compartido por las dos
+    // hojas, pero en expedidas los codigos significan otra cosa: el 4 es
+    // "operacion triangular", no inversion del sujeto pasivo. Una venta con
+    // un tipo heredado del aprendizaje por NIF (que no distingue sentido)
+    // entraria mal en el 303/349 sin que nadie lo vea. Avisamos hasta que el
+    // mapa este bifurcado por sentido.
+    if (!isPurchase && inv.operationType
+        && !OPERATION_TYPE_OPTIONS.SALE.includes(inv.operationType as OperationTypeName)) {
+      warnings.push(
+        `Tipo de operación "${OPERATION_TYPE_LABEL[inv.operationType as OperationTypeName]}" no es válido en facturas emitidas `
+        + `(exportaría el código ${OPERATION_TYPE_CODE[inv.operationType as OperationTypeName]}, que en expedidas significa otra cosa)`,
+      );
+    }
     if (!inv.invoiceDate) warnings.push("Fecha vacía");
     if (!inv.supplierAccount) warnings.push("Sin cuenta proveedor");
     if (!inv.expenseAccount) warnings.push("Sin cuenta gasto");
