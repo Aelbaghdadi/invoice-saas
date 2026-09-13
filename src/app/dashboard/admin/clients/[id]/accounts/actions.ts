@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { z } from "zod";
 import * as XLSX from "xlsx";
 import { parseTaxId } from "@/lib/validators";
+import { accountGroup, normalizePlanAccount } from "@/lib/accountingAccount";
 
 type ActionState = { success?: boolean; error?: string; imported?: number; errors?: string[] } | null;
 
@@ -43,7 +44,14 @@ export async function importAccountsFromExcel(
     const row = rows[i];
     if (!row || row.length < 2) continue;
 
-    const cuenta = String(row[0] ?? "").trim();
+    // xlsx entrega las celdas numericas como number: "430.10" llega como 430.1
+    // y al expandirlo daria 43000001 en vez de 43000010, la subcuenta de otro
+    // tercero. Mejor pedir la columna como texto que adivinar el cero perdido.
+    if (typeof row[0] === "number" && !Number.isInteger(row[0])) {
+      errors.push(`Fila ${i + 1}: la cuenta ${row[0]} está guardada como número con decimales y puede haber perdido ceros. Formatea la columna de cuentas como texto y vuelve a importar.`);
+      continue;
+    }
+    const cuenta = normalizePlanAccount(String(row[0] ?? ""));
     const descripcion = String(row[1] ?? "").trim();
     // Normalizar igual que busca el resto del sistema (parseTaxId.clean):
     // mayusculas, sin puntos/guiones y SIN prefijo de pais. Si aqui se
@@ -53,9 +61,10 @@ export async function importAccountsFromExcel(
 
     if (!cuenta || !nif) continue; // Skip empty rows
 
-    // Determine account type by prefix
-    const prefix = cuenta.split(".")[0] ?? cuenta.substring(0, 3);
-    const prefixNum = parseInt(prefix, 10);
+    // Grupo por los tres primeros digitos. Antes se usaba split(".")[0], que
+    // con una cuenta sin punto ("40000022", el formato de A3 a 8 digitos)
+    // devolvia la cuenta entera y la mandaba siempre a "prefijo desconocido".
+    const prefixNum = accountGroup(cuenta) ?? NaN;
 
     const existing = entries.get(nif) ?? { nif, name: descripcion, supplierAccount: "", expenseAccount: "" };
 
@@ -79,7 +88,7 @@ export async function importAccountsFromExcel(
   }
 
   if (entries.size === 0) {
-    return { error: "No se encontraron cuentas v\u00e1lidas en el archivo. Formato esperado: Cuenta | Descripci\u00f3n | NIF" };
+    return { error: errors[0] ?? "No se encontraron cuentas v\u00e1lidas en el archivo. Formato esperado: Cuenta | Descripci\u00f3n | NIF", errors: errors.length > 0 ? errors : undefined };
   }
 
   // Upsert all entries
@@ -119,8 +128,8 @@ const accountSchema = z.object({
     .transform((v) => parseTaxId(v).clean)
     .refine((v) => v.length > 0, "NIF obligatorio"),
   name: z.string().min(1, "Nombre obligatorio"),
-  supplierAccount: z.string().min(1, "Cuenta proveedor obligatoria"),
-  expenseAccount: z.string().min(1, "Cuenta gasto obligatoria"),
+  supplierAccount: z.string().trim().min(1, "Cuenta proveedor obligatoria").transform(normalizePlanAccount),
+  expenseAccount: z.string().trim().min(1, "Cuenta gasto obligatoria").transform(normalizePlanAccount),
   defaultVatRate: z.coerce.number().min(0).max(100).optional(),
 });
 

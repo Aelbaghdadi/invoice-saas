@@ -76,3 +76,21 @@ export function resultAccountMatchesType(
   if (!account) return false;
   return invoiceType === "SALE" ? !/^6/.test(account) : !/^7/.test(account);
 }
+
+/**
+ * Normaliza una cuenta del plan de cuentas (Excel de A3 o alta manual).
+ * Con punto ("430.00001") se expande a 8 digitos sin punto, igual que la
+ * teclea el gestor, para que la columna H del export no mezcle formatos.
+ * Sin punto se deja tal cual: rellenar a la derecha cambiaria el numero de
+ * una cuenta que ya tiene otro largo.
+ */
+export function normalizePlanAccount(raw: string): string {
+  const value = raw.trim();
+  return /^[0-9]+[.][0-9]*$/.test(value) ? padAccountingAccount(value) : value;
+}
+
+/** Grupo contable de una cuenta: sus tres primeros digitos. null si no los tiene. */
+export function accountGroup(account: string): number | null {
+  const digits = account.replace(/[^0-9]/g, "");
+  return digits.length >= 3 ? parseInt(digits.slice(0, 3), 10) : null;
+}
