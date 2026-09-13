@@ -70,6 +70,23 @@ try {
         conflictos++;
         continue;
       }
+      // Dos terceros distintos pueden compartir numero: uno importado con
+      // prefijo y otro sin el (caso real: CN418306763 "Guangzhou Blings Bag",
+      // cuenta 40000046, frente a 418306763 "Guangzhou Hongxin Cosmetics",
+      // cuenta 41000192). Si el nombre o alguna cuenta no coinciden, NO se
+      // fusiona: se borraria la cuenta de uno de los dos sin avisar.
+      const sinSignos = (v) => String(v ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+      const nombreReal = (fila) => (fila.name === fila.nif ? "" : sinSignos(fila.name));
+      const difieren = (a, b) => !vacio(a) && !vacio(b) && String(a).trim() !== String(b).trim();
+      if (
+        difieren(nombreReal(destino), nombreReal(r)) ||
+        difieren(destino.supplierAccount, r.supplierAccount) ||
+        difieren(destino.expenseAccount, r.expenseAccount)
+      ) {
+        console.log(`AVISO  ${r.nif} ("${r.name}", ${r.supplierAccount || "sin cuenta"}) y ${destino.nif} ("${destino.name}", ${destino.supplierAccount || "sin cuenta"}) limpian a "${limpio}" pero son terceros distintos. NO se fusiona: resuelvelo a mano. [${r.id} / ${destino.id}]`);
+        conflictos++;
+        continue;
+      }
       // Ya existe la fila canonica (creada por el aprendizaje al validar):
       // completar en ella lo que le falte y borrar la fila con prefijo.
       const sets = [];
@@ -127,5 +144,5 @@ try {
 console.log(`\n${APPLY ? "APLICADO" : "SIMULACRO (nada escrito; usa --apply)"}: ${renombrados} renombrados, ${fusionados} fusionados, ${conflictos} conflictos sin tocar, ${intactos} ya correctos de ${rows.length} filas.`);
 if (conflictos > 0) {
   console.log(`
-Hay ${conflictos} colisiones entre paises distintos marcadas como AVISO. Revisalas a mano ANTES de dar por buena la normalizacion.`);
+Hay ${conflictos} colisiones marcadas como AVISO (paises distintos, o terceros distintos con el mismo numero). Se han dejado intactas: revisalas a mano.`);
 }
