@@ -42,22 +42,24 @@ ENV HOSTNAME=0.0.0.0
 
 RUN addgroup -g 1001 -S nodejs && adduser -S nextjs -u 1001
 
+# El propietario se asigna en cada COPY (--chown). Un `RUN chown -R /app`
+# posterior reescribiria el arbol entero en una capa nueva: la imagen
+# llevaba ~1,1 GB duplicados solo por cambiar el propietario al final.
 # Build de Next + estáticos + configs
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/next.config.ts ./next.config.ts
-COPY --from=builder /app/tsconfig.json ./tsconfig.json
-COPY --from=builder /app/package.json ./package.json
+COPY --from=builder --chown=nextjs:nodejs /app/.next ./.next
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+COPY --from=builder --chown=nextjs:nodejs /app/next.config.ts ./next.config.ts
+COPY --from=builder --chown=nextjs:nodejs /app/tsconfig.json ./tsconfig.json
+COPY --from=builder --chown=nextjs:nodejs /app/package.json ./package.json
 # Prisma: schema + migraciones + config (para `migrate deploy` en el arranque)
-COPY --from=builder /app/prisma ./prisma
-COPY --from=builder /app/prisma.config.ts ./prisma.config.ts
+COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
+COPY --from=builder --chown=nextjs:nodejs /app/prisma.config.ts ./prisma.config.ts
 # Bootstrap del primer admin (node plano, sin tsx)
-COPY --from=builder /app/scripts/bootstrap-admin.mjs ./scripts/bootstrap-admin.mjs
+COPY --from=builder --chown=nextjs:nodejs /app/scripts/bootstrap-admin.mjs ./scripts/bootstrap-admin.mjs
 # node_modules de producción (next, @prisma/client + cliente generado, prisma CLI, pg, dotenv…)
-COPY --from=prod-deps /app/node_modules ./node_modules
+COPY --from=prod-deps --chown=nextjs:nodejs /app/node_modules ./node_modules
 
-COPY docker-entrypoint.sh ./docker-entrypoint.sh
-RUN chmod +x docker-entrypoint.sh && chown -R nextjs:nodejs /app
+COPY --chown=nextjs:nodejs --chmod=755 docker-entrypoint.sh ./docker-entrypoint.sh
 
 USER nextjs
 EXPOSE 3000
