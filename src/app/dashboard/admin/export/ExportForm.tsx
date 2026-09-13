@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
 import {
   Download, FileDown, CheckCircle2, AlertCircle,
   Loader2, AlertTriangle,
@@ -282,7 +283,14 @@ export function ExportForm({ clients }: Props) {
               <ul className="mt-2 space-y-1.5">
                 {warnings.map((w) => (
                   <li key={w.invoiceId} className="text-[12px] text-amber-700">
-                    <span className="font-medium">{w.invoiceNumber || "Sin número"}</span>
+                    {/* Enlace a la revision: una validada se puede corregir mientras
+                        el periodo no este cerrado, y sin enlace habia que buscarla a mano. */}
+                    <Link
+                      href={`/dashboard/worker/review/${w.invoiceId}`}
+                      className="font-medium underline decoration-amber-300 underline-offset-2 hover:text-amber-900"
+                    >
+                      {w.invoiceNumber || "Sin número"}
+                    </Link>
                     {" — "}
                     {w.warnings.join("; ")}
                   </li>
