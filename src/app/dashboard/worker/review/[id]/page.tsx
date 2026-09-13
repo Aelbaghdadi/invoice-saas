@@ -1,5 +1,6 @@
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { canAccessClient } from "@/lib/accessibleClients";
 import { partyAccountMatchesType, resultAccountMatchesType } from "@/lib/accountingAccount";
 import { redirect, notFound } from "next/navigation";
 import { ReviewForm } from "./ReviewForm";
@@ -41,18 +42,9 @@ export default async function ReviewPage({
   });
   if (!invoice) notFound();
 
-  // Workers can only review invoices of their assigned clients
-  if (session.user.role === "WORKER") {
-    const assignment = await prisma.workerClientAssignment.findUnique({
-      where: {
-        workerId_clientId: {
-          workerId: session.user.id,
-          clientId: invoice.clientId,
-        },
-      },
-    });
-    if (!assignment) notFound();
-  }
+  // WORKER: solo clientes asignados. ADMIN: solo clientes de su asesoria
+  // (antes un ADMIN podia abrir la factura de otra asesoria conociendo su id).
+  if (!(await canAccessClient(session, invoice.clientId))) notFound();
 
   // Load latest extraction (for confidence scores and OCR comparison)
   const latestExtraction = await prisma.invoiceExtraction.findFirst({

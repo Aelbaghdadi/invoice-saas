@@ -14,6 +14,7 @@ import {
   queueToSearchParams,
 } from "@/lib/reviewQueue";
 import { appendAuditLogs } from "@/lib/auditLog";
+import { canAccessClient } from "@/lib/accessibleClients";
 import { parseTaxId, isPersonaFisica } from "@/lib/validators";
 import { partyAccountMatchesType, resultAccountMatchesType } from "@/lib/accountingAccount";
 import { normalizeCurrency } from "@/lib/currency";
@@ -27,13 +28,15 @@ import { putObject, getObjectBytes, sanitizeFilenameForStorage, isStorageConfigu
  *  - undefined / null: exito */
 export type ReviewState = { error?: AppError | string } | null;
 
-async function assertWorkerAccess(userId: string, role: string, clientId: string): Promise<ReviewState> {
-  if (role !== "WORKER") return null;
-  const assignment = await prisma.workerClientAssignment.findUnique({
-    where: { workerId_clientId: { workerId: userId, clientId } },
-  });
-  if (!assignment) return { error: "No tienes acceso a esta factura." };
-  return null;
+/** WORKER: el cliente tiene que estar asignado. ADMIN: tiene que ser de su
+ *  asesoria. Antes solo se comprobaba al WORKER: cualquier otro rol pasaba sin
+ *  mirar nada y podia tocar facturas de otra asesoria conociendo el id. */
+async function assertInvoiceAccess(
+  session: { user: { id: string; role: string; advisoryFirmId?: string | null } },
+  clientId: string,
+): Promise<ReviewState> {
+  if (await canAccessClient(session, clientId)) return null;
+  return { error: "No tienes acceso a esta factura." };
 }
 
 type FieldData = {
@@ -119,7 +122,7 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
   if (!invoice) return { error: "Factura no encontrada" };
 
   // Workers can only modify invoices of assigned clients
-  const accessErr = await assertWorkerAccess(session.user.id, session.user.role, invoice.clientId);
+  const accessErr = await assertInvoiceAccess(session, invoice.clientId);
   if (accessErr) return accessErr;
 
   // Check if the period is closed (use accounting period when set, fallback to upload period)
@@ -561,7 +564,7 @@ export async function deferInvoice(
   const invoice = await prisma.invoice.findUnique({ where: { id } });
   if (!invoice) return { error: "Factura no encontrada" };
 
-  const accessErr = await assertWorkerAccess(session.user.id, session.user.role, invoice.clientId);
+  const accessErr = await assertInvoiceAccess(session, invoice.clientId);
   if (accessErr) return accessErr;
 
   await prisma.invoice.update({
@@ -612,7 +615,7 @@ export async function rejectInvoice(
   if (!invoice) return { error: "Factura no encontrada" };
 
   // Workers can only reject invoices of assigned clients
-  const accessErr = await assertWorkerAccess(session.user.id, session.user.role, invoice.clientId);
+  const accessErr = await assertInvoiceAccess(session, invoice.clientId);
   if (accessErr) return accessErr;
 
   await prisma.invoice.update({
@@ -710,7 +713,7 @@ export async function splitInvoice(
   });
   if (!invoice) return { error: "Factura no encontrada" };
 
-  const accessErr = await assertWorkerAccess(session.user.id, session.user.role, invoice.clientId);
+  const accessErr = await assertInvoiceAccess(session, invoice.clientId);
   if (accessErr) return accessErr as { error: string };
 
   if (!isStorageConfigured()) return { error: "Almacenamiento no configurado" };
@@ -852,7 +855,7 @@ export async function splitPdfInvoice(
   });
   if (!invoice) return { error: "Factura no encontrada" };
 
-  const accessErr = await assertWorkerAccess(session.user.id, session.user.role, invoice.clientId);
+  const accessErr = await assertInvoiceAccess(session, invoice.clientId);
   if (accessErr) return accessErr as { error: string };
 
   if (!isStorageConfigured()) return { error: "Almacenamiento no configurado" };

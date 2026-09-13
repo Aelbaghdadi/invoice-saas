@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { canAccessClient } from "@/lib/accessibleClients";
 import { processInvoice } from "@/lib/processInvoice";
 import { appendAuditLogs } from "@/lib/auditLog";
 import type { InvoiceStatus } from "@prisma/client";
@@ -25,14 +26,10 @@ export async function POST(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  // Workers can only reprocess invoices of their assigned clients
-  if (session.user.role === "WORKER") {
-    const assignment = await prisma.workerClientAssignment.findUnique({
-      where: { workerId_clientId: { workerId: userId, clientId: invoice.clientId } },
-    });
-    if (!assignment) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
-    }
+  // WORKER: solo clientes asignados. ADMIN: solo clientes de su asesoria
+  // (antes un ADMIN podia reprocesar la factura de otra asesoria).
+  if (!(await canAccessClient(session, invoice.clientId))) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
   if (!PROCESSABLE_STATUSES.includes(invoice.status as typeof PROCESSABLE_STATUSES[number])) {

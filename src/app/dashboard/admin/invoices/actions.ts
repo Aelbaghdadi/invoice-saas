@@ -15,9 +15,19 @@ export async function bulkValidateInvoices(ids: string[]) {
   }
   if (ids.length === 0) return { error: "No hay facturas seleccionadas" };
 
-  // Only allow bulk validation of invoices that have been reviewed
+  // Sin asesoria en la sesion no hay filtro posible: en Prisma un
+  // `advisoryFirmId: undefined` desactiva la condicion en silencio.
+  const firmId = session.user.advisoryFirmId;
+  if (!firmId) return { error: "No autorizado" };
+
+  // Only allow bulk validation of invoices that have been reviewed. Filtrado
+  // por asesoria: los ids llegan del navegador y no se pueden dar por buenos.
   const invoices = await prisma.invoice.findMany({
-    where: { id: { in: ids }, status: { in: ["PENDING_REVIEW", "NEEDS_ATTENTION"] } },
+    where: {
+      id: { in: ids },
+      status: { in: ["PENDING_REVIEW", "NEEDS_ATTENTION"] },
+      client: { advisoryFirmId: firmId },
+    },
   });
 
   if (invoices.length === 0) {
