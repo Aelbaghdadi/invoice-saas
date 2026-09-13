@@ -4,6 +4,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
 import * as XLSX from "xlsx";
+import { parseTaxId } from "@/lib/validators";
 
 type ActionState = { success?: boolean; error?: string; imported?: number; errors?: string[] } | null;
 
@@ -44,7 +45,11 @@ export async function importAccountsFromExcel(
 
     const cuenta = String(row[0] ?? "").trim();
     const descripcion = String(row[1] ?? "").trim();
-    const nif = String(row[2] ?? "").trim().replace(/\s/g, "");
+    // Normalizar igual que busca el resto del sistema (parseTaxId.clean):
+    // mayusculas, sin puntos/guiones y SIN prefijo de pais. Si aqui se
+    // guardara "PT515160873" tal cual, la revision buscaria "515160873"
+    // y no casarian nunca (causa real del "no encuentra ningun cliente").
+    const nif = parseTaxId(String(row[2] ?? "")).clean;
 
     if (!cuenta || !nif) continue; // Skip empty rows
 
@@ -108,7 +113,11 @@ export async function importAccountsFromExcel(
 // ─── CRUD ───────────────────────────────────────────────────────────────────
 
 const accountSchema = z.object({
-  nif: z.string().min(1, "NIF obligatorio"),
+  // Normalizado a la clave canonica (sin prefijo de pais) para que el
+  // alta manual y el buscador de revision usen exactamente el mismo NIF.
+  nif: z.string().min(1, "NIF obligatorio")
+    .transform((v) => parseTaxId(v).clean)
+    .refine((v) => v.length > 0, "NIF obligatorio"),
   name: z.string().min(1, "Nombre obligatorio"),
   supplierAccount: z.string().min(1, "Cuenta proveedor obligatoria"),
   expenseAccount: z.string().min(1, "Cuenta gasto obligatoria"),
@@ -175,6 +184,17 @@ export async function updateAccountEntry(
     defaultVatRate: formData.get("defaultVatRate") || undefined,
   });
   if (!parsed.success) return { error: parsed.error.issues.map((i) => i.message).join(", ") };
+
+  // El NIF se normaliza al parsear, asi que puede acabar chocando con otra
+  // fila del mismo cliente (p.ej. editar "PT515160873" cuando ya existe
+  // "515160873"). Sin esta comprobacion, Prisma lanzaria un P2002 crudo a la
+  // UI: las server actions devuelven error, no lanzan.
+  const colision = await prisma.accountEntry.findUnique({
+    where: { clientId_nif: { clientId: entry.clientId, nif: parsed.data.nif } },
+  });
+  if (colision && colision.id !== entryId) {
+    return { error: `Ya existe otra cuenta con el NIF ${parsed.data.nif} en este cliente` };
+  }
 
   await prisma.accountEntry.update({
     where: { id: entryId },

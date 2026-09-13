@@ -15,6 +15,7 @@ import { appendAuditLogs } from "@/lib/auditLog";
 import {
   parseTaxId,
   isPersonaFisica,
+  textMentionsRetention,
   RETENTION_DEFAULT_RATE,
   type RetentionTypeName,
 } from "@/lib/validators";
@@ -344,9 +345,9 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
 
     // ── Deteccion de retencion IRPF ────────────────────────────────────
     //
-    // Heuristica conservadora: si el emisor (en PURCHASE) es persona
-    // fisica (DNI/NIE), sugerimos PROFESSIONAL al 15%. El gestor lo
-    // ajusta si hace falta (a 7% para nuevos autonomos, o lo desactiva).
+    // Heuristica conservadora: solo sugerimos retencion si el emisor
+    // (en PURCHASE) es persona fisica (DNI/NIE) Y el OCR vio de verdad
+    // una retencion en el documento. El gestor la ajusta o desactiva.
     //
     // El aprendizaje por NIF (`knownEntry.defaultRetentionType`) solo lo
     // respetamos si el emisor es realmente persona fisica. Asi evitamos
@@ -362,12 +363,37 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
         ? Number(knownEntry.defaultRetentionRate)
         : null;
 
-    // Sugerencia automatica: persona fisica como emisor en PURCHASE.
+    // Sugerencia automatica: persona fisica como emisor en PURCHASE y,
+    // ademas, el OCR tiene que haber VISTO una retencion en el documento.
+    // Ser autonomo no implica retener (comercio, hosteleria, modulos...):
+    // antes se inventaba un 15% en facturas sin IRPF y se machacaba el
+    // porcentaje real extraido (7%, 2%, 1%...) con el default.
     // Para SALE no sugerimos retencion (es el cliente quien retiene a
     // sus proveedores, no al reves).
-    if (!retentionType && invoice.type === "PURCHASE" && issuerIsPF) {
+    //
+    // "Vio retencion" tiene que ser > 0, no "!= null": Facturae obliga a
+    // incluir TotalTaxesWithheld y una factura SIN retencion trae un 0.00
+    // literal, que con `!= null` volvia a disparar el 15% inventado.
+    //
+    // Y hay que mirar tambien el texto: Document AI no extrae IRPF nunca
+    // (devuelve null fijo), asi que solo con los campos numericos la
+    // sugerencia moriria por completo en ese modo de despliegue.
+    const ocrSawIrpf =
+      (extracted.irpfRate ?? 0) > 0 ||
+      (extracted.irpfAmount ?? 0) !== 0 ||
+      textMentionsRetention(ocrResult.rawText);
+    if (!retentionType && invoice.type === "PURCHASE" && issuerIsPF && ocrSawIrpf) {
       retentionType = "PROFESSIONAL";
-      retentionRate = RETENTION_DEFAULT_RATE.PROFESSIONAL;
+      // Si el OCR dio el importe pero no el %, lo deducimos de las bases en
+      // vez de asumir el 15%: al recalcular la cuota mas abajo, un default
+      // equivocado sobrescribiria el importe real extraido del documento.
+      const baseParaTipo = vatLines.reduce((acc, l) => acc + l.taxBase, 0);
+      const tipoDeducido =
+        extracted.irpfAmount != null && baseParaTipo > 0
+          ? parseFloat(((extracted.irpfAmount / baseParaTipo) * 100).toFixed(2))
+          : null;
+      retentionRate =
+        extracted.irpfRate ?? tipoDeducido ?? RETENTION_DEFAULT_RATE.PROFESSIONAL;
     }
 
     // Calculamos cuota e importe de la base de retencion solo si hay

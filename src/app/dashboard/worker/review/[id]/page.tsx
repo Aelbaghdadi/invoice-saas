@@ -1,5 +1,6 @@
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { partyAccountMatchesType, resultAccountMatchesType } from "@/lib/accountingAccount";
 import { redirect, notFound } from "next/navigation";
 import { ReviewForm } from "./ReviewForm";
 import {
@@ -114,17 +115,30 @@ export default async function ReviewPage({
     createdAt: latestExtraction.createdAt.toISOString(),
   } : null;
 
-  // Look up accounting entry by issuer NIF for auto-assignment
-  const suggestedAccount = invoice.issuerCif
+  // Buscar la cuenta por el NIF de la "otra parte" (la que no es el
+  // cliente): emisor en compras, receptor en ventas. Con issuerCif a
+  // secas, en una emitida se buscaba el NIF del propio cliente (que
+  // nunca esta en su plan de cuentas) y jamas encontraba nada.
+  const counterpartyNif = invoice.type === "SALE" ? invoice.receiverCif : invoice.issuerCif;
+  const suggestedAccount = counterpartyNif
     ? await prisma.accountEntry.findUnique({
-        where: { clientId_nif: { clientId: invoice.clientId, nif: invoice.issuerCif } },
+        where: { clientId_nif: { clientId: invoice.clientId, nif: counterpartyNif } },
       })
     : null;
 
+  // Solo sugerimos la cuenta si pertenece a la familia del sentido de esta
+  // factura. Un tercero que es proveedor y cliente a la vez comparte fila en
+  // AccountEntry, y sin este filtro una emitida se autorrellenaba con la
+  // cuenta 400x/6xx aprendida en sus compras.
+  const invoiceType = invoice.type === "SALE" ? "SALE" : "PURCHASE";
   const accountData = suggestedAccount
     ? {
-        supplierAccount: suggestedAccount.supplierAccount,
-        expenseAccount: suggestedAccount.expenseAccount,
+        supplierAccount: partyAccountMatchesType(suggestedAccount.supplierAccount, invoiceType)
+          ? suggestedAccount.supplierAccount
+          : "",
+        expenseAccount: resultAccountMatchesType(suggestedAccount.expenseAccount, invoiceType)
+          ? suggestedAccount.expenseAccount
+          : "",
         defaultVatRate: suggestedAccount.defaultVatRate ? Number(suggestedAccount.defaultVatRate) : null,
         name: suggestedAccount.name,
       }

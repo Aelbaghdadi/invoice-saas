@@ -1,5 +1,14 @@
 import { describe, it, expect } from "vitest";
-import { isValidNIF, formatNIF } from "@/lib/validators";
+import {
+  isValidNIF,
+  formatNIF,
+  isValidTaxIdWithPrefix,
+  OPERATION_TYPE_OPTIONS,
+  OPERATION_TYPE_CODE,
+  OPERATION_TYPE_LABEL,
+  OPERATION_TYPE_LABEL_SALE,
+  operationTypeLabel,
+} from "@/lib/validators";
 
 describe("isValidNIF", () => {
   it("accepts valid DNI", () => {
@@ -60,5 +69,57 @@ describe("formatNIF", () => {
   it("uppercases and strips separators", () => {
     expect(formatNIF("12.345.678-z")).toBe("12345678Z");
     expect(formatNIF(" b12345674 ")).toBe("B12345674");
+  });
+});
+
+describe("isValidTaxIdWithPrefix", () => {
+  it("acepta VAT comunitarios con prefijo (el caso PT que salia en rojo)", () => {
+    expect(isValidTaxIdWithPrefix("PT515160873")).toBe(true);
+    expect(isValidTaxIdWithPrefix("DE123456789")).toBe(true);
+    expect(isValidTaxIdWithPrefix("FR 12 345678901")).toBe(true);
+  });
+
+  it("acepta extra-UE comunes con prefijo", () => {
+    expect(isValidTaxIdWithPrefix("GB123456789")).toBe(true);
+  });
+
+  it("los nacionales siguen pasando el algoritmo español completo", () => {
+    expect(isValidTaxIdWithPrefix("12345678Z")).toBe(true);
+    expect(isValidTaxIdWithPrefix("ES12345678Z")).toBe(true);
+    expect(isValidTaxIdWithPrefix("12345678A")).toBe(false); // letra de control mal
+  });
+
+  it("rechaza vacio y basura corta", () => {
+    expect(isValidTaxIdWithPrefix("")).toBe(false);
+    expect(isValidTaxIdWithPrefix("---")).toBe(false);
+    expect(isValidTaxIdWithPrefix("PT12")).toBe(false); // demasiado corto para tratarlo como VAT
+  });
+});
+
+describe("OPERATION_TYPE_OPTIONS por sentido", () => {
+  it("compras ofrece los 6 valores del enum", () => {
+    expect(OPERATION_TYPE_OPTIONS.PURCHASE).toHaveLength(6);
+  });
+
+  it("ventas solo ofrece los codigos verificados contra la lista real de expedidas (1, 3, 6)", () => {
+    expect(OPERATION_TYPE_OPTIONS.SALE).toEqual(["INTERIOR", "INTRACOM", "IMPORTACION"]);
+    expect(OPERATION_TYPE_OPTIONS.SALE.map((op) => OPERATION_TYPE_CODE[op])).toEqual([1, 3, 6]);
+  });
+
+  it("ventas NO ofrece inversion del sujeto pasivo (exportaria un 4 = triangulares)", () => {
+    expect(OPERATION_TYPE_OPTIONS.SALE).not.toContain("INVERSION_SP");
+  });
+
+  it("todos los valores ofrecidos tienen etiqueta y codigo en ambos sentidos", () => {
+    for (const op of [...OPERATION_TYPE_OPTIONS.PURCHASE, ...OPERATION_TYPE_OPTIONS.SALE]) {
+      expect(OPERATION_TYPE_LABEL[op]).toBeTruthy();
+      expect(OPERATION_TYPE_LABEL_SALE[op]).toBeTruthy();
+      expect(OPERATION_TYPE_CODE[op]).toBeGreaterThan(0);
+    }
+  });
+
+  it("la etiqueta de INTRACOM cambia de sentido: adquisicion en compras, entrega en ventas", () => {
+    expect(operationTypeLabel("INTRACOM", "PURCHASE")).toMatch(/Adquisición/);
+    expect(operationTypeLabel("INTRACOM", "SALE")).toMatch(/Entrega/);
   });
 });

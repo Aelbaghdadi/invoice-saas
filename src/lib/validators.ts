@@ -109,7 +109,7 @@ export const OPERATION_TYPE_CODE: Record<OperationTypeName, number> = {
   IVA_NO_DEDUCIBLE: 7,
 };
 
-/** Etiquetas en español para mostrar en la UI. */
+/** Etiquetas en español para facturas RECIBIDAS (compras). */
 export const OPERATION_TYPE_LABEL: Record<OperationTypeName, string> = {
   INTERIOR: "Interior (IVA deducible)",
   AGRARIA: "Compensaciones Agrarias",
@@ -117,6 +117,40 @@ export const OPERATION_TYPE_LABEL: Record<OperationTypeName, string> = {
   INVERSION_SP: "Inversión del Sujeto Pasivo",
   IMPORTACION: "Importación (fuera UE)",
   IVA_NO_DEDUCIBLE: "IVA no deducible",
+};
+
+/** Etiquetas para facturas EMITIDAS (ventas). Mismos valores del enum,
+ *  pero en una expedida el significado cambia: el 3 de A3 es una ENTREGA
+ *  intracomunitaria y el 6 una exportacion (lista real de A3 eco). Los
+ *  valores que solo tienen sentido en compras se marcan como tales por
+ *  si una factura antigua los trae guardados. */
+export const OPERATION_TYPE_LABEL_SALE: Record<OperationTypeName, string> = {
+  INTERIOR: "Interior (sujeta a IVA)",
+  AGRARIA: "Compensaciones Agrarias (solo compras)",
+  INTRACOM: "Entrega Intracomunitaria",
+  INVERSION_SP: "Inversión del Sujeto Pasivo (solo compras)",
+  IMPORTACION: "Exportación (fuera UE)",
+  IVA_NO_DEDUCIBLE: "IVA no deducible (solo compras)",
+};
+
+/** Etiqueta segun el sentido de la factura. */
+export function operationTypeLabel(
+  op: OperationTypeName,
+  invoiceType: "PURCHASE" | "SALE",
+): string {
+  return invoiceType === "SALE" ? OPERATION_TYPE_LABEL_SALE[op] : OPERATION_TYPE_LABEL[op];
+}
+
+/** Valores ofrecidos en el desplegable de tipo de operacion segun el
+ *  sentido. En ventas solo los tres cuyo codigo exportado (columna G)
+ *  coincide con la lista real de expedidas de A3: 1 interior, 3 entrega
+ *  intracomunitaria, 6 exportacion. INVERSION_SP se excluye a proposito:
+ *  con el mapa unico actual exportaria un 4, que en expedidas significa
+ *  "operacion triangular". Bifurcar OPERATION_TYPE_CODE por sentido esta
+ *  pendiente de confirmar los codigos reales con el asesor. */
+export const OPERATION_TYPE_OPTIONS: Record<"PURCHASE" | "SALE", OperationTypeName[]> = {
+  PURCHASE: ["INTERIOR", "AGRARIA", "INTRACOM", "INVERSION_SP", "IMPORTACION", "IVA_NO_DEDUCIBLE"],
+  SALE: ["INTERIOR", "INTRACOM", "IMPORTACION"],
 };
 
 /** Resultado del parser de NIF/VAT: el numero limpio (sin prefijo y sin
@@ -177,6 +211,19 @@ export function parseTaxId(raw: string | null | undefined): ParsedTaxId {
   return { clean: normalized, countryCode: null, operationType: "INTERIOR" };
 }
 
+/**
+ * Valida un NIF/VAT tal y como lo ve el gestor en el formulario, con o
+ * sin prefijo de pais. Nacional (ES o sin prefijo) -> algoritmo español
+ * completo. Extranjero -> solo formato plausible tras el prefijo: la
+ * letra de control de cada pais no es verificable sin consultar VIES.
+ */
+export function isValidTaxIdWithPrefix(raw: string): boolean {
+  const parsed = parseTaxId(raw);
+  if (!parsed.clean) return false;
+  if (!parsed.countryCode || parsed.countryCode === "ES") return isValidNIF(parsed.clean);
+  return /^[0-9A-Z]{2,12}$/.test(parsed.clean);
+}
+
 // ─── Retenciones IRPF ──────────────────────────────────────────────────
 
 export type RetentionTypeName = "PROFESSIONAL" | "RENT";
@@ -205,6 +252,28 @@ export const RETENTION_DEFAULT_RATE: Record<RetentionTypeName, number> = {
  *  - NIE: empieza por X/Y/Z + 7 digitos + letra (ej. X1234567L)
  *  - CIF (empresas) empieza por A/B/C/D/E/F/G/H/J/N/P/Q/R/S/U/V/W -> NO persona fisica
  */
+/**
+ * ¿El texto del documento menciona una retencion IRPF?
+ *
+ * Necesario porque no todas las rutas de OCR extraen el IRPF: Document AI
+ * devuelve siempre irpfRate/irpfAmount a null, asi que sin mirar el texto
+ * la retencion no se sugeriria jamas en ese modo. Se busca en la capa de
+ * orquestacion (processInvoice), no en ocr.ts.
+ */
+export function textMentionsRetention(text: string | null | undefined): boolean {
+  if (!text) return false;
+  const t = text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    // "sin retencion", "no sujeta a retencion", "exento de retencion": son
+    // justo el caso CONTRARIO, asi que se borran antes de buscar.
+    .replace(/\b(sin|no\s+sujet\w*\s+a|exent\w*\s+de)\s+retenc\w*/g, " ");
+  return /\birpf\b/.test(t)
+    || /\bretenc(?:ion|iones)\b/.test(t)
+    || /\bretenid[oa]s?\b/.test(t);
+}
+
 export function isPersonaFisica(rawCif: string | null | undefined): boolean {
   if (!rawCif) return false;
   const cif = formatNIF(rawCif);

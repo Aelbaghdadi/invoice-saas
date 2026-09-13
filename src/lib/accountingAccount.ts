@@ -43,3 +43,36 @@ export function padAccountingAccount(value: string): string {
   const zeros = Math.max(0, MAX_DIGITS - group.length - subaccount.length);
   return `${group}${"0".repeat(zeros)}${subaccount}`;
 }
+
+/**
+ * AccountEntry guarda UN solo par de cuentas por (cliente, NIF), sin
+ * distinguir sentido. Si el mismo tercero es proveedor y cliente a la vez,
+ * la entrada aprendida en compras (400x/6xx) se ofreceria tal cual en una
+ * venta, donde tocan 43x/7xx. Estas comprobaciones evitan sugerir —y
+ * exportar— una cuenta de la familia equivocada.
+ *
+ * El arreglo de fondo es añadir el sentido a AccountEntry, que necesita
+ * migracion y esta pendiente de confirmar el plan contable con el asesor.
+ */
+export function partyAccountMatchesType(
+  account: string | null | undefined,
+  invoiceType: "PURCHASE" | "SALE",
+): boolean {
+  if (!account) return false;
+  // Lista NEGRA, no blanca: solo rechazamos la familia del sentido contrario.
+  // Una 44x (deudores varios) o cualquier otra cuenta que el asesor use a
+  // proposito tiene que seguir funcionando; exigir 43x/40x descartaba cuentas
+  // legitimas y ademas impedia que se aprendieran.
+  return invoiceType === "SALE" ? !/^4[01]/.test(account) : !/^43/.test(account);
+}
+
+/** Cuenta de resultado: en compras no puede ser un ingreso 7xx, y en ventas
+ *  no puede ser un gasto 6xx. El resto (inmovilizado 2xx, existencias 3xx…)
+ *  se acepta: son contrapartidas legitimas que el gestor elige. */
+export function resultAccountMatchesType(
+  account: string | null | undefined,
+  invoiceType: "PURCHASE" | "SALE",
+): boolean {
+  if (!account) return false;
+  return invoiceType === "SALE" ? !/^6/.test(account) : !/^7/.test(account);
+}

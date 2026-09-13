@@ -14,8 +14,9 @@ const SplitInvoiceModal = dynamic(() => import("./SplitInvoiceModal"), { ssr: fa
 const SplitPdfModal = dynamic(() => import("./SplitPdfModal"), { ssr: false });
 import type { Invoice, IssueType, IssueStatus } from "@prisma/client";
 import {
-  isValidNIF, parseTaxId,
-  OPERATION_TYPE_LABEL,
+  parseTaxId, isValidTaxIdWithPrefix,
+  operationTypeLabel,
+  OPERATION_TYPE_OPTIONS,
   OPERATION_TYPE_CODE,
   RETENTION_TYPE_LABEL,
   RETENTION_DEFAULT_RATE,
@@ -24,15 +25,6 @@ import {
 } from "@/lib/validators";
 import { dateMatchesPeriod, periodLabel, type PeriodTypeName } from "@/lib/period";
 import { sanitizeAccountingAccountInput, padAccountingAccount } from "@/lib/accountingAccount";
-
-const OPERATION_TYPE_OPTIONS: OperationTypeName[] = [
-  "INTERIOR",
-  "AGRARIA",
-  "INTRACOM",
-  "INVERSION_SP",
-  "IMPORTACION",
-  "IVA_NO_DEDUCIBLE",
-];
 
 const RETENTION_TYPE_OPTIONS: RetentionTypeName[] = ["PROFESSIONAL", "RENT"];
 import Link from "next/link";
@@ -265,6 +257,13 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     invoice.type === "SALE" ? "SALE" : "PURCHASE",
   );
 
+  // La "otra parte" (la que no es el cliente): emisor en compras,
+  // receptor en ventas. Es el NIF por el que se busca y se aprende el
+  // plan de cuentas.
+  // Se lee del campo editable, no del valor guardado: si el gestor conmuta
+  // el tipo, el guardado apunta al lado que ya no toca (en una emitida el
+  // issuerCif es el propio cliente) y el aviso senalaria su propio NIF.
+
   // Retencion IRPF (Modelo 111 / 115). Si no hay tipo no aplica retencion.
   const [retentionType, setRetentionType] = useState<RetentionTypeName | "">(
     (invoice.retentionType as RetentionTypeName | null) ?? "",
@@ -305,6 +304,10 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
   const [editableReceiverCif, setEditableReceiverCif] = useState(
     cifWithPrefix(invoice.receiverCif, invoice.receiverCountry),
   );
+
+  // NIF de la "otra parte" (la que no es el cliente): emisor en compras,
+  // receptor en ventas. Es el NIF por el que se busca el plan de cuentas.
+  const counterpartyNif = (type === "SALE" ? editableReceiverCif : editableIssuerCif).trim();
 
   // Estado de bloques plegables: Retencion y Rectificativa. Por defecto
   // plegados (uso poco frecuente); auto-expandidos si la factura ya
@@ -981,7 +984,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                   )}
                   {(() => {
                     const v = lockedSide === "receiver" ? editableIssuerCif : editableReceiverCif;
-                    return v && !isValidNIF(v) ? (
+                    return v && !isValidTaxIdWithPrefix(v) ? (
                       <p className="mt-1 flex items-center gap-1 text-[11px] text-orange-600">
                         <AlertTriangle className="h-3 w-3" />
                         CIF/NIF con formato inválido
@@ -1070,9 +1073,12 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                     value={operationType}
                     onChange={(e) => setOperationType(e.target.value as OperationTypeName)}
                   >
-                    {OPERATION_TYPE_OPTIONS.map((op) => (
+                    {(OPERATION_TYPE_OPTIONS[type].includes(operationType)
+                      ? OPERATION_TYPE_OPTIONS[type]
+                      : [...OPERATION_TYPE_OPTIONS[type], operationType]
+                    ).map((op) => (
                       <option key={op} value={op}>
-                        {OPERATION_TYPE_CODE[op]} · {OPERATION_TYPE_LABEL[op]}
+                        {OPERATION_TYPE_CODE[op]} · {operationTypeLabel(op, type)}
                       </option>
                     ))}
                   </select>
@@ -1086,7 +1092,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
               && vatTotals.sumAmount > 0.01 && (
               <p className="flex items-center gap-1 text-[11px] text-amber-600">
                 <AlertTriangle className="h-3 w-3" />
-                Las facturas de tipo &quot;{OPERATION_TYPE_LABEL[operationType]}&quot; suelen ir sin IVA en factura (inversión del sujeto pasivo). Revisa el desglose.
+                Las facturas de tipo &quot;{operationTypeLabel(operationType, type)}&quot; suelen ir sin IVA en factura (inversión del sujeto pasivo). Revisa el desglose.
               </p>
             )}
 
@@ -1530,37 +1536,41 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
               <legend className="px-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 Cuentas Contables
               </legend>
-              {suggestedAccount && !invoice.supplierAccount && (
+              {suggestedAccount?.supplierAccount && !invoice.supplierAccount && (
                 <div className="mb-3 flex items-center gap-2 rounded-lg bg-green-50 px-3 py-2 text-[12px] text-green-700">
                   <CheckCheck className="h-4 w-4" />
                   Auto-asignada desde plan de cuentas ({suggestedAccount.name})
                 </div>
               )}
-              {!suggestedAccount && invoice.issuerCif && (
+              {!suggestedAccount && counterpartyNif && (
                 <div className="mb-3 flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-700">
                   <AlertTriangle className="h-3.5 w-3.5" />
-                  NIF {invoice.issuerCif} no registrado en el plan de cuentas
+                  NIF {counterpartyNif} no registrado en el plan de cuentas
                 </div>
               )}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="mb-1 block text-[11px] font-medium text-slate-500">Cuenta Proveedor (4xx)</label>
+                  <label className="mb-1 block text-[11px] font-medium text-slate-500">
+                    {type === "SALE" ? "Cuenta Cliente (43x)" : "Cuenta Proveedor (4xx)"}
+                  </label>
                   <input
                     className={inputClass}
                     value={supplierAccountVal}
                     onChange={(e) => setSupplierAccount(sanitizeAccountingAccountInput(e.target.value))}
                     onBlur={(e) => setSupplierAccount(padAccountingAccount(e.target.value))}
-                    placeholder="40000001"
+                    placeholder={type === "SALE" ? "43000001" : "40000001"}
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-[11px] font-medium text-slate-500">Cuenta Gasto (6xx/7xx)</label>
+                  <label className="mb-1 block text-[11px] font-medium text-slate-500">
+                    {type === "SALE" ? "Cuenta Ingreso (7xx)" : "Cuenta Gasto (6xx)"}
+                  </label>
                   <input
                     className={inputClass}
                     value={expenseAccountVal}
                     onChange={(e) => setExpenseAccount(sanitizeAccountingAccountInput(e.target.value))}
                     onBlur={(e) => setExpenseAccount(padAccountingAccount(e.target.value))}
-                    placeholder="62900000"
+                    placeholder={type === "SALE" ? "70000000" : "62900000"}
                   />
                 </div>
               </div>

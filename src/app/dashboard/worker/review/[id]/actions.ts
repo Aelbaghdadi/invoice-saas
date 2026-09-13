@@ -15,6 +15,7 @@ import {
 } from "@/lib/reviewQueue";
 import { appendAuditLogs } from "@/lib/auditLog";
 import { parseTaxId, isPersonaFisica } from "@/lib/validators";
+import { partyAccountMatchesType, resultAccountMatchesType } from "@/lib/accountingAccount";
 import { applyRectificativeSign } from "@/lib/rectificative";
 import { appError, type AppError } from "@/lib/errorCodes";
 import { putObject, getObjectBytes, sanitizeFilenameForStorage, isStorageConfigured } from "@/lib/storage";
@@ -145,7 +146,13 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
   }
 
   const parse = (v: string) => v.trim() === "" ? null : parseFloat(v.replace(",", "."));
-  const parseDate = (v: string) => v.trim() === "" ? null : new Date(v);
+  // Con guard: un valor no parseable (raro con <input type="date">, pero
+  // posible via API) produciria un Invalid Date que Prisma rechaza.
+  const parseDate = (v: string) => {
+    if (v.trim() === "") return null;
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? null : d;
+  };
 
   const vatLines = parseVatLines(data.vatLines);
   const isRectificativeFlag = data.isRectificative === "1";
@@ -369,8 +376,17 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     // el mismo.
     const learnNif  = (isPurchase ? newData.issuerCif  : newData.receiverCif )?.trim().toUpperCase();
     const learnName = (isPurchase ? newData.issuerName : newData.receiverName)?.trim();
-    const learnSupplier = newData.supplierAccount?.trim();
-    const learnExpense = newData.expenseAccount?.trim();
+    // Solo aprendemos la cuenta si es de la familia que toca a este sentido.
+    // AccountEntry tiene una sola pareja de cuentas por (cliente, NIF): sin
+    // este filtro, validar una venta a un tercero que tambien es proveedor
+    // machacaba su cuenta 400x/6xx con la 43x/7xx y corrompia el autorelleno
+    // de las siguientes compras.
+    const rawSupplier = newData.supplierAccount?.trim();
+    const rawExpense = newData.expenseAccount?.trim();
+    const learnSupplier = partyAccountMatchesType(rawSupplier, isPurchase ? "PURCHASE" : "SALE")
+      ? rawSupplier : undefined;
+    const learnExpense = resultAccountMatchesType(rawExpense, isPurchase ? "PURCHASE" : "SALE")
+      ? rawExpense : undefined;
     // defaultVatRate solo lo aprendemos cuando hay un unico tipo (multi-IVA
     // no tiene un "tipo por defecto" significativo).
     const learnVatRate = vatLines.length === 1 ? vatLines[0].vatRate : null;
