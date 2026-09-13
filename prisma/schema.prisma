@@ -315,6 +315,10 @@ model Invoice {
   /// almacenamos por separado.
   retentionBase Decimal?  @db.Decimal(12, 2)
   totalAmount   Decimal?  @db.Decimal(12, 2)
+  /// Moneda ISO 4217 de los importes segun el OCR. null = no detectada (se
+  /// tratan como euros). A3 solo admite euros: cualquier otra se avisa en
+  /// revision y en el export hasta que el gestor convierta los importes.
+  currency      String?   @db.Char(3)
   isValid       Boolean?
 
   // ── Factura rectificativa (abono / corrección) ─────────────────────

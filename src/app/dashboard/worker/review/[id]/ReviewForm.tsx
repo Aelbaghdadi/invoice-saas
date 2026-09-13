@@ -25,6 +25,7 @@ import {
 } from "@/lib/validators";
 import { dateMatchesPeriod, periodLabel, type PeriodTypeName } from "@/lib/period";
 import { sanitizeAccountingAccountInput, padAccountingAccount } from "@/lib/accountingAccount";
+import { isForeignCurrency } from "@/lib/currency";
 
 const RETENTION_TYPE_OPTIONS: RetentionTypeName[] = ["PROFESSIONAL", "RENT"];
 import Link from "next/link";
@@ -309,6 +310,13 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
   // receptor en ventas. Es el NIF por el que se busca el plan de cuentas.
   const counterpartyNif = (type === "SALE" ? editableReceiverCif : editableIssuerCif).trim();
 
+  // Si la factura trae una moneda que no es euro, el gestor convierte los
+  // importes a mano y la marca en euros. Solo se envia esa marca, nunca la
+  // moneda leida al abrir: si el formulario se abrio mientras corria el OCR,
+  // ese valor esta desfasado y al guardar borraria la que el OCR detecto.
+  const [markedEuro, setMarkedEuro] = useState(false);
+  const showForeignCurrency = isForeignCurrency(invoice.currency) && !markedEuro;
+
   // Estado de bloques plegables: Retencion y Rectificativa. Por defecto
   // plegados (uso poco frecuente); auto-expandidos si la factura ya
   // venia con esos campos rellenos (OCR los detecto o el gestor los
@@ -554,6 +562,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     // InvoiceVatLine y recalcula los totales denormalizados de Invoice.
     fd.set("vatLines", JSON.stringify(vatLines));
     fd.set("totalAmount",totalAmount);
+    if (markedEuro) fd.set("currency", "EUR");
     fd.set("accountingPeriodMonth", (document.getElementById("accountingPeriodMonth") as HTMLSelectElement)?.value ?? "");
     fd.set("accountingPeriodYear",  (document.getElementById("accountingPeriodYear")  as HTMLSelectElement)?.value ?? "");
     fd.set("supplierAccount", supplierAccountVal);
@@ -571,7 +580,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     fd.set("bucket", bucket);
     if (extra) Object.entries(extra).forEach(([k,v]) => fd.set(k,v));
     return fd;
-  }, [type, vatLines, totalAmount, invoiceDateVal, supplierAccountVal, expenseAccountVal, operationType, retentionType, retentionBase, retentionRate, retentionAmount, isRectificative, rectifiedInvoiceSeries, rectifiedInvoiceNumber, rectificativeType, art80Tres, invoice.id, invoice.updatedAt, bucket]);
+  }, [type, vatLines, totalAmount, markedEuro, invoiceDateVal, supplierAccountVal, expenseAccountVal, operationType, retentionType, retentionBase, retentionRate, retentionAmount, isRectificative, rectifiedInvoiceSeries, rectifiedInvoiceNumber, rectificativeType, art80Tres, invoice.id, invoice.updatedAt, bucket]);
 
   const handleSave = () => {
     startSave(async () => {
@@ -864,6 +873,27 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                     : `Error: ${(vatTotals.sumBase + vatTotals.sumAmount - retentionAmount).toFixed(2)} ≠ ${totalNum.toFixed(2)} (diferencia: ${Math.abs(vatTotals.sumBase + vatTotals.sumAmount - retentionAmount - totalNum).toFixed(2)} €)`
                   }
                 </span>
+              </div>
+            )}
+
+            {/* Moneda extranjera: A3 solo admite euros y la validacion
+                matematica no lo detecta (la factura cuadra en su moneda). */}
+            {showForeignCurrency && (
+              <div className="flex items-start gap-2.5 rounded-xl bg-amber-50 px-4 py-3 text-amber-800">
+                <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                <div className="flex-1 text-[12px]">
+                  <p className="font-medium">Importes en {invoice.currency}</p>
+                  <p className="mt-0.5">
+                    A3 solo admite euros. Convierte la base, las cuotas y el total a euros y después marca la factura en euros.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setMarkedEuro(true)}
+                    className="mt-2 rounded-lg border border-amber-300 bg-white px-2.5 py-1 text-[12px] font-medium text-amber-800 hover:bg-amber-100"
+                  >
+                    Ya están en euros
+                  </button>
+                </div>
               </div>
             )}
 

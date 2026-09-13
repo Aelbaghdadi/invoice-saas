@@ -205,6 +205,10 @@ export default async function ReviewPage({
   return (
     <div className="-m-6 flex h-[calc(100vh-64px)] flex-col overflow-hidden">
       <ReviewForm
+        /* Se remonta al terminar el OCR: el formulario copia los props a su
+           estado al montar, y si se abria en analisis se quedaba vacio y al
+           guardar borraba lo que el OCR acababa de extraer. */
+        key={invoice.status === "UPLOADED" || invoice.status === "ANALYZING" ? "ocr" : "ready"}
         invoice={invoiceForForm}
         initialVatLines={initialVatLines}
         prevId={prevId}

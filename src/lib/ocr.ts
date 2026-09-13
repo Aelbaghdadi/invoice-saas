@@ -1,5 +1,6 @@
 import { GoogleAuth } from "google-auth-library";
 import { XMLParser } from "fast-xml-parser";
+import { normalizeCurrency } from "./currency";
 
 /** Una linea del desglose de IVA. Una factura con varios tipos
  *  (4% + 10% + 21%) tiene varias lineas. Cuando la factura tiene un
@@ -26,6 +27,8 @@ export type ExtractedInvoice = {
   irpfRate:      number | null;
   irpfAmount:    number | null;
   totalAmount:   number | null;
+  /** Moneda ISO 4217 de los importes (EUR, USD...). null si no se detecto. */
+  currency:      string | null;
   /** Desglose de IVA. Vacio si no se pudo extraer. */
   vatLines:      ExtractedVatLine[];
   confidence:    Record<string, number> | null;
@@ -186,6 +189,42 @@ function extractVatLines(entities: any[]): ExtractedVatLine[] {
   return lines;
 }
 
+type DocumentAiMoneyEntity = {
+  mentionText?: string;
+  normalizedValue?: { text?: string; moneyValue?: { currencyCode?: string } };
+};
+
+/**
+ * Moneda de los importes segun Document AI.
+ *
+ * Primero la entidad "currency", que sale del texto del documento. El
+ * moneyValue.currencyCode de los importes solo se cree si el texto del propio
+ * importe muestra simbolo o codigo: si no, puede venir inferido del idioma del
+ * procesador y marcaria como extranjeras facturas en euros sin simbolo.
+ */
+const CURRENCY_SYMBOL: Record<string, string> = { EUR: "€", GBP: "£", USD: "$" };
+
+export function detectDocumentAiCurrency(
+  byType: (type: string) => DocumentAiMoneyEntity | undefined,
+): string | null {
+  const entity = byType("currency");
+  const fromEntity =
+    normalizeCurrency(entity?.normalizedValue?.text) ?? normalizeCurrency(entity?.mentionText);
+  if (fromEntity) return fromEntity;
+
+  for (const type of ["total_amount", "net_amount"]) {
+    const amount = byType(type);
+    const code = normalizeCurrency(amount?.normalizedValue?.moneyValue?.currencyCode);
+    if (!code) continue;
+    // Tiene que verse ESE codigo o SU simbolo: ni una palabra de tres letras
+    // ("Total") ni un "€" junto a un USD inferido demuestran la moneda.
+    const shown = amount?.mentionText ?? "";
+    const symbol = CURRENCY_SYMBOL[code];
+    if (shown.toUpperCase().includes(code) || (symbol && shown.includes(symbol))) return code;
+  }
+  return null;
+}
+
 /**
  * Mapea las entidades que devuelve Document AI Invoice Parser
  * a nuestro tipo ExtractedInvoice, incluyendo scores de confianza.
@@ -243,6 +282,9 @@ function mapEntities(entities: any[]): ExtractedInvoice {
     irpfRate:      null,
     irpfAmount:    null,
     totalAmount:   getMoney(byType("total_amount")),
+    // getMoney solo lee units/nanos y la moneda se perdia: una factura en USD
+    // entraba en A3 como si fueran euros.
+    currency:      detectDocumentAiCurrency(byType),
     vatLines,
     confidence,
   };
@@ -500,6 +542,10 @@ async function parseFacturaeXml(xml: string): Promise<ExtractedInvoice> {
     irpfAmount:    safeNum(firstWithheld?.TaxAmount?.TotalAmount ?? firstWithheld?.taxAmount?.totalAmount
                      ?? totals?.TotalTaxesWithheld ?? totals?.totalTaxesWithheld),
     totalAmount:   safeNum(totals?.InvoiceTotal ?? totals?.invoiceTotal),
+    currency:      normalizeCurrency(
+      inv?.InvoiceIssueData?.InvoiceCurrencyCode ?? inv?.invoiceIssueData?.invoiceCurrencyCode
+      ?? facturae?.FileHeader?.Batch?.InvoiceCurrencyCode ?? facturae?.fileHeader?.batch?.invoiceCurrencyCode,
+    ),
     vatLines,
     confidence,
   };

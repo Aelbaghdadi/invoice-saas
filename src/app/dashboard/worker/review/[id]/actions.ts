@@ -16,6 +16,7 @@ import {
 import { appendAuditLogs } from "@/lib/auditLog";
 import { parseTaxId, isPersonaFisica } from "@/lib/validators";
 import { partyAccountMatchesType, resultAccountMatchesType } from "@/lib/accountingAccount";
+import { normalizeCurrency } from "@/lib/currency";
 import { applyRectificativeSign } from "@/lib/rectificative";
 import { appError, type AppError } from "@/lib/errorCodes";
 import { putObject, getObjectBytes, sanitizeFilenameForStorage, isStorageConfigured } from "@/lib/storage";
@@ -49,6 +50,8 @@ type FieldData = {
   irpfRate:      string;
   irpfAmount:    string;
   totalAmount:   string;
+  /** ISO 4217. null si el formulario no lo envia: se conserva el guardado. */
+  currency:      string | null;
   accountingPeriodMonth: string;
   accountingPeriodYear:  string;
   supplierAccount: string;
@@ -245,6 +248,7 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     retentionType,
     retentionBase: retentionBaseNum,
     totalAmount:   parse(data.totalAmount),
+    currency:      data.currency === null ? invoice.currency : normalizeCurrency(data.currency),
     accountingPeriodMonth: parseInt2(data.accountingPeriodMonth),
     accountingPeriodYear:  parseInt2(data.accountingPeriodYear),
     supplierAccount: data.supplierAccount || null,
@@ -302,7 +306,7 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
   const trackedFields = [
     "type",
     "issuerName","issuerCif","receiverName","receiverCif",
-    "invoiceNumber","taxBase","vatRate","vatAmount","irpfRate","irpfAmount","totalAmount",
+    "invoiceNumber","taxBase","vatRate","vatAmount","irpfRate","irpfAmount","totalAmount","currency",
     "operationType",
     "isRectificative","rectifiedInvoiceNumber","rectificativeType",
   ] as const;
@@ -755,6 +759,9 @@ export async function splitInvoice(
         clientId: invoice.clientId,
         documentId: document.id,
         splitFromId: invoiceId,
+        // La hija hereda la moneda: si su recorte no la muestra, el OCR no
+        // la veria y el aviso de "no es euro" desapareceria en silencio.
+        currency: invoice.currency,
       },
     });
     createdIds.push(child.id);
@@ -919,6 +926,9 @@ export async function splitPdfInvoice(
         clientId: invoice.clientId,
         documentId: document.id,
         splitFromId: invoiceId,
+        // La hija hereda la moneda: si su recorte no la muestra, el OCR no
+        // la veria y el aviso de "no es euro" desapareceria en silencio.
+        currency: invoice.currency,
       },
     });
     createdIds.push(child.id);
@@ -986,6 +996,7 @@ function extractFields(fd: FormData): FieldData {
     irpfRate:      fd.get("irpfRate")      as string ?? "",
     irpfAmount:    fd.get("irpfAmount")    as string ?? "",
     totalAmount:   fd.get("totalAmount")   as string ?? "",
+    currency:      fd.get("currency") as string | null,
     accountingPeriodMonth: fd.get("accountingPeriodMonth") as string ?? "",
     accountingPeriodYear:  fd.get("accountingPeriodYear")  as string ?? "",
     supplierAccount: fd.get("supplierAccount") as string ?? "",

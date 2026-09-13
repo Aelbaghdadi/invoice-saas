@@ -485,6 +485,9 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
           retentionType,
           retentionBase: signed.retentionBase,
           totalAmount:   signed.totalAmount,
+          // Si este OCR no ve la moneda se conserva la que ya tenia (p.ej. la
+          // heredada de la factura madre al dividir un PDF en USD).
+          currency:      extracted.currency ?? invoice.currency,
           isValid,
           lastOcrError:  null,
         },

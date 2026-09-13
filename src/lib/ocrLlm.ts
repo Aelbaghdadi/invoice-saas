@@ -1,5 +1,6 @@
 import type { OcrResult, ExtractedInvoice, ExtractedVatLine } from "./ocr";
 import type { FieldBoundingBoxes, BoundingBox } from "./boundingBoxes";
+import { normalizeCurrency } from "./currency";
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL ?? "gemini-2.5-flash-lite";
 
@@ -219,6 +220,7 @@ const EXTRACTION_PROMPT = `Eres un extractor de facturas españolas. Extrae los 
   "irpfRate": null,
   "irpfAmount": null,
   "totalAmount": 0.00,
+  "currency": "Código ISO 4217 de la moneda de los importes (EUR, USD, GBP...) o null",
   "vatLines": [
     { "taxBase": 0.00, "vatRate": 21, "vatAmount": 0.00 }
   ],
@@ -235,6 +237,7 @@ Reglas:
 - vatRate: null si hay múltiples tipos de IVA; incluirlos todos en vatLines
 - vatLines: una entrada por tipo de IVA (4%, 10%, 21%, etc.)
 - irpfRate/irpfAmount: solo si aparece retención explícita en la factura
+- currency: código ISO de 3 letras solo si la factura muestra la moneda (símbolo o código); null si no aparece
 - confidence: 0.0-1.0 según tu certeza; 0.0 para campos no encontrados
 - invoiceDate: siempre YYYY-MM-DD
 - CIFs sin espacios ni guiones`;
@@ -257,6 +260,7 @@ const EXTRACTION_PROMPT_BBOX = `Eres un extractor de facturas españolas. Extrae
   "irpfRate": null,
   "irpfAmount": null,
   "totalAmount": 0.00,
+  "currency": "Código ISO 4217 de la moneda de los importes (EUR, USD, GBP...) o null",
   "vatLines": [
     { "taxBase": 0.00, "vatRate": 21, "vatAmount": 0.00 }
   ],
@@ -285,6 +289,7 @@ Reglas:
 - vatRate: null si hay múltiples tipos de IVA; incluirlos todos en vatLines
 - vatLines: una entrada por tipo de IVA (4%, 10%, 21%, etc.)
 - irpfRate/irpfAmount: solo si aparece retención explícita en la factura
+- currency: código ISO de 3 letras solo si la factura muestra la moneda (símbolo o código); null si no aparece
 - confidence: 0.0-1.0 según tu certeza; 0.0 para campos no encontrados
 - invoiceDate: siempre YYYY-MM-DD
 - CIFs sin espacios ni guiones
@@ -400,6 +405,7 @@ function parseGeminiResponse(raw: string): GeminiResult {
       irpfRate:      num(parsed.irpfRate),
       irpfAmount:    num(parsed.irpfAmount),
       totalAmount:   num(parsed.totalAmount),
+      currency:      normalizeCurrency(parsed.currency),
       vatLines,
       confidence,
     },

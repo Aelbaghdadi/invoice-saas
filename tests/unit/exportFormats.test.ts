@@ -231,3 +231,26 @@ describe("validateForA3Export", () => {
     expect(res.flatMap((r) => r.warnings).filter((w) => w.includes("Descuadre"))).toEqual([]);
   });
 });
+
+describe("validateForA3Export — facturas emitidas y moneda", () => {
+  it("en una emitida habla de cuenta cliente e ingreso, no de proveedor y gasto", () => {
+    const res = validateForA3Export([
+      mkInvoice({ type: "SALE", supplierAccount: null, expenseAccount: null }),
+    ]);
+    expect(res[0].warnings).toEqual(expect.arrayContaining(["Sin cuenta cliente", "Sin cuenta ingreso"]));
+    expect(res[0].warnings).not.toContain("Sin cuenta proveedor");
+  });
+
+  it("avisa si los importes no están en euros", () => {
+    const res = validateForA3Export([mkInvoice({ currency: "USD" })]);
+    expect(res[0].warnings.some((w) => w.includes("USD"))).toBe(true);
+  });
+
+  it("no avisa en euros ni cuando la moneda no se detectó", () => {
+    const res = validateForA3Export([
+      mkInvoice({ currency: "EUR" }),
+      mkInvoice({ id: "inv-2", currency: null }),
+    ]);
+    expect(res.flatMap((r) => r.warnings).filter((w) => w.includes("euros"))).toEqual([]);
+  });
+});

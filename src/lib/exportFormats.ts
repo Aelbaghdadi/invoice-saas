@@ -6,6 +6,7 @@ import {
   OPERATION_TYPE_OPTIONS,
   type OperationTypeName,
 } from "@/lib/validators";
+import { isForeignCurrency } from "@/lib/currency";
 
 export type ExportFormat = "sage50" | "contasol" | "a3con" | "a3excel";
 
@@ -273,8 +274,12 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
       );
     }
     if (!inv.invoiceDate) warnings.push("Fecha vacía");
-    if (!inv.supplierAccount) warnings.push("Sin cuenta proveedor");
-    if (!inv.expenseAccount) warnings.push("Sin cuenta gasto");
+    if (!inv.supplierAccount) warnings.push(isPurchase ? "Sin cuenta proveedor" : "Sin cuenta cliente");
+    if (!inv.expenseAccount) warnings.push(isPurchase ? "Sin cuenta gasto" : "Sin cuenta ingreso");
+
+    if (isForeignCurrency(inv.currency)) {
+      warnings.push(`Importes en ${inv.currency}: A3 solo admite euros. Conviértelos y márcala en euros en la revisión`);
+    }
 
     // Total = 0: A3 rechaza asientos de valor cero. Lo marcamos como
     // warning serio para que el gestor o lo corrija o lo excluya del
