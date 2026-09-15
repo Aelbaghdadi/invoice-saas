@@ -5,24 +5,22 @@ import { prisma } from "@/lib/prisma";
 import { PERIOD_BLOCKING_STATUSES } from "@/lib/invoiceStatuses";
 import { appendAuditLogs } from "@/lib/auditLog";
 import { revalidatePath } from "next/cache";
-import type { InvoiceType, InvoiceStatus } from "@prisma/client";
+import { canAccessClient } from "@/lib/accessibleClients";
+import type { InvoiceType, InvoiceStatus, PeriodType } from "@prisma/client";
 
 export type BatchAction =
-  | { ok?: boolean; error?: string; rejectedCount?: number }
+  | { ok?: boolean; error?: string; rejectedCount?: number; warning?: string }
   | null;
 
+/** ADMIN: solo clientes de su asesoria. WORKER: solo clientes asignados.
+ *  Antes cualquier ADMIN pasaba sin mirar nada y podia cerrar o rechazar
+ *  lotes de otra asesoria conociendo el clientId. */
 async function assertBatchAccess(
-  userId: string,
-  role: string,
+  session: { user: { id: string; role: string; advisoryFirmId?: string | null } },
   clientId: string,
 ): Promise<{ error: string } | null> {
-  if (role === "ADMIN") return null;
-  if (role !== "WORKER") return { error: "No autorizado" };
-  const assignment = await prisma.workerClientAssignment.findUnique({
-    where: { workerId_clientId: { workerId: userId, clientId } },
-  });
-  if (!assignment) return { error: "No tienes acceso a este cliente" };
-  return null;
+  if (await canAccessClient(session, clientId)) return null;
+  return { error: "No tienes acceso a este cliente" };
 }
 
 function parseBatchParams(formData: FormData) {
@@ -33,7 +31,11 @@ function parseBatchParams(formData: FormData) {
   if (!clientId || !month || !year || (typeRaw !== "PURCHASE" && typeRaw !== "SALE")) {
     return null;
   }
-  return { clientId, month, year, type: typeRaw as InvoiceType };
+  // Solo lo necesita rechazar lote (el cierre es del periodo entero).
+  const periodTypeRaw = (formData.get("periodType") as string) ?? "";
+  const periodType: PeriodType | null =
+    periodTypeRaw === "MONTHLY" || periodTypeRaw === "QUARTERLY" ? periodTypeRaw : null;
+  return { clientId, month, year, type: typeRaw as InvoiceType, periodType };
 }
 
 /**
@@ -58,7 +60,7 @@ export async function closePeriodFromBatch(
   const parsed = parseBatchParams(formData);
   if (!parsed) return { error: "Parametros invalidos" };
 
-  const access = await assertBatchAccess(session.user.id, session.user.role, parsed.clientId);
+  const access = await assertBatchAccess(session, parsed.clientId);
   if (access) return access;
 
   // Comprobar que no queda nada pendiente en el periodo (todo tipo). El
@@ -141,64 +143,118 @@ export async function rejectBatch(
   }
 
   const parsed = parseBatchParams(formData);
-  if (!parsed) return { error: "Parametros invalidos" };
+  // Un trimestre se guarda con periodMonth = su primer mes: sin filtrar por
+  // la agrupacion, "rechazar T1" arrastraba tambien el lote mensual de enero.
+  if (!parsed || !parsed.periodType) return { error: "Parámetros inválidos" };
   const reason = ((formData.get("reason") as string) ?? "").trim();
   if (!reason) return { error: "Indica el motivo del rechazo del lote" };
 
-  const access = await assertBatchAccess(session.user.id, session.user.role, parsed.clientId);
+  const access = await assertBatchAccess(session, parsed.clientId);
   if (access) return access;
 
-  const invoices = await prisma.invoice.findMany({
-    where: {
-      clientId: parsed.clientId,
-      periodMonth: parsed.month,
-      periodYear: parsed.year,
-      type: parsed.type,
-      status: { notIn: ["REJECTED", "EXPORTED", "SPLIT_SOURCE"] as InvoiceStatus[] },
-    },
-    select: { id: true, status: true },
+  const client = await prisma.client.findUnique({
+    where: { id: parsed.clientId },
+    select: { isUnclassifiedBucket: true },
   });
+  if (!client || client.isUnclassifiedBucket) return { error: "Este lote no se puede rechazar" };
 
-  if (invoices.length === 0) {
-    return { error: "No hay facturas en este lote que se puedan rechazar (ya exportadas o rechazadas)" };
+  // Mismo criterio que guardar y validar: con el periodo cerrado no se toca.
+  const closure = await prisma.periodClosure.findUnique({
+    where: { clientId_month_year: { clientId: parsed.clientId, month: parsed.month, year: parsed.year } },
+  });
+  if (closure && !closure.reopenedAt) {
+    return { error: `Periodo ${parsed.month}/${parsed.year} cerrado: reábrelo antes de rechazar el lote` };
   }
 
-  const invoiceIds = invoices.map((i) => i.id);
+  // Que NO entra en el rechazo:
+  //  - REJECTED: idempotente.
+  //  - Exportadas: ya estan en la contabilidad del cliente. Exportar no cambia
+  //    el estado (queda VALIDATED + exportBatchId), asi que filtrar solo por
+  //    el estado legacy EXPORTED no bastaba y se rechazaban lotes ya enviados.
+  //  - SPLIT_SOURCE: la foto original de una division; sus hijas si entran.
+  //  - PENDING_ROUTING: viven en el buzon "Sin clasificar".
+  //  - UPLOADED / ANALYZING: el OCR en curso las devolveria a revision al
+  //    terminar y desharia el rechazo sin dejar rastro.
+  const where = {
+    clientId: parsed.clientId,
+    periodMonth: parsed.month,
+    periodYear: parsed.year,
+    periodType: parsed.periodType,
+    type: parsed.type,
+    exportBatchId: null,
+    status: {
+      notIn: ["REJECTED", "EXPORTED", "SPLIT_SOURCE", "PENDING_ROUTING", "UPLOADED", "ANALYZING"] as InvoiceStatus[],
+    },
+  };
 
-  await prisma.$transaction([
-    prisma.invoice.updateMany({
-      where: { id: { in: invoiceIds } },
-      data: {
-        status: "REJECTED",
-        rejectionReason: reason,
-        rejectionCategory: "OTHER",
-        // Una factura pospuesta que se rechaza sale de la cola de pospuestas.
-        deferredAt: null,
-      },
-    }),
-    prisma.invoiceStatusHistory.createMany({
-      data: invoices.map((inv) => ({
-        invoiceId: inv.id,
-        fromStatus: inv.status,
-        toStatus: "REJECTED" as InvoiceStatus,
-        changedBy: session.user.id,
-        reason: `Lote rechazado: ${reason}`,
-      })),
-    }),
-  ]);
+  let rejected: { id: string; status: InvoiceStatus }[] = [];
+  try {
+    rejected = await prisma.$transaction(async (tx) => {
+      const candidates = await tx.invoice.findMany({ where, select: { id: true, status: true } });
+      if (candidates.length === 0) return [];
+      const ids = candidates.map((i) => i.id);
+      // El filtro se repite en el update: entre la lectura y la escritura
+      // otro gestor puede haber validado o exportado alguna.
+      await tx.invoice.updateMany({
+        where: { ...where, id: { in: ids } },
+        data: {
+          status: "REJECTED",
+          rejectionReason: reason,
+          rejectionCategory: "OTHER",
+          // Una factura pospuesta que se rechaza sale de la cola de pospuestas.
+          deferredAt: null,
+        },
+      });
+      // Historial solo de las que hemos cambiado de verdad.
+      const done = await tx.invoice.findMany({
+        where: { id: { in: ids }, status: "REJECTED", rejectionReason: reason },
+        select: { id: true },
+      });
+      const doneIds = new Set(done.map((d) => d.id));
+      const applied = candidates.filter((c) => doneIds.has(c.id));
+      await tx.invoiceStatusHistory.createMany({
+        data: applied.map((inv) => ({
+          invoiceId: inv.id,
+          fromStatus: inv.status,
+          toStatus: "REJECTED" as InvoiceStatus,
+          changedBy: session.user.id,
+          reason: `Lote rechazado: ${reason}`,
+        })),
+      });
+      return applied;
+    });
+  } catch (e) {
+    console.error("[rejectBatch]", e);
+    return { error: "No se pudo rechazar el lote. Inténtalo de nuevo." };
+  }
 
-  await appendAuditLogs(
-    invoices.map((inv) => ({
-      invoiceId: inv.id,
-      userId: session.user.id,
-      field: "status",
-      oldValue: inv.status,
-      newValue: "REJECTED",
-    })),
-  );
+  if (rejected.length === 0) {
+    return { error: "No hay facturas en este lote que se puedan rechazar (ya exportadas, rechazadas o en análisis)" };
+  }
+
+  // La auditoria es una cadena de hash por factura en su propia transaccion
+  // interactiva: en tandas para no pasarnos del timeout con lotes grandes.
+  // Si aun asi falla, el rechazo ya esta hecho: se avisa, no se lanza.
+  let warning: string | undefined;
+  try {
+    for (let i = 0; i < rejected.length; i += 25) {
+      await appendAuditLogs(
+        rejected.slice(i, i + 25).map((inv) => ({
+          invoiceId: inv.id,
+          userId: session.user.id,
+          field: "status",
+          oldValue: inv.status,
+          newValue: "REJECTED",
+        })),
+      );
+    }
+  } catch (e) {
+    console.error("[rejectBatch] auditoría", e);
+    warning = "Lote rechazado, pero no se pudo registrar toda la auditoría. Avisa al administrador.";
+  }
 
   revalidatePath("/dashboard/worker/batch", "layout");
   revalidatePath("/dashboard/admin/batch", "layout");
   revalidatePath("/dashboard/worker/invoices");
-  return { ok: true, rejectedCount: invoices.length };
+  return { ok: true, rejectedCount: rejected.length, warning };
 }

@@ -18,12 +18,13 @@ import {
   textMentionsRetention,
   RETENTION_DEFAULT_RATE,
   equivalenceSurchargeRateForVat,
+  OPERATION_TYPE_OPTIONS,
   type RetentionTypeName,
 } from "@/lib/validators";
 import { textMentionsRectificative, applyRectificativeSign } from "@/lib/rectificative";
 import { routeByCif, clientSideCif, routeByText, detectInvoiceType } from "@/lib/invoiceRouting";
 import { lookupProviderClient } from "@/lib/providerRouting";
-import { accountEntryKey } from "@/lib/supplierMatching";
+import { accountEntryKey, entryNameMatches } from "@/lib/supplierMatching";
 
 /**
  * Convierte el string de fecha del OCR a Date. Si el OCR devuelve algo
@@ -345,17 +346,30 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     // tambien puedan encontrar/aprender su fila sin arriesgar fusionarse con
     // otro tercero que comparta el mismo identificador basura.
     const entryKey = accountEntryKey(otherPartyClean, otherPartyName, otherParty.countryCode);
-    const knownEntry = entryKey
+    const foundEntry = entryKey
       ? await prisma.accountEntry.findUnique({
           where: { clientId_nif: { clientId: invoice.clientId, nif: entryKey } },
           select: {
+            nif: true,
+            name: true,
             defaultOperationType: true,
             defaultRetentionType: true,
             defaultRetentionRate: true,
           },
         }).catch(() => null)
       : null;
-    const operationType = knownEntry?.defaultOperationType ?? otherParty.operationType;
+    // Si la fila es de OTRO tercero con el mismo numero (dos proveedores
+    // chinos con 418306763), lo aprendido ahi no vale para esta factura.
+    const knownEntry = foundEntry && entryNameMatches(foundEntry, otherPartyName) ? foundEntry : null;
+    // Lo aprendido se guardo en el sentido de aquella factura; una fila
+    // compartida entre compras y ventas puede traer un tipo que aqui no
+    // existe (INTRACOM_SERVICIOS en una emitida exportaria un 8 que en
+    // expedidas significa otra cosa).
+    const learnedOperationType = knownEntry?.defaultOperationType ?? null;
+    const operationType =
+      learnedOperationType && OPERATION_TYPE_OPTIONS[invoice.type].includes(learnedOperationType)
+        ? learnedOperationType
+        : otherParty.operationType;
 
     // ── Deteccion de retencion IRPF ────────────────────────────────────
     //

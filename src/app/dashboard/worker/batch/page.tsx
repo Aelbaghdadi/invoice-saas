@@ -38,6 +38,9 @@ type BatchGroup = {
   rejected: number;
   exported: number;
   ocrError: number;
+  /** Lo que tocaria "Rechazar lote" (mismo criterio que la accion). */
+  rejectable: number;
+  rejectableValidated: number;
   firstAttentionId: string | null;
   firstCleanId: string | null;
 };
@@ -127,6 +130,8 @@ export default async function WorkerBatchPage({
         rejected: 0,
         exported: 0,
         ocrError: 0,
+        rejectable: 0,
+        rejectableValidated: 0,
         firstAttentionId: null,
         firstCleanId: null,
       };
@@ -136,9 +141,13 @@ export default async function WorkerBatchPage({
     const hasOpenIssue = inv.issues.length > 0;
 
     // Clasificacion en buckets. Prioridad: terminal > atencion > clean > processing.
-    if (inv.status === "VALIDATED") g.validated++;
+    // Exportar no cambia el estado (queda VALIDATED + exportBatchId), asi que
+    // "exportada" se mira por exportBatchId; el estado EXPORTED es legacy.
+    // Antes este contador era siempre 0 y "rechazar lote" incluia las exportadas.
+    const isExported = inv.status === "EXPORTED" || (inv.status === "VALIDATED" && inv.exportBatchId != null);
+    if (isExported) g.exported++;
+    else if (inv.status === "VALIDATED") g.validated++;
     else if (inv.status === "REJECTED") g.rejected++;
-    else if (inv.status === "EXPORTED") g.exported++;
     else if (inv.status === "NEEDS_ATTENTION" || inv.status === "OCR_ERROR") {
       g.attentionCount++;
       if (inv.status === "OCR_ERROR") g.ocrError++;
@@ -156,6 +165,15 @@ export default async function WorkerBatchPage({
     else {
       // UPLOADED / ANALYZING / ANALYZED
       g.processingCount++;
+    }
+
+    // Mismo criterio que rejectBatch: ni exportadas, ni rechazadas, ni en
+    // analisis (el OCR las devolveria a revision), ni pendientes de rutear.
+    const rechazable = !isExported
+      && !["REJECTED", "EXPORTED", "PENDING_ROUTING", "UPLOADED", "ANALYZING"].includes(inv.status);
+    if (rechazable) {
+      g.rejectable++;
+      if (inv.status === "VALIDATED") g.rejectableValidated++;
     }
   }
 
@@ -512,9 +530,11 @@ export default async function WorkerBatchPage({
                     month={g.periodMonth}
                     year={g.periodYear}
                     type={g.type}
+                    periodType={g.periodType}
                     readyToClose={readyToClose}
                     alreadyClosed={closed}
-                    rejectableCount={g.total - g.rejected - g.exported}
+                    rejectableCount={g.rejectable}
+                    validatedCount={g.rejectableValidated}
                   />
                 )}
               </div>

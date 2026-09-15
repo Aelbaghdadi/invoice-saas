@@ -4,7 +4,6 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
 import * as XLSX from "xlsx";
-import { parseTaxId } from "@/lib/validators";
 import { accountGroup, normalizePlanAccount } from "@/lib/accountingAccount";
 import { accountEntryKey } from "@/lib/supplierMatching";
 
@@ -55,19 +54,26 @@ export async function importAccountsFromExcel(
     const cuenta = normalizePlanAccount(String(row[0] ?? ""));
     const descripcion = String(row[1] ?? "").trim();
     const rawNif = String(row[2] ?? "").trim();
-    // Clave de identidad del tercero: el NIF limpio (parseTaxId.clean) si es
-    // fiable, o el nombre normalizado si no lo es (proveedores extranjeros,
-    // habitual en chinos, sin NIF/VAT valido). Usar el NIF basura tal cual
-    // fusionaria en una sola fila a dos proveedores distintos que comparten
-    // el mismo identificador no fiable.
-    const key = accountEntryKey(rawNif, descripcion);
-
-    if (!cuenta || !key) continue; // Skip empty rows
+    if (!cuenta) continue;
 
     // Grupo por los tres primeros digitos. Antes se usaba split(".")[0], que
     // con una cuenta sin punto ("40000022", el formato de A3 a 8 digitos)
     // devolvia la cuenta entera y la mandaba siempre a "prefijo desconocido".
     const prefixNum = accountGroup(cuenta) ?? NaN;
+
+    // Sin NIF solo entra si la cuenta es de tercero (4xx): un proveedor sin
+    // VAT fiable, que se identificara por nombre. Una linea sin NIF de gasto,
+    // ingreso o banco ("62900000 | Otros servicios") no es un tercero y
+    // ensuciaba el plan con filas SINNIF: que ademas se fusionaban entre si
+    // por descripcion.
+    if (!rawNif && !(prefixNum >= 400 && prefixNum < 500)) continue;
+
+    // Clave de identidad del tercero: el NIF limpio si tiene contenido, o el
+    // nombre normalizado si es basura (proveedores extranjeros, habitual en
+    // chinos, sin NIF/VAT). Usar el NIF basura tal cual fusionaria en una
+    // sola fila a dos proveedores distintos que comparten el mismo relleno.
+    const key = accountEntryKey(rawNif, descripcion);
+    if (!key) continue;
 
     const existing = entries.get(key) ?? { nif: key, name: descripcion, supplierAccount: "", expenseAccount: "" };
 
@@ -131,11 +137,10 @@ export async function importAccountsFromExcel(
 // ─── CRUD ───────────────────────────────────────────────────────────────────
 
 const accountSchema = z.object({
-  // Normalizado a la clave canonica (sin prefijo de pais) para que el
-  // alta manual y el buscador de revision usen exactamente el mismo NIF.
-  nif: z.string().min(1, "NIF obligatorio")
-    .transform((v) => parseTaxId(v).clean)
-    .refine((v) => v.length > 0, "NIF obligatorio"),
+  // La clave canonica se calcula despues con accountEntryKey (necesita
+  // tambien el nombre): asi alta manual, importador y revision usan
+  // exactamente la misma.
+  nif: z.string().trim().min(1, "NIF obligatorio"),
   name: z.string().min(1, "Nombre obligatorio"),
   supplierAccount: z.string().trim().min(1, "Cuenta proveedor obligatoria").transform(normalizePlanAccount),
   expenseAccount: z.string().trim().min(1, "Cuenta gasto obligatoria").transform(normalizePlanAccount),
@@ -163,15 +168,19 @@ export async function createAccountEntry(
   });
   if (!parsed.success) return { error: parsed.error.issues.map((i) => i.message).join(", ") };
 
+  const nif = accountEntryKey(parsed.data.nif, parsed.data.name);
+  if (!nif) return { error: "NIF no utilizable. Escribe un NIF con contenido o un nombre reconocible" };
+
   const existing = await prisma.accountEntry.findUnique({
-    where: { clientId_nif: { clientId, nif: parsed.data.nif } },
+    where: { clientId_nif: { clientId, nif } },
   });
-  if (existing) return { error: `Ya existe una cuenta para el NIF ${parsed.data.nif}` };
+  if (existing) return { error: `Ya existe una cuenta para el NIF ${nif}` };
 
   await prisma.accountEntry.create({
     data: {
       clientId,
       ...parsed.data,
+      nif,
       defaultVatRate: parsed.data.defaultVatRate ?? null,
     },
   });
@@ -203,21 +212,28 @@ export async function updateAccountEntry(
   });
   if (!parsed.success) return { error: parsed.error.issues.map((i) => i.message).join(", ") };
 
-  // El NIF se normaliza al parsear, asi que puede acabar chocando con otra
-  // fila del mismo cliente (p.ej. editar "PT515160873" cuando ya existe
-  // "515160873"). Sin esta comprobacion, Prisma lanzaria un P2002 crudo a la
-  // UI: las server actions devuelven error, no lanzan.
+  // Misma clave que el importador y la revision. Una fila SINNIF: que se
+  // edita conserva su clave: pasarla por parseTaxId la dejaba en "NNIF:..."
+  // (lee "SI" como prefijo de Eslovenia) y dejaba de casar.
+  const nif = accountEntryKey(parsed.data.nif, parsed.data.name);
+  if (!nif) return { error: "NIF no utilizable. Escribe un NIF con contenido o un nombre reconocible" };
+
+  // El NIF se normaliza, asi que puede acabar chocando con otra fila del
+  // mismo cliente (p.ej. editar "PT515160873" cuando ya existe "515160873").
+  // Sin esta comprobacion, Prisma lanzaria un P2002 crudo a la UI: las
+  // server actions devuelven error, no lanzan.
   const colision = await prisma.accountEntry.findUnique({
-    where: { clientId_nif: { clientId: entry.clientId, nif: parsed.data.nif } },
+    where: { clientId_nif: { clientId: entry.clientId, nif } },
   });
   if (colision && colision.id !== entryId) {
-    return { error: `Ya existe otra cuenta con el NIF ${parsed.data.nif} en este cliente` };
+    return { error: `Ya existe otra cuenta con el NIF ${nif} en este cliente` };
   }
 
   await prisma.accountEntry.update({
     where: { id: entryId },
     data: {
       ...parsed.data,
+      nif,
       defaultVatRate: parsed.data.defaultVatRate ?? null,
     },
   });

@@ -15,9 +15,9 @@ import {
 } from "@/lib/reviewQueue";
 import { appendAuditLogs } from "@/lib/auditLog";
 import { canAccessClient } from "@/lib/accessibleClients";
-import { parseTaxId, isPersonaFisica } from "@/lib/validators";
+import { parseTaxId, isPersonaFisica, operationTypeLabel, OPERATION_TYPE_OPTIONS, OPERATION_TYPE_LABEL, type OperationTypeName } from "@/lib/validators";
 import { partyAccountMatchesType, resultAccountMatchesType } from "@/lib/accountingAccount";
-import { accountEntryKey } from "@/lib/supplierMatching";
+import { accountEntryKey, entryNameMatches } from "@/lib/supplierMatching";
 import { normalizeCurrency } from "@/lib/currency";
 import { applyRectificativeSign } from "@/lib/rectificative";
 import { appError, type AppError } from "@/lib/errorCodes";
@@ -76,12 +76,6 @@ type FieldData = {
   rectificativeType:      string;  // "BY_DIFFERENCE" / "BY_SUBSTITUTION" / ""
   art80Tres:              string;  // "1" / "0"
 };
-
-const VALID_OPERATION_TYPES = [
-  "INTERIOR", "AGRARIA", "INTRACOM",
-  "INVERSION_SP", "IMPORTACION", "IVA_NO_DEDUCIBLE",
-] as const;
-type ValidOperationType = (typeof VALID_OPERATION_TYPES)[number];
 
 const VALID_RETENTION_TYPES = ["PROFESSIONAL", "RENT"] as const;
 type ValidRetentionType = (typeof VALID_RETENTION_TYPES)[number];
@@ -243,9 +237,24 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
   // intracomunitarias. Si la factura no es eso (cambio de tipo/operacion
   // desde que se fijo, o dato residual) se descarta para no dejar
   // informacion incoherente en BD.
-  const submittedOperationType = (VALID_OPERATION_TYPES as readonly string[]).includes(data.operationType)
-    ? (data.operationType as ValidOperationType)
-    : "INTERIOR" as ValidOperationType;
+  // El tipo de operacion tiene que existir Y valer para el sentido de la
+  // factura. La lista suelta que habia aqui no se actualizo al añadir
+  // INTRACOM_SERVICIOS y lo convertia en INTERIOR sin avisar: a A3 llegaba
+  // un 1 en vez de un 8, y encima se aprendia para el proveedor. Y un tipo
+  // de compra en una emitida exporta un codigo que en expedidas significa
+  // otra cosa (el 4 de la inversion del sujeto pasivo es "triangular").
+  const allowedOperationTypes: readonly string[] =
+    OPERATION_TYPE_OPTIONS[effectiveType === "SALE" ? "SALE" : "PURCHASE"];
+  if (!allowedOperationTypes.includes(data.operationType)) {
+    const direccion = effectiveType === "SALE" ? "SALE" : "PURCHASE";
+    const etiqueta = data.operationType in OPERATION_TYPE_LABEL
+      ? operationTypeLabel(data.operationType as OperationTypeName, direccion)
+      : (data.operationType || "(vacío)");
+    return {
+      error: `El tipo de operación «${etiqueta}» no es válido para facturas ${effectiveType === "SALE" ? "emitidas" : "recibidas"}. Elige uno de la lista.`,
+    };
+  }
+  const submittedOperationType = data.operationType as OperationTypeName;
   const intracomGoodsType: ValidIntracomGoodsType | null =
     effectiveType === "SALE" && submittedOperationType === "INTRACOM"
     && (VALID_INTRACOM_GOODS_TYPES as readonly string[]).includes(data.intracomGoodsType)
@@ -439,7 +448,17 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     const learnRetentionRate = learnIsPF && newData.irpfRate != null ? newData.irpfRate : null;
     // Aprendemos tambien el tipo de operacion por NIF: la proxima factura
     // de este emisor pre-rellenara el operationType automaticamente.
-    if (learnKey && (learnSupplier || learnExpense || newData.operationType)) {
+    // Dos terceros distintos pueden compartir numero (dos proveedores chinos
+    // con 418306763): si la fila que hay bajo esta clave es de otro nombre,
+    // no la sobreescribimos con los datos de este.
+    const existingEntry = learnKey
+      ? await prisma.accountEntry.findUnique({
+          where: { clientId_nif: { clientId: invoice.clientId, nif: learnKey } },
+          select: { nif: true, name: true },
+        })
+      : null;
+    const otherThirdParty = existingEntry != null && !entryNameMatches(existingEntry, learnName);
+    if (learnKey && !otherThirdParty && (learnSupplier || learnExpense || newData.operationType)) {
       await prisma.accountEntry.upsert({
         where: { clientId_nif: { clientId: invoice.clientId, nif: learnKey } },
         create: {

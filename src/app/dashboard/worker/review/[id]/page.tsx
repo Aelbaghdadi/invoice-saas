@@ -12,7 +12,7 @@ import {
 } from "@/lib/reviewQueue";
 import { extractBoundingBoxes } from "@/lib/boundingBoxes";
 import { extractGeminiBoundingBoxes } from "@/lib/ocrLlm";
-import { accountEntryKey } from "@/lib/supplierMatching";
+import { accountEntryKey, entryNameMatches } from "@/lib/supplierMatching";
 
 // La cola se calcula en cada render — el conteo cambia segun otro
 // gestor valide/rechace facturas. Forzamos dinamico para que el "X de N"
@@ -129,6 +129,12 @@ export default async function ReviewPage({
       })
     : null;
   const accountMatchedByName = entryKey.startsWith("SINNIF:");
+  // Encontrada por NIF pero a nombre de otro tercero (dos proveedores que
+  // comparten numero): no se rellena nada y se avisa para que el gestor
+  // decida. Sin esto, una factura de "Blings Bag" salia con la cuenta de
+  // "Hongxin Cosmetics" y banner verde.
+  const accountNameMismatch =
+    suggestedAccount != null && !accountMatchedByName && !entryNameMatches(suggestedAccount, counterpartyName);
 
   // Solo sugerimos la cuenta si pertenece a la familia del sentido de esta
   // factura. Un tercero que es proveedor y cliente a la vez comparte fila en
@@ -137,10 +143,10 @@ export default async function ReviewPage({
   const invoiceType = invoice.type === "SALE" ? "SALE" : "PURCHASE";
   const accountData = suggestedAccount
     ? {
-        supplierAccount: partyAccountMatchesType(suggestedAccount.supplierAccount, invoiceType)
+        supplierAccount: !accountNameMismatch && partyAccountMatchesType(suggestedAccount.supplierAccount, invoiceType)
           ? suggestedAccount.supplierAccount
           : "",
-        expenseAccount: resultAccountMatchesType(suggestedAccount.expenseAccount, invoiceType)
+        expenseAccount: !accountNameMismatch && resultAccountMatchesType(suggestedAccount.expenseAccount, invoiceType)
           ? suggestedAccount.expenseAccount
           : "",
         defaultVatRate: suggestedAccount.defaultVatRate ? Number(suggestedAccount.defaultVatRate) : null,
@@ -227,6 +233,7 @@ export default async function ReviewPage({
         issues={issuesData}
         suggestedAccount={accountData}
         accountMatchedByName={accountMatchedByName}
+        accountNameMismatch={accountNameMismatch}
         queueSuffix={queueSuffix}
         bucket={bucket}
         avgOcrDurationMs={avgOcrDurationMs}

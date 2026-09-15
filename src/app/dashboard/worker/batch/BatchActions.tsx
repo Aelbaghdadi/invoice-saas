@@ -14,12 +14,17 @@ type Props = {
   month: number;
   year: number;
   type: "PURCHASE" | "SALE";
+  /** Agrupacion del lote: un trimestre y su primer mes comparten periodMonth,
+   *  sin esto "rechazar T1" arrastraba tambien el lote mensual. */
+  periodType: "MONTHLY" | "QUARTERLY";
   /** Si el periodo esta listo para cerrar (todo done) se muestra el boton. */
   readyToClose: boolean;
   /** Si ya estaba cerrado (o reabierto) — para ajustar el texto. */
   alreadyClosed: boolean;
   /** Numero de facturas del lote que se verian afectadas por "Rechazar lote". */
   rejectableCount: number;
+  /** Cuantas de esas ya estaban validadas: el gestor tiene que saberlo. */
+  validatedCount: number;
 };
 
 /**
@@ -37,9 +42,11 @@ export function BatchActions({
   month,
   year,
   type,
+  periodType,
   readyToClose,
   alreadyClosed,
   rejectableCount,
+  validatedCount,
 }: Props) {
   const { success, error: toastError } = useToast();
   const [closeState, closeAction, closePending] = useActionState<BatchAction, FormData>(
@@ -68,6 +75,7 @@ export function BatchActions({
       fd.set("month", String(month));
       fd.set("year", String(year));
       fd.set("type", type);
+      fd.set("periodType", periodType);
       fd.set("reason", rejectReason);
       const res = await rejectBatch(null, fd);
       if (res?.error) {
@@ -75,6 +83,7 @@ export function BatchActions({
         toastError(res.error);
       } else {
         success(`Lote rechazado (${res?.rejectedCount ?? 0} factura${res?.rejectedCount !== 1 ? "s" : ""})`);
+        if (res?.warning) toastError(res.warning);
         setShowRejectConfirm(false);
         setRejectReason("");
       }
@@ -132,8 +141,10 @@ export function BatchActions({
         <div className="rounded-lg border border-red-200 bg-red-50 p-3">
           <p className="flex items-center gap-1.5 text-[12px] font-medium text-red-800">
             <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
-            Vas a rechazar {rejectableCount} factura{rejectableCount !== 1 ? "s" : ""} de este lote. No se borran:
-            quedan marcadas como rechazadas y salen del flujo de revisión/export. Esta acción no se deshace desde aquí.
+            Vas a rechazar {rejectableCount} factura{rejectableCount !== 1 ? "s" : ""} de este lote
+            {validatedCount > 0 ? ` (${validatedCount} ya validada${validatedCount !== 1 ? "s" : ""})` : ""}.
+            Las ya exportadas y las que aún se están analizando no se tocan. No se borran: quedan marcadas como
+            rechazadas y salen del flujo de revisión/export. Esta acción no se deshace desde aquí.
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <input

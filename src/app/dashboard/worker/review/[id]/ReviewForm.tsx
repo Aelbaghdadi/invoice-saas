@@ -147,6 +147,9 @@ type Props = {
   /** true si la cuenta sugerida se encontró por nombre (el NIF del tercero
    *  no era fiable) en vez de por NIF exacto. */
   accountMatchedByName?: boolean;
+  /** true si hay una fila con este NIF pero a nombre de OTRO tercero: no se
+   *  rellena nada y se avisa (dos proveedores que comparten numero). */
+  accountNameMismatch?: boolean;
   boundingBoxes?: FieldBoundingBoxes;
   /** Querystring ya formada ("?bucket=clean" o ""), a pegar a las URLs de nav. */
   queueSuffix?: string;
@@ -234,7 +237,7 @@ function fmtDate(d: Date | null | undefined) {
   return new Date(d).toISOString().slice(0, 10);
 }
 
-export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position, batchTotal, backHref, extraction, issues, suggestedAccount, accountMatchedByName, boundingBoxes, queueSuffix = "", bucket = "all", sessionContext, avgOcrDurationMs, genericAccounts }: Props) {
+export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position, batchTotal, backHref, extraction, issues, suggestedAccount, accountMatchedByName, accountNameMismatch = false, boundingBoxes, queueSuffix = "", bucket = "all", sessionContext, avgOcrDurationMs, genericAccounts }: Props) {
   const { success, error } = useToast();
   const isImage = invoice.fileType.startsWith("image/");
   const isPdf   = invoice.fileType === "application/pdf";
@@ -1096,7 +1099,16 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                   <select
                     className={inputClass}
                     value={type}
-                    onChange={(e) => setType(e.target.value as "PURCHASE" | "SALE")}
+                    onChange={(e) => {
+                      const next = e.target.value as "PURCHASE" | "SALE";
+                      setType(next);
+                      // El tipo de operacion actual puede no existir en el
+                      // otro sentido (INTRACOM_SERVICIOS solo es de compras);
+                      // si se dejara, el servidor lo rechazaria al guardar.
+                      if (!OPERATION_TYPE_OPTIONS[next].includes(operationType)) {
+                        setOperationType(OPERATION_TYPE_OPTIONS[next][0]);
+                      }
+                    }}
                   >
                     <option value="PURCHASE">Recibida (compra)</option>
                     <option value="SALE">Emitida (venta)</option>
@@ -1683,6 +1695,12 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                 <div className="mb-3 flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-700">
                   <AlertTriangle className="h-3.5 w-3.5" />
                   NIF {counterpartyNif} no registrado en el plan de cuentas — tampoco se encontró por nombre, revisa/da de alta la cuenta manualmente
+                </div>
+              )}
+              {suggestedAccount && accountNameMismatch && (
+                <div className="mb-3 flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-700">
+                  <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
+                  El NIF {counterpartyNif} está en el plan de cuentas a nombre de «{suggestedAccount.name}», que no coincide con esta factura. No se ha rellenado ninguna cuenta: comprueba cuál de los dos es el tercero correcto.
                 </div>
               )}
               <div className="grid grid-cols-2 gap-3">
