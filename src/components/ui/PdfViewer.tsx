@@ -22,6 +22,12 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL(
 
 const ZOOM_STEPS = [0.5, 0.65, 0.75, 0.9, 1.0, 1.15, 1.25, 1.5, 1.75, 2.0];
 
+// Zoom inicial al abrir la vista previa: 150%, para que la factura se lea
+// sin tener que ampliar a mano cada vez. El usuario puede cambiarlo despues
+// con total libertad — no se vuelve a forzar mientras revisa esta factura
+// (es solo el valor con el que arranca useState, no un reset periódico).
+const DEFAULT_ZOOM = 1.5;
+
 // ── Funciones de búsqueda de texto (puras, sin imports de pdfjs) ──────────────
 
 type PdfTextItem = { str: string; pageNum: number; x: number; y: number; w: number; h: number };
@@ -122,7 +128,7 @@ export default function PdfViewer({
 }: Props) {
   const [numPages, setNumPages] = useState<number>(0);
   const [page, setPage]         = useState(1);
-  const [zoom, setZoom]         = useState(1.0);
+  const [zoom, setZoom]         = useState(DEFAULT_ZOOM);
   const [loading, setLoading]   = useState(true);
   const [rotation, setRotation] = useState(0);
 
@@ -209,7 +215,7 @@ export default function PdfViewer({
 
   const zoomIn  = () => setZoom((z) => ZOOM_STEPS[ZOOM_STEPS.findIndex((s) => s >= z) + 1] ?? z);
   const zoomOut = () => setZoom((z) => ZOOM_STEPS[ZOOM_STEPS.findIndex((s) => s >= z) - 1] ?? z);
-  const reset   = () => setZoom(1.0);
+  const reset   = () => setZoom(DEFAULT_ZOOM);
   const rotate  = () => setRotation((r) => (r + 90) % 360);
 
   return (

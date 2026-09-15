@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import type { ExtractedInvoice } from "@/lib/ocr";
 import type { Invoice, IssueType } from "@prisma/client";
+import type { OperationTypeName } from "@/lib/validators";
 
 type IssueData = {
   type: IssueType;
@@ -13,11 +14,16 @@ const CONFIDENCE_THRESHOLD = 0.7;
 /**
  * Detects issues after OCR extraction and creates InvoiceIssue records.
  * Returns the list of issues created.
+ *
+ * `operationTypeHint` es una pista (derivada del prefijo del NIF de la otra
+ * parte, ver processInvoice) de si la factura es intracomunitaria — se usa
+ * SOLO para decidir si avisar de IVA no-cero, no se persiste aqui.
  */
 export async function detectIssues(
   invoiceId: string,
   extraction: ExtractedInvoice,
   invoice: Invoice,
+  operationTypeHint?: OperationTypeName,
 ): Promise<IssueData[]> {
   const issues: IssueData[] = [];
 
@@ -83,7 +89,26 @@ export async function detectIssues(
     }
   }
 
-  // 4. POSSIBLE_DUPLICATE — functional dedup (non-blocking alert)
+  // 4. INTRACOM_VAT — operacion intracomunitaria (adquisicion/entrega) con
+  // IVA declarado. Las intracomunitarias van con IVA 0%; si el OCR deja el
+  // 21% por defecto del documento, no puede colarse silenciosamente hasta
+  // el export. Se avisa aqui (NEEDS_ATTENTION) en vez de forzar el 0% a
+  // ciegas: puede ser un error real del proveedor que el gestor deba ver.
+  if (operationTypeHint === "INTRACOM" || operationTypeHint === "INTRACOM_SERVICIOS") {
+    const sumVat = extraction.vatLines.length > 0
+      ? extraction.vatLines.reduce((s, l) => s + l.vatAmount, 0)
+      : (extraction.vatAmount ?? 0);
+    if (Math.abs(sumVat) > 0.01) {
+      const rate = extraction.vatLines.length === 1 ? extraction.vatLines[0].vatRate : extraction.vatRate;
+      issues.push({
+        type: "MANUAL",
+        description: `Operación intracomunitaria con IVA declarado${rate != null ? ` (${rate}%)` : ""}: las intracomunitarias suelen ir con IVA 0%. Revisa el desglose antes de exportar.`,
+        field: "vatRate",
+      });
+    }
+  }
+
+  // 5. POSSIBLE_DUPLICATE — functional dedup (non-blocking alert)
   // Strategy A: exact match by CIF + invoice number (strongest signal)
   // Strategy B: fuzzy match by CIF + total + date (catches re-scans / different PDFs)
   if (extraction.issuerCif) {

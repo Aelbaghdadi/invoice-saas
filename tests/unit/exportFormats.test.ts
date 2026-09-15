@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
+import * as XLSX from "xlsx";
 import {
   generateCsv,
+  generateA3Excel,
   suggestFilename,
   validateForA3Export,
   type InvoiceWithClient,
@@ -252,5 +254,98 @@ describe("validateForA3Export — facturas emitidas y moneda", () => {
       mkInvoice({ id: "inv-2", currency: null }),
     ]);
     expect(res.flatMap((r) => r.warnings).filter((w) => w.includes("euros"))).toEqual([]);
+  });
+});
+
+describe("validateForA3Export — intracomunitarias", () => {
+  it("avisa si una compra intracomunitaria (bienes o servicios) declara IVA distinto de 0", () => {
+    const bienes = validateForA3Export([
+      mkInvoice({ operationType: "INTRACOM" as any, vatAmount: 21 as any }),
+    ]);
+    const servicios = validateForA3Export([
+      mkInvoice({ operationType: "INTRACOM_SERVICIOS" as any, vatAmount: 21 as any }),
+    ]);
+    expect(bienes[0].warnings.some((w) => w.includes("IVA declarado"))).toBe(true);
+    expect(servicios[0].warnings.some((w) => w.includes("IVA declarado"))).toBe(true);
+  });
+
+  it("no avisa de IVA si la intracomunitaria ya va a 0%", () => {
+    const res = validateForA3Export([
+      mkInvoice({
+        operationType: "INTRACOM" as any,
+        vatAmount: 0 as any,
+        totalAmount: 100 as any,
+        taxBase: 100 as any,
+      }),
+    ]);
+    expect(res.flatMap((r) => r.warnings).filter((w) => w.includes("IVA declarado"))).toEqual([]);
+  });
+
+  it("avisa si una venta intracomunitaria no tiene clasificación bienes/servicios (349)", () => {
+    const res = validateForA3Export([
+      mkInvoice({
+        type: "SALE",
+        operationType: "INTRACOM" as any,
+        vatAmount: 0 as any,
+        totalAmount: 100 as any,
+        taxBase: 100 as any,
+        intracomGoodsType: null as any,
+      }),
+    ]);
+    expect(res.some((r) => r.warnings.some((w) => w.includes("349")))).toBe(true);
+  });
+
+  it("no avisa del 349 si la venta intracomunitaria ya está clasificada", () => {
+    const res = validateForA3Export([
+      mkInvoice({
+        type: "SALE",
+        operationType: "INTRACOM" as any,
+        vatAmount: 0 as any,
+        totalAmount: 100 as any,
+        taxBase: 100 as any,
+        intracomGoodsType: "BIENES" as any,
+      }),
+    ]);
+    expect(res.flatMap((r) => r.warnings).filter((w) => w.includes("349"))).toEqual([]);
+  });
+
+  it("una compra interior normal con IVA no dispara el aviso de intracomunitaria", () => {
+    const res = validateForA3Export([mkInvoice({ operationType: "INTERIOR" as any })]);
+    expect(res.flatMap((r) => r.warnings).filter((w) => w.includes("IVA declarado"))).toEqual([]);
+  });
+});
+
+describe("generateA3Excel — recargo de equivalencia", () => {
+  function readRows(buf: Buffer, sheetName: string): unknown[][] {
+    const wb = XLSX.read(buf, { type: "buffer" });
+    const sheet = wb.Sheets[sheetName];
+    return XLSX.utils.sheet_to_json(sheet, { header: 1 }) as unknown[][];
+  }
+
+  it("exporta 0/0 en las columnas de recargo cuando la factura no lo lleva", () => {
+    const buf = generateA3Excel([mkInvoice()]);
+    const rows = readRows(buf, "Facturas recibidas");
+    const dataRow = rows[1];
+    expect(dataRow[12]).toBe(0); // M: % Rec. Equiv.
+    expect(dataRow[13]).toBe(0); // N: Cutoa Rec. Equiv.
+  });
+
+  it("exporta el % y la cuota reales cuando la factura sí lleva recargo", () => {
+    const buf = generateA3Excel([
+      mkInvoice({ equivalenceSurchargeRate: 5.2 as any, equivalenceSurchargeAmount: 5.2 as any }),
+    ]);
+    const rows = readRows(buf, "Facturas recibidas");
+    const dataRow = rows[1];
+    expect(dataRow[12]).toBe(5.2);
+    expect(dataRow[13]).toBe(5.2);
+  });
+
+  it("no aplica el recargo de una factura a otra sin recargo (no queda un valor pegado global)", () => {
+    const withSurcharge = mkInvoice({ id: "inv-a", equivalenceSurchargeRate: 5.2 as any, equivalenceSurchargeAmount: 5.2 as any });
+    const withoutSurcharge = mkInvoice({ id: "inv-b" });
+    const buf = generateA3Excel([withSurcharge, withoutSurcharge]);
+    const rows = readRows(buf, "Facturas recibidas");
+    expect(rows[1][12]).toBe(5.2);
+    expect(rows[2][12]).toBe(0);
   });
 });

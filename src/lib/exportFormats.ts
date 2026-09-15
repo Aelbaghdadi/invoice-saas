@@ -212,6 +212,11 @@ function buildA3Row(
   // Para rectificativas, la retencion respeta el signo de la base.
   const retentionRate   = isFirstLine && inv.irpfRate   ? Number(inv.irpfRate)   : 0;
   const retentionAmount = isFirstLine && inv.irpfAmount ? Number(inv.irpfAmount) : 0;
+  // Recargo de equivalencia: igual que la retencion, solo en la primera fila
+  // del multi-IVA para no sumarlo varias veces. 0 cuando no aplica (A3
+  // espera 0/vacio en ese caso, no hay un tercer estado).
+  const surchargeRate   = isFirstLine && inv.equivalenceSurchargeRate   ? Number(inv.equivalenceSurchargeRate)   : 0;
+  const surchargeAmount = isFirstLine && inv.equivalenceSurchargeAmount ? Number(inv.equivalenceSurchargeAmount) : 0;
   // Fecha de Contabilizacion (col B): obligatoria segun plantilla A3.
   // Por defecto = fecha de la factura. El gestor puede sobreescribirla
   // en el Excel exportado si quiere registrar el asiento en otro mes.
@@ -236,8 +241,8 @@ function buildA3Row(
     line.taxBase,                                              // J: Base (signo respetado en rectificativa)
     line.vatRate,                                              // K: % IVA
     line.vatAmount,                                            // L: Cuota IVA (signo respetado)
-    0,                                                         // M: % Rec. Equiv.
-    0,                                                         // N: Cutoa Rec. Equiv.
+    surchargeRate,                                              // M: % Rec. Equiv.
+    surchargeAmount,                                            // N: Cutoa Rec. Equiv.
     retentionRate,                                             // O: % Retención IRPF
     retentionAmount,                                           // P: Cuota Retención IRPF
   ];
@@ -276,6 +281,28 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
     if (!inv.invoiceDate) warnings.push("Fecha vacía");
     if (!inv.supplierAccount) warnings.push(isPurchase ? "Sin cuenta proveedor" : "Sin cuenta cliente");
     if (!inv.expenseAccount) warnings.push(isPurchase ? "Sin cuenta gasto" : "Sin cuenta ingreso");
+
+    // Intracomunitaria con IVA declarado: mismo aviso que en revision, pero
+    // aqui es la ultima linea de defensa antes de que el fichero salga hacia
+    // A3. No bloqueamos el export (el gestor puede tener un motivo real),
+    // pero no debe poder pasar inadvertido.
+    const isIntracomOp = inv.operationType === "INTRACOM" || inv.operationType === "INTRACOM_SERVICIOS";
+    if (isIntracomOp) {
+      const lines = getExportLines(inv);
+      const sumVat = lines.reduce((s, l) => s + l.vatAmount, 0);
+      if (Math.abs(sumVat) > 0.01) {
+        warnings.push("Operación intracomunitaria con IVA declarado (debería ir a 0%)");
+      }
+    }
+
+    // Venta intracomunitaria sin clasificar bienes/servicios: necesaria para
+    // la Clave del modelo 349. No bloquea el export (nuestro formato A3
+    // actual no tiene una columna para transmitirla — ver nota en
+    // generateA3Excel), pero debe quedar visible para que el gestor la
+    // resuelva antes de declarar el 349 aparte.
+    if (!isPurchase && inv.operationType === "INTRACOM" && !inv.intracomGoodsType) {
+      warnings.push("Venta intracomunitaria sin clasificar como bienes/servicios (necesario para el modelo 349)");
+    }
 
     if (isForeignCurrency(inv.currency)) {
       warnings.push(`Importes en ${inv.currency}: A3 solo admite euros. Conviértelos y márcala en euros en la revisión`);

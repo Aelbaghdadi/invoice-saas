@@ -17,11 +17,13 @@ import {
   isPersonaFisica,
   textMentionsRetention,
   RETENTION_DEFAULT_RATE,
+  equivalenceSurchargeRateForVat,
   type RetentionTypeName,
 } from "@/lib/validators";
 import { textMentionsRectificative, applyRectificativeSign } from "@/lib/rectificative";
 import { routeByCif, clientSideCif, routeByText, detectInvoiceType } from "@/lib/invoiceRouting";
 import { lookupProviderClient } from "@/lib/providerRouting";
+import { accountEntryKey } from "@/lib/supplierMatching";
 
 /**
  * Convierte el string de fecha del OCR a Date. Si el OCR devuelve algo
@@ -245,9 +247,19 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     }
     const isUnclassified = isRoutingUpload && routingReason !== null;
 
-    // Detect issues (duplicates, low confidence, math mismatch, etc.). En las
-    // "Por clasificar" no tiene sentido (aún no hay cliente real).
-    const issues = isUnclassified ? [] : await detectIssues(invoiceId, extracted, invoice);
+    // Normalizacion de NIFs y deteccion de tipo de operacion a partir del
+    // prefijo del NIF (parser en validators.ts para no tocar OCR). Se
+    // calcula ya aqui (en vez de mas abajo, donde se usaba antes) porque
+    // detectIssues necesita una pista de operationType para avisar de IVA
+    // no-cero en intracomunitarias antes de decidir el estado de la factura.
+    const issuerParsed   = parseTaxId(extracted.issuerCif);
+    const receiverParsed = parseTaxId(extracted.receiverCif);
+    const operationTypeHint = (invoice.type === "PURCHASE" ? issuerParsed : receiverParsed).operationType;
+
+    // Detect issues (duplicates, low confidence, math mismatch, IVA no-cero
+    // en intracomunitarias, etc.). En las "Por clasificar" no tiene sentido
+    // (aún no hay cliente real).
+    const issues = isUnclassified ? [] : await detectIssues(invoiceId, extracted, invoice, operationTypeHint);
     const targetStatus: InvoiceStatus = isUnclassified
       ? "PENDING_ROUTING"
       : issues.length > 0 ? "NEEDS_ATTENTION" : "PENDING_REVIEW";
@@ -255,11 +267,6 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     // vatRate denormalizado: solo significativo cuando hay una unica linea.
     // Multi-IVA -> null (el desglose vive en InvoiceVatLine).
     const denormVatRate = vatLines.length === 1 ? vatLines[0].vatRate : null;
-
-    // Normalizacion de NIFs y deteccion de tipo de operacion a partir
-    // del prefijo del NIF (parser en validators.ts para no tocar OCR).
-    const issuerParsed   = parseTaxId(extracted.issuerCif);
-    const receiverParsed = parseTaxId(extracted.receiverCif);
 
     // ── Auto-rellenado del cliente como parte conocida ─────────────────
     //
@@ -277,7 +284,7 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       ? null
       : await prisma.client.findUnique({
           where: { id: invoice.clientId },
-          select: { name: true, cif: true },
+          select: { name: true, cif: true, equivalenceSurchargeCustomer: true },
         });
 
     // ── Detección del tipo cuando se subió como "No lo sé" ─────────────
@@ -326,14 +333,21 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     // las SALE internacionales se marcaban mal.
     const otherParty = invoice.type === "PURCHASE" ? issuerParsed : receiverParsed;
     const otherPartyClean = otherParty.clean;
+    const otherPartyName = invoice.type === "PURCHASE" ? extracted.issuerName : extracted.receiverName;
 
-    // Aprendizaje por NIF: si ya hemos visto a esta otra parte en este
+    // Aprendizaje por tercero: si ya hemos visto a esta otra parte en este
     // cliente y el gestor le asigno un operationType / retencion, lo
     // respetamos. Asi proveedores recurrentes (gestoria, abogado,
     // alquiler) se autoconfiguran desde la 2a factura.
-    const knownEntry = otherPartyClean
+    //
+    // La clave es accountEntryKey (NIF si es fiable, nombre normalizado si
+    // no) para que proveedores extranjeros sin NIF/VAT fiable (ej. chinos)
+    // tambien puedan encontrar/aprender su fila sin arriesgar fusionarse con
+    // otro tercero que comparta el mismo identificador basura.
+    const entryKey = accountEntryKey(otherPartyClean, otherPartyName);
+    const knownEntry = entryKey
       ? await prisma.accountEntry.findUnique({
-          where: { clientId_nif: { clientId: invoice.clientId, nif: otherPartyClean } },
+          where: { clientId_nif: { clientId: invoice.clientId, nif: entryKey } },
           select: {
             defaultOperationType: true,
             defaultRetentionType: true,
@@ -439,6 +453,33 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
           retentionBase,
         };
 
+    // ── Recargo de equivalencia ─────────────────────────────────────────
+    //
+    // Solo aplica a COMPRAS de clientes minoristas acogidos a RE (el
+    // proveedor les repercute el recargo ademas del IVA normal). Nunca lo
+    // inventamos por el simple hecho de que el IVA sea 21/10/4 — exige que
+    // el cliente este marcado explicitamente (Client.equivalenceSurchargeCustomer).
+    //
+    // 1) Si el OCR/IA vio explicitamente % y cuota en el documento, se
+    //    conservan tal cual (mas fiables que cualquier mapeo).
+    // 2) Si no, y el cliente esta en RE con una unica linea de IVA, se
+    //    propone el mapeo habitual (21->5.2, 10->1.4, 4->0.5) sobre la base
+    //    ya firmada (respeta el signo en rectificativas).
+    let equivalenceSurchargeRate: number | null = extracted.equivalenceSurchargeRate ?? null;
+    let equivalenceSurchargeAmount: number | null = extracted.equivalenceSurchargeAmount ?? null;
+    if (
+      equivalenceSurchargeRate == null &&
+      invoice.type === "PURCHASE" &&
+      clientRecord?.equivalenceSurchargeCustomer &&
+      signed.lines.length === 1
+    ) {
+      const mapped = equivalenceSurchargeRateForVat(signed.lines[0].vatRate);
+      if (mapped != null) {
+        equivalenceSurchargeRate = mapped;
+        equivalenceSurchargeAmount = parseFloat(((signed.lines[0].taxBase * mapped) / 100).toFixed(2));
+      }
+    }
+
     // Copy OCR data to Invoice (datos finales — gestor los editará)
     await prisma.$transaction([
       // Reemplazar lineas previas (idempotente: si reproceso, borra y mete).
@@ -484,6 +525,8 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
           irpfAmount:    signed.irpfAmount,
           retentionType,
           retentionBase: signed.retentionBase,
+          equivalenceSurchargeRate,
+          equivalenceSurchargeAmount,
           totalAmount:   signed.totalAmount,
           // Si este OCR no ve la moneda se conserva la que ya tenia (p.ej. la
           // heredada de la factura madre al dividir un PDF en USD).

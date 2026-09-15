@@ -21,8 +21,14 @@ type Props = {
  * el PdfViewer para que el gestor no tenga que reaprender la toolbar
  * al pasar de un PDF a una foto del movil.
  */
+// Zoom inicial al abrir la vista previa: 150%, para que la factura se lea
+// sin tener que ampliar a mano cada vez. El usuario puede cambiarlo despues
+// con total libertad — no se vuelve a forzar mientras revisa esta factura
+// (es solo el valor con el que arranca useState, no un reset periódico).
+const DEFAULT_ZOOM = 1.5;
+
 export default function ImageViewer({ url, alt = "Factura", activeBox }: Props) {
-  const [zoom, setZoom] = useState(1.0);
+  const [zoom, setZoom] = useState(DEFAULT_ZOOM);
   const [rotation, setRotation] = useState(0);
 
   const zoomIn  = () => setZoom((z) => Math.min(
@@ -33,7 +39,7 @@ export default function ImageViewer({ url, alt = "Factura", activeBox }: Props) 
     ZOOM_STEPS[0],
     ZOOM_STEPS[ZOOM_STEPS.findIndex((s) => s >= z) - 1] ?? z,
   ));
-  const reset  = () => { setZoom(1.0); setRotation(0); };
+  const reset  = () => { setZoom(DEFAULT_ZOOM); setRotation(0); };
   const rotate = () => setRotation((r) => (r + 90) % 360);
 
   return (

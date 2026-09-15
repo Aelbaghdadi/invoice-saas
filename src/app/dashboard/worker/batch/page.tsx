@@ -504,8 +504,9 @@ export default async function WorkerBatchPage({
                   )}
                 </div>
 
-                {/* Accion: cerrar periodo cuando todo esta validado. */}
-                {!closed && readyToClose && (
+                {/* Acciones: cerrar periodo (cuando todo esta validado) y/o
+                    rechazar el lote completo (p.ej. se subió por error). */}
+                {!closed && (
                   <BatchActions
                     clientId={g.clientId}
                     month={g.periodMonth}
@@ -513,6 +514,7 @@ export default async function WorkerBatchPage({
                     type={g.type}
                     readyToClose={readyToClose}
                     alreadyClosed={closed}
+                    rejectableCount={g.total - g.rejected - g.exported}
                   />
                 )}
               </div>

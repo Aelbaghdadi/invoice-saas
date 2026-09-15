@@ -22,27 +22,44 @@ enum InvoiceType {
 /// enum más granular alineado al estándar fiscal.
 ///
 /// Mapeo a códigos numéricos (lo que va al Excel A3):
-///   INTERIOR        -> 1
-///   AGRARIA         -> 2
-///   INTRACOM        -> 3
-///   INVERSION_SP    -> 4
-///   IMPORTACION     -> 6
-///   IVA_NO_DEDUCIBLE -> 7
+///   INTERIOR            -> 1
+///   AGRARIA             -> 2
+///   INTRACOM            -> 3  (compras: adq. intracom. de BIENES; ventas: entrega
+///                               intracom., bienes o servicios — ver Invoice.intracomGoodsType)
+///   INVERSION_SP        -> 4
+///   IMPORTACION         -> 6
+///   IVA_NO_DEDUCIBLE    -> 7
+///   INTRACOM_SERVICIOS  -> 8  (SOLO compras: adq. intracom. de SERVICIOS)
 /// (No hay 5 a propósito — A3 reserva ese código para usos futuros.)
 ///
 /// Detección automática:
 ///   ES o sin prefijo  -> INTERIOR (default)
-///   UE no-ES          -> INTRACOM
+///   UE no-ES          -> INTRACOM (se asume bienes; el gestor cambia a
+///                        INTRACOM_SERVICIOS a mano si la compra es de servicios)
 ///   No-UE             -> IMPORTACION
 /// Otros tipos los marca el gestor manualmente en revisión, o se aprenden
 /// del NIF (AccountEntry.defaultOperationType) la próxima vez.
+///
+/// INTRACOM_SERVICIOS es exclusivo de compras (ver validators.OPERATION_TYPE_OPTIONS):
+/// en ventas la distinción bienes/servicios NO cambia el código de operación
+/// (siempre 3), se guarda aparte en Invoice.intracomGoodsType para el modelo 349.
 enum OperationType {
   INTERIOR
   AGRARIA
   INTRACOM
+  INTRACOM_SERVICIOS
   INVERSION_SP
   IMPORTACION
   IVA_NO_DEDUCIBLE
+}
+
+/// Clasificación BIENES/SERVICIOS de una ENTREGA intracomunitaria (venta).
+/// A3 usa el mismo código de operación (3) para ambas; la distinción la pide
+/// el modelo 349 aparte ("Clave"). No se usa en compras: ahi ya lo dice
+/// OperationType (INTRACOM = bienes, INTRACOM_SERVICIOS = servicios).
+enum IntracomGoodsType {
+  BIENES
+  SERVICIOS
 }
 
 /// Tipo de retención IRPF aplicada en la factura. Determina a qué
@@ -167,6 +184,12 @@ model Client {
   simplifiedSupplierAccount String?
   /// Cuenta de gasto por defecto para esas mismas facturas simplificadas.
   simplifiedExpenseAccount  String?
+  /// true si este cliente es un comerciante minorista acogido a Recargo de
+  /// Equivalencia: sus compras llevan % y cuota de recargo ademas del IVA
+  /// normal. Solo se sugiere automaticamente el recargo (ver processInvoice)
+  /// cuando este flag esta activo — nunca por el simple hecho de que el IVA
+  /// sea 21/10/4.
+  equivalenceSurchargeCustomer Boolean @default(false)
   /// true solo para el cliente técnico "Sin clasificar" de cada asesoría, que
   /// sostiene las facturas subidas en modo clasificar mientras se rutean. Se
   /// excluye de selectores, listados, colas y exportación.
@@ -319,6 +342,17 @@ model Invoice {
   /// tratan como euros). A3 solo admite euros: cualquier otra se avisa en
   /// revision y en el export hasta que el gestor convierta los importes.
   currency      String?   @db.Char(3)
+  /// SOLO ventas (entregas intracomunitarias, operationType=INTRACOM):
+  /// BIENES o SERVICIOS para la Clave 349. null = no aplica o aun sin
+  /// determinar (se avisa en revision/export hasta que se fije). Se puede
+  /// inferir de la cuenta de ingreso (700->bienes, 705->servicios) pero el
+  /// gestor siempre puede corregirlo a mano.
+  intracomGoodsType IntracomGoodsType?
+  /// % y cuota de Recargo de Equivalencia (solo clientes minoristas acogidos
+  /// a RE, ver Client.equivalenceSurchargeCustomer). null = no aplica — NO
+  /// confundir con 0: una factura sin RE simplemente no tiene estos campos.
+  equivalenceSurchargeRate   Decimal? @db.Decimal(5, 2)
+  equivalenceSurchargeAmount Decimal? @db.Decimal(12, 2)
   isValid       Boolean?
 
   // ── Factura rectificativa (abono / corrección) ─────────────────────

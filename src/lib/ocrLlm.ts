@@ -221,6 +221,8 @@ const EXTRACTION_PROMPT = `Eres un extractor de facturas españolas. Extrae los 
   "irpfAmount": null,
   "totalAmount": 0.00,
   "currency": "Código ISO 4217 de la moneda de los importes (EUR, USD, GBP...) o null",
+  "equivalenceSurchargeRate": null,
+  "equivalenceSurchargeAmount": null,
   "vatLines": [
     { "taxBase": 0.00, "vatRate": 21, "vatAmount": 0.00 }
   ],
@@ -238,6 +240,7 @@ Reglas:
 - vatLines: una entrada por tipo de IVA (4%, 10%, 21%, etc.)
 - irpfRate/irpfAmount: solo si aparece retención explícita en la factura
 - currency: código ISO de 3 letras solo si la factura muestra la moneda (símbolo o código); null si no aparece
+- equivalenceSurchargeRate/equivalenceSurchargeAmount: SOLO si el documento menciona explícitamente "Recargo de Equivalencia" (o "R.E.") con su % y/o cuota; null en caso contrario. NUNCA los derives del % de IVA.
 - confidence: 0.0-1.0 según tu certeza; 0.0 para campos no encontrados
 - invoiceDate: siempre YYYY-MM-DD
 - CIFs sin espacios ni guiones`;
@@ -261,6 +264,8 @@ const EXTRACTION_PROMPT_BBOX = `Eres un extractor de facturas españolas. Extrae
   "irpfAmount": null,
   "totalAmount": 0.00,
   "currency": "Código ISO 4217 de la moneda de los importes (EUR, USD, GBP...) o null",
+  "equivalenceSurchargeRate": null,
+  "equivalenceSurchargeAmount": null,
   "vatLines": [
     { "taxBase": 0.00, "vatRate": 21, "vatAmount": 0.00 }
   ],
@@ -290,6 +295,7 @@ Reglas:
 - vatLines: una entrada por tipo de IVA (4%, 10%, 21%, etc.)
 - irpfRate/irpfAmount: solo si aparece retención explícita en la factura
 - currency: código ISO de 3 letras solo si la factura muestra la moneda (símbolo o código); null si no aparece
+- equivalenceSurchargeRate/equivalenceSurchargeAmount: SOLO si el documento menciona explícitamente "Recargo de Equivalencia" (o "R.E.") con su % y/o cuota; null en caso contrario. NUNCA los derives del % de IVA.
 - confidence: 0.0-1.0 según tu certeza; 0.0 para campos no encontrados
 - invoiceDate: siempre YYYY-MM-DD
 - CIFs sin espacios ni guiones
@@ -406,6 +412,8 @@ function parseGeminiResponse(raw: string): GeminiResult {
       irpfAmount:    num(parsed.irpfAmount),
       totalAmount:   num(parsed.totalAmount),
       currency:      normalizeCurrency(parsed.currency),
+      equivalenceSurchargeRate:   num(parsed.equivalenceSurchargeRate),
+      equivalenceSurchargeAmount: num(parsed.equivalenceSurchargeAmount),
       vatLines,
       confidence,
     },

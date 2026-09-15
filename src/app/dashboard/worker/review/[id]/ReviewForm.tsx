@@ -20,11 +20,14 @@ import {
   OPERATION_TYPE_CODE,
   RETENTION_TYPE_LABEL,
   RETENTION_DEFAULT_RATE,
+  INTRACOM_GOODS_TYPE_LABEL,
+  equivalenceSurchargeRateForVat,
   type OperationTypeName,
   type RetentionTypeName,
+  type IntracomGoodsTypeName,
 } from "@/lib/validators";
 import { dateMatchesPeriod, periodLabel, type PeriodTypeName } from "@/lib/period";
-import { sanitizeAccountingAccountInput, padAccountingAccount } from "@/lib/accountingAccount";
+import { sanitizeAccountingAccountInput, padAccountingAccount, accountGroup } from "@/lib/accountingAccount";
 import { isForeignCurrency } from "@/lib/currency";
 
 const RETENTION_TYPE_OPTIONS: RetentionTypeName[] = ["PROFESSIONAL", "RENT"];
@@ -77,6 +80,9 @@ type SessionContext = {
   periodMonth: number;
   periodYear: number;
   type: "PURCHASE" | "SALE";
+  /** Cliente minorista acogido a Recargo de Equivalencia — sus compras
+   *  pueden llevar % y cuota de recargo ademas del IVA normal. */
+  equivalenceSurchargeCustomer?: boolean;
 };
 
 /** Linea individual de IVA tal como la maneja el form (strings para
@@ -110,7 +116,8 @@ const VAT_RATE_SHORTCUTS = [21, 10, 4] as const;
 // antes de cruzar la frontera Server → Client. Redefinimos esos campos aquí.
 type SerializedInvoice = Omit<
   Invoice,
-  "taxBase" | "vatRate" | "vatAmount" | "irpfRate" | "irpfAmount" | "retentionBase" | "totalAmount"
+  | "taxBase" | "vatRate" | "vatAmount" | "irpfRate" | "irpfAmount" | "retentionBase" | "totalAmount"
+  | "equivalenceSurchargeRate" | "equivalenceSurchargeAmount"
 > & {
   taxBase:       number | null;
   vatRate:       number | null;
@@ -119,6 +126,8 @@ type SerializedInvoice = Omit<
   irpfAmount:    number | null;
   retentionBase: number | null;
   totalAmount:   number | null;
+  equivalenceSurchargeRate:   number | null;
+  equivalenceSurchargeAmount: number | null;
 };
 
 type Props = {
@@ -135,6 +144,9 @@ type Props = {
   extraction: ExtractionData | null;
   issues: IssueData[];
   suggestedAccount?: SuggestedAccount;
+  /** true si la cuenta sugerida se encontró por nombre (el NIF del tercero
+   *  no era fiable) en vez de por NIF exacto. */
+  accountMatchedByName?: boolean;
   boundingBoxes?: FieldBoundingBoxes;
   /** Querystring ya formada ("?bucket=clean" o ""), a pegar a las URLs de nav. */
   queueSuffix?: string;
@@ -222,7 +234,7 @@ function fmtDate(d: Date | null | undefined) {
   return new Date(d).toISOString().slice(0, 10);
 }
 
-export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position, batchTotal, backHref, extraction, issues, suggestedAccount, boundingBoxes, queueSuffix = "", bucket = "all", sessionContext, avgOcrDurationMs, genericAccounts }: Props) {
+export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position, batchTotal, backHref, extraction, issues, suggestedAccount, accountMatchedByName, boundingBoxes, queueSuffix = "", bucket = "all", sessionContext, avgOcrDurationMs, genericAccounts }: Props) {
   const { success, error } = useToast();
   const isImage = invoice.fileType.startsWith("image/");
   const isPdf   = invoice.fileType === "application/pdf";
@@ -251,12 +263,45 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     (invoice.operationType as OperationTypeName | undefined) ?? "INTERIOR",
   );
 
+  // Ventas intracomunitarias (operationType INTRACOM): clasificación
+  // BIENES/SERVICIOS para la Clave 349. NO afecta al código de operación
+  // (siempre 3 en ventas) — es información aparte. Se puede inferir de la
+  // cuenta de ingreso (700->bienes, 705->servicios) pero solo mientras el
+  // gestor no la haya fijado a mano.
+  const [intracomGoodsType, setIntracomGoodsType] = useState<IntracomGoodsTypeName | "">(
+    (invoice.intracomGoodsType as IntracomGoodsTypeName | null) ?? "",
+  );
+  const [goodsTypeTouched, setGoodsTypeTouched] = useState<boolean>(
+    Boolean(invoice.intracomGoodsType),
+  );
+
+  // Recargo de equivalencia: % y cuota. Solo relevante en compras de
+  // clientes minoristas acogidos a RE (sessionContext.equivalenceSurchargeCustomer).
+  const [equivalenceSurchargeRate, setEquivalenceSurchargeRate] = useState(
+    fmt(invoice.equivalenceSurchargeRate),
+  );
+  const [equivalenceSurchargeAmount, setEquivalenceSurchargeAmount] = useState(
+    fmt(invoice.equivalenceSurchargeAmount),
+  );
+
   // Tipo emitida/recibida — editable en la revisión. Si la factura se subió
   // como "No lo sé" (typeUnconfirmed), el OCR intentó detectarlo y aquí se
   // confirma o corrige. Cambiarlo conmuta qué lado es el cliente (lockedSide).
   const [type, setType] = useState<"PURCHASE" | "SALE">(
     invoice.type === "SALE" ? "SALE" : "PURCHASE",
   );
+
+  // Inferencia automática de BIENES/SERVICIOS a partir de la cuenta de
+  // ingreso (700->bienes, 705->servicios), SOLO mientras el gestor no haya
+  // fijado el valor a mano (goodsTypeTouched). Nunca sobreescribe una
+  // elección manual — evita el "resetearse constantemente" que no queremos.
+  useEffect(() => {
+    if (goodsTypeTouched) return;
+    if (type !== "SALE" || operationType !== "INTRACOM") return;
+    const group = accountGroup(expenseAccountVal);
+    if (group === 700) setIntracomGoodsType("BIENES");
+    else if (group === 705) setIntracomGoodsType("SERVICIOS");
+  }, [expenseAccountVal, type, operationType, goodsTypeTouched]);
 
   // La "otra parte" (la que no es el cliente): emisor en compras,
   // receptor en ventas. Es el NIF por el que se busca y se aprende el
@@ -568,6 +613,9 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     fd.set("supplierAccount", supplierAccountVal);
     fd.set("expenseAccount",  expenseAccountVal);
     fd.set("operationType", operationType);
+    fd.set("intracomGoodsType", intracomGoodsType);
+    fd.set("equivalenceSurchargeRate", equivalenceSurchargeRate);
+    fd.set("equivalenceSurchargeAmount", equivalenceSurchargeAmount);
     fd.set("retentionType", retentionType);
     fd.set("retentionBase", retentionBase);
     fd.set("retentionRate", retentionRate);
@@ -580,7 +628,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     fd.set("bucket", bucket);
     if (extra) Object.entries(extra).forEach(([k,v]) => fd.set(k,v));
     return fd;
-  }, [type, vatLines, totalAmount, markedEuro, invoiceDateVal, supplierAccountVal, expenseAccountVal, operationType, retentionType, retentionBase, retentionRate, retentionAmount, isRectificative, rectifiedInvoiceSeries, rectifiedInvoiceNumber, rectificativeType, art80Tres, invoice.id, invoice.updatedAt, bucket]);
+  }, [type, vatLines, totalAmount, markedEuro, invoiceDateVal, supplierAccountVal, expenseAccountVal, operationType, intracomGoodsType, equivalenceSurchargeRate, equivalenceSurchargeAmount, retentionType, retentionBase, retentionRate, retentionAmount, isRectificative, rectifiedInvoiceSeries, rectifiedInvoiceNumber, rectificativeType, art80Tres, invoice.id, invoice.updatedAt, bucket]);
 
   const handleSave = () => {
     startSave(async () => {
@@ -1116,13 +1164,70 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
               </fieldset>
             </div>
 
+            {/* Ventas intracomunitarias: BIENES/SERVICIOS para la Clave 349.
+                No cambia el código de operación (siempre 3) — es aparte.
+                Fuera del grid para no romper alturas, igual que el aviso. */}
+            {type === "SALE" && operationType === "INTRACOM" && (
+              <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
+                <span className="text-[11px] font-medium text-slate-500">
+                  Clasificación 349 (entrega intracomunitaria)
+                </span>
+                <div className="flex gap-1">
+                  {(["BIENES", "SERVICIOS"] as IntracomGoodsTypeName[]).map((g) => (
+                    <button
+                      key={g}
+                      type="button"
+                      onClick={() => { setIntracomGoodsType(g); setGoodsTypeTouched(true); }}
+                      className={
+                        "rounded-md px-2.5 py-1 text-[11px] font-medium transition " +
+                        (intracomGoodsType === g
+                          ? "bg-blue-600 text-white"
+                          : "bg-slate-100 text-slate-600 hover:bg-slate-200")
+                      }
+                    >
+                      {INTRACOM_GOODS_TYPE_LABEL[g]}
+                    </button>
+                  ))}
+                </div>
+                {!intracomGoodsType && (
+                  <span className="flex items-center gap-1 text-[11px] text-amber-600">
+                    <AlertTriangle className="h-3 w-3" />
+                    Sin determinar
+                  </span>
+                )}
+              </div>
+            )}
+
             {/* Aviso ISP/intracom — fuera del grid para no romper alturas. */}
             {operationType !== "INTERIOR" && operationType !== "AGRARIA"
               && operationType !== "IVA_NO_DEDUCIBLE"
               && vatTotals.sumAmount > 0.01 && (
+              <p className="flex flex-wrap items-center gap-1.5 text-[11px] text-amber-600">
+                <AlertTriangle className="h-3 w-3 flex-shrink-0" />
+                {operationType === "INTRACOM" || operationType === "INTRACOM_SERVICIOS" ? (
+                  <>
+                    Operación intracomunitaria con IVA declarado: estas operaciones suelen ir con IVA 0%. Revisa el desglose antes de exportar.
+                    <button
+                      type="button"
+                      onClick={() => setVatLines((prev) => prev.map((l) => ({ ...l, vatRate: "0", vatAmount: "0" })))}
+                      className="ml-1 rounded-md border border-amber-300 bg-amber-50 px-2 py-0.5 font-semibold text-amber-700 hover:bg-amber-100"
+                    >
+                      Poner IVA a 0%
+                    </button>
+                  </>
+                ) : (
+                  <>Las facturas de tipo &quot;{operationTypeLabel(operationType, type)}&quot; suelen ir sin IVA en factura (inversión del sujeto pasivo). Revisa el desglose.</>
+                )}
+              </p>
+            )}
+
+            {/* Venta intracomunitaria sin cuenta de ingreso: el plan de cuentas
+                puede tener solo la cuenta de cliente (43x); la de ingreso
+                700/705 necesita asignacion manual y no debe elegirse sola. */}
+            {type === "SALE" && operationType === "INTRACOM" && !expenseAccountVal && (
               <p className="flex items-center gap-1 text-[11px] text-amber-600">
                 <AlertTriangle className="h-3 w-3" />
-                Las facturas de tipo &quot;{operationTypeLabel(operationType, type)}&quot; suelen ir sin IVA en factura (inversión del sujeto pasivo). Revisa el desglose.
+                Venta intracomunitaria sin cuenta de ingreso (700/705) — asígnala manualmente antes de validar.
               </p>
             )}
 
@@ -1569,13 +1674,15 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
               {suggestedAccount?.supplierAccount && !invoice.supplierAccount && (
                 <div className="mb-3 flex items-center gap-2 rounded-lg bg-green-50 px-3 py-2 text-[12px] text-green-700">
                   <CheckCheck className="h-4 w-4" />
-                  Auto-asignada desde plan de cuentas ({suggestedAccount.name})
+                  {accountMatchedByName
+                    ? `Auto-asignada por nombre (${suggestedAccount.name}) — el NIF de este proveedor no es fiable, verifica que sea el tercero correcto`
+                    : `Auto-asignada desde plan de cuentas (${suggestedAccount.name})`}
                 </div>
               )}
               {!suggestedAccount && counterpartyNif && (
                 <div className="mb-3 flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-700">
                   <AlertTriangle className="h-3.5 w-3.5" />
-                  NIF {counterpartyNif} no registrado en el plan de cuentas
+                  NIF {counterpartyNif} no registrado en el plan de cuentas — tampoco se encontró por nombre, revisa/da de alta la cuenta manualmente
                 </div>
               )}
               <div className="grid grid-cols-2 gap-3">
@@ -1621,6 +1728,103 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                 </button>
               )}
             </fieldset>
+
+            {/* Recargo de equivalencia — solo compras. No se hardcodea nunca:
+                el % sugerido según el IVA solo aparece si el cliente esta
+                marcado como minorista en RE (ver ficha del cliente). */}
+            {type === "PURCHASE" && (
+              <fieldset className="rounded-xl border border-slate-200 bg-white p-3">
+                <legend className="px-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                  Recargo de Equivalencia
+                </legend>
+                {sessionContext?.equivalenceSurchargeCustomer && !equivalenceSurchargeRate && (
+                  <div className="mb-3 flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-700">
+                    <AlertTriangle className="h-3.5 w-3.5" />
+                    Cliente en Recargo de Equivalencia — revisa si esta factura lo lleva
+                  </div>
+                )}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="mb-1 block text-[11px] font-medium text-slate-500">% Recargo</label>
+                    <input
+                      className={inputClass}
+                      type="number"
+                      step="0.01"
+                      value={equivalenceSurchargeRate}
+                      onChange={(e) => setEquivalenceSurchargeRate(e.target.value)}
+                      placeholder="0.00"
+                    />
+                    <div className="mt-1.5 flex flex-wrap gap-1">
+                      {[5.2, 1.4, 0.5].map((r) => (
+                        <button
+                          key={r}
+                          type="button"
+                          onClick={() => {
+                            setEquivalenceSurchargeRate(String(r));
+                            const base = vatTotals.sumBase;
+                            if (base) setEquivalenceSurchargeAmount(((base * r) / 100).toFixed(2));
+                          }}
+                          className={
+                            "rounded-md px-2 py-0.5 text-[11px] font-medium transition " +
+                            (parseFloat(equivalenceSurchargeRate) === r
+                              ? "bg-blue-600 text-white"
+                              : "bg-slate-100 text-slate-600 hover:bg-slate-200")
+                          }
+                        >
+                          {r}%
+                        </button>
+                      ))}
+                      {(() => {
+                        // Sugerencia según el % IVA de la factura (solo con un único
+                        // tipo): 21->5.2, 10->1.4, 4->0.5. Nunca se aplica sola —
+                        // el gestor confirma con este botón.
+                        if (vatLines.length !== 1) return null;
+                        const vatRate = parseFloat(vatLines[0].vatRate);
+                        if (isNaN(vatRate)) return null;
+                        const suggested = equivalenceSurchargeRateForVat(vatRate);
+                        if (suggested == null) return null;
+                        return (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEquivalenceSurchargeRate(String(suggested));
+                              const base = vatTotals.sumBase;
+                              if (base) setEquivalenceSurchargeAmount(((base * suggested) / 100).toFixed(2));
+                            }}
+                            className="rounded-md border border-blue-200 px-2 py-0.5 text-[11px] font-medium text-blue-700 hover:bg-blue-50"
+                            title={`Según el ${vatRate}% de IVA de esta factura`}
+                          >
+                            Según IVA ({suggested}%)
+                          </button>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] font-medium text-slate-500">Cuota Recargo</label>
+                    <input
+                      className={inputClass}
+                      type="number"
+                      step="0.01"
+                      value={equivalenceSurchargeAmount}
+                      onChange={(e) => setEquivalenceSurchargeAmount(e.target.value)}
+                      placeholder="0.00"
+                    />
+                  </div>
+                </div>
+                {equivalenceSurchargeRate && !equivalenceSurchargeAmount && vatTotals.sumBase > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setEquivalenceSurchargeAmount(
+                      ((vatTotals.sumBase * (parseFloat(equivalenceSurchargeRate) || 0)) / 100).toFixed(2),
+                    )}
+                    className="mt-2 text-[11px] font-medium text-blue-600 hover:underline"
+                  >
+                    Calcular cuota desde la base ({vatTotals.sumBase.toFixed(2)} €)
+                  </button>
+                )}
+              </fieldset>
+            )}
 
           </div>
 

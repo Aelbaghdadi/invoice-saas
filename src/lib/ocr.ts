@@ -29,6 +29,12 @@ export type ExtractedInvoice = {
   totalAmount:   number | null;
   /** Moneda ISO 4217 de los importes (EUR, USD...). null si no se detecto. */
   currency:      string | null;
+  /** % y cuota de Recargo de Equivalencia SOLO si el documento los menciona
+   *  explicitamente ("Recargo de Equivalencia", "R.E."...). null en el resto
+   *  de casos — nunca se derivan del % de IVA en esta capa (eso, cuando
+   *  procede, lo decide processInvoice a partir de Client.equivalenceSurchargeCustomer). */
+  equivalenceSurchargeRate:   number | null;
+  equivalenceSurchargeAmount: number | null;
   /** Desglose de IVA. Vacio si no se pudo extraer. */
   vatLines:      ExtractedVatLine[];
   confidence:    Record<string, number> | null;
@@ -285,6 +291,11 @@ function mapEntities(entities: any[]): ExtractedInvoice {
     // getMoney solo lee units/nanos y la moneda se perdia: una factura en USD
     // entraba en A3 como si fueran euros.
     currency:      detectDocumentAiCurrency(byType),
+    // Document AI Invoice Parser no tiene una entidad para el recargo de
+    // equivalencia (concepto especifico de España). Se conserva null; el
+    // gestor lo introduce a mano en revision si aplica.
+    equivalenceSurchargeRate:   null,
+    equivalenceSurchargeAmount: null,
     vatLines,
     confidence,
   };
@@ -546,6 +557,12 @@ async function parseFacturaeXml(xml: string): Promise<ExtractedInvoice> {
       inv?.InvoiceIssueData?.InvoiceCurrencyCode ?? inv?.invoiceIssueData?.invoiceCurrencyCode
       ?? facturae?.FileHeader?.Batch?.InvoiceCurrencyCode ?? facturae?.fileHeader?.batch?.invoiceCurrencyCode,
     ),
+    // El recargo de equivalencia en Facturae iria como una linea de impuesto
+    // adicional dentro de TaxesOutputs con un TaxTypeCode distinto de IVA;
+    // no lo mapeamos aqui (fuera de alcance) para no inventar una lectura
+    // sin confirmar el formato real. El gestor lo introduce a mano si aplica.
+    equivalenceSurchargeRate:   null,
+    equivalenceSurchargeAmount: null,
     vatLines,
     confidence,
   };

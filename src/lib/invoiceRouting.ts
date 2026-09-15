@@ -11,7 +11,7 @@
  * Módulo PURO (sin Prisma ni OCR): testeable de forma aislada. La orquestación
  * (descargar el OCR, reasignar el cliente, persistir) vive en processInvoice.
  */
-import { parseTaxId, isValidNIF } from "@/lib/validators";
+import { parseTaxId, isValidNIF, normalizeBusinessName } from "@/lib/validators";
 
 export type RoutingCandidate = { clientId: string; cif: string };
 
@@ -82,19 +82,6 @@ export function routeByCif(
 
 export type TextRoutingCandidate = { clientId: string; cif: string; name: string };
 
-/** Normaliza un nombre para comparar contra el texto del OCR: sin tildes,
- *  en mayúsculas y sin puntuación (espacios colapsados). Así "Bar Pepe, S.L."
- *  del alta casa con "BAR PEPE S L" que pueda leer el OCR. */
-function normalizeName(raw: string): string {
-  return raw
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "") // quitar tildes/diacriticos
-    .toUpperCase()
-    .replace(/[^A-Z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 /**
  * Fallback de ruteo por el TEXTO CRUDO del OCR, para cuando la extracción
  * estructurada no logró casar el CIF (Document AI a veces no rellena el campo
@@ -121,9 +108,9 @@ export function routeByText(
   if (byCif.length > 1) return null; // varios CIF de candidatos en el texto → ambiguo
 
   // Texto normalizado (sin tildes ni puntuación) para buscar el nombre.
-  const normText = normalizeName(rawText);
+  const normText = normalizeBusinessName(rawText);
   const byName = candidates.filter((c) => {
-    const name = normalizeName(c.name);
+    const name = normalizeBusinessName(c.name);
     return name.length >= 4 && normText.includes(name);
   });
   if (byName.length === 1) return { clientId: byName[0].clientId, via: "name" };

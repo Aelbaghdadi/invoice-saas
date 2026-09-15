@@ -94,12 +94,17 @@ export type OperationTypeName =
   | "INTERIOR"
   | "AGRARIA"
   | "INTRACOM"
+  | "INTRACOM_SERVICIOS"
   | "INVERSION_SP"
   | "IMPORTACION"
   | "IVA_NO_DEDUCIBLE";
 
 /** Codigo numerico A3 para cada OperationType. Lo que va a la columna G
- *  del Excel A3 Asesor. */
+ *  del Excel A3 Asesor.
+ *
+ *  INTRACOM_SERVICIOS (8) es EXCLUSIVO de compras: en ventas ambas
+ *  (bienes y servicios) comparten el codigo 3 — ver OPERATION_TYPE_OPTIONS
+ *  y Invoice.intracomGoodsType para la distincion en expedidas (modelo 349). */
 export const OPERATION_TYPE_CODE: Record<OperationTypeName, number> = {
   INTERIOR: 1,
   AGRARIA: 2,
@@ -107,13 +112,15 @@ export const OPERATION_TYPE_CODE: Record<OperationTypeName, number> = {
   INVERSION_SP: 4,
   IMPORTACION: 6,
   IVA_NO_DEDUCIBLE: 7,
+  INTRACOM_SERVICIOS: 8,
 };
 
 /** Etiquetas en español para facturas RECIBIDAS (compras). */
 export const OPERATION_TYPE_LABEL: Record<OperationTypeName, string> = {
   INTERIOR: "Interior (IVA deducible)",
   AGRARIA: "Compensaciones Agrarias",
-  INTRACOM: "Adquisición Intracomunitaria",
+  INTRACOM: "Adquisición Intracomunitaria de Bienes",
+  INTRACOM_SERVICIOS: "Adquisición Intracomunitaria de Servicios",
   INVERSION_SP: "Inversión del Sujeto Pasivo",
   IMPORTACION: "Importación (fuera UE)",
   IVA_NO_DEDUCIBLE: "IVA no deducible",
@@ -121,16 +128,28 @@ export const OPERATION_TYPE_LABEL: Record<OperationTypeName, string> = {
 
 /** Etiquetas para facturas EMITIDAS (ventas). Mismos valores del enum,
  *  pero en una expedida el significado cambia: el 3 de A3 es una ENTREGA
- *  intracomunitaria y el 6 una exportacion (lista real de A3 eco). Los
- *  valores que solo tienen sentido en compras se marcan como tales por
- *  si una factura antigua los trae guardados. */
+ *  intracomunitaria (bienes o servicios, ver intracomGoodsType) y el 6 una
+ *  exportacion (lista real de A3 eco). Los valores que solo tienen sentido
+ *  en compras se marcan como tales por si una factura antigua los trae
+ *  guardados. */
 export const OPERATION_TYPE_LABEL_SALE: Record<OperationTypeName, string> = {
   INTERIOR: "Interior (sujeta a IVA)",
   AGRARIA: "Compensaciones Agrarias (solo compras)",
   INTRACOM: "Entrega Intracomunitaria",
+  INTRACOM_SERVICIOS: "Adquisición Intracomunitaria de Servicios (solo compras)",
   INVERSION_SP: "Inversión del Sujeto Pasivo (solo compras)",
   IMPORTACION: "Exportación (fuera UE)",
   IVA_NO_DEDUCIBLE: "IVA no deducible (solo compras)",
+};
+
+/** Clasificación BIENES/SERVICIOS de una entrega intracomunitaria (venta),
+ *  para la Clave del modelo 349. Solo aplica a ventas — ver Prisma
+ *  `IntracomGoodsType` y Invoice.intracomGoodsType. */
+export type IntracomGoodsTypeName = "BIENES" | "SERVICIOS";
+
+export const INTRACOM_GOODS_TYPE_LABEL: Record<IntracomGoodsTypeName, string> = {
+  BIENES: "Bienes",
+  SERVICIOS: "Servicios",
 };
 
 /** Etiqueta segun el sentido de la factura. */
@@ -147,11 +166,51 @@ export function operationTypeLabel(
  *  intracomunitaria, 6 exportacion. INVERSION_SP se excluye a proposito:
  *  con el mapa unico actual exportaria un 4, que en expedidas significa
  *  "operacion triangular". Bifurcar OPERATION_TYPE_CODE por sentido esta
- *  pendiente de confirmar los codigos reales con el asesor. */
+ *  pendiente de confirmar los codigos reales con el asesor.
+ *
+ *  INTRACOM_SERVICIOS tambien se excluye de ventas a proposito: en
+ *  expedidas bienes y servicios comparten el codigo 3 (ver
+ *  Invoice.intracomGoodsType para la Clave 349), asi que ofrecer el 8
+ *  llevaria a exportar un codigo que en expedidas no existe. */
 export const OPERATION_TYPE_OPTIONS: Record<"PURCHASE" | "SALE", OperationTypeName[]> = {
-  PURCHASE: ["INTERIOR", "AGRARIA", "INTRACOM", "INVERSION_SP", "IMPORTACION", "IVA_NO_DEDUCIBLE"],
+  PURCHASE: ["INTERIOR", "AGRARIA", "INTRACOM", "INTRACOM_SERVICIOS", "INVERSION_SP", "IMPORTACION", "IVA_NO_DEDUCIBLE"],
   SALE: ["INTERIOR", "INTRACOM", "IMPORTACION"],
 };
+
+// ─── Recargo de Equivalencia ─────────────────────────────────────────────
+
+/** Mapeo IVA -> % recargo de equivalencia habitual. Solo se aplica cuando
+ *  ya sabemos con certeza (Client.equivalenceSurchargeCustomer) que la
+ *  factura esta sujeta a RE — nunca por el simple hecho de que el IVA sea
+ *  uno de estos tres valores. */
+const EQUIVALENCE_SURCHARGE_BY_VAT: Record<number, number> = {
+  21: 5.2,
+  10: 1.4,
+  4: 0.5,
+};
+
+/** % de recargo de equivalencia habitual para un tipo de IVA, o null si el
+ *  tipo no tiene un recargo estandar asociado (el gestor lo introduce a mano). */
+export function equivalenceSurchargeRateForVat(vatRate: number): number | null {
+  return EQUIVALENCE_SURCHARGE_BY_VAT[vatRate] ?? null;
+}
+
+// ─── Normalización de nombres de terceros ───────────────────────────────
+
+/** Normaliza un nombre de tercero (proveedor/cliente) para comparar de
+ *  forma insensible a mayusculas, tildes, puntuacion y espacios. Ej:
+ *  "Bar Pepe, S.L." y "BAR PEPE S L" normalizan igual. Compartido por el
+ *  auto-ruteo multicliente (invoiceRouting.ts) y el matching del plan de
+ *  cuentas por nombre cuando el NIF no es fiable (supplierMatching.ts). */
+export function normalizeBusinessName(raw: string): string {
+  return raw
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 /** Resultado del parser de NIF/VAT: el numero limpio (sin prefijo y sin
  *  caracteres especiales), el codigo de pais detectado y el tipo de

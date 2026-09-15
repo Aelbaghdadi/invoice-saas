@@ -8,6 +8,8 @@ import {
   OPERATION_TYPE_LABEL,
   OPERATION_TYPE_LABEL_SALE,
   operationTypeLabel,
+  equivalenceSurchargeRateForVat,
+  normalizeBusinessName,
 } from "@/lib/validators";
 
 describe("isValidNIF", () => {
@@ -97,8 +99,9 @@ describe("isValidTaxIdWithPrefix", () => {
 });
 
 describe("OPERATION_TYPE_OPTIONS por sentido", () => {
-  it("compras ofrece los 6 valores del enum", () => {
-    expect(OPERATION_TYPE_OPTIONS.PURCHASE).toHaveLength(6);
+  it("compras ofrece los 7 valores del enum (incluye INTRACOM_SERVICIOS)", () => {
+    expect(OPERATION_TYPE_OPTIONS.PURCHASE).toHaveLength(7);
+    expect(OPERATION_TYPE_OPTIONS.PURCHASE).toContain("INTRACOM_SERVICIOS");
   });
 
   it("ventas solo ofrece los codigos verificados contra la lista real de expedidas (1, 3, 6)", () => {
@@ -108,6 +111,15 @@ describe("OPERATION_TYPE_OPTIONS por sentido", () => {
 
   it("ventas NO ofrece inversion del sujeto pasivo (exportaria un 4 = triangulares)", () => {
     expect(OPERATION_TYPE_OPTIONS.SALE).not.toContain("INVERSION_SP");
+  });
+
+  it("ventas NO ofrece INTRACOM_SERVICIOS: en expedidas bienes y servicios comparten el codigo 3", () => {
+    expect(OPERATION_TYPE_OPTIONS.SALE).not.toContain("INTRACOM_SERVICIOS");
+  });
+
+  it("compras: bienes intracomunitarios -> codigo 3, servicios intracomunitarios -> codigo 8", () => {
+    expect(OPERATION_TYPE_CODE.INTRACOM).toBe(3);
+    expect(OPERATION_TYPE_CODE.INTRACOM_SERVICIOS).toBe(8);
   });
 
   it("todos los valores ofrecidos tienen etiqueta y codigo en ambos sentidos", () => {
@@ -121,5 +133,31 @@ describe("OPERATION_TYPE_OPTIONS por sentido", () => {
   it("la etiqueta de INTRACOM cambia de sentido: adquisicion en compras, entrega en ventas", () => {
     expect(operationTypeLabel("INTRACOM", "PURCHASE")).toMatch(/Adquisición/);
     expect(operationTypeLabel("INTRACOM", "SALE")).toMatch(/Entrega/);
+  });
+});
+
+describe("equivalenceSurchargeRateForVat", () => {
+  it("mapea los tres tipos de IVA con recargo estandar", () => {
+    expect(equivalenceSurchargeRateForVat(21)).toBe(5.2);
+    expect(equivalenceSurchargeRateForVat(10)).toBe(1.4);
+    expect(equivalenceSurchargeRateForVat(4)).toBe(0.5);
+  });
+
+  it("devuelve null para tipos sin recargo estandar asociado", () => {
+    expect(equivalenceSurchargeRateForVat(0)).toBeNull();
+    expect(equivalenceSurchargeRateForVat(7)).toBeNull();
+    expect(equivalenceSurchargeRateForVat(5)).toBeNull();
+  });
+});
+
+describe("normalizeBusinessName", () => {
+  it("normaliza mayusculas, tildes y puntuacion igual sin importar el formato", () => {
+    expect(normalizeBusinessName("Bar Pepe, S.L.")).toBe(normalizeBusinessName("BAR PEPE S L"));
+    expect(normalizeBusinessName("Guangzhou Blings Bag")).toBe("GUANGZHOU BLINGS BAG");
+  });
+
+  it("distingue nombres realmente distintos", () => {
+    expect(normalizeBusinessName("Guangzhou Blings Bag"))
+      .not.toBe(normalizeBusinessName("Guangzhou Hongxin Cosmetics"));
   });
 });

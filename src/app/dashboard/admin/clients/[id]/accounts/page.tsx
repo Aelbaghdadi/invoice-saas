@@ -7,6 +7,7 @@ import Link from "next/link";
 import { ImportButton } from "./ImportButton";
 import { AccountsTable } from "./AccountsTable";
 import { SimplifiedAccountsConfig } from "./SimplifiedAccountsConfig";
+import { EquivalenceSurchargeConfig } from "./EquivalenceSurchargeConfig";
 
 export default async function AccountsPage({ params }: { params: Promise<{ id: string }> }) {
   const session = await auth();
@@ -42,6 +43,12 @@ export default async function AccountsPage({ params }: { params: Promise<{ id: s
         clientId={clientId}
         initialSupplier={client.simplifiedSupplierAccount ?? ""}
         initialExpense={client.simplifiedExpenseAccount ?? ""}
+      />
+
+      {/* Recargo de equivalencia */}
+      <EquivalenceSurchargeConfig
+        clientId={clientId}
+        initialEnabled={client.equivalenceSurchargeCustomer}
       />
 
       {/* Import + Add */}

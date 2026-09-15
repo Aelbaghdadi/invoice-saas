@@ -138,7 +138,18 @@ export function AccountsTable({ entries, clientId }: Props) {
                 />
               ) : (
                 <tr key={entry.id} className="hover:bg-slate-50/60">
-                  <td className="px-3 md:px-5 py-3 text-[13px] font-mono text-slate-700">{entry.nif}</td>
+                  <td className="px-3 md:px-5 py-3 text-[13px] font-mono text-slate-700">
+                    {entry.nif.startsWith("SINNIF:") ? (
+                      <span
+                        className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700"
+                        title="Sin NIF/VAT fiable — identificado por nombre"
+                      >
+                        Sin NIF fiable
+                      </span>
+                    ) : (
+                      entry.nif
+                    )}
+                  </td>
                   <td className="px-3 md:px-5 py-3 text-[13px] text-slate-700">{entry.name}</td>
                   <td className="px-3 md:px-5 py-3 text-[13px] font-mono text-slate-600">{entry.supplierAccount}</td>
                   <td className="hidden md:table-cell px-3 md:px-5 py-3 text-[13px] font-mono text-slate-600">{entry.expenseAccount}</td>

@@ -12,6 +12,7 @@ import {
 } from "@/lib/reviewQueue";
 import { extractBoundingBoxes } from "@/lib/boundingBoxes";
 import { extractGeminiBoundingBoxes } from "@/lib/ocrLlm";
+import { accountEntryKey } from "@/lib/supplierMatching";
 
 // La cola se calcula en cada render — el conteo cambia segun otro
 // gestor valide/rechace facturas. Forzamos dinamico para que el "X de N"
@@ -112,11 +113,18 @@ export default async function ReviewPage({
   // secas, en una emitida se buscaba el NIF del propio cliente (que
   // nunca esta en su plan de cuentas) y jamas encontraba nada.
   const counterpartyNif = invoice.type === "SALE" ? invoice.receiverCif : invoice.issuerCif;
-  const suggestedAccount = counterpartyNif
+  const counterpartyName = invoice.type === "SALE" ? invoice.receiverName : invoice.issuerName;
+  // Clave de identidad del tercero: NIF si es fiable, nombre normalizado si
+  // no (proveedores extranjeros sin NIF/VAT valido, ej. chinos). Asi un
+  // proveedor sin NIF fiable puede encontrarse por nombre en vez de
+  // quedarse siempre "no registrado".
+  const entryKey = accountEntryKey(counterpartyNif, counterpartyName);
+  const suggestedAccount = entryKey
     ? await prisma.accountEntry.findUnique({
-        where: { clientId_nif: { clientId: invoice.clientId, nif: counterpartyNif } },
+        where: { clientId_nif: { clientId: invoice.clientId, nif: entryKey } },
       })
     : null;
+  const accountMatchedByName = entryKey.startsWith("SINNIF:");
 
   // Solo sugerimos la cuenta si pertenece a la familia del sentido de esta
   // factura. Un tercero que es proveedor y cliente a la vez comparte fila en
@@ -192,6 +200,8 @@ export default async function ReviewPage({
     irpfAmount:    toNum(invoiceRaw.irpfAmount),
     retentionBase: toNum(invoiceRaw.retentionBase),
     totalAmount:   toNum(invoiceRaw.totalAmount),
+    equivalenceSurchargeRate:   toNum(invoiceRaw.equivalenceSurchargeRate),
+    equivalenceSurchargeAmount: toNum(invoiceRaw.equivalenceSurchargeAmount),
   };
 
   return (
@@ -212,6 +222,7 @@ export default async function ReviewPage({
         boundingBoxes={boundingBoxes}
         issues={issuesData}
         suggestedAccount={accountData}
+        accountMatchedByName={accountMatchedByName}
         queueSuffix={queueSuffix}
         bucket={bucket}
         avgOcrDurationMs={avgOcrDurationMs}
@@ -225,6 +236,7 @@ export default async function ReviewPage({
           periodMonth: invoice.periodMonth,
           periodYear: invoice.periodYear,
           type: invoice.type,
+          equivalenceSurchargeCustomer: invoice.client.equivalenceSurchargeCustomer,
         }}
       />
     </div>

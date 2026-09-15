@@ -6,6 +6,7 @@ import { z } from "zod";
 import * as XLSX from "xlsx";
 import { parseTaxId } from "@/lib/validators";
 import { accountGroup, normalizePlanAccount } from "@/lib/accountingAccount";
+import { accountEntryKey } from "@/lib/supplierMatching";
 
 type ActionState = { success?: boolean; error?: string; imported?: number; errors?: string[] } | null;
 
@@ -53,20 +54,22 @@ export async function importAccountsFromExcel(
     }
     const cuenta = normalizePlanAccount(String(row[0] ?? ""));
     const descripcion = String(row[1] ?? "").trim();
-    // Normalizar igual que busca el resto del sistema (parseTaxId.clean):
-    // mayusculas, sin puntos/guiones y SIN prefijo de pais. Si aqui se
-    // guardara "PT515160873" tal cual, la revision buscaria "515160873"
-    // y no casarian nunca (causa real del "no encuentra ningun cliente").
-    const nif = parseTaxId(String(row[2] ?? "")).clean;
+    const rawNif = String(row[2] ?? "").trim();
+    // Clave de identidad del tercero: el NIF limpio (parseTaxId.clean) si es
+    // fiable, o el nombre normalizado si no lo es (proveedores extranjeros,
+    // habitual en chinos, sin NIF/VAT valido). Usar el NIF basura tal cual
+    // fusionaria en una sola fila a dos proveedores distintos que comparten
+    // el mismo identificador no fiable.
+    const key = accountEntryKey(rawNif, descripcion);
 
-    if (!cuenta || !nif) continue; // Skip empty rows
+    if (!cuenta || !key) continue; // Skip empty rows
 
     // Grupo por los tres primeros digitos. Antes se usaba split(".")[0], que
     // con una cuenta sin punto ("40000022", el formato de A3 a 8 digitos)
     // devolvia la cuenta entera y la mandaba siempre a "prefijo desconocido".
     const prefixNum = accountGroup(cuenta) ?? NaN;
 
-    const existing = entries.get(nif) ?? { nif, name: descripcion, supplierAccount: "", expenseAccount: "" };
+    const existing = entries.get(key) ?? { nif: key, name: descripcion, supplierAccount: "", expenseAccount: "" };
 
     if (prefixNum >= 400 && prefixNum < 500) {
       // 4xx = cuenta proveedor/cliente
@@ -84,7 +87,7 @@ export async function importAccountsFromExcel(
     }
 
     if (!existing.name && descripcion) existing.name = descripcion;
-    entries.set(nif, existing);
+    entries.set(key, existing);
   }
 
   if (entries.size === 0) {
@@ -265,6 +268,37 @@ export async function updateSimplifiedAccounts(
       simplifiedSupplierAccount: supplier || null,
       simplifiedExpenseAccount: expense || null,
     },
+  });
+
+  return { success: true };
+}
+
+// ─── Recargo de Equivalencia ────────────────────────────────────────────────
+
+/**
+ * Marca/desmarca a este cliente como minorista acogido a Recargo de
+ * Equivalencia. Con el flag activo, sus facturas de compra sugieren
+ * automáticamente % y cuota de recargo (mapeo habitual según el IVA) al
+ * procesarlas — nunca sin este flag, para no inventar recargo en clientes
+ * que no están en ese régimen.
+ */
+export async function updateEquivalenceSurcharge(
+  clientId: string,
+  _prev: ActionState,
+  formData: FormData,
+): Promise<ActionState> {
+  const session = await auth();
+  if (!session?.user || session.user.role !== "ADMIN") return { error: "No autorizado" };
+  const firmId = session.user.advisoryFirmId ?? undefined;
+
+  const client = await prisma.client.findUnique({ where: { id: clientId } });
+  if (!client || client.advisoryFirmId !== firmId) return { error: "Cliente no encontrado" };
+
+  const enabled = formData.get("equivalenceSurchargeCustomer") === "on";
+
+  await prisma.client.update({
+    where: { id: clientId },
+    data: { equivalenceSurchargeCustomer: enabled },
   });
 
   return { success: true };

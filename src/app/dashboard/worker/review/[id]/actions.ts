@@ -17,6 +17,7 @@ import { appendAuditLogs } from "@/lib/auditLog";
 import { canAccessClient } from "@/lib/accessibleClients";
 import { parseTaxId, isPersonaFisica } from "@/lib/validators";
 import { partyAccountMatchesType, resultAccountMatchesType } from "@/lib/accountingAccount";
+import { accountEntryKey } from "@/lib/supplierMatching";
 import { normalizeCurrency } from "@/lib/currency";
 import { applyRectificativeSign } from "@/lib/rectificative";
 import { appError, type AppError } from "@/lib/errorCodes";
@@ -60,6 +61,11 @@ type FieldData = {
   supplierAccount: string;
   expenseAccount:  string;
   operationType:   string;
+  /** "BIENES" / "SERVICIOS" / "" — solo relevante en ventas intracomunitarias
+   *  (Clave 349). Ver Invoice.intracomGoodsType. */
+  intracomGoodsType: string;
+  equivalenceSurchargeRate:   string;
+  equivalenceSurchargeAmount: string;
   retentionType:   string;
   retentionBase:   string;
   retentionRate:   string;
@@ -79,6 +85,9 @@ type ValidOperationType = (typeof VALID_OPERATION_TYPES)[number];
 
 const VALID_RETENTION_TYPES = ["PROFESSIONAL", "RENT"] as const;
 type ValidRetentionType = (typeof VALID_RETENTION_TYPES)[number];
+
+const VALID_INTRACOM_GOODS_TYPES = ["BIENES", "SERVICIOS"] as const;
+type ValidIntracomGoodsType = (typeof VALID_INTRACOM_GOODS_TYPES)[number];
 
 const VALID_RECTIFICATIVE_TYPES = ["BY_DIFFERENCE", "BY_SUBSTITUTION"] as const;
 type ValidRectificativeType = (typeof VALID_RECTIFICATIVE_TYPES)[number];
@@ -230,6 +239,19 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
             : null))
     : null;
 
+  // Clave 349 (BIENES/SERVICIOS): solo tiene sentido en ventas
+  // intracomunitarias. Si la factura no es eso (cambio de tipo/operacion
+  // desde que se fijo, o dato residual) se descarta para no dejar
+  // informacion incoherente en BD.
+  const submittedOperationType = (VALID_OPERATION_TYPES as readonly string[]).includes(data.operationType)
+    ? (data.operationType as ValidOperationType)
+    : "INTERIOR" as ValidOperationType;
+  const intracomGoodsType: ValidIntracomGoodsType | null =
+    effectiveType === "SALE" && submittedOperationType === "INTRACOM"
+    && (VALID_INTRACOM_GOODS_TYPES as readonly string[]).includes(data.intracomGoodsType)
+      ? (data.intracomGoodsType as ValidIntracomGoodsType)
+      : null;
+
   const newData = {
     type:          effectiveType,
     // Al guardar con un tipo concreto, queda confirmado; si no se tocó y
@@ -256,9 +278,10 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     accountingPeriodYear:  parseInt2(data.accountingPeriodYear),
     supplierAccount: data.supplierAccount || null,
     expenseAccount:  data.expenseAccount  || null,
-    operationType:   (VALID_OPERATION_TYPES as readonly string[]).includes(data.operationType)
-      ? (data.operationType as ValidOperationType)
-      : "INTERIOR" as ValidOperationType,
+    operationType:   submittedOperationType,
+    intracomGoodsType,
+    equivalenceSurchargeRate:   parse(data.equivalenceSurchargeRate),
+    equivalenceSurchargeAmount: parse(data.equivalenceSurchargeAmount),
     isRectificative:        isRectificativeFlag,
     rectifiedInvoiceSeries: isRectificativeFlag ? (data.rectifiedInvoiceSeries.trim() || null) : null,
     rectifiedInvoiceNumber: isRectificativeFlag ? (data.rectifiedInvoiceNumber.trim() || null) : null,
@@ -310,7 +333,8 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     "type",
     "issuerName","issuerCif","receiverName","receiverCif",
     "invoiceNumber","taxBase","vatRate","vatAmount","irpfRate","irpfAmount","totalAmount","currency",
-    "operationType",
+    "operationType","intracomGoodsType",
+    "equivalenceSurchargeRate","equivalenceSurchargeAmount",
     "isRectificative","rectifiedInvoiceNumber","rectificativeType",
   ] as const;
 
@@ -383,6 +407,12 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     // el mismo.
     const learnNif  = (isPurchase ? newData.issuerCif  : newData.receiverCif )?.trim().toUpperCase();
     const learnName = (isPurchase ? newData.issuerName : newData.receiverName)?.trim();
+    // Clave de identidad del tercero: el NIF si es fiable, o el nombre
+    // normalizado si no (proveedores extranjeros sin NIF/VAT valido, ej.
+    // chinos). Usar el NIF basura tal cual arriesgaria fusionar en una sola
+    // fila a dos proveedores distintos que comparten el mismo identificador
+    // no fiable.
+    const learnKey = accountEntryKey(learnNif, learnName);
     // Solo aprendemos la cuenta si es de la familia que toca a este sentido.
     // AccountEntry tiene una sola pareja de cuentas por (cliente, NIF): sin
     // este filtro, validar una venta a un tercero que tambien es proveedor
@@ -406,13 +436,13 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     const learnRetentionRate = learnIsPF && newData.irpfRate != null ? newData.irpfRate : null;
     // Aprendemos tambien el tipo de operacion por NIF: la proxima factura
     // de este emisor pre-rellenara el operationType automaticamente.
-    if (learnNif && (learnSupplier || learnExpense || newData.operationType)) {
+    if (learnKey && (learnSupplier || learnExpense || newData.operationType)) {
       await prisma.accountEntry.upsert({
-        where: { clientId_nif: { clientId: invoice.clientId, nif: learnNif } },
+        where: { clientId_nif: { clientId: invoice.clientId, nif: learnKey } },
         create: {
           clientId: invoice.clientId,
-          nif: learnNif,
-          name: learnName || learnNif,
+          nif: learnKey,
+          name: learnName || learnNif || learnKey,
           supplierAccount: learnSupplier || "",
           expenseAccount: learnExpense || "",
           defaultVatRate: learnVatRate != null ? (learnVatRate as any) : null,
@@ -1005,6 +1035,9 @@ function extractFields(fd: FormData): FieldData {
     supplierAccount: fd.get("supplierAccount") as string ?? "",
     expenseAccount:  fd.get("expenseAccount")  as string ?? "",
     operationType:   fd.get("operationType")   as string ?? "INTERIOR",
+    intracomGoodsType: fd.get("intracomGoodsType") as string ?? "",
+    equivalenceSurchargeRate:   fd.get("equivalenceSurchargeRate")   as string ?? "",
+    equivalenceSurchargeAmount: fd.get("equivalenceSurchargeAmount") as string ?? "",
     retentionType:   fd.get("retentionType")   as string ?? "",
     retentionBase:   fd.get("retentionBase")   as string ?? "",
     retentionRate:   fd.get("retentionRate")   as string ?? "",
