@@ -8,7 +8,7 @@ import {
   XCircle, RefreshCw, CheckCheck, Plus, Trash2,
   Globe, Scissors, Sparkles,
 } from "lucide-react";
-import { saveInvoiceFields, validateInvoice, rejectInvoice, deferInvoice, type ReviewState } from "./actions";
+import { saveInvoiceFields, validateInvoice, rejectInvoice, deferInvoice, confirmThirdPartyName, type ReviewState } from "./actions";
 import dynamic from "next/dynamic";
 const SplitInvoiceModal = dynamic(() => import("./SplitInvoiceModal"), { ssr: false });
 const SplitPdfModal = dynamic(() => import("./SplitPdfModal"), { ssr: false });
@@ -768,6 +768,28 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
       // El action redirecciona en caso de exito; solo veremos retorno si hay error.
       if (res?.error) {
         error(typeof res.error === "string" ? res.error : res.error.message);
+      }
+    });
+  };
+
+  // El gestor confirma que la fila del plan de cuentas con este NIF es este
+  // mismo tercero: se le pone el nombre de la factura y deja de avisar.
+  // Se usa el nombre que hay en pantalla (puede haber corregido el del OCR sin
+  // guardar); tras confirmar el aviso se oculta, porque la pagina lo sigue
+  // comparando con el nombre guardado hasta que se guarde o valide.
+  const [isPendingThirdPartyName, startThirdPartyName] = useTransition();
+  const [thirdPartyNameConfirmed, setThirdPartyNameConfirmed] = useState(false);
+  const handleConfirmThirdPartyName = () => {
+    const nameInput = document.getElementById(type === "SALE" ? "receiverName" : "issuerName") as HTMLInputElement | null;
+    const typedName = nameInput?.value.trim() ?? "";
+    startThirdPartyName(async () => {
+      const res = await confirmThirdPartyName(invoice.id, typedName);
+      if (res?.error) {
+        error(typeof res.error === "string" ? res.error : res.error.message);
+      } else {
+        setThirdPartyNameConfirmed(true);
+        success("Nombre actualizado en el plan de cuentas");
+        router.refresh();
       }
     });
   };
@@ -1816,7 +1838,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
               <legend className="px-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 Cuentas Contables
               </legend>
-              {suggestedAccount?.supplierAccount && !invoice.supplierAccount && (
+              {suggestedAccount?.supplierAccount && !invoice.supplierAccount && !accountNameMismatch && (
                 <div className="mb-3 flex items-center gap-2 rounded-lg bg-green-50 px-3 py-2 text-[12px] text-green-700">
                   <CheckCheck className="h-4 w-4" />
                   {accountMatchedByName
@@ -1830,10 +1852,25 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                   NIF {counterpartyNif} no registrado en el plan de cuentas — tampoco se encontró por nombre, revisa/da de alta la cuenta manualmente
                 </div>
               )}
-              {suggestedAccount && accountNameMismatch && (
-                <div className="mb-3 flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-700">
-                  <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
-                  El NIF {counterpartyNif} está en el plan de cuentas a nombre de «{suggestedAccount.name}», que no coincide con esta factura. No se ha rellenado ninguna cuenta: comprueba cuál de los dos es el tercero correcto.
+              {/* Con el NIF o el tipo cambiados sin guardar, la fila encontrada
+                  al abrir ya no es la de este tercero: ni aviso ni boton. */}
+              {suggestedAccount && accountNameMismatch && !counterpartyChanged && !thirdPartyNameConfirmed && (
+                <div className="mb-3 rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
+                  <p className="flex items-start gap-2">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+                    <span>
+                      El NIF {counterpartyNif} está en el plan de cuentas a nombre de «{suggestedAccount.name}», que no coincide con esta factura. Se han puesto sus cuentas: comprueba que es el mismo {type === "SALE" ? "cliente" : "proveedor"}. Mientras el nombre no coincida, al validar no se guarda nada en el plan de cuentas.
+                    </span>
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleConfirmThirdPartyName}
+                    disabled={isPendingThirdPartyName}
+                    className="ml-5 mt-2 inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-2.5 py-1 text-[12px] font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+                  >
+                    {isPendingThirdPartyName && <Loader2 className="h-3 w-3 animate-spin" />}
+                    Es el mismo: usar el nombre de esta factura
+                  </button>
                 </div>
               )}
               <div className="grid grid-cols-2 gap-3">

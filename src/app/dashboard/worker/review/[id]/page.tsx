@@ -129,10 +129,13 @@ export default async function ReviewPage({
       })
     : null;
   const accountMatchedByName = entryKey.startsWith("SINNIF:");
-  // Encontrada por NIF pero a nombre de otro tercero (dos proveedores que
-  // comparten numero): no se rellena nada y se avisa para que el gestor
-  // decida. Sin esto, una factura de "Blings Bag" salia con la cuenta de
-  // "Hongxin Cosmetics" y banner verde.
+  // Encontrada por NIF pero a nombre de otro: las cuentas se rellenan igual y
+  // se avisa para que el gestor lo compruebe. En el plan de A3 los nombres
+  // vienen cortados o escritos de otra forma y casi siempre es el mismo
+  // tercero; no rellenar dejaba sin cuentas a muchos terceros reales. Lo que
+  // si se evita es aprender de la factura mientras no coincida (actions.ts),
+  // para que dos proveedores que comparten numero (Blings Bag / Hongxin) no
+  // se pisen la fila.
   const accountNameMismatch =
     suggestedAccount != null && !accountMatchedByName && !entryNameMatches(suggestedAccount, counterpartyName);
 
@@ -143,10 +146,10 @@ export default async function ReviewPage({
   const invoiceType = invoice.type === "SALE" ? "SALE" : "PURCHASE";
   const accountData = suggestedAccount
     ? {
-        supplierAccount: !accountNameMismatch && partyAccountMatchesType(suggestedAccount.supplierAccount, invoiceType)
+        supplierAccount: partyAccountMatchesType(suggestedAccount.supplierAccount, invoiceType)
           ? suggestedAccount.supplierAccount
           : "",
-        expenseAccount: !accountNameMismatch && resultAccountMatchesType(suggestedAccount.expenseAccount, invoiceType)
+        expenseAccount: resultAccountMatchesType(suggestedAccount.expenseAccount, invoiceType)
           ? suggestedAccount.expenseAccount
           : "",
         defaultVatRate: suggestedAccount.defaultVatRate ? Number(suggestedAccount.defaultVatRate) : null,

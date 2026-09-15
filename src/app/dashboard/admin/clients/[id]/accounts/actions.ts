@@ -4,8 +4,9 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
 import * as XLSX from "xlsx";
-import { accountGroup, normalizePlanAccount } from "@/lib/accountingAccount";
+import { normalizePlanAccount } from "@/lib/accountingAccount";
 import { accountEntryKey } from "@/lib/supplierMatching";
+import { groupPlanRows } from "@/lib/accountPlanImport";
 
 type ActionState = { success?: boolean; error?: string; imported?: number; errors?: string[] } | null;
 
@@ -35,68 +36,10 @@ export async function importAccountsFromExcel(
 
   const rows: unknown[][] = XLSX.utils.sheet_to_json(sheet, { header: 1 });
 
-  // Skip header row, parse data rows
-  // Expected A3 format: Cuenta | Descripcion | NIF
-  const entries = new Map<string, { nif: string; name: string; supplierAccount: string; expenseAccount: string }>();
-  const errors: string[] = [];
+  // Formato A3: Cuenta | Descripcion | NIF, con la primera fila de cabecera.
+  const { entries, errors } = groupPlanRows(rows);
 
-  for (let i = 1; i < rows.length; i++) {
-    const row = rows[i];
-    if (!row || row.length < 2) continue;
-
-    // xlsx entrega las celdas numericas como number: "430.10" llega como 430.1
-    // y al expandirlo daria 43000001 en vez de 43000010, la subcuenta de otro
-    // tercero. Mejor pedir la columna como texto que adivinar el cero perdido.
-    if (typeof row[0] === "number" && !Number.isInteger(row[0])) {
-      errors.push(`Fila ${i + 1}: la cuenta ${row[0]} está guardada como número con decimales y puede haber perdido ceros. Formatea la columna de cuentas como texto y vuelve a importar.`);
-      continue;
-    }
-    const cuenta = normalizePlanAccount(String(row[0] ?? ""));
-    const descripcion = String(row[1] ?? "").trim();
-    const rawNif = String(row[2] ?? "").trim();
-    if (!cuenta) continue;
-
-    // Grupo por los tres primeros digitos. Antes se usaba split(".")[0], que
-    // con una cuenta sin punto ("40000022", el formato de A3 a 8 digitos)
-    // devolvia la cuenta entera y la mandaba siempre a "prefijo desconocido".
-    const prefixNum = accountGroup(cuenta) ?? NaN;
-
-    // Sin NIF solo entra si la cuenta es de tercero (4xx): un proveedor sin
-    // VAT fiable, que se identificara por nombre. Una linea sin NIF de gasto,
-    // ingreso o banco ("62900000 | Otros servicios") no es un tercero y
-    // ensuciaba el plan con filas SINNIF: que ademas se fusionaban entre si
-    // por descripcion.
-    if (!rawNif && !(prefixNum >= 400 && prefixNum < 500)) continue;
-
-    // Clave de identidad del tercero: el NIF limpio si tiene contenido, o el
-    // nombre normalizado si es basura (proveedores extranjeros, habitual en
-    // chinos, sin NIF/VAT). Usar el NIF basura tal cual fusionaria en una
-    // sola fila a dos proveedores distintos que comparten el mismo relleno.
-    const key = accountEntryKey(rawNif, descripcion);
-    if (!key) continue;
-
-    const existing = entries.get(key) ?? { nif: key, name: descripcion, supplierAccount: "", expenseAccount: "" };
-
-    if (prefixNum >= 400 && prefixNum < 500) {
-      // 4xx = cuenta proveedor/cliente
-      existing.supplierAccount = cuenta;
-    } else if ((prefixNum >= 600 && prefixNum < 700) || (prefixNum >= 700 && prefixNum < 800)) {
-      // 6xx = gasto, 7xx = ingreso
-      existing.expenseAccount = cuenta;
-    } else {
-      // Unknown prefix — try to assign intelligently
-      if (!existing.supplierAccount) {
-        existing.supplierAccount = cuenta;
-      } else if (!existing.expenseAccount) {
-        existing.expenseAccount = cuenta;
-      }
-    }
-
-    if (!existing.name && descripcion) existing.name = descripcion;
-    entries.set(key, existing);
-  }
-
-  if (entries.size === 0) {
+  if (entries.length === 0) {
     // El primer motivo va como error principal y la lista lleva solo el resto:
     // antes el primero salia repetido en los dos sitios.
     const [primerError, ...restoErrores] = errors;
@@ -108,7 +51,7 @@ export async function importAccountsFromExcel(
 
   // Upsert all entries
   let imported = 0;
-  for (const entry of entries.values()) {
+  for (const entry of entries) {
     try {
       await prisma.accountEntry.upsert({
         where: { clientId_nif: { clientId, nif: entry.nif } },

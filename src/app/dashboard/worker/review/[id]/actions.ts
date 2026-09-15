@@ -17,7 +17,7 @@ import { appendAuditLogs } from "@/lib/auditLog";
 import { canAccessClient } from "@/lib/accessibleClients";
 import { parseTaxId, isPersonaFisica, operationTypeLabel, OPERATION_TYPE_OPTIONS, OPERATION_TYPE_LABEL, type OperationTypeName } from "@/lib/validators";
 import { partyAccountMatchesType, resultAccountMatchesType } from "@/lib/accountingAccount";
-import { accountEntryKey, entryNameMatches } from "@/lib/supplierMatching";
+import { accountEntryKey, entryNameMatches, NO_RELIABLE_NIF_PREFIX } from "@/lib/supplierMatching";
 import {
   isIntracomOperation,
   goodsTypeFromOperationType,
@@ -677,6 +677,70 @@ export async function deferInvoice(
     redirect(`/dashboard/worker/review/${nextId}${suffix ? `?${suffix}` : ""}`);
   }
   redirect("/dashboard/worker/invoices");
+}
+
+/**
+ * El gestor confirma que la fila del plan de cuentas encontrada por NIF es
+ * este mismo tercero aunque el nombre no coincida (A3 corta los nombres, un
+ * autonomo sale escrito de otra forma, nombre comercial...). Se le pone a la
+ * fila el nombre que el gestor tiene en pantalla (puede haber corregido el del
+ * OCR sin guardar): al validar con ese nombre vuelve a aprender. La fila se
+ * busca con el NIF y el tipo guardados; el formulario no ofrece el boton si
+ * el gestor los ha cambiado. Solo toca AccountEntry; la factura no cambia.
+ */
+export async function confirmThirdPartyName(invoiceId: string, typedName: string): Promise<ReviewState> {
+  try {
+    return await applyThirdPartyName(invoiceId, typeof typedName === "string" ? typedName : "");
+  } catch (e) {
+    console.error("[confirmThirdPartyName]", e);
+    return { error: "No se pudo actualizar el plan de cuentas. Inténtalo de nuevo." };
+  }
+}
+
+async function applyThirdPartyName(invoiceId: string, typedName: string): Promise<ReviewState> {
+  const session = await auth();
+  if (!session?.user || !["ADMIN", "WORKER"].includes(session.user.role)) {
+    return { error: "No autorizado" };
+  }
+
+  const invoice = await prisma.invoice.findUnique({
+    where: { id: invoiceId },
+    select: {
+      clientId: true, type: true,
+      issuerCif: true, issuerCountry: true,
+      receiverCif: true, receiverCountry: true,
+    },
+  });
+  if (!invoice) return { error: "Factura no encontrada" };
+
+  const accessErr = await assertInvoiceAccess(session, invoice.clientId);
+  if (accessErr) return accessErr;
+
+  const isSale = invoice.type === "SALE";
+  const name = (typedName ?? "").trim().slice(0, 200);
+  if (!name) return { error: "Escribe el nombre del tercero antes de confirmar." };
+  const key = accountEntryKey(
+    isSale ? invoice.receiverCif : invoice.issuerCif,
+    name,
+    isSale ? invoice.receiverCountry : invoice.issuerCountry,
+  );
+  if (!key || key.startsWith(NO_RELIABLE_NIF_PREFIX)) {
+    return { error: "Este tercero no tiene un NIF fiable: el plan de cuentas lo busca por nombre." };
+  }
+
+  try {
+    const updated = await prisma.accountEntry.updateMany({
+      where: { clientId: invoice.clientId, nif: key },
+      data: { name },
+    });
+    if (updated.count === 0) return { error: "Ese NIF ya no está en el plan de cuentas." };
+  } catch (e) {
+    console.error("[confirmThirdPartyName]", e);
+    return { error: "No se pudo actualizar el plan de cuentas. Inténtalo de nuevo." };
+  }
+
+  revalidatePath(`/dashboard/worker/review/${invoiceId}`);
+  return null;
 }
 
 export async function rejectInvoice(

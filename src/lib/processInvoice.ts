@@ -361,9 +361,14 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
           },
         }).catch(() => null)
       : null;
-    // Si la fila es de OTRO tercero con el mismo numero (dos proveedores
-    // chinos con 418306763), lo aprendido ahi no vale para esta factura.
-    const knownEntry = foundEntry && entryNameMatches(foundEntry, otherPartyName) ? foundEntry : null;
+    // Lo aprendido (tipo de operacion, retencion) se aplica por NIF aunque el
+    // nombre no coincida: en el plan de A3 los nombres vienen cortados o
+    // escritos de otra forma, y exigirlo dejaba sin aplicar lo aprendido a
+    // muchos terceros reales. La revision avisa del nombre distinto. Lo
+    // asignado "siempre" como bienes/servicios si exige el mismo nombre: con
+    // dos terceros que comparten numero (418306763) seria la eleccion del otro.
+    const knownEntry = foundEntry;
+    const entryIsSameThirdParty = foundEntry != null && entryNameMatches(foundEntry, otherPartyName);
     // Lo aprendido se guardo en el sentido de aquella factura; una fila
     // compartida entre compras y ventas puede traer un tipo que aqui no
     // existe (INTRACOM_SERVICIOS en una emitida exportaria un 8 que en
@@ -380,9 +385,9 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     const intracomProposal = proposeIntracomGoodsType({
       direction: invoice.type,
       operationType: baseOperationType,
-      thirdParty: (invoice.type === "SALE"
-        ? knownEntry?.intracomGoodsTypeSale
-        : knownEntry?.intracomGoodsTypePurchase) ?? null,
+      thirdParty: entryIsSameThirdParty
+        ? (invoice.type === "SALE" ? knownEntry?.intracomGoodsTypeSale : knownEntry?.intracomGoodsTypePurchase) ?? null
+        : null,
       ai: extracted.supplyType,
     });
     const operationType = intracomProposal.operationType;
