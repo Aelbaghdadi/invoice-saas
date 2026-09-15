@@ -2154,7 +2154,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                   role="dialog"
                   aria-modal="true"
                   aria-labelledby="goods-question-title"
-                  className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl"
+                  className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl"
                   onClick={(e) => e.stopPropagation()}
                   onKeyDown={(e) => {
                     if (e.key === "Escape") setGoodsQuestion(null);
@@ -2174,19 +2174,15 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                       ? `Si dices que sí, sus próximas facturas vendrán marcadas como ${chosen} (${detail}). Si alguna es distinta, se cambia a mano.`
                       : `En esta factura has marcado ${chosen}. ¿Es solo una excepción o a partir de ahora va siempre como ${chosen}?`}
                   </p>
-                  <div className="mt-4 flex flex-wrap justify-end gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setGoodsQuestion(null)}
-                      className="rounded-lg border border-slate-200 px-4 py-2 text-[13px] font-medium text-slate-600 hover:bg-slate-50"
-                    >
-                      Cancelar
-                    </button>
+                  {/* Las dos respuestas en columnas iguales: en una fila con
+                      flex-wrap, "Sí, siempre servicios" no cabia y el boton
+                      verde bajaba solo a otra linea. */}
+                  <div className="mt-5 grid grid-cols-2 gap-2">
                     <button
                       type="button"
                       autoFocus={goodsQuestion === "CAMBIO"}
                       onClick={() => runValidate("SOLO_ESTA")}
-                      className="rounded-lg border border-slate-300 px-4 py-2 text-[13px] font-semibold text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-accent-100"
+                      className="rounded-lg border border-slate-300 px-3 py-2.5 text-[13px] font-semibold leading-tight text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-accent-100"
                     >
                       {goodsQuestion === "NUEVO" ? "Solo esta factura" : "Es una excepción"}
                     </button>
@@ -2194,11 +2190,18 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                       type="button"
                       autoFocus={goodsQuestion === "NUEVO"}
                       onClick={() => runValidate("SIEMPRE")}
-                      className="rounded-lg bg-green-600 px-4 py-2 text-[13px] font-semibold text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-200"
+                      className="rounded-lg bg-green-600 px-3 py-2.5 text-[13px] font-semibold leading-tight text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-200"
                     >
                       {goodsQuestion === "NUEVO" ? `Sí, siempre ${chosen}` : `Cambiar a ${chosen} para siempre`}
                     </button>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => setGoodsQuestion(null)}
+                    className="mt-3 w-full text-center text-[12px] font-medium text-slate-500 hover:text-slate-700"
+                  >
+                    Cancelar
+                  </button>
                 </div>
               </div>
             );
