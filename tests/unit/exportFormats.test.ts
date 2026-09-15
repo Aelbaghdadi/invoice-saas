@@ -309,6 +309,36 @@ describe("validateForA3Export — intracomunitarias", () => {
     expect(res.flatMap((r) => r.warnings).filter((w) => w.includes("349"))).toEqual([]);
   });
 
+  it("avisa si la cuenta de ingreso no cuadra con bienes/servicios", () => {
+    const res = validateForA3Export([
+      mkInvoice({
+        type: "SALE",
+        operationType: "INTRACOM" as any,
+        vatAmount: 0 as any,
+        totalAmount: 100 as any,
+        taxBase: 100 as any,
+        intracomGoodsType: "SERVICIOS" as any,
+        expenseAccount: "70000000",
+      }),
+    ]);
+    expect(res.some((r) => r.warnings.some((w) => w.includes("van a la 700")))).toBe(true);
+  });
+
+  it("no avisa si la cuenta de ingreso cuadra con lo marcado", () => {
+    const res = validateForA3Export([
+      mkInvoice({
+        type: "SALE",
+        operationType: "INTRACOM" as any,
+        vatAmount: 0 as any,
+        totalAmount: 100 as any,
+        taxBase: 100 as any,
+        intracomGoodsType: "SERVICIOS" as any,
+        expenseAccount: "70500000",
+      }),
+    ]);
+    expect(res.flatMap((r) => r.warnings).filter((w) => w.includes("van a la 700"))).toEqual([]);
+  });
+
   it("una compra interior normal con IVA no dispara el aviso de intracomunitaria", () => {
     const res = validateForA3Export([mkInvoice({ operationType: "INTERIOR" as any })]);
     expect(res.flatMap((r) => r.warnings).filter((w) => w.includes("IVA declarado"))).toEqual([]);

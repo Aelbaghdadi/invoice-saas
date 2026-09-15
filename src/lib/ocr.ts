@@ -1,6 +1,7 @@
 import { GoogleAuth } from "google-auth-library";
 import { XMLParser } from "fast-xml-parser";
 import { normalizeCurrency } from "./currency";
+import type { IntracomGoodsTypeName } from "./validators";
 
 /** Una linea del desglose de IVA. Una factura con varios tipos
  *  (4% + 10% + 21%) tiene varias lineas. Cuando la factura tiene un
@@ -35,6 +36,9 @@ export type ExtractedInvoice = {
    *  procede, lo decide processInvoice a partir de Client.equivalenceSurchargeCustomer). */
   equivalenceSurchargeRate:   number | null;
   equivalenceSurchargeAmount: number | null;
+  /** Si lo facturado son BIENES o SERVICIOS segun la IA. Solo se usa en
+   *  intracomunitarias (compras 3/8, ventas cuenta 700/705); null si no lo sabe. */
+  supplyType: IntracomGoodsTypeName | null;
   /** Desglose de IVA. Vacio si no se pudo extraer. */
   vatLines:      ExtractedVatLine[];
   confidence:    Record<string, number> | null;
@@ -296,6 +300,9 @@ function mapEntities(entities: any[]): ExtractedInvoice {
     // gestor lo introduce a mano en revision si aplica.
     equivalenceSurchargeRate:   null,
     equivalenceSurchargeAmount: null,
+    // Bienes/servicios lo deduce la IA leyendo los conceptos; Document AI no
+    // tiene esa entidad. El gestor lo marca en revision.
+    supplyType: null,
     vatLines,
     confidence,
   };
@@ -563,6 +570,8 @@ async function parseFacturaeXml(xml: string): Promise<ExtractedInvoice> {
     // sin confirmar el formato real. El gestor lo introduce a mano si aplica.
     equivalenceSurchargeRate:   null,
     equivalenceSurchargeAmount: null,
+    // Facturae no marca si las lineas son bienes o servicios.
+    supplyType: null,
     vatLines,
     confidence,
   };

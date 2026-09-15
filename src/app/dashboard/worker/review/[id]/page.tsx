@@ -234,6 +234,10 @@ export default async function ReviewPage({
         suggestedAccount={accountData}
         accountMatchedByName={accountMatchedByName}
         accountNameMismatch={accountNameMismatch}
+        thirdPartyGoodsType={suggestedAccount && !accountNameMismatch
+          ? (invoiceType === "SALE" ? suggestedAccount.intracomGoodsTypeSale : suggestedAccount.intracomGoodsTypePurchase)
+          : null}
+        canRememberGoodsType={Boolean(entryKey) && !accountNameMismatch}
         queueSuffix={queueSuffix}
         bucket={bucket}
         avgOcrDurationMs={avgOcrDurationMs}

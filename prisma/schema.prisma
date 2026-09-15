@@ -53,13 +53,23 @@ enum OperationType {
   IVA_NO_DEDUCIBLE
 }
 
-/// Clasificación BIENES/SERVICIOS de una ENTREGA intracomunitaria (venta).
-/// A3 usa el mismo código de operación (3) para ambas; la distinción la pide
-/// el modelo 349 aparte ("Clave"). No se usa en compras: ahi ya lo dice
-/// OperationType (INTRACOM = bienes, INTRACOM_SERVICIOS = servicios).
+/// Clasificación BIENES/SERVICIOS de una operación intracomunitaria.
+/// Compras: la dice el código de operación (INTRACOM = 3 bienes,
+/// INTRACOM_SERVICIOS = 8 servicios). Ventas: el código es siempre 3 y la
+/// distinción va en la cuenta de ingreso (700 bienes, 705 servicios).
 enum IntracomGoodsType {
   BIENES
   SERVICIOS
+}
+
+/// De dónde sale la clasificación bienes/servicios de una factura, para que
+/// el gestor vea en revisión si la detectó la IA, viene asignada al tercero,
+/// se dedujo de la cuenta 700/705 o la marcó a mano.
+enum IntracomGoodsSource {
+  IA
+  TERCERO
+  CUENTA
+  MANUAL
 }
 
 /// Tipo de retención IRPF aplicada en la factura. Determina a qué
@@ -342,12 +352,13 @@ model Invoice {
   /// tratan como euros). A3 solo admite euros: cualquier otra se avisa en
   /// revision y en el export hasta que el gestor convierta los importes.
   currency      String?   @db.Char(3)
-  /// SOLO ventas (entregas intracomunitarias, operationType=INTRACOM):
-  /// BIENES o SERVICIOS para la Clave 349. null = no aplica o aun sin
-  /// determinar (se avisa en revision/export hasta que se fije). Se puede
-  /// inferir de la cuenta de ingreso (700->bienes, 705->servicios) pero el
-  /// gestor siempre puede corregirlo a mano.
-  intracomGoodsType IntracomGoodsType?
+  /// Intracomunitarias: BIENES o SERVICIOS. En compras va a la par del
+  /// código de operación (3/8); en ventas decide la cuenta de ingreso
+  /// (700/705). null = no aplica o sin determinar (una venta intracomunitaria
+  /// sin clasificar no se puede validar).
+  intracomGoodsType   IntracomGoodsType?
+  /// Origen de intracomGoodsType: IA, tercero, cuenta o a mano.
+  intracomGoodsSource IntracomGoodsSource?
   /// % y cuota de Recargo de Equivalencia (solo clientes minoristas acogidos
   /// a RE, ver Client.equivalenceSurchargeCustomer). null = no aplica — NO
   /// confundir con 0: una factura sin RE simplemente no tiene estos campos.
@@ -615,6 +626,13 @@ model AccountEntry {
   /// la próxima factura suya se pre-rellena con esos valores.
   defaultRetentionType RetentionType?
   defaultRetentionRate Decimal?       @db.Decimal(5, 2)
+  /// Bienes o servicios asignado "siempre" a este tercero en intracomunitarias,
+  /// por sentido: la fila es la misma si el tercero es proveedor y cliente a
+  /// la vez, y puede vendernos bienes y comprarnos servicios. Solo se guarda
+  /// cuando el gestor lo confirma al validar y manda sobre lo que detecte la
+  /// IA. null = sin asignar.
+  intracomGoodsTypePurchase IntracomGoodsType?
+  intracomGoodsTypeSale     IntracomGoodsType?
 
   clientId String
   client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)

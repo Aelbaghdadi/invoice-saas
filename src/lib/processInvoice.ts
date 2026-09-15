@@ -25,6 +25,7 @@ import { textMentionsRectificative, applyRectificativeSign } from "@/lib/rectifi
 import { routeByCif, clientSideCif, routeByText, detectInvoiceType } from "@/lib/invoiceRouting";
 import { lookupProviderClient } from "@/lib/providerRouting";
 import { accountEntryKey, entryNameMatches } from "@/lib/supplierMatching";
+import { proposeIntracomGoodsType } from "@/lib/intracomGoods";
 
 /**
  * Convierte el string de fecha del OCR a Date. Si el OCR devuelve algo
@@ -355,6 +356,8 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
             defaultOperationType: true,
             defaultRetentionType: true,
             defaultRetentionRate: true,
+            intracomGoodsTypePurchase: true,
+            intracomGoodsTypeSale: true,
           },
         }).catch(() => null)
       : null;
@@ -366,10 +369,23 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     // existe (INTRACOM_SERVICIOS en una emitida exportaria un 8 que en
     // expedidas significa otra cosa).
     const learnedOperationType = knownEntry?.defaultOperationType ?? null;
-    const operationType =
+    const baseOperationType =
       learnedOperationType && OPERATION_TYPE_OPTIONS[invoice.type].includes(learnedOperationType)
         ? learnedOperationType
         : otherParty.operationType;
+
+    // Bienes o servicios en intracomunitarias: lo asignado "siempre" a este
+    // tercero manda y, si no hay, lo que diga la IA. En compras decide el
+    // codigo (3 bienes / 8 servicios); en ventas va aparte (cuenta 700/705).
+    const intracomProposal = proposeIntracomGoodsType({
+      direction: invoice.type,
+      operationType: baseOperationType,
+      thirdParty: (invoice.type === "SALE"
+        ? knownEntry?.intracomGoodsTypeSale
+        : knownEntry?.intracomGoodsTypePurchase) ?? null,
+      ai: extracted.supplyType,
+    });
+    const operationType = intracomProposal.operationType;
 
     // ── Deteccion de retencion IRPF ────────────────────────────────────
     //
@@ -527,6 +543,8 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
           issuerCif:     finalIssuerCif,
           issuerCountry: finalIssuerCountry,
           operationType,
+          intracomGoodsType:   intracomProposal.goodsType,
+          intracomGoodsSource: intracomProposal.source,
           receiverName:    finalReceiverName,
           receiverCif:     finalReceiverCif,
           receiverCountry: finalReceiverCountry,

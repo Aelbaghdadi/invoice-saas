@@ -6,7 +6,7 @@ import {
   CheckCircle2, AlertTriangle, Save, ChevronLeft, ChevronRight, ChevronDown,
   Loader2, AlertCircle, ExternalLink, FileText, Image as ImageIcon,
   XCircle, RefreshCw, CheckCheck, Plus, Trash2,
-  Globe, Scissors,
+  Globe, Scissors, Sparkles,
 } from "lucide-react";
 import { saveInvoiceFields, validateInvoice, rejectInvoice, deferInvoice, type ReviewState } from "./actions";
 import dynamic from "next/dynamic";
@@ -27,7 +27,19 @@ import {
   type IntracomGoodsTypeName,
 } from "@/lib/validators";
 import { dateMatchesPeriod, periodLabel, type PeriodTypeName } from "@/lib/period";
-import { sanitizeAccountingAccountInput, padAccountingAccount, accountGroup } from "@/lib/accountingAccount";
+import { sanitizeAccountingAccountInput, padAccountingAccount } from "@/lib/accountingAccount";
+import {
+  isIntracomOperation,
+  goodsTypeFromOperationType,
+  goodsTypeFromSaleAccount,
+  purchaseOperationTypeForGoods,
+  saleAccountForGoodsType,
+  initialIntracomGoods,
+  goodsTypeQuestion,
+  SALE_ACCOUNT_GROUP,
+  type IntracomGoodsSourceName,
+  type GoodsTypeScope,
+} from "@/lib/intracomGoods";
 import { isForeignCurrency } from "@/lib/currency";
 
 const RETENTION_TYPE_OPTIONS: RetentionTypeName[] = ["PROFESSIONAL", "RENT"];
@@ -150,6 +162,12 @@ type Props = {
   /** true si hay una fila con este NIF pero a nombre de OTRO tercero: no se
    *  rellena nada y se avisa (dos proveedores que comparten numero). */
   accountNameMismatch?: boolean;
+  /** Bienes/servicios asignado "siempre" a este tercero en el plan de cuentas.
+   *  null si no hay nada o si la fila es de otro tercero. */
+  thirdPartyGoodsType?: IntracomGoodsTypeName | null;
+  /** Si se puede guardar esa asignacion (hay NIF o nombre y la fila no es de
+   *  otro tercero). Sin esto no se pregunta al validar. */
+  canRememberGoodsType?: boolean;
   boundingBoxes?: FieldBoundingBoxes;
   /** Querystring ya formada ("?bucket=clean" o ""), a pegar a las URLs de nav. */
   queueSuffix?: string;
@@ -237,7 +255,7 @@ function fmtDate(d: Date | null | undefined) {
   return new Date(d).toISOString().slice(0, 10);
 }
 
-export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position, batchTotal, backHref, extraction, issues, suggestedAccount, accountMatchedByName, accountNameMismatch = false, boundingBoxes, queueSuffix = "", bucket = "all", sessionContext, avgOcrDurationMs, genericAccounts }: Props) {
+export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position, batchTotal, backHref, extraction, issues, suggestedAccount, accountMatchedByName, accountNameMismatch = false, thirdPartyGoodsType = null, canRememberGoodsType = false, boundingBoxes, queueSuffix = "", bucket = "all", sessionContext, avgOcrDurationMs, genericAccounts }: Props) {
   const { success, error } = useToast();
   const isImage = invoice.fileType.startsWith("image/");
   const isPdf   = invoice.fileType === "application/pdf";
@@ -260,23 +278,45 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
   });
   const [totalAmount, setTotalAmount] = useState(fmt(invoice.totalAmount));
   const [invoiceDateVal, setInvoiceDateVal] = useState(fmtDate(invoice.invoiceDate));
+  // Bienes o servicios en intracomunitarias. Se decide al abrir, antes que el
+  // tipo de operacion y la cuenta, porque los mueve: en compras es el 3 o el 8
+  // y en ventas la cuenta de ingreso 700 o 705. Prioridad en initialIntracomGoods.
+  const [intracomInit] = useState(() => {
+    const direction = invoice.type === "SALE" ? "SALE" : "PURCHASE";
+    const savedOperationType = (invoice.operationType as OperationTypeName | undefined) ?? "INTERIOR";
+    const savedExpenseAccount = fmt(invoice.expenseAccount) || suggestedAccount?.expenseAccount || "";
+    const locked = invoice.status === "VALIDATED" || invoice.status === "EXPORTED";
+    const { goodsType, source } = initialIntracomGoods({
+      direction,
+      operationType: savedOperationType,
+      saved: (invoice.intracomGoodsType as IntracomGoodsTypeName | null) ?? null,
+      savedSource: (invoice.intracomGoodsSource as IntracomGoodsSourceName | null) ?? null,
+      thirdParty: thirdPartyGoodsType,
+      expenseAccount: savedExpenseAccount,
+      locked,
+    });
+    const intracom = isIntracomOperation(direction, savedOperationType);
+    return {
+      goodsType,
+      source,
+      operationType: goodsType && intracom && direction === "PURCHASE"
+        ? purchaseOperationTypeForGoods(goodsType)
+        : savedOperationType,
+      // Una factura ya validada se abre con su cuenta tal cual: si no cuadra con
+      // bienes/servicios lo avisa el export, no se corrige sin que se vea.
+      expenseAccount: goodsType && intracom && direction === "SALE" && !locked
+        ? saleAccountForGoodsType(savedExpenseAccount, goodsType, false)
+        : savedExpenseAccount,
+    };
+  });
   const [supplierAccountVal, setSupplierAccount] = useState(fmt(invoice.supplierAccount) || suggestedAccount?.supplierAccount || "");
-  const [expenseAccountVal, setExpenseAccount]   = useState(fmt(invoice.expenseAccount) || suggestedAccount?.expenseAccount || "");
-  const [operationType, setOperationType] = useState<OperationTypeName>(
-    (invoice.operationType as OperationTypeName | undefined) ?? "INTERIOR",
-  );
-
-  // Ventas intracomunitarias (operationType INTRACOM): clasificación
-  // BIENES/SERVICIOS para la Clave 349. NO afecta al código de operación
-  // (siempre 3 en ventas) — es información aparte. Se puede inferir de la
-  // cuenta de ingreso (700->bienes, 705->servicios) pero solo mientras el
-  // gestor no la haya fijado a mano.
-  const [intracomGoodsType, setIntracomGoodsType] = useState<IntracomGoodsTypeName | "">(
-    (invoice.intracomGoodsType as IntracomGoodsTypeName | null) ?? "",
-  );
-  const [goodsTypeTouched, setGoodsTypeTouched] = useState<boolean>(
-    Boolean(invoice.intracomGoodsType),
-  );
+  const [expenseAccountVal, setExpenseAccount]   = useState(intracomInit.expenseAccount);
+  const [operationType, setOperationType] = useState<OperationTypeName>(intracomInit.operationType);
+  const [intracomGoodsType, setIntracomGoodsType] = useState<IntracomGoodsTypeName | null>(intracomInit.goodsType);
+  const [intracomGoodsSource, setIntracomGoodsSource] = useState<IntracomGoodsSourceName | null>(intracomInit.source);
+  // Pregunta al validar: "NUEVO" (el tercero no tiene nada asignado) o
+  // "CAMBIO" (tiene lo contrario de lo marcado).
+  const [goodsQuestion, setGoodsQuestion] = useState<"NUEVO" | "CAMBIO" | null>(null);
 
   // Recargo de equivalencia: % y cuota. Solo relevante en compras de
   // clientes minoristas acogidos a RE (sessionContext.equivalenceSurchargeCustomer).
@@ -294,17 +334,20 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     invoice.type === "SALE" ? "SALE" : "PURCHASE",
   );
 
-  // Inferencia automática de BIENES/SERVICIOS a partir de la cuenta de
-  // ingreso (700->bienes, 705->servicios), SOLO mientras el gestor no haya
-  // fijado el valor a mano (goodsTypeTouched). Nunca sobreescribe una
-  // elección manual — evita el "resetearse constantemente" que no queremos.
-  useEffect(() => {
-    if (goodsTypeTouched) return;
-    if (type !== "SALE" || operationType !== "INTRACOM") return;
-    const group = accountGroup(expenseAccountVal);
-    if (group === 700) setIntracomGoodsType("BIENES");
-    else if (group === 705) setIntracomGoodsType("SERVICIOS");
-  }, [expenseAccountVal, type, operationType, goodsTypeTouched]);
+  const isIntracom = isIntracomOperation(type, operationType);
+  // En compras el propio codigo ya dice bienes (3) o servicios (8).
+  const goodsTypeShown: IntracomGoodsTypeName | null = !isIntracom
+    ? null
+    : type === "PURCHASE" ? goodsTypeFromOperationType(operationType) : intracomGoodsType;
+
+  // Botones Bienes/Servicios: en compras cambian el codigo 3/8 y en ventas
+  // ponen la cuenta de ingreso 700/705 (sustituyendo otra 7xx si la hubiera).
+  const chooseGoodsType = (goods: IntracomGoodsTypeName) => {
+    setIntracomGoodsType(goods);
+    setIntracomGoodsSource("MANUAL");
+    if (type === "PURCHASE") setOperationType(purchaseOperationTypeForGoods(goods));
+    else setExpenseAccount((prev) => saleAccountForGoodsType(prev, goods, true));
+  };
 
   // La "otra parte" (la que no es el cliente): emisor en compras,
   // receptor en ventas. Es el NIF por el que se busca y se aprende el
@@ -357,6 +400,22 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
   // NIF de la "otra parte" (la que no es el cliente): emisor en compras,
   // receptor en ventas. Es el NIF por el que se busca el plan de cuentas.
   const counterpartyNif = (type === "SALE" ? editableReceiverCif : editableIssuerCif).trim();
+
+  // Lo asignado al tercero se cargo con el NIF y el sentido guardados. Si el
+  // gestor los ha cambiado ya no vale: se pregunta como tercero nuevo, y el
+  // servidor no pisa lo que tuviera asignado el otro tercero sin haberlo visto.
+  const loadedDirection = invoice.type === "SALE" ? "SALE" : "PURCHASE";
+  const loadedCounterpartyNif = loadedDirection === "SALE"
+    ? cifWithPrefix(invoice.receiverCif, invoice.receiverCountry)
+    : cifWithPrefix(invoice.issuerCif, invoice.issuerCountry);
+  const counterpartyChanged = type !== loadedDirection
+    || parseTaxId(counterpartyNif).clean !== parseTaxId(loadedCounterpartyNif).clean;
+  const assignedGoodsType = counterpartyChanged ? null : thirdPartyGoodsType;
+  // "Asignado siempre" solo mientras sea verdad: si se cambio el NIF o el
+  // sentido, o al tercero se le asigno despues otra cosa (factura ya
+  // validada), ni se enseña ni se guarda ese origen.
+  const shownSource: IntracomGoodsSourceName | null =
+    intracomGoodsSource === "TERCERO" && assignedGoodsType !== goodsTypeShown ? null : intracomGoodsSource;
 
   // Si la factura trae una moneda que no es euro, el gestor convierte los
   // importes a mano y la marca en euros. Solo se envia esa marca, nunca la
@@ -616,7 +675,8 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     fd.set("supplierAccount", supplierAccountVal);
     fd.set("expenseAccount",  expenseAccountVal);
     fd.set("operationType", operationType);
-    fd.set("intracomGoodsType", intracomGoodsType);
+    fd.set("intracomGoodsType", goodsTypeShown ?? "");
+    fd.set("intracomGoodsSource", goodsTypeShown ? (shownSource ?? "") : "");
     fd.set("equivalenceSurchargeRate", equivalenceSurchargeRate);
     fd.set("equivalenceSurchargeAmount", equivalenceSurchargeAmount);
     fd.set("retentionType", retentionType);
@@ -631,7 +691,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     fd.set("bucket", bucket);
     if (extra) Object.entries(extra).forEach(([k,v]) => fd.set(k,v));
     return fd;
-  }, [type, vatLines, totalAmount, markedEuro, invoiceDateVal, supplierAccountVal, expenseAccountVal, operationType, intracomGoodsType, equivalenceSurchargeRate, equivalenceSurchargeAmount, retentionType, retentionBase, retentionRate, retentionAmount, isRectificative, rectifiedInvoiceSeries, rectifiedInvoiceNumber, rectificativeType, art80Tres, invoice.id, invoice.updatedAt, bucket]);
+  }, [type, vatLines, totalAmount, markedEuro, invoiceDateVal, supplierAccountVal, expenseAccountVal, operationType, goodsTypeShown, shownSource, equivalenceSurchargeRate, equivalenceSurchargeAmount, retentionType, retentionBase, retentionRate, retentionAmount, isRectificative, rectifiedInvoiceSeries, rectifiedInvoiceNumber, rectificativeType, art80Tres, invoice.id, invoice.updatedAt, bucket]);
 
   const handleSave = () => {
     startSave(async () => {
@@ -645,9 +705,14 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     });
   };
 
-  const handleValidate = () => {
+  const runValidate = (goodsTypeScope: GoodsTypeScope) => {
+    setGoodsQuestion(null);
     startValidate(async () => {
-      const res = await validateInvoice(null, buildFormData({ nextId: nextId ?? "" }));
+      const res = await validateInvoice(null, buildFormData({
+        nextId: nextId ?? "",
+        goodsTypeScope,
+        goodsTypeAssignedSeen: assignedGoodsType ?? "",
+      }));
       setValidateState(res);
       if (res?.error) {
         error("Error al guardar");
@@ -655,6 +720,24 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
         success("Factura validada correctamente");
       }
     });
+  };
+
+  // En una intracomunitaria se pregunta antes si el tercero va siempre como
+  // bienes o como servicios. Validar redirige a la siguiente factura, asi
+  // que la respuesta tiene que viajar con la propia validacion.
+  const handleValidate = () => {
+    const question = goodsTypeQuestion({
+      direction: type,
+      operationType,
+      goodsType: goodsTypeShown,
+      thirdParty: assignedGoodsType,
+      canRemember: counterpartyChanged ? Boolean(counterpartyNif) : canRememberGoodsType,
+    });
+    if (question) {
+      setGoodsQuestion(question);
+      return;
+    }
+    runValidate("");
   };
 
   const handleReject = () => {
@@ -727,7 +810,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     onNext: () => { if (nextId) router.push(`/dashboard/worker/review/${nextId}${queueSuffix}`); },
     onPrev: () => { if (prevId) router.push(`/dashboard/worker/review/${prevId}${queueSuffix}`); },
     onToggleHelp: () => setShowHelp((s) => !s),
-    isBlocked: () => showRejectModal || showHelp || showSplitModal || showSplitPdfModal,
+    isBlocked: () => showRejectModal || showHelp || showSplitModal || showSplitPdfModal || goodsQuestion !== null,
   });
 
   // Etiqueta del bucket activo en la sesion. Ayuda al gestor a saber
@@ -1102,10 +1185,14 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                     onChange={(e) => {
                       const next = e.target.value as "PURCHASE" | "SALE";
                       setType(next);
-                      // El tipo de operacion actual puede no existir en el
-                      // otro sentido (INTRACOM_SERVICIOS solo es de compras);
-                      // si se dejara, el servidor lo rechazaria al guardar.
-                      if (!OPERATION_TYPE_OPTIONS[next].includes(operationType)) {
+                      // Una intracomunitaria sigue siendolo al cambiar de
+                      // sentido: en compras bienes/servicios es el 3 o el 8 y
+                      // en ventas siempre el 3. Cualquier otro tipo que no
+                      // exista en el otro sentido se rechazaria al guardar.
+                      if (isIntracom && goodsTypeShown) {
+                        setIntracomGoodsType(goodsTypeShown);
+                        setOperationType(next === "PURCHASE" ? purchaseOperationTypeForGoods(goodsTypeShown) : "INTRACOM");
+                      } else if (!OPERATION_TYPE_OPTIONS[next].includes(operationType)) {
                         setOperationType(OPERATION_TYPE_OPTIONS[next][0]);
                       }
                     }}
@@ -1161,7 +1248,24 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                   <select
                     className={inputClass}
                     value={operationType}
-                    onChange={(e) => setOperationType(e.target.value as OperationTypeName)}
+                    onChange={(e) => {
+                      const next = e.target.value as OperationTypeName;
+                      setOperationType(next);
+                      // Elegir 3 u 8 en una compra es marcar bienes o servicios a mano.
+                      if (type === "PURCHASE" && isIntracomOperation("PURCHASE", next)) {
+                        setIntracomGoodsType(goodsTypeFromOperationType(next));
+                        setIntracomGoodsSource("MANUAL");
+                      }
+                      // Venta que pasa a intracomunitaria sin clasificar: si
+                      // ya tiene una 700/705, esa cuenta lo dice.
+                      if (type === "SALE" && next === "INTRACOM" && !intracomGoodsType) {
+                        const fromAccount = goodsTypeFromSaleAccount(expenseAccountVal);
+                        if (fromAccount) {
+                          setIntracomGoodsType(fromAccount);
+                          setIntracomGoodsSource("CUENTA");
+                        }
+                      }
+                    }}
                   >
                     {(OPERATION_TYPE_OPTIONS[type].includes(operationType)
                       ? OPERATION_TYPE_OPTIONS[type]
@@ -1176,39 +1280,68 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
               </fieldset>
             </div>
 
-            {/* Ventas intracomunitarias: BIENES/SERVICIOS para la Clave 349.
-                No cambia el código de operación (siempre 3) — es aparte.
+            {/* Intracomunitarias: bienes o servicios. En compras mueve el
+                código 3/8 y en ventas la cuenta de ingreso 700/705. Se enseña
+                de dónde sale para que el gestor sepa qué comprobar.
                 Fuera del grid para no romper alturas, igual que el aviso. */}
-            {type === "SALE" && operationType === "INTRACOM" && (
-              <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
-                <span className="text-[11px] font-medium text-slate-500">
-                  Clasificación 349 (entrega intracomunitaria)
-                </span>
-                <div className="flex gap-1">
-                  {(["BIENES", "SERVICIOS"] as IntracomGoodsTypeName[]).map((g) => (
-                    <button
-                      key={g}
-                      type="button"
-                      onClick={() => { setIntracomGoodsType(g); setGoodsTypeTouched(true); }}
-                      className={
-                        "rounded-md px-2.5 py-1 text-[11px] font-medium transition " +
-                        (intracomGoodsType === g
-                          ? "bg-blue-600 text-white"
-                          : "bg-slate-100 text-slate-600 hover:bg-slate-200")
-                      }
-                    >
-                      {INTRACOM_GOODS_TYPE_LABEL[g]}
-                    </button>
-                  ))}
+            {isIntracom && (() => {
+              const party = type === "SALE" ? "cliente" : "proveedor";
+              const label = goodsTypeShown ? INTRACOM_GOODS_TYPE_LABEL[goodsTypeShown] : "";
+              const status = !goodsTypeShown
+                ? { tone: "bg-amber-50 text-amber-800", icon: <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />, text: <>Sin marcar: indica si son bienes o servicios antes de validar.</> }
+                : shownSource === "TERCERO"
+                  ? { tone: "bg-green-50 text-green-700", icon: <CheckCheck className="h-3.5 w-3.5 flex-shrink-0" />, text: <>Asignado siempre a este {party}: <strong>{label}</strong></> }
+                  : shownSource === "IA"
+                    ? { tone: "bg-blue-50 text-blue-700", icon: <Sparkles className="h-3.5 w-3.5 flex-shrink-0" />, text: <>Detectado por la IA: <strong>{label}</strong>. Compruébalo en la factura.</> }
+                    : shownSource === "CUENTA"
+                      ? { tone: "bg-blue-50 text-blue-700", icon: <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0" />, text: <>Según la cuenta de ingreso: <strong>{label}</strong></> }
+                      : shownSource === "MANUAL"
+                        ? { tone: "bg-slate-100 text-slate-700", icon: <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0" />, text: <>Marcado a mano: <strong>{label}</strong></> }
+                        : { tone: "bg-amber-50 text-amber-800", icon: <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />, text: <>Sin detectar: está como <strong>{label}</strong>. Compruébalo en la factura.</> };
+              return (
+                <div className="rounded-xl border border-slate-200 bg-white p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                      ¿Bienes o servicios?
+                    </span>
+                    <div className="flex gap-1.5" role="group" aria-label="Bienes o servicios">
+                      {(["BIENES", "SERVICIOS"] as IntracomGoodsTypeName[]).map((g) => (
+                        <button
+                          key={g}
+                          type="button"
+                          aria-pressed={goodsTypeShown === g}
+                          onClick={() => chooseGoodsType(g)}
+                          className={
+                            "rounded-lg px-3.5 py-1.5 text-[13px] font-semibold transition focus:outline-none focus:ring-2 focus:ring-accent-100 " +
+                            (goodsTypeShown === g
+                              ? "bg-blue-600 text-white shadow-sm"
+                              : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50")
+                          }
+                        >
+                          {INTRACOM_GOODS_TYPE_LABEL[g]}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <p className={`mt-2 flex items-center gap-2 rounded-lg px-3 py-2 text-[12px] ${status.tone}`}>
+                    {status.icon}
+                    <span>{status.text}</span>
+                  </p>
+                  {goodsTypeShown && (
+                    <p className="mt-1.5 text-[11px] text-slate-500">
+                      En A3: tipo de operación {OPERATION_TYPE_CODE[operationType]}
+                      {type === "SALE" && <> y cuenta de ingreso {expenseAccountVal || SALE_ACCOUNT_GROUP[goodsTypeShown]}</>}.
+                    </p>
+                  )}
+                  {assignedGoodsType && goodsTypeShown && assignedGoodsType !== goodsTypeShown && (
+                    <p className="mt-1.5 flex items-center gap-1 text-[11px] text-amber-600">
+                      <AlertTriangle className="h-3 w-3 flex-shrink-0" />
+                      Este {party} está asignado siempre como {INTRACOM_GOODS_TYPE_LABEL[assignedGoodsType].toLowerCase()}: al validar se te preguntará si es una excepción.
+                    </p>
+                  )}
                 </div>
-                {!intracomGoodsType && (
-                  <span className="flex items-center gap-1 text-[11px] text-amber-600">
-                    <AlertTriangle className="h-3 w-3" />
-                    Sin determinar
-                  </span>
-                )}
-              </div>
-            )}
+              );
+            })()}
 
             {/* Aviso ISP/intracom — fuera del grid para no romper alturas. */}
             {operationType !== "INTERIOR" && operationType !== "AGRARIA"
@@ -1234,12 +1367,12 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
             )}
 
             {/* Venta intracomunitaria sin cuenta de ingreso: el plan de cuentas
-                puede tener solo la cuenta de cliente (43x); la de ingreso
-                700/705 necesita asignacion manual y no debe elegirse sola. */}
+                puede tener solo la cuenta de cliente (43x). Al marcar bienes o
+                servicios se pone la 700 o la 705. */}
             {type === "SALE" && operationType === "INTRACOM" && !expenseAccountVal && (
               <p className="flex items-center gap-1 text-[11px] text-amber-600">
                 <AlertTriangle className="h-3 w-3" />
-                Venta intracomunitaria sin cuenta de ingreso (700/705) — asígnala manualmente antes de validar.
+                Venta intracomunitaria sin cuenta de ingreso: marca bienes (700) o servicios (705) y se pondrá sola.
               </p>
             )}
 
@@ -1723,8 +1856,31 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                   <input
                     className={inputClass}
                     value={expenseAccountVal}
-                    onChange={(e) => setExpenseAccount(sanitizeAccountingAccountInput(e.target.value))}
-                    onBlur={(e) => setExpenseAccount(padAccountingAccount(e.target.value))}
+                    onChange={(e) => {
+                      const value = sanitizeAccountingAccountInput(e.target.value);
+                      setExpenseAccount(value);
+                      // En una venta intracomunitaria teclear la 700 o la 705
+                      // es marcar bienes o servicios.
+                      if (type === "SALE" && operationType === "INTRACOM") {
+                        const fromAccount = goodsTypeFromSaleAccount(value);
+                        if (fromAccount && fromAccount !== intracomGoodsType) {
+                          setIntracomGoodsType(fromAccount);
+                          setIntracomGoodsSource("MANUAL");
+                        }
+                      }
+                    }}
+                    onBlur={(e) => {
+                      const padded = padAccountingAccount(e.target.value);
+                      setExpenseAccount(padded);
+                      // "70" o "705" cortos: hasta completarlos no se sabia el grupo.
+                      if (type === "SALE" && operationType === "INTRACOM") {
+                        const fromAccount = goodsTypeFromSaleAccount(padded);
+                        if (fromAccount && fromAccount !== intracomGoodsType) {
+                          setIntracomGoodsType(fromAccount);
+                          setIntracomGoodsSource("MANUAL");
+                        }
+                      }
+                    }}
                     placeholder={type === "SALE" ? "70000000" : "62900000"}
                   />
                 </div>
@@ -1979,6 +2135,74 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
               </div>
             </div>
           )}
+
+          {/* Al validar una intracomunitaria: ¿este tercero va siempre como
+              bienes o como servicios? */}
+          {goodsQuestion && goodsTypeShown && (() => {
+            const party = type === "SALE" ? "cliente" : "proveedor";
+            const chosen = INTRACOM_GOODS_TYPE_LABEL[goodsTypeShown].toLowerCase();
+            const assigned = assignedGoodsType ? INTRACOM_GOODS_TYPE_LABEL[assignedGoodsType].toLowerCase() : "";
+            const detail = type === "SALE"
+              ? `cuenta ${SALE_ACCOUNT_GROUP[goodsTypeShown]}`
+              : `tipo ${OPERATION_TYPE_CODE[purchaseOperationTypeForGoods(goodsTypeShown)]}`;
+            return (
+              <div
+                className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+                onClick={() => setGoodsQuestion(null)}
+              >
+                <div
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="goods-question-title"
+                  className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl"
+                  onClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") setGoodsQuestion(null);
+                    // Enter mantenido desde validar: las repeticiones activarian
+                    // el boton enfocado y se contestaria sin leer la pregunta.
+                    if (e.key === "Enter" && e.repeat) e.preventDefault();
+                  }}
+                >
+                  <h3 id="goods-question-title" className="text-[15px] font-semibold text-slate-800 flex items-center gap-2">
+                    <Globe className="h-5 w-5 text-blue-600" />
+                    {goodsQuestion === "NUEVO"
+                      ? `¿Este ${party} es siempre de ${chosen}?`
+                      : `Este ${party} está asignado siempre como ${assigned}`}
+                  </h3>
+                  <p className="mt-1.5 text-[12px] text-slate-500">
+                    {goodsQuestion === "NUEVO"
+                      ? `Si dices que sí, sus próximas facturas vendrán marcadas como ${chosen} (${detail}). Si alguna es distinta, se cambia a mano.`
+                      : `En esta factura has marcado ${chosen}. ¿Es solo una excepción o a partir de ahora va siempre como ${chosen}?`}
+                  </p>
+                  <div className="mt-4 flex flex-wrap justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setGoodsQuestion(null)}
+                      className="rounded-lg border border-slate-200 px-4 py-2 text-[13px] font-medium text-slate-600 hover:bg-slate-50"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      autoFocus={goodsQuestion === "CAMBIO"}
+                      onClick={() => runValidate("SOLO_ESTA")}
+                      className="rounded-lg border border-slate-300 px-4 py-2 text-[13px] font-semibold text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-accent-100"
+                    >
+                      {goodsQuestion === "NUEVO" ? "Solo esta factura" : "Es una excepción"}
+                    </button>
+                    <button
+                      type="button"
+                      autoFocus={goodsQuestion === "NUEVO"}
+                      onClick={() => runValidate("SIEMPRE")}
+                      className="rounded-lg bg-green-600 px-4 py-2 text-[13px] font-semibold text-white hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-200"
+                    >
+                      {goodsQuestion === "NUEVO" ? `Sí, siempre ${chosen}` : `Cambiar a ${chosen} para siempre`}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Reject modal */}
           {showRejectModal && (

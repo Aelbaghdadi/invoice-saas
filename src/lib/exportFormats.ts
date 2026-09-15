@@ -4,9 +4,11 @@ import {
   OPERATION_TYPE_CODE,
   OPERATION_TYPE_LABEL,
   OPERATION_TYPE_OPTIONS,
+  INTRACOM_GOODS_TYPE_LABEL,
   type OperationTypeName,
 } from "@/lib/validators";
 import { isForeignCurrency } from "@/lib/currency";
+import { goodsTypeFromSaleAccount } from "@/lib/intracomGoods";
 
 export type ExportFormat = "sage50" | "contasol" | "a3con" | "a3excel";
 
@@ -235,7 +237,7 @@ function buildA3Row(
     exportNumber,                                              // D: Numero factura (con _R si rectificativa)
     (isPurchase ? inv.issuerCif : inv.receiverCif) ?? "",     // E: NIF
     (isPurchase ? inv.issuerName : inv.receiverName) ?? "",   // F: Nombre
-    opTypeCode,                                                // G: Tipo operación (1/2/3/4/6/7)
+    opTypeCode,                                                // G: Tipo operación (1/2/3/4/6/7/8)
     inv.supplierAccount ?? "",                                 // H: Cuenta proveedor/cliente
     inv.expenseAccount ?? "",                                  // I: Cuenta compras/ventas
     line.taxBase,                                              // J: Base (signo respetado en rectificativa)
@@ -302,6 +304,17 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
     // resuelva antes de declarar el 349 aparte.
     if (!isPurchase && inv.operationType === "INTRACOM" && !inv.intracomGoodsType) {
       warnings.push("Venta intracomunitaria sin clasificar como bienes/servicios (necesario para el modelo 349)");
+    }
+    // En ventas la cuenta de ingreso es la que distingue bienes (700) de
+    // servicios (705): si no cuadra con lo marcado, A3 lo contabiliza mal.
+    if (!isPurchase && inv.operationType === "INTRACOM" && inv.intracomGoodsType) {
+      const goodsFromAccount = goodsTypeFromSaleAccount(inv.expenseAccount);
+      if (goodsFromAccount && goodsFromAccount !== inv.intracomGoodsType) {
+        warnings.push(
+          `Venta intracomunitaria marcada como ${INTRACOM_GOODS_TYPE_LABEL[inv.intracomGoodsType].toLowerCase()} `
+          + `con la cuenta ${inv.expenseAccount}: los bienes van a la 700 y los servicios a la 705`,
+        );
+      }
     }
 
     if (isForeignCurrency(inv.currency)) {

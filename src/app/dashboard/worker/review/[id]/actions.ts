@@ -18,6 +18,14 @@ import { canAccessClient } from "@/lib/accessibleClients";
 import { parseTaxId, isPersonaFisica, operationTypeLabel, OPERATION_TYPE_OPTIONS, OPERATION_TYPE_LABEL, type OperationTypeName } from "@/lib/validators";
 import { partyAccountMatchesType, resultAccountMatchesType } from "@/lib/accountingAccount";
 import { accountEntryKey, entryNameMatches } from "@/lib/supplierMatching";
+import {
+  isIntracomOperation,
+  goodsTypeFromOperationType,
+  normalizeGoodsType,
+  normalizeGoodsSource,
+  normalizeGoodsTypeScope,
+  goodsTypeLearning,
+} from "@/lib/intracomGoods";
 import { normalizeCurrency } from "@/lib/currency";
 import { applyRectificativeSign } from "@/lib/rectificative";
 import { appError, type AppError } from "@/lib/errorCodes";
@@ -61,9 +69,17 @@ type FieldData = {
   supplierAccount: string;
   expenseAccount:  string;
   operationType:   string;
-  /** "BIENES" / "SERVICIOS" / "" — solo relevante en ventas intracomunitarias
-   *  (Clave 349). Ver Invoice.intracomGoodsType. */
+  /** "BIENES" / "SERVICIOS" / "" — en ventas intracomunitarias (cuenta
+   *  700/705). En compras lo dice el tipo de operacion (3/8) y se ignora. */
   intracomGoodsType: string;
+  /** De donde sale la clasificacion: "IA" / "TERCERO" / "CUENTA" / "MANUAL". */
+  intracomGoodsSource: string;
+  /** Respuesta al validar a "¿este tercero va siempre asi?": "SIEMPRE" /
+   *  "SOLO_ESTA" / "" (no se pregunto). */
+  goodsTypeScope: string;
+  /** Lo asignado al tercero que tenia delante el gestor al contestar
+   *  ("BIENES" / "SERVICIOS" / ""). */
+  goodsTypeAssignedSeen: string;
   equivalenceSurchargeRate:   string;
   equivalenceSurchargeAmount: string;
   retentionType:   string;
@@ -79,9 +95,6 @@ type FieldData = {
 
 const VALID_RETENTION_TYPES = ["PROFESSIONAL", "RENT"] as const;
 type ValidRetentionType = (typeof VALID_RETENTION_TYPES)[number];
-
-const VALID_INTRACOM_GOODS_TYPES = ["BIENES", "SERVICIOS"] as const;
-type ValidIntracomGoodsType = (typeof VALID_INTRACOM_GOODS_TYPES)[number];
 
 const VALID_RECTIFICATIVE_TYPES = ["BY_DIFFERENCE", "BY_SUBSTITUTION"] as const;
 type ValidRectificativeType = (typeof VALID_RECTIFICATIVE_TYPES)[number];
@@ -233,10 +246,6 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
             : null))
     : null;
 
-  // Clave 349 (BIENES/SERVICIOS): solo tiene sentido en ventas
-  // intracomunitarias. Si la factura no es eso (cambio de tipo/operacion
-  // desde que se fijo, o dato residual) se descarta para no dejar
-  // informacion incoherente en BD.
   // El tipo de operacion tiene que existir Y valer para el sentido de la
   // factura. La lista suelta que habia aqui no se actualizo al añadir
   // INTRACOM_SERVICIOS y lo convertia en INTERIOR sin avisar: a A3 llegaba
@@ -255,11 +264,19 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     };
   }
   const submittedOperationType = data.operationType as OperationTypeName;
-  const intracomGoodsType: ValidIntracomGoodsType | null =
-    effectiveType === "SALE" && submittedOperationType === "INTRACOM"
-    && (VALID_INTRACOM_GOODS_TYPES as readonly string[]).includes(data.intracomGoodsType)
-      ? (data.intracomGoodsType as ValidIntracomGoodsType)
-      : null;
+  // Bienes o servicios: solo en intracomunitarias (fuera de ellas se descarta
+  // para no dejar un dato residual). En compras lo dice el propio codigo
+  // (3 bienes / 8 servicios); en ventas va aparte y decide la cuenta 700/705.
+  const isIntracom = isIntracomOperation(effectiveType, submittedOperationType);
+  const intracomGoodsType = !isIntracom
+    ? null
+    : effectiveType === "PURCHASE"
+      ? goodsTypeFromOperationType(submittedOperationType)
+      : normalizeGoodsType(data.intracomGoodsType);
+  if (validate && isIntracom && !intracomGoodsType) {
+    return { error: "Marca si la entrega intracomunitaria es de bienes o de servicios antes de validar." };
+  }
+  const intracomGoodsSource = intracomGoodsType ? normalizeGoodsSource(data.intracomGoodsSource) : null;
 
   const newData = {
     type:          effectiveType,
@@ -289,6 +306,7 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     expenseAccount:  data.expenseAccount  || null,
     operationType:   submittedOperationType,
     intracomGoodsType,
+    intracomGoodsSource,
     equivalenceSurchargeRate:   parse(data.equivalenceSurchargeRate),
     equivalenceSurchargeAmount: parse(data.equivalenceSurchargeAmount),
     isRectificative:        isRectificativeFlag,
@@ -454,10 +472,30 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     const existingEntry = learnKey
       ? await prisma.accountEntry.findUnique({
           where: { clientId_nif: { clientId: invoice.clientId, nif: learnKey } },
-          select: { nif: true, name: true },
+          select: { nif: true, name: true, intracomGoodsTypePurchase: true, intracomGoodsTypeSale: true },
         })
       : null;
     const otherThirdParty = existingEntry != null && !entryNameMatches(existingEntry, learnName);
+    // Bienes/servicios "siempre" para este tercero: solo se guarda si el
+    // gestor lo confirmo al validar. Una excepcion (solo esta factura, o
+    // distinta de lo asignado) no toca lo aprendido: si no, la siguiente
+    // factura de este tercero saldria con el tipo 3/8 o la cuenta 700/705
+    // de la excepcion.
+    // Va por sentido: un tercero que es proveedor y cliente puede vendernos
+    // bienes y comprarnos servicios.
+    const goodsLearning = goodsTypeLearning({
+      scope: normalizeGoodsTypeScope(data.goodsTypeScope),
+      goodsType: intracomGoodsType,
+      existingPreference: (isPurchase
+        ? existingEntry?.intracomGoodsTypePurchase
+        : existingEntry?.intracomGoodsTypeSale) ?? null,
+      seenPreference: normalizeGoodsType(data.goodsTypeAssignedSeen),
+    });
+    const goodsPreference = goodsLearning.preference
+      ? (isPurchase
+          ? { intracomGoodsTypePurchase: goodsLearning.preference }
+          : { intracomGoodsTypeSale: goodsLearning.preference })
+      : {};
     if (learnKey && !otherThirdParty && (learnSupplier || learnExpense || newData.operationType)) {
       await prisma.accountEntry.upsert({
         where: { clientId_nif: { clientId: invoice.clientId, nif: learnKey } },
@@ -471,13 +509,15 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
           defaultOperationType: newData.operationType,
           defaultRetentionType: learnRetentionType,
           defaultRetentionRate: learnRetentionRate != null ? (learnRetentionRate as any) : null,
+          ...goodsPreference,
         },
         update: {
           ...(learnName ? { name: learnName } : {}),
           ...(learnSupplier ? { supplierAccount: learnSupplier } : {}),
-          ...(learnExpense ? { expenseAccount: learnExpense } : {}),
+          ...(learnExpense && !goodsLearning.isException ? { expenseAccount: learnExpense } : {}),
           ...(learnVatRate != null ? { defaultVatRate: learnVatRate as any } : {}),
-          defaultOperationType: newData.operationType,
+          ...(goodsLearning.isException ? {} : { defaultOperationType: newData.operationType }),
+          ...goodsPreference,
           // Si el gestor quita la retencion (o no aplica por no ser
           // persona fisica), tambien limpiamos lo aprendido para no
           // re-sugerirla la proxima vez.
@@ -1058,6 +1098,9 @@ function extractFields(fd: FormData): FieldData {
     expenseAccount:  fd.get("expenseAccount")  as string ?? "",
     operationType:   fd.get("operationType")   as string ?? "INTERIOR",
     intracomGoodsType: fd.get("intracomGoodsType") as string ?? "",
+    intracomGoodsSource: fd.get("intracomGoodsSource") as string ?? "",
+    goodsTypeScope:    fd.get("goodsTypeScope")    as string ?? "",
+    goodsTypeAssignedSeen: fd.get("goodsTypeAssignedSeen") as string ?? "",
     equivalenceSurchargeRate:   fd.get("equivalenceSurchargeRate")   as string ?? "",
     equivalenceSurchargeAmount: fd.get("equivalenceSurchargeAmount") as string ?? "",
     retentionType:   fd.get("retentionType")   as string ?? "",

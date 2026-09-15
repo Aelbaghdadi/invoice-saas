@@ -142,9 +142,9 @@ export const OPERATION_TYPE_LABEL_SALE: Record<OperationTypeName, string> = {
   IVA_NO_DEDUCIBLE: "IVA no deducible (solo compras)",
 };
 
-/** Clasificación BIENES/SERVICIOS de una entrega intracomunitaria (venta),
- *  para la Clave del modelo 349. Solo aplica a ventas — ver Prisma
- *  `IntracomGoodsType` y Invoice.intracomGoodsType. */
+/** Clasificación BIENES/SERVICIOS de una intracomunitaria. En compras decide
+ *  el código de operación (3 bienes / 8 servicios); en ventas el código es
+ *  siempre 3 y decide la cuenta de ingreso (700 / 705). Ver src/lib/intracomGoods.ts. */
 export type IntracomGoodsTypeName = "BIENES" | "SERVICIOS";
 
 export const INTRACOM_GOODS_TYPE_LABEL: Record<IntracomGoodsTypeName, string> = {

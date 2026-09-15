@@ -39,7 +39,8 @@ await db.connect();
 
 const { rows } = await db.query(
   `SELECT id, "clientId", nif, name, "supplierAccount", "expenseAccount",
-          "defaultVatRate", "defaultOperationType", "defaultRetentionType", "defaultRetentionRate"
+          "defaultVatRate", "defaultOperationType", "defaultRetentionType", "defaultRetentionRate",
+          "intracomGoodsTypePurchase", "intracomGoodsTypeSale"
      FROM "AccountEntry" ORDER BY "createdAt"`
 );
 
@@ -81,7 +82,11 @@ try {
       if (
         difieren(nombreReal(destino), nombreReal(r)) ||
         difieren(destino.supplierAccount, r.supplierAccount) ||
-        difieren(destino.expenseAccount, r.expenseAccount)
+        difieren(destino.expenseAccount, r.expenseAccount) ||
+        // Bienes/servicios asignado "siempre": si cada fila dice una cosa, lo
+        // decide el gestor; fusionar perderia una de las dos asignaciones.
+        difieren(destino.intracomGoodsTypePurchase, r.intracomGoodsTypePurchase) ||
+        difieren(destino.intracomGoodsTypeSale, r.intracomGoodsTypeSale)
       ) {
         console.log(`AVISO  ${r.nif} ("${r.name}", ${r.supplierAccount || "sin cuenta"}) y ${destino.nif} ("${destino.name}", ${destino.supplierAccount || "sin cuenta"}) limpian a "${limpio}" pero son terceros distintos. NO se fusiona: resuelvelo a mano. [${r.id} / ${destino.id}]`);
         conflictos++;
@@ -104,6 +109,8 @@ try {
       if (destino.defaultOperationType == null && r.defaultOperationType != null) rellena("defaultOperationType", r.defaultOperationType);
       if (destino.defaultRetentionType == null && r.defaultRetentionType != null) rellena("defaultRetentionType", r.defaultRetentionType);
       if (destino.defaultRetentionRate == null && r.defaultRetentionRate != null) rellena("defaultRetentionRate", r.defaultRetentionRate);
+      if (destino.intracomGoodsTypePurchase == null && r.intracomGoodsTypePurchase != null) rellena("intracomGoodsTypePurchase", r.intracomGoodsTypePurchase);
+      if (destino.intracomGoodsTypeSale == null && r.intracomGoodsTypeSale != null) rellena("intracomGoodsTypeSale", r.intracomGoodsTypeSale);
 
       console.log(`FUSION ${r.nif} -> ${limpio}  (${sets.length} campos completados) [${r.id} -> ${destino.id}]`);
       if (APPLY) {
