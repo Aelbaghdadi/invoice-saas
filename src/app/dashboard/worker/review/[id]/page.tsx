@@ -114,11 +114,15 @@ export default async function ReviewPage({
   // nunca esta en su plan de cuentas) y jamas encontraba nada.
   const counterpartyNif = invoice.type === "SALE" ? invoice.receiverCif : invoice.issuerCif;
   const counterpartyName = invoice.type === "SALE" ? invoice.receiverName : invoice.issuerName;
+  const counterpartyCountry = invoice.type === "SALE" ? invoice.receiverCountry : invoice.issuerCountry;
   // Clave de identidad del tercero: NIF si es fiable, nombre normalizado si
   // no (proveedores extranjeros sin NIF/VAT valido, ej. chinos). Asi un
   // proveedor sin NIF fiable puede encontrarse por nombre en vez de
-  // quedarse siempre "no registrado".
-  const entryKey = accountEntryKey(counterpartyNif, counterpartyName);
+  // quedarse siempre "no registrado". El pais ya resuelto (issuerCountry/
+  // receiverCountry) es necesario porque el NIF aqui llega SIN el prefijo
+  // (se guarda limpio en Invoice) — sin el pais, un VAT extranjero real se
+  // intentaria validar como NIF espanol y fallaria por error.
+  const entryKey = accountEntryKey(counterpartyNif, counterpartyName, counterpartyCountry);
   const suggestedAccount = entryKey
     ? await prisma.accountEntry.findUnique({
         where: { clientId_nif: { clientId: invoice.clientId, nif: entryKey } },

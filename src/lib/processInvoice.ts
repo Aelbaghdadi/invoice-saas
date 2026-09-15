@@ -344,7 +344,7 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     // no) para que proveedores extranjeros sin NIF/VAT fiable (ej. chinos)
     // tambien puedan encontrar/aprender su fila sin arriesgar fusionarse con
     // otro tercero que comparta el mismo identificador basura.
-    const entryKey = accountEntryKey(otherPartyClean, otherPartyName);
+    const entryKey = accountEntryKey(otherPartyClean, otherPartyName, otherParty.countryCode);
     const knownEntry = entryKey
       ? await prisma.accountEntry.findUnique({
           where: { clientId_nif: { clientId: invoice.clientId, nif: entryKey } },

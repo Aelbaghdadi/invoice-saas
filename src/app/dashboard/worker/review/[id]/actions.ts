@@ -407,12 +407,15 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     // el mismo.
     const learnNif  = (isPurchase ? newData.issuerCif  : newData.receiverCif )?.trim().toUpperCase();
     const learnName = (isPurchase ? newData.issuerName : newData.receiverName)?.trim();
+    const learnCountry = isPurchase ? newData.issuerCountry : newData.receiverCountry;
     // Clave de identidad del tercero: el NIF si es fiable, o el nombre
     // normalizado si no (proveedores extranjeros sin NIF/VAT valido, ej.
     // chinos). Usar el NIF basura tal cual arriesgaria fusionar en una sola
     // fila a dos proveedores distintos que comparten el mismo identificador
-    // no fiable.
-    const learnKey = accountEntryKey(learnNif, learnName);
+    // no fiable. El pais ya resuelto es necesario porque learnNif llega SIN
+    // prefijo (issuerCif/receiverCif se guardan limpios) — sin el, un VAT
+    // extranjero real se validaria como NIF espanol y fallaria por error.
+    const learnKey = accountEntryKey(learnNif, learnName, learnCountry);
     // Solo aprendemos la cuenta si es de la familia que toca a este sentido.
     // AccountEntry tiene una sola pareja de cuentas por (cliente, NIF): sin
     // este filtro, validar una venta a un tercero que tambien es proveedor

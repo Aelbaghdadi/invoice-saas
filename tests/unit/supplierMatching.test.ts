@@ -47,4 +47,26 @@ describe("accountEntryKey — identidad de tercero para el plan de cuentas", () 
     expect(accountEntryKey("", "")).toBe("");
     expect(accountEntryKey(null, null)).toBe("");
   });
+
+  // Regresión real: Invoice.issuerCif/receiverCif se guardan SIN el prefijo
+  // de país (p.ej. "812871812", no "DE812871812"); el país va aparte en
+  // issuerCountry/receiverCountry. Sin pasar ese país, un VAT alemán
+  // perfectamente real se intentaba validar como NIF español, fallaba el
+  // dígito de control, y un proveedor con NIF correcto en el plan de
+  // cuentas (ej. Hetzner) seguía saliendo como "no encontrado".
+  it("un NIF europeo ya limpio (sin prefijo) es fiable si se conoce el país por separado", () => {
+    const conPais = accountEntryKey("812871812", "Hetzner Online GmbH", "DE");
+    expect(conPais).toBe("812871812");
+  });
+
+  it("sin el país, ese mismo NIF limpio se trataría (mal) como no fiable y caería al nombre", () => {
+    const sinPais = accountEntryKey("812871812", "Hetzner Online GmbH");
+    expect(sinPais).toBe(`${NO_RELIABLE_NIF_PREFIX}HETZNER ONLINE GMBH`);
+  });
+
+  it("con o sin prefijo en el NIF crudo, si el país es extranjero da la misma clave", () => {
+    const desdeFactura = accountEntryKey("812871812", "Hetzner Online GmbH", "DE");
+    const desdeAltaManual = accountEntryKey("DE812871812", "Hetzner Online GmbH");
+    expect(desdeFactura).toBe(desdeAltaManual);
+  });
 });

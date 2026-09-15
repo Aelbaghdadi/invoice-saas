@@ -21,12 +21,31 @@ import { isValidTaxIdWithPrefix, normalizeBusinessName, parseTaxId } from "./val
  *  también para reconocer estas filas en la UI del plan de cuentas. */
 export const NO_RELIABLE_NIF_PREFIX = "SINNIF:";
 
-/** ¿Es este NIF/VAT lo bastante fiable para usarlo como clave de identidad?
- *  Nacional: pasa el algoritmo de control completo. Extranjero con prefijo
- *  reconocido: formato plausible (no hay forma de verificar el dígito de
- *  control sin consultar VIES, pero al menos no está vacío/es basura). */
-export function isReliableNif(nif: string | null | undefined): boolean {
-  return !!nif && nif.trim().length > 0 && isValidTaxIdWithPrefix(nif);
+/**
+ * ¿Es este NIF/VAT lo bastante fiable para usarlo como clave de identidad?
+ *
+ * `countryCode` es el país YA RESUELTO por parseTaxId en un paso anterior
+ * (Invoice.issuerCountry/receiverCountry): el NIF que llega aquí normalmente
+ * ya viene LIMPIO, sin el prefijo de país (p.ej. "812871812", no
+ * "DE812871812"), porque así es como se guarda en Invoice. Sin ese contexto,
+ * un NIF alemán limpio se intentaría validar como si fuera español y
+ * fallaría el dígito de control — se marcaría "no fiable" por error incluso
+ * siendo un VAT extranjero perfectamente real.
+ *
+ * Nacional (sin countryCode o "ES"): pasa el algoritmo de control completo.
+ * Extranjero (countryCode conocido y distinto de "ES"): formato plausible
+ * (no hay forma de verificar el dígito de control sin consultar VIES, pero
+ * al menos no está vacío/es basura).
+ */
+export function isReliableNif(
+  nif: string | null | undefined,
+  countryCode?: string | null,
+): boolean {
+  if (!nif || !nif.trim()) return false;
+  if (countryCode && countryCode !== "ES") {
+    return /^[0-9A-Z]{2,12}$/.test(nif.trim().toUpperCase());
+  }
+  return isValidTaxIdWithPrefix(nif);
 }
 
 /**
@@ -34,13 +53,18 @@ export function isReliableNif(nif: string | null | undefined): boolean {
  * fiable, o `SINNIF:<NOMBRE NORMALIZADO>` si no lo es. Vacío ("") si no hay
  * ni NIF fiable ni nombre utilizable — en ese caso no se puede identificar
  * al tercero y no debe crearse/buscarse ninguna entrada.
+ *
+ * `countryCode`: pásalo siempre que lo tengas (Invoice.issuerCountry /
+ * receiverCountry, o parseTaxId(...).countryCode si el NIF crudo aún trae
+ * el prefijo) — ver `isReliableNif`.
  */
 export function accountEntryKey(
   rawNif: string | null | undefined,
   name: string | null | undefined,
+  countryCode?: string | null,
 ): string {
-  if (isReliableNif(rawNif)) {
-    return parseTaxId(rawNif).clean;
+  if (isReliableNif(rawNif, countryCode)) {
+    return parseTaxId(rawNif!).clean || rawNif!.trim().toUpperCase();
   }
   const normalizedName = normalizeBusinessName(name ?? "");
   return normalizedName ? `${NO_RELIABLE_NIF_PREFIX}${normalizedName}` : "";
