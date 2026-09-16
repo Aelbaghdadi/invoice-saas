@@ -11,10 +11,10 @@ type Props = {
 
 /**
  * Marca a este cliente como minorista acogido a Recargo de Equivalencia.
- * Con el flag activo, sus facturas de compra sugieren automáticamente % y
- * cuota de recargo (mapeo habitual según el IVA) al procesarlas; sin él,
- * el sistema nunca inventa recargo por el simple hecho de que el IVA sea
- * 21/10/4.
+ * Con el flag activo, sus facturas (recibidas y emitidas) sugieren
+ * automáticamente % y cuota de recargo (mapeo habitual según el IVA) al
+ * procesarlas; sin él, el sistema nunca inventa recargo por el simple hecho
+ * de que el IVA sea 21/10/4.
  */
 export function EquivalenceSurchargeConfig({ clientId, initialEnabled }: Props) {
   const action = updateEquivalenceSurcharge.bind(null, clientId);
@@ -45,7 +45,7 @@ export function EquivalenceSurchargeConfig({ clientId, initialEnabled }: Props) 
       <div>
         <h3 className="text-[13px] font-semibold text-slate-800">Recargo de Equivalencia</h3>
         <p className="mt-0.5 text-[12px] text-slate-500">
-          Cliente minorista acogido a RE: sus compras sugieren automáticamente % y cuota de recargo
+          Cliente minorista acogido a RE: sus facturas sugieren automáticamente % y cuota de recargo
           (21→5,2 / 10→1,4 / 4→0,5), revisable en cada factura.
         </p>
       </div>

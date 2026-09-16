@@ -1848,90 +1848,91 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                 )}
               </div>
 
-              {/* Recargo de Equivalencia — solo compras, y POR LINEA de IVA
-                  (una fila del desglose de arriba puede llevarlo y otra no,
-                  p.ej. portes sin recargo). La casilla la marca la IA sola si
-                  detecto el recargo explicito en el documento para esa linea
-                  (ver ocrLlm.ts); si no, el gestor la marca a mano. Nunca se
-                  aplica solo por el % de IVA salvo que el cliente este
-                  marcado como minorista en RE (ver ficha del cliente). */}
-              {type === "PURCHASE" && (
-                <div className="border-t border-slate-200 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowSurchargePanel((v) => !v)}
-                    className="flex w-full items-center justify-between gap-2 rounded-md px-1 py-1 text-left"
-                  >
-                    <span className="flex items-center gap-2">
-                      <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                        Recargo de Equivalencia
-                      </span>
-                      {vatTotals.sumSurcharge > 0 && (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-blue-700">
-                          {vatTotals.sumSurcharge.toFixed(2)} €
-                        </span>
-                      )}
+              {/* Recargo de Equivalencia — en compras Y en ventas, y POR
+                  LINEA de IVA (una fila del desglose de arriba puede
+                  llevarlo y otra no, p.ej. portes sin recargo). La casilla
+                  la marca la IA sola si detecto el recargo explicito en el
+                  documento para esa linea (ver ocrLlm.ts), sea recibida o
+                  emitida; si no, el gestor la marca a mano. La sugerencia
+                  automatica por % de IVA (21->5.2/10->1.4/4->0.5) solo se
+                  ofrece si el cliente esta marcado como minorista en RE (ver
+                  ficha del cliente), pero se ofrece igual en las dos
+                  direcciones. */}
+              <div className="border-t border-slate-200 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowSurchargePanel((v) => !v)}
+                  className="flex w-full items-center justify-between gap-2 rounded-md px-1 py-1 text-left"
+                >
+                  <span className="flex items-center gap-2">
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                      Recargo de Equivalencia
                     </span>
-                    <ChevronDown
-                      className={`h-3.5 w-3.5 text-slate-400 transition-transform duration-200 ${
-                        showSurchargePanel ? "rotate-0" : "-rotate-90"
-                      }`}
-                    />
-                  </button>
-                  {showSurchargePanel && (
-                    <div className="mt-2 space-y-2">
-                      {sessionContext?.equivalenceSurchargeCustomer && vatTotals.sumSurcharge === 0 && (
-                        <div className="flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-700">
-                          <AlertTriangle className="h-3.5 w-3.5" />
-                          Cliente en Recargo de Equivalencia — revisa si esta factura lo lleva
+                    {vatTotals.sumSurcharge > 0 && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-blue-700">
+                        {vatTotals.sumSurcharge.toFixed(2)} €
+                      </span>
+                    )}
+                  </span>
+                  <ChevronDown
+                    className={`h-3.5 w-3.5 text-slate-400 transition-transform duration-200 ${
+                      showSurchargePanel ? "rotate-0" : "-rotate-90"
+                    }`}
+                  />
+                </button>
+                {showSurchargePanel && (
+                  <div className="mt-2 space-y-2">
+                    {sessionContext?.equivalenceSurchargeCustomer && vatTotals.sumSurcharge === 0 && (
+                      <div className="flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-700">
+                        <AlertTriangle className="h-3.5 w-3.5" />
+                        Cliente en Recargo de Equivalencia — revisa si esta factura lo lleva
+                      </div>
+                    )}
+                    {vatLines.map((line, idx) => {
+                      const hasSurcharge = line.equivalenceSurchargeRate !== "";
+                      return (
+                        <div key={idx} className="flex items-center gap-2 rounded-lg border border-slate-200 p-2">
+                          <label className="flex w-24 flex-shrink-0 items-center gap-1.5 text-[12px] font-medium text-slate-600">
+                            <input
+                              type="checkbox"
+                              checked={hasSurcharge}
+                              onChange={(e) => toggleLineSurcharge(idx, e.target.checked)}
+                              className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-accent-400"
+                            />
+                            {line.vatRate || "?"}% IVA
+                          </label>
+                          {hasSurcharge ? (
+                            <>
+                              <div className="flex-1">
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  className={inputClass}
+                                  value={line.equivalenceSurchargeRate}
+                                  onChange={(e) => updateVatLine(idx, "equivalenceSurchargeRate", e.target.value)}
+                                  placeholder="% recargo"
+                                />
+                              </div>
+                              <div className="flex-1">
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  className={inputClass}
+                                  value={line.equivalenceSurchargeAmount}
+                                  onChange={(e) => updateVatLine(idx, "equivalenceSurchargeAmount", e.target.value)}
+                                  placeholder="cuota"
+                                />
+                              </div>
+                            </>
+                          ) : (
+                            <span className="flex-1 text-[11px] text-slate-400">Sin recargo en esta línea</span>
+                          )}
                         </div>
-                      )}
-                      {vatLines.map((line, idx) => {
-                        const hasSurcharge = line.equivalenceSurchargeRate !== "";
-                        return (
-                          <div key={idx} className="flex items-center gap-2 rounded-lg border border-slate-200 p-2">
-                            <label className="flex w-24 flex-shrink-0 items-center gap-1.5 text-[12px] font-medium text-slate-600">
-                              <input
-                                type="checkbox"
-                                checked={hasSurcharge}
-                                onChange={(e) => toggleLineSurcharge(idx, e.target.checked)}
-                                className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-accent-400"
-                              />
-                              {line.vatRate || "?"}% IVA
-                            </label>
-                            {hasSurcharge ? (
-                              <>
-                                <div className="flex-1">
-                                  <input
-                                    type="number"
-                                    step="0.01"
-                                    className={inputClass}
-                                    value={line.equivalenceSurchargeRate}
-                                    onChange={(e) => updateVatLine(idx, "equivalenceSurchargeRate", e.target.value)}
-                                    placeholder="% recargo"
-                                  />
-                                </div>
-                                <div className="flex-1">
-                                  <input
-                                    type="number"
-                                    step="0.01"
-                                    className={inputClass}
-                                    value={line.equivalenceSurchargeAmount}
-                                    onChange={(e) => updateVatLine(idx, "equivalenceSurchargeAmount", e.target.value)}
-                                    placeholder="cuota"
-                                  />
-                                </div>
-                              </>
-                            ) : (
-                              <span className="flex-1 text-[11px] text-slate-400">Sin recargo en esta línea</span>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
 
               {/* Total factura — fila compacta al pie del bloque
                   desglose. Antes vivia como bloque ancho separado abajo;

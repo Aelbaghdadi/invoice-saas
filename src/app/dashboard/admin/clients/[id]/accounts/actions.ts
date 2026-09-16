@@ -236,10 +236,10 @@ export async function updateSimplifiedAccounts(
 
 /**
  * Marca/desmarca a este cliente como minorista acogido a Recargo de
- * Equivalencia. Con el flag activo, sus facturas de compra sugieren
- * automáticamente % y cuota de recargo (mapeo habitual según el IVA) al
- * procesarlas — nunca sin este flag, para no inventar recargo en clientes
- * que no están en ese régimen.
+ * Equivalencia. Con el flag activo, sus facturas (recibidas y emitidas)
+ * sugieren automáticamente % y cuota de recargo (mapeo habitual según el
+ * IVA) al procesarlas — nunca sin este flag, para no inventar recargo en
+ * clientes que no están en ese régimen.
  */
 export async function updateEquivalenceSurcharge(
   clientId: string,

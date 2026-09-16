@@ -492,22 +492,23 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     //
     // Va POR LINEA de IVA, no por factura: cada tipo (21/10/4) puede llevar
     // su propio recargo, y una linea concreta (p.ej. portes) puede no
-    // llevarlo aunque el resto de la factura si. Solo aplica a COMPRAS de
-    // clientes minoristas acogidos a RE (el proveedor les repercute el
-    // recargo ademas del IVA normal). Nunca lo inventamos por el simple
-    // hecho de que el IVA sea 21/10/4 — exige que el cliente este marcado
-    // explicitamente (Client.equivalenceSurchargeCustomer).
+    // llevarlo aunque el resto de la factura si. Se aplica tanto en COMPRAS
+    // como en VENTAS de clientes minoristas acogidos a RE — no se limita a
+    // un sentido. Nunca lo inventamos por el simple hecho de que el IVA sea
+    // 21/10/4 — exige que el cliente este marcado explicitamente
+    // (Client.equivalenceSurchargeCustomer).
     //
     // Por cada linea:
     // 1) Si el OCR/IA vio explicitamente % y/o cuota para ESA linea en el
-    //    documento, se conservan tal cual (mas fiables que cualquier mapeo).
+    //    documento (recibida o emitida), se conservan tal cual (mas fiables
+    //    que cualquier mapeo).
     // 2) Si no, y el cliente esta en RE, se propone el mapeo habitual
     //    (21->5.2, 10->1.4, 4->0.5) sobre la base YA FIRMADA de esa misma
     //    linea (respeta el signo en rectificativas).
     const lineSurcharges = signed.lines.map((l, i) => {
       let rate: number | null = extracted.vatLines[i]?.equivalenceSurchargeRate ?? null;
       let amount: number | null = extracted.vatLines[i]?.equivalenceSurchargeAmount ?? null;
-      if (rate == null && invoice.type === "PURCHASE" && clientRecord?.equivalenceSurchargeCustomer) {
+      if (rate == null && clientRecord?.equivalenceSurchargeCustomer) {
         const mapped = equivalenceSurchargeRateForVat(l.vatRate);
         if (mapped != null) {
           rate = mapped;
