@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import type { InvoiceType, PeriodType } from "@prisma/client";
-import { completionPercent, PERIOD_BLOCKING_STATUSES } from "@/lib/invoiceStatuses";
+import { completionPercent, isBatchRejectable, PERIOD_BLOCKING_STATUSES } from "@/lib/invoiceStatuses";
 import { periodLabel } from "@/lib/period";
 import { BatchActions } from "./BatchActions";
 import { getAccessibleClientIds } from "@/lib/accessibleClients";
@@ -167,11 +167,7 @@ export default async function WorkerBatchPage({
       g.processingCount++;
     }
 
-    // Mismo criterio que rejectBatch: ni exportadas, ni rechazadas, ni en
-    // analisis (el OCR las devolveria a revision), ni pendientes de rutear.
-    const rechazable = !isExported
-      && !["REJECTED", "EXPORTED", "PENDING_ROUTING", "UPLOADED", "ANALYZING"].includes(inv.status);
-    if (rechazable) {
+    if (isBatchRejectable(inv)) {
       g.rejectable++;
       if (inv.status === "VALIDATED") g.rejectableValidated++;
     }

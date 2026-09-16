@@ -5,6 +5,8 @@ import {
   DONE_WORK,
   NEEDS_REVIEW,
   LEGACY_STATUSES,
+  BATCH_REJECT_EXCLUDED_STATUSES,
+  isBatchRejectable,
 } from "@/lib/invoiceStatuses";
 
 describe("completionPercent", () => {
@@ -58,5 +60,36 @@ describe("status lists", () => {
   it("LEGACY_STATUSES contains ANALYZED and EXPORTED", () => {
     expect(LEGACY_STATUSES).toContain("ANALYZED");
     expect(LEGACY_STATUSES).toContain("EXPORTED");
+  });
+});
+
+describe("isBatchRejectable", () => {
+  it("includes invoices still pending work, OCR errors among them", () => {
+    for (const status of ["PENDING_REVIEW", "NEEDS_ATTENTION", "OCR_ERROR", "ANALYZED"] as const) {
+      expect(isBatchRejectable({ status, exportBatchId: null })).toBe(true);
+    }
+  });
+
+  it("includes validated invoices that were never exported", () => {
+    expect(isBatchRejectable({ status: "VALIDATED", exportBatchId: null })).toBe(true);
+  });
+
+  it("excludes validated invoices already exported (status stays VALIDATED)", () => {
+    expect(isBatchRejectable({ status: "VALIDATED", exportBatchId: "batch_1" })).toBe(false);
+  });
+
+  it("excludes any invoice with an export batch, whatever its status", () => {
+    expect(isBatchRejectable({ status: "PENDING_REVIEW", exportBatchId: "batch_1" })).toBe(false);
+  });
+
+  it("excludes every status in BATCH_REJECT_EXCLUDED_STATUSES", () => {
+    for (const status of BATCH_REJECT_EXCLUDED_STATUSES) {
+      expect(isBatchRejectable({ status, exportBatchId: null })).toBe(false);
+    }
+  });
+
+  it("never touches invoices whose OCR is still running", () => {
+    expect(BATCH_REJECT_EXCLUDED_STATUSES).toContain("UPLOADED");
+    expect(BATCH_REJECT_EXCLUDED_STATUSES).toContain("ANALYZING");
   });
 });

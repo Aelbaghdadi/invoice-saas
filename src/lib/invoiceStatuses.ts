@@ -108,3 +108,27 @@ export function formatAuditValue(value: string | null | undefined): string {
 export const PERIOD_BLOCKING_STATUSES: InvoiceStatus[] = [
   "UPLOADED", "ANALYZING", "ANALYZED", "PENDING_REVIEW", "NEEDS_ATTENTION", "OCR_ERROR",
 ];
+
+/** Estados que "Rechazar lote" nunca toca:
+ *  - REJECTED: ya lo estan.
+ *  - EXPORTED (legacy): ya estan en la contabilidad del cliente.
+ *  - SPLIT_SOURCE: la foto original de una division; sus hijas si entran.
+ *  - PENDING_ROUTING: viven en el buzon "Sin clasificar".
+ *  - UPLOADED / ANALYZING: el OCR en curso las devolveria a revision al
+ *    terminar y desharia el rechazo sin dejar rastro.
+ *  La accion y las dos pantallas de lotes (gestor y admin) usan esta lista:
+ *  con copias a mano, lo que el boton anunciaba y lo que se rechazaba de
+ *  verdad acababan sin cuadrar. */
+export const BATCH_REJECT_EXCLUDED_STATUSES: InvoiceStatus[] = [
+  "REJECTED", "EXPORTED", "SPLIT_SOURCE", "PENDING_ROUTING", "UPLOADED", "ANALYZING",
+];
+
+/** Si "Rechazar lote" tocaria esta factura. Exportar no cambia el estado
+ *  (queda VALIDATED + exportBatchId), por eso tambien se mira exportBatchId. */
+export function isBatchRejectable(invoice: {
+  status: InvoiceStatus;
+  exportBatchId: string | null;
+}): boolean {
+  return invoice.exportBatchId == null
+    && !BATCH_REJECT_EXCLUDED_STATUSES.includes(invoice.status);
+}

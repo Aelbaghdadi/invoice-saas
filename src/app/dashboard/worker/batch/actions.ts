@@ -2,7 +2,7 @@
 
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { PERIOD_BLOCKING_STATUSES } from "@/lib/invoiceStatuses";
+import { BATCH_REJECT_EXCLUDED_STATUSES, PERIOD_BLOCKING_STATUSES } from "@/lib/invoiceStatuses";
 import { appendAuditLogs } from "@/lib/auditLog";
 import { revalidatePath } from "next/cache";
 import { canAccessClient } from "@/lib/accessibleClients";
@@ -166,15 +166,9 @@ export async function rejectBatch(
     return { error: `Periodo ${parsed.month}/${parsed.year} cerrado: reábrelo antes de rechazar el lote` };
   }
 
-  // Que NO entra en el rechazo:
-  //  - REJECTED: idempotente.
-  //  - Exportadas: ya estan en la contabilidad del cliente. Exportar no cambia
-  //    el estado (queda VALIDATED + exportBatchId), asi que filtrar solo por
-  //    el estado legacy EXPORTED no bastaba y se rechazaban lotes ya enviados.
-  //  - SPLIT_SOURCE: la foto original de una division; sus hijas si entran.
-  //  - PENDING_ROUTING: viven en el buzon "Sin clasificar".
-  //  - UPLOADED / ANALYZING: el OCR en curso las devolveria a revision al
-  //    terminar y desharia el rechazo sin dejar rastro.
+  // Mismo criterio que isBatchRejectable (lo que cuentan las pantallas de
+  // lotes). exportBatchId: exportar no cambia el estado, asi que filtrar solo
+  // por el estado legacy EXPORTED no bastaba y se rechazaban lotes ya enviados.
   const where = {
     clientId: parsed.clientId,
     periodMonth: parsed.month,
@@ -182,9 +176,7 @@ export async function rejectBatch(
     periodType: parsed.periodType,
     type: parsed.type,
     exportBatchId: null,
-    status: {
-      notIn: ["REJECTED", "EXPORTED", "SPLIT_SOURCE", "PENDING_ROUTING", "UPLOADED", "ANALYZING"] as InvoiceStatus[],
-    },
+    status: { notIn: BATCH_REJECT_EXCLUDED_STATUSES },
   };
 
   let rejected: { id: string; status: InvoiceStatus }[] = [];
@@ -256,5 +248,6 @@ export async function rejectBatch(
   revalidatePath("/dashboard/worker/batch", "layout");
   revalidatePath("/dashboard/admin/batch", "layout");
   revalidatePath("/dashboard/worker/invoices");
+  revalidatePath("/dashboard/admin/invoices");
   return { ok: true, rejectedCount: rejected.length, warning };
 }

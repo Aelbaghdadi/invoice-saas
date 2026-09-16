@@ -10,11 +10,12 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import type { InvoiceType, PeriodType } from "@prisma/client";
-import { PENDING_WORK, completionPercent } from "@/lib/invoiceStatuses";
+import { PENDING_WORK, completionPercent, isBatchRejectable } from "@/lib/invoiceStatuses";
 import { periodLabel } from "@/lib/period";
 import { AutoRefresh } from "@/components/ui/AutoRefresh";
 import { BatchFilters } from "@/components/batch/BatchFilters";
 import { ClientAccordionSection } from "@/components/batch/ClientAccordionSection";
+import { BatchActions } from "@/app/dashboard/worker/batch/BatchActions";
 
 // La pagina muestra estados de OCR en curso — la marcamos dynamic para
 // que el conteo no quede cacheado entre cargas.
@@ -38,6 +39,9 @@ type BatchGroup = {
   validated: number;
   rejected: number;
   exported: number;
+  /** Lo que tocaria "Rechazar lote" (mismo criterio que la accion). */
+  rejectable: number;
+  rejectableValidated: number;
   firstPendingId: string | null;
 };
 
@@ -109,6 +113,8 @@ export default async function BatchPage({
         validated: 0,
         rejected: 0,
         exported: 0,
+        rejectable: 0,
+        rejectableValidated: 0,
         firstPendingId: null,
       };
       groupMap.set(key, g);
@@ -121,9 +127,19 @@ export default async function BatchPage({
       case "PENDING_REVIEW":   g.pendingReview++; break;
       case "NEEDS_ATTENTION":  g.needsAttention++; break;
       case "OCR_ERROR":        g.ocrError++; break;
-      case "VALIDATED":        g.validated++; break;
+      // Exportar no cambia el estado (queda VALIDATED + exportBatchId). Sin
+      // esto las exportadas salian como validadas y no cuadraban con lo que
+      // "Rechazar lote" anuncia que va a tocar.
+      case "VALIDATED":
+        if (inv.exportBatchId != null) g.exported++;
+        else g.validated++;
+        break;
       case "REJECTED":         g.rejected++; break;
       case "EXPORTED":         g.exported++; break;
+    }
+    if (isBatchRejectable(inv)) {
+      g.rejectable++;
+      if (inv.status === "VALIDATED") g.rejectableValidated++;
     }
     if (!g.firstPendingId && pendingStatuses.has(inv.status)) {
       g.firstPendingId = inv.id;
@@ -396,6 +412,23 @@ export default async function BatchPage({
                     </span>
                   ))}
                 </div>
+
+                {/* Rechazar el lote completo (subido por error, contabilizado
+                    por fuera...). El cierre de periodo del admin se hace en
+                    su pantalla de cierres, por eso aqui no se ofrece. */}
+                {!closed && (
+                  <BatchActions
+                    clientId={g.clientId}
+                    month={g.periodMonth}
+                    year={g.periodYear}
+                    type={g.type}
+                    periodType={g.periodType}
+                    readyToClose={false}
+                    alreadyClosed={false}
+                    rejectableCount={g.rejectable}
+                    validatedCount={g.rejectableValidated}
+                  />
+                )}
               </div>
             );
           })}
