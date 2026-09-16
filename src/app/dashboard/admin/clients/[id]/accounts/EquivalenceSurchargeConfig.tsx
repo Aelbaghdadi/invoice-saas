@@ -20,6 +20,11 @@ export function EquivalenceSurchargeConfig({ clientId, initialEnabled }: Props) 
   const action = updateEquivalenceSurcharge.bind(null, clientId);
   const [state, formAction, pending] = useActionState(action, null);
   const [saved, setSaved] = useState(false);
+  // Checkbox controlado con estado optimista: cambia de color al clicar,
+  // sin esperar a la respuesta del server action ni a un re-render posterior
+  // (con defaultChecked sin controlar, el interruptor a veces se quedaba sin
+  // repintar hasta refrescar la pagina aunque el dato ya se hubiera guardado).
+  const [checked, setChecked] = useState(initialEnabled);
 
   useEffect(() => {
     if (state?.success) {
@@ -27,7 +32,9 @@ export function EquivalenceSurchargeConfig({ clientId, initialEnabled }: Props) 
       const t = setTimeout(() => setSaved(false), 2500);
       return () => clearTimeout(t);
     }
-  }, [state]);
+    // Si el guardado falla, revertimos el optimismo al valor real del servidor.
+    if (state?.error) setChecked(initialEnabled);
+  }, [state, initialEnabled]);
 
   return (
     <form
@@ -49,10 +56,11 @@ export function EquivalenceSurchargeConfig({ clientId, initialEnabled }: Props) 
           <input
             type="checkbox"
             name="equivalenceSurchargeCustomer"
-            defaultChecked={initialEnabled}
+            checked={checked}
+            onChange={(e) => setChecked(e.target.checked)}
             className="peer sr-only"
           />
-          <div className="peer h-5 w-9 rounded-full bg-slate-200 transition-colors peer-checked:bg-blue-600 after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:transition-all after:content-[''] peer-checked:after:translate-x-4" />
+          <div className="h-5 w-9 rounded-full bg-slate-200 transition-colors peer-checked:bg-blue-600 after:absolute after:left-0.5 after:top-0.5 after:h-4 after:w-4 after:rounded-full after:bg-white after:transition-all after:content-[''] peer-checked:after:translate-x-4" />
         </label>
       </div>
       {state?.error && <p className="text-[12px] text-red-600">{state.error}</p>}
