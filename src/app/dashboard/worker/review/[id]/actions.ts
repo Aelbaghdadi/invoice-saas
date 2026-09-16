@@ -80,8 +80,6 @@ type FieldData = {
   /** Lo asignado al tercero que tenia delante el gestor al contestar
    *  ("BIENES" / "SERVICIOS" / ""). */
   goodsTypeAssignedSeen: string;
-  equivalenceSurchargeRate:   string;
-  equivalenceSurchargeAmount: string;
   retentionType:   string;
   retentionBase:   string;
   retentionRate:   string;
@@ -99,7 +97,15 @@ type ValidRetentionType = (typeof VALID_RETENTION_TYPES)[number];
 const VALID_RECTIFICATIVE_TYPES = ["BY_DIFFERENCE", "BY_SUBSTITUTION"] as const;
 type ValidRectificativeType = (typeof VALID_RECTIFICATIVE_TYPES)[number];
 
-type ParsedVatLine = { taxBase: number; vatRate: number; vatAmount: number };
+type ParsedVatLine = {
+  taxBase: number;
+  vatRate: number;
+  vatAmount: number;
+  /** Recargo de equivalencia DE ESTA LINEA. null = esta linea no lo lleva —
+   *  no confundir con 0. Va por linea, no por factura (ver Client.equivalenceSurchargeCustomer). */
+  equivalenceSurchargeRate: number | null;
+  equivalenceSurchargeAmount: number | null;
+};
 
 /** Parsea el JSON de lineas, descarta las vacias y normaliza a numeros.
  *  Devuelve [] si el JSON es invalido o no hay nada util. */
@@ -122,7 +128,15 @@ function parseVatLines(raw: string): ParsedVatLine[] {
     const vatRate = parseFloat(vr.replace(",", "."));
     const vatAmount = parseFloat(va.replace(",", "."));
     if (isNaN(taxBase) || isNaN(vatRate) || isNaN(vatAmount)) continue;
-    lines.push({ taxBase, vatRate, vatAmount });
+    const sr = typeof o.equivalenceSurchargeRate === "string" ? o.equivalenceSurchargeRate.trim() : "";
+    const sa = typeof o.equivalenceSurchargeAmount === "string" ? o.equivalenceSurchargeAmount.trim() : "";
+    const srNum = sr ? parseFloat(sr.replace(",", ".")) : NaN;
+    const saNum = sa ? parseFloat(sa.replace(",", ".")) : NaN;
+    lines.push({
+      taxBase, vatRate, vatAmount,
+      equivalenceSurchargeRate:   isNaN(srNum) ? null : srNum,
+      equivalenceSurchargeAmount: isNaN(saNum) ? null : saNum,
+    });
   }
   return lines;
 }
@@ -307,8 +321,6 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     operationType:   submittedOperationType,
     intracomGoodsType,
     intracomGoodsSource,
-    equivalenceSurchargeRate:   parse(data.equivalenceSurchargeRate),
-    equivalenceSurchargeAmount: parse(data.equivalenceSurchargeAmount),
     isRectificative:        isRectificativeFlag,
     rectifiedInvoiceSeries: isRectificativeFlag ? (data.rectifiedInvoiceSeries.trim() || null) : null,
     rectifiedInvoiceNumber: isRectificativeFlag ? (data.rectifiedInvoiceNumber.trim() || null) : null,
@@ -341,13 +353,24 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
   newData.irpfAmount    = signedLines.irpfAmount;
   newData.retentionBase = signedLines.retentionBase;
 
-  // Math validation: Sigma(bases) + Sigma(cuotas) - IRPF = Total (el signo es
-  // invariante: negar ambos lados no cambia la diferencia).
+  // applyRectificativeSign solo conserva {taxBase,vatRate,vatAmount} por
+  // linea: el recargo de equivalencia (por linea, no cubierto por esa
+  // funcion) se vuelve a pegar aqui por indice — mismo orden, misma
+  // longitud que vatLines de donde salio signedLines.lines.
+  const linesToSave = signedLines.lines.map((l, i) => ({
+    ...l,
+    equivalenceSurchargeRate:   vatLines[i]?.equivalenceSurchargeRate   ?? null,
+    equivalenceSurchargeAmount: vatLines[i]?.equivalenceSurchargeAmount ?? null,
+  }));
+  const sumSurcharge = linesToSave.reduce((s, l) => s + (l.equivalenceSurchargeAmount ?? 0), 0);
+
+  // Math validation: Sigma(bases) + Sigma(cuotas) + Sigma(recargo) - IRPF =
+  // Total (el signo es invariante: negar ambos lados no cambia la diferencia).
   let isValid: boolean | null = null;
   if (signedLines.lines.length > 0 && newData.totalAmount !== null) {
     const sBase = signedLines.lines.reduce((s, l) => s + l.taxBase, 0);
     const sAmount = signedLines.lines.reduce((s, l) => s + l.vatAmount, 0);
-    const expected = sBase + sAmount - (newData.irpfAmount ?? 0);
+    const expected = sBase + sAmount + sumSurcharge - (newData.irpfAmount ?? 0);
     const diff = Math.abs(
       Math.round(expected * 100) - Math.round(newData.totalAmount * 100)
     );
@@ -361,7 +384,6 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     "issuerName","issuerCif","receiverName","receiverCif",
     "invoiceNumber","taxBase","vatRate","vatAmount","irpfRate","irpfAmount","totalAmount","currency",
     "operationType","intracomGoodsType",
-    "equivalenceSurchargeRate","equivalenceSurchargeAmount",
     "isRectificative","rectifiedInvoiceNumber","rectificativeType",
   ] as const;
 
@@ -390,14 +412,16 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
   // previas y reinsertamos: la UI envia el array completo.
   await prisma.$transaction([
     prisma.invoiceVatLine.deleteMany({ where: { invoiceId } }),
-    ...(signedLines.lines.length > 0
+    ...(linesToSave.length > 0
       ? [prisma.invoiceVatLine.createMany({
-          data: signedLines.lines.map((l, i) => ({
+          data: linesToSave.map((l, i) => ({
             invoiceId,
             position:  i,
             taxBase:   l.taxBase,
             vatRate:   l.vatRate,
             vatAmount: l.vatAmount,
+            equivalenceSurchargeRate:   l.equivalenceSurchargeRate,
+            equivalenceSurchargeAmount: l.equivalenceSurchargeAmount,
           })),
         })]
       : []),
@@ -1165,8 +1189,6 @@ function extractFields(fd: FormData): FieldData {
     intracomGoodsSource: fd.get("intracomGoodsSource") as string ?? "",
     goodsTypeScope:    fd.get("goodsTypeScope")    as string ?? "",
     goodsTypeAssignedSeen: fd.get("goodsTypeAssignedSeen") as string ?? "",
-    equivalenceSurchargeRate:   fd.get("equivalenceSurchargeRate")   as string ?? "",
-    equivalenceSurchargeAmount: fd.get("equivalenceSurchargeAmount") as string ?? "",
     retentionType:   fd.get("retentionType")   as string ?? "",
     retentionBase:   fd.get("retentionBase")   as string ?? "",
     retentionRate:   fd.get("retentionRate")   as string ?? "",

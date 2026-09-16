@@ -362,7 +362,11 @@ describe("generateA3Excel — recargo de equivalencia", () => {
 
   it("exporta el % y la cuota reales cuando la factura sí lleva recargo", () => {
     const buf = generateA3Excel([
-      mkInvoice({ equivalenceSurchargeRate: 5.2 as any, equivalenceSurchargeAmount: 5.2 as any }),
+      mkInvoice({
+        vatLines: [
+          { id: "v1", invoiceId: "inv-1", position: 0, taxBase: 100 as any, vatRate: 21 as any, vatAmount: 21 as any, equivalenceSurchargeRate: 5.2 as any, equivalenceSurchargeAmount: 5.2 as any, createdAt: new Date() },
+        ] as any,
+      }),
     ]);
     const rows = readRows(buf, "Facturas recibidas");
     const dataRow = rows[1];
@@ -371,11 +375,32 @@ describe("generateA3Excel — recargo de equivalencia", () => {
   });
 
   it("no aplica el recargo de una factura a otra sin recargo (no queda un valor pegado global)", () => {
-    const withSurcharge = mkInvoice({ id: "inv-a", equivalenceSurchargeRate: 5.2 as any, equivalenceSurchargeAmount: 5.2 as any });
+    const withSurcharge = mkInvoice({
+      id: "inv-a",
+      vatLines: [
+        { id: "v1", invoiceId: "inv-a", position: 0, taxBase: 100 as any, vatRate: 21 as any, vatAmount: 21 as any, equivalenceSurchargeRate: 5.2 as any, equivalenceSurchargeAmount: 5.2 as any, createdAt: new Date() },
+      ] as any,
+    });
     const withoutSurcharge = mkInvoice({ id: "inv-b" });
     const buf = generateA3Excel([withSurcharge, withoutSurcharge]);
     const rows = readRows(buf, "Facturas recibidas");
     expect(rows[1][12]).toBe(5.2);
     expect(rows[2][12]).toBe(0);
+  });
+
+  it("una linea sin recargo dentro de una factura con otras que si lo llevan exporta 0 solo en esa fila (p.ej. portes)", () => {
+    const buf = generateA3Excel([
+      mkInvoice({
+        taxBase: null, vatAmount: null, totalAmount: 226.20 as any,
+        vatLines: [
+          { id: "v1", invoiceId: "inv-1", position: 0, taxBase: 100 as any, vatRate: 21 as any, vatAmount: 21 as any, equivalenceSurchargeRate: 5.2 as any, equivalenceSurchargeAmount: 5.2 as any, createdAt: new Date() },
+          { id: "v2", invoiceId: "inv-1", position: 1, taxBase: 100 as any, vatRate: 0 as any, vatAmount: 0 as any, equivalenceSurchargeRate: null, equivalenceSurchargeAmount: null, createdAt: new Date() },
+        ] as any,
+      }),
+    ]);
+    const rows = readRows(buf, "Facturas recibidas");
+    expect(rows[1][12]).toBe(5.2);
+    expect(rows[2][12]).toBe(0);
+    expect(rows[2][13]).toBe(0);
   });
 });

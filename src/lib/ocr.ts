@@ -10,6 +10,13 @@ export type ExtractedVatLine = {
   taxBase:   number;
   vatRate:   number;
   vatAmount: number;
+  /** % y cuota de Recargo de Equivalencia de ESTA linea, SOLO si el
+   *  documento los menciona explicitamente ("Recargo de Equivalencia",
+   *  "R.E."...) para este tipo de IVA. null en el resto de casos — nunca se
+   *  derivan del % de IVA en esta capa (eso, cuando procede, lo decide
+   *  processInvoice a partir de Client.equivalenceSurchargeCustomer). */
+  equivalenceSurchargeRate?:   number | null;
+  equivalenceSurchargeAmount?: number | null;
 };
 
 export type ExtractedInvoice = {
@@ -30,12 +37,6 @@ export type ExtractedInvoice = {
   totalAmount:   number | null;
   /** Moneda ISO 4217 de los importes (EUR, USD...). null si no se detecto. */
   currency:      string | null;
-  /** % y cuota de Recargo de Equivalencia SOLO si el documento los menciona
-   *  explicitamente ("Recargo de Equivalencia", "R.E."...). null en el resto
-   *  de casos — nunca se derivan del % de IVA en esta capa (eso, cuando
-   *  procede, lo decide processInvoice a partir de Client.equivalenceSurchargeCustomer). */
-  equivalenceSurchargeRate:   number | null;
-  equivalenceSurchargeAmount: number | null;
   /** Si lo facturado son BIENES o SERVICIOS segun la IA. Solo se usa en
    *  intracomunitarias (compras 3/8, ventas cuenta 700/705); null si no lo sabe. */
   supplyType: IntracomGoodsTypeName | null;
@@ -296,10 +297,8 @@ function mapEntities(entities: any[]): ExtractedInvoice {
     // entraba en A3 como si fueran euros.
     currency:      detectDocumentAiCurrency(byType),
     // Document AI Invoice Parser no tiene una entidad para el recargo de
-    // equivalencia (concepto especifico de España). Se conserva null; el
-    // gestor lo introduce a mano en revision si aplica.
-    equivalenceSurchargeRate:   null,
-    equivalenceSurchargeAmount: null,
+    // equivalencia (concepto especifico de España): las lineas de vatLines
+    // se quedan sin ese dato; el gestor lo introduce a mano en revision.
     // Bienes/servicios lo deduce la IA leyendo los conceptos; Document AI no
     // tiene esa entidad. El gestor lo marca en revision.
     supplyType: null,
@@ -567,9 +566,8 @@ async function parseFacturaeXml(xml: string): Promise<ExtractedInvoice> {
     // El recargo de equivalencia en Facturae iria como una linea de impuesto
     // adicional dentro de TaxesOutputs con un TaxTypeCode distinto de IVA;
     // no lo mapeamos aqui (fuera de alcance) para no inventar una lectura
-    // sin confirmar el formato real. El gestor lo introduce a mano si aplica.
-    equivalenceSurchargeRate:   null,
-    equivalenceSurchargeAmount: null,
+    // sin confirmar el formato real. Las lineas quedan sin ese dato; el
+    // gestor lo introduce a mano si aplica.
     // Facturae no marca si las lineas son bienes o servicios.
     supplyType: null,
     vatLines,

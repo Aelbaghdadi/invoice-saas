@@ -30,7 +30,15 @@ export type InvoiceWithClient = Invoice & {
 /** Devuelve las lineas a exportar para una factura. Si la factura ya tiene
  *  desglose lo usa; si no, sintetiza una linea unica con los campos planos
  *  (compatibilidad con datos legacy y con los tests). */
-type ExportVatLine = { taxBase: number; vatRate: number; vatAmount: number };
+type ExportVatLine = {
+  taxBase: number;
+  vatRate: number;
+  vatAmount: number;
+  /** Recargo de equivalencia DE ESTA LINEA (0 si no lleva — a diferencia del
+   *  modelo de datos, aqui A3 espera un numero, no un tercer estado null). */
+  equivalenceSurchargeRate: number;
+  equivalenceSurchargeAmount: number;
+};
 
 function getExportLines(inv: InvoiceWithClient): ExportVatLine[] {
   if (inv.vatLines && inv.vatLines.length > 0) {
@@ -38,12 +46,17 @@ function getExportLines(inv: InvoiceWithClient): ExportVatLine[] {
       taxBase:   Number(l.taxBase),
       vatRate:   Number(l.vatRate),
       vatAmount: Number(l.vatAmount),
+      equivalenceSurchargeRate:   l.equivalenceSurchargeRate   ? Number(l.equivalenceSurchargeRate)   : 0,
+      equivalenceSurchargeAmount: l.equivalenceSurchargeAmount ? Number(l.equivalenceSurchargeAmount) : 0,
     }));
   }
   return [{
     taxBase:   inv.taxBase   ? Number(inv.taxBase)   : 0,
     vatRate:   inv.vatRate   ? Number(inv.vatRate)   : 0,
     vatAmount: inv.vatAmount ? Number(inv.vatAmount) : 0,
+    // Datos legacy sin desglose: no hay donde guardar el recargo por linea.
+    equivalenceSurchargeRate: 0,
+    equivalenceSurchargeAmount: 0,
   }];
 }
 
@@ -214,11 +227,11 @@ function buildA3Row(
   // Para rectificativas, la retencion respeta el signo de la base.
   const retentionRate   = isFirstLine && inv.irpfRate   ? Number(inv.irpfRate)   : 0;
   const retentionAmount = isFirstLine && inv.irpfAmount ? Number(inv.irpfAmount) : 0;
-  // Recargo de equivalencia: igual que la retencion, solo en la primera fila
-  // del multi-IVA para no sumarlo varias veces. 0 cuando no aplica (A3
-  // espera 0/vacio en ese caso, no hay un tercer estado).
-  const surchargeRate   = isFirstLine && inv.equivalenceSurchargeRate   ? Number(inv.equivalenceSurchargeRate)   : 0;
-  const surchargeAmount = isFirstLine && inv.equivalenceSurchargeAmount ? Number(inv.equivalenceSurchargeAmount) : 0;
+  // Recargo de equivalencia: a diferencia de la retencion, va POR LINEA (cada
+  // tipo de IVA puede llevar su propio recargo, o ninguno) — no se limita a
+  // la primera fila del multi-IVA.
+  const surchargeRate   = line.equivalenceSurchargeRate;
+  const surchargeAmount = line.equivalenceSurchargeAmount;
   // Fecha de Contabilizacion (col B): obligatoria segun plantilla A3.
   // Por defecto = fecha de la factura. El gestor puede sobreescribirla
   // en el Excel exportado si quiere registrar el asiento en otro mes.
@@ -329,13 +342,14 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
       warnings.push("Total = 0 (excluida del export — A3 no acepta importes cero)");
     }
 
-    // Base + IVA - IRPF = Total. Suma sobre las lineas si las hay.
+    // Base + IVA + Recargo - IRPF = Total. Suma sobre las lineas si las hay.
     if (inv.totalAmount && Math.abs(totalNum) >= 0.005) {
       const lines = getExportLines(inv);
       const sumBase = lines.reduce((s, l) => s + l.taxBase, 0);
       const sumAmt  = lines.reduce((s, l) => s + l.vatAmount, 0);
+      const sumSurcharge = lines.reduce((s, l) => s + l.equivalenceSurchargeAmount, 0);
       const irpf    = inv.irpfAmount ? Number(inv.irpfAmount) : 0;
-      const expected = sumBase + sumAmt - irpf;
+      const expected = sumBase + sumAmt + sumSurcharge - irpf;
       if (Math.abs(sumBase) > 0 || Math.abs(sumAmt) > 0) {
         const diff = Math.abs(Math.round(expected * 100) - Math.round(totalNum * 100));
         if (diff > 1) warnings.push(`Descuadre Base+IVA vs Total: ${(diff / 100).toFixed(2)}`);

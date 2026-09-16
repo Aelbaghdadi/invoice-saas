@@ -103,6 +103,10 @@ type VatLineInput = {
   taxBase: string;
   vatRate: string;
   vatAmount: string;
+  /** Recargo de equivalencia DE ESTA LINEA. "" = esta linea no lo lleva —
+   *  no confundir con "0". Va por linea, no por factura. */
+  equivalenceSurchargeRate: string;
+  equivalenceSurchargeAmount: string;
 };
 
 /** Etiquetas legibles de los campos para el hint del visor PDF. */
@@ -129,7 +133,6 @@ const VAT_RATE_SHORTCUTS = [21, 10, 4] as const;
 type SerializedInvoice = Omit<
   Invoice,
   | "taxBase" | "vatRate" | "vatAmount" | "irpfRate" | "irpfAmount" | "retentionBase" | "totalAmount"
-  | "equivalenceSurchargeRate" | "equivalenceSurchargeAmount"
 > & {
   taxBase:       number | null;
   vatRate:       number | null;
@@ -138,16 +141,21 @@ type SerializedInvoice = Omit<
   irpfAmount:    number | null;
   retentionBase: number | null;
   totalAmount:   number | null;
-  equivalenceSurchargeRate:   number | null;
-  equivalenceSurchargeAmount: number | null;
 };
 
 type Props = {
   invoice: SerializedInvoice;
   /** Lineas de IVA iniciales (de InvoiceVatLine, o sintetizada desde los
    *  campos planos de la factura para datos legacy). Vacio si nunca se
-   *  procesaron datos. */
-  initialVatLines: { taxBase: number; vatRate: number; vatAmount: number }[];
+   *  procesaron datos. El recargo de equivalencia va por linea: null =
+   *  esa linea no lo lleva. */
+  initialVatLines: {
+    taxBase: number;
+    vatRate: number;
+    vatAmount: number;
+    equivalenceSurchargeRate: number | null;
+    equivalenceSurchargeAmount: number | null;
+  }[];
   prevId: string | null;
   nextId: string | null;
   position: number;
@@ -268,12 +276,14 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
   // para que el gestor pueda empezar a teclear.
   const [vatLines, setVatLines] = useState<VatLineInput[]>(() => {
     if (initialVatLines.length === 0) {
-      return [{ taxBase: "", vatRate: "", vatAmount: "" }];
+      return [{ taxBase: "", vatRate: "", vatAmount: "", equivalenceSurchargeRate: "", equivalenceSurchargeAmount: "" }];
     }
     return initialVatLines.map((l) => ({
       taxBase: String(l.taxBase),
       vatRate: String(l.vatRate),
       vatAmount: String(l.vatAmount),
+      equivalenceSurchargeRate: l.equivalenceSurchargeRate != null ? String(l.equivalenceSurchargeRate) : "",
+      equivalenceSurchargeAmount: l.equivalenceSurchargeAmount != null ? String(l.equivalenceSurchargeAmount) : "",
     }));
   });
   const [totalAmount, setTotalAmount] = useState(fmt(invoice.totalAmount));
@@ -318,13 +328,12 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
   // "CAMBIO" (tiene lo contrario de lo marcado).
   const [goodsQuestion, setGoodsQuestion] = useState<"NUEVO" | "CAMBIO" | null>(null);
 
-  // Recargo de equivalencia: % y cuota. Solo relevante en compras de
-  // clientes minoristas acogidos a RE (sessionContext.equivalenceSurchargeCustomer).
-  const [equivalenceSurchargeRate, setEquivalenceSurchargeRate] = useState(
-    fmt(invoice.equivalenceSurchargeRate),
-  );
-  const [equivalenceSurchargeAmount, setEquivalenceSurchargeAmount] = useState(
-    fmt(invoice.equivalenceSurchargeAmount),
+  // Recargo de equivalencia: va por linea de IVA (ver vatLines), no aqui.
+  // Solo relevante en compras de clientes minoristas acogidos a RE
+  // (sessionContext.equivalenceSurchargeCustomer). Panel plegable, expandido
+  // si ya venia con recargo en alguna linea.
+  const [showSurchargePanel, setShowSurchargePanel] = useState<boolean>(
+    initialVatLines.some((l) => l.equivalenceSurchargeRate != null),
   );
 
   // Tipo emitida/recibida — editable en la revisión. Si la factura se subió
@@ -500,16 +509,51 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
           copy[idx].vatAmount = (Math.round(b * r) / 100).toFixed(2);
         }
       }
+      // Idem para la cuota de recargo cuando se edita el % de recargo.
+      if (field === "equivalenceSurchargeRate") {
+        const b = parseFloat(copy[idx].taxBase);
+        const r = parseFloat(value);
+        if (!isNaN(b) && !isNaN(r)) {
+          copy[idx].equivalenceSurchargeAmount = ((b * r) / 100).toFixed(2);
+        }
+      }
       return copy;
     });
   };
 
   const addVatLine = () => {
-    setVatLines((prev) => [...prev, { taxBase: "", vatRate: "", vatAmount: "" }]);
+    setVatLines((prev) => [...prev, { taxBase: "", vatRate: "", vatAmount: "", equivalenceSurchargeRate: "", equivalenceSurchargeAmount: "" }]);
   };
 
   const removeVatLine = (idx: number) => {
     setVatLines((prev) => prev.length === 1 ? prev : prev.filter((_, i) => i !== idx));
+  };
+
+  // Casilla de recargo de una linea: al marcarla se propone el mapeo
+  // habitual segun el % de IVA de esa misma linea (21->5.2, 10->1.4,
+  // 4->0.5); al desmarcarla se limpian ambos campos ("" = no lleva recargo,
+  // no confundir con "0"). El gestor puede editar el valor propuesto o
+  // ponerlo a 0 en lineas concretas (p.ej. portes).
+  const toggleLineSurcharge = (idx: number, checked: boolean) => {
+    setVatLines((prev) => {
+      const copy = [...prev];
+      if (!checked) {
+        copy[idx] = { ...copy[idx], equivalenceSurchargeRate: "", equivalenceSurchargeAmount: "" };
+        return copy;
+      }
+      const rateNum = parseFloat(copy[idx].vatRate);
+      const suggested = !isNaN(rateNum) ? equivalenceSurchargeRateForVat(rateNum) : null;
+      const baseNum = parseFloat(copy[idx].taxBase);
+      const suggestedAmount = suggested != null && !isNaN(baseNum)
+        ? ((baseNum * suggested) / 100).toFixed(2)
+        : "";
+      copy[idx] = {
+        ...copy[idx],
+        equivalenceSurchargeRate: suggested != null ? String(suggested) : "",
+        equivalenceSurchargeAmount: suggestedAmount,
+      };
+      return copy;
+    });
   };
 
   const [saveState, setSaveState]         = useState<ReviewState>(null);
@@ -539,20 +583,23 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
   const vatTotals = useMemo(() => {
     let sumBase = 0;
     let sumAmount = 0;
+    let sumSurcharge = 0;
     let anyFilled = false;
     for (const l of vatLines) {
       const b = parseFloat(l.taxBase);
       const a = parseFloat(l.vatAmount);
+      const s = parseFloat(l.equivalenceSurchargeAmount);
       if (!isNaN(b)) { sumBase += b; anyFilled = true; }
       if (!isNaN(a)) { sumAmount += a; anyFilled = true; }
+      if (!isNaN(s)) { sumSurcharge += s; }
     }
-    return { sumBase, sumAmount, anyFilled };
+    return { sumBase, sumAmount, sumSurcharge, anyFilled };
   }, [vatLines]);
 
-  // Math semaphore: Total = Σ Bases + Σ Cuotas - Retencion IRPF
+  // Math semaphore: Total = Σ Bases + Σ Cuotas + Σ Recargo - Retencion IRPF
   const totalNum   = parseFloat(totalAmount) || 0;
   const hasValues  = vatTotals.anyFilled && totalAmount;
-  const calculated = Math.round((vatTotals.sumBase + vatTotals.sumAmount - retentionAmount) * 100);
+  const calculated = Math.round((vatTotals.sumBase + vatTotals.sumAmount + vatTotals.sumSurcharge - retentionAmount) * 100);
   const actual     = Math.round(totalNum * 100);
   const mathOk     = hasValues ? Math.abs(calculated - actual) <= 2 : null;
 
@@ -677,8 +724,8 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     fd.set("operationType", operationType);
     fd.set("intracomGoodsType", goodsTypeShown ?? "");
     fd.set("intracomGoodsSource", goodsTypeShown ? (shownSource ?? "") : "");
-    fd.set("equivalenceSurchargeRate", equivalenceSurchargeRate);
-    fd.set("equivalenceSurchargeAmount", equivalenceSurchargeAmount);
+    // El recargo de equivalencia va incluido en vatLines (por linea), no
+    // aparte: el fd.set("vatLines", ...) de mas arriba ya lo manda.
     fd.set("retentionType", retentionType);
     fd.set("retentionBase", retentionBase);
     fd.set("retentionRate", retentionRate);
@@ -691,7 +738,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     fd.set("bucket", bucket);
     if (extra) Object.entries(extra).forEach(([k,v]) => fd.set(k,v));
     return fd;
-  }, [type, vatLines, totalAmount, markedEuro, invoiceDateVal, supplierAccountVal, expenseAccountVal, operationType, goodsTypeShown, shownSource, equivalenceSurchargeRate, equivalenceSurchargeAmount, retentionType, retentionBase, retentionRate, retentionAmount, isRectificative, rectifiedInvoiceSeries, rectifiedInvoiceNumber, rectificativeType, art80Tres, invoice.id, invoice.updatedAt, bucket]);
+  }, [type, vatLines, totalAmount, markedEuro, invoiceDateVal, supplierAccountVal, expenseAccountVal, operationType, goodsTypeShown, shownSource, retentionType, retentionBase, retentionRate, retentionAmount, isRectificative, rectifiedInvoiceSeries, rectifiedInvoiceNumber, rectificativeType, art80Tres, invoice.id, invoice.updatedAt, bucket]);
 
   const handleSave = () => {
     startSave(async () => {
@@ -1801,6 +1848,91 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                 )}
               </div>
 
+              {/* Recargo de Equivalencia — solo compras, y POR LINEA de IVA
+                  (una fila del desglose de arriba puede llevarlo y otra no,
+                  p.ej. portes sin recargo). La casilla la marca la IA sola si
+                  detecto el recargo explicito en el documento para esa linea
+                  (ver ocrLlm.ts); si no, el gestor la marca a mano. Nunca se
+                  aplica solo por el % de IVA salvo que el cliente este
+                  marcado como minorista en RE (ver ficha del cliente). */}
+              {type === "PURCHASE" && (
+                <div className="border-t border-slate-200 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowSurchargePanel((v) => !v)}
+                    className="flex w-full items-center justify-between gap-2 rounded-md px-1 py-1 text-left"
+                  >
+                    <span className="flex items-center gap-2">
+                      <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                        Recargo de Equivalencia
+                      </span>
+                      {vatTotals.sumSurcharge > 0 && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-blue-700">
+                          {vatTotals.sumSurcharge.toFixed(2)} €
+                        </span>
+                      )}
+                    </span>
+                    <ChevronDown
+                      className={`h-3.5 w-3.5 text-slate-400 transition-transform duration-200 ${
+                        showSurchargePanel ? "rotate-0" : "-rotate-90"
+                      }`}
+                    />
+                  </button>
+                  {showSurchargePanel && (
+                    <div className="mt-2 space-y-2">
+                      {sessionContext?.equivalenceSurchargeCustomer && vatTotals.sumSurcharge === 0 && (
+                        <div className="flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-700">
+                          <AlertTriangle className="h-3.5 w-3.5" />
+                          Cliente en Recargo de Equivalencia — revisa si esta factura lo lleva
+                        </div>
+                      )}
+                      {vatLines.map((line, idx) => {
+                        const hasSurcharge = line.equivalenceSurchargeRate !== "";
+                        return (
+                          <div key={idx} className="flex items-center gap-2 rounded-lg border border-slate-200 p-2">
+                            <label className="flex w-24 flex-shrink-0 items-center gap-1.5 text-[12px] font-medium text-slate-600">
+                              <input
+                                type="checkbox"
+                                checked={hasSurcharge}
+                                onChange={(e) => toggleLineSurcharge(idx, e.target.checked)}
+                                className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600 focus:ring-accent-400"
+                              />
+                              {line.vatRate || "?"}% IVA
+                            </label>
+                            {hasSurcharge ? (
+                              <>
+                                <div className="flex-1">
+                                  <input
+                                    type="number"
+                                    step="0.01"
+                                    className={inputClass}
+                                    value={line.equivalenceSurchargeRate}
+                                    onChange={(e) => updateVatLine(idx, "equivalenceSurchargeRate", e.target.value)}
+                                    placeholder="% recargo"
+                                  />
+                                </div>
+                                <div className="flex-1">
+                                  <input
+                                    type="number"
+                                    step="0.01"
+                                    className={inputClass}
+                                    value={line.equivalenceSurchargeAmount}
+                                    onChange={(e) => updateVatLine(idx, "equivalenceSurchargeAmount", e.target.value)}
+                                    placeholder="cuota"
+                                  />
+                                </div>
+                              </>
+                            ) : (
+                              <span className="flex-1 text-[11px] text-slate-400">Sin recargo en esta línea</span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Total factura — fila compacta al pie del bloque
                   desglose. Antes vivia como bloque ancho separado abajo;
                   ahora es la "fila final" del IVA, alineada a la
@@ -1940,102 +2072,6 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
               )}
             </fieldset>
 
-            {/* Recargo de equivalencia — solo compras. No se hardcodea nunca:
-                el % sugerido según el IVA solo aparece si el cliente esta
-                marcado como minorista en RE (ver ficha del cliente). */}
-            {type === "PURCHASE" && (
-              <fieldset className="rounded-xl border border-slate-200 bg-white p-3">
-                <legend className="px-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                  Recargo de Equivalencia
-                </legend>
-                {sessionContext?.equivalenceSurchargeCustomer && !equivalenceSurchargeRate && (
-                  <div className="mb-3 flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-700">
-                    <AlertTriangle className="h-3.5 w-3.5" />
-                    Cliente en Recargo de Equivalencia — revisa si esta factura lo lleva
-                  </div>
-                )}
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="mb-1 block text-[11px] font-medium text-slate-500">% Recargo</label>
-                    <input
-                      className={inputClass}
-                      type="number"
-                      step="0.01"
-                      value={equivalenceSurchargeRate}
-                      onChange={(e) => setEquivalenceSurchargeRate(e.target.value)}
-                      placeholder="0.00"
-                    />
-                    <div className="mt-1.5 flex flex-wrap gap-1">
-                      {[5.2, 1.4, 0.5].map((r) => (
-                        <button
-                          key={r}
-                          type="button"
-                          onClick={() => {
-                            setEquivalenceSurchargeRate(String(r));
-                            const base = vatTotals.sumBase;
-                            if (base) setEquivalenceSurchargeAmount(((base * r) / 100).toFixed(2));
-                          }}
-                          className={
-                            "rounded-md px-2 py-0.5 text-[11px] font-medium transition " +
-                            (parseFloat(equivalenceSurchargeRate) === r
-                              ? "bg-blue-600 text-white"
-                              : "bg-slate-100 text-slate-600 hover:bg-slate-200")
-                          }
-                        >
-                          {r}%
-                        </button>
-                      ))}
-                      {(() => {
-                        // Sugerencia según el % IVA de la factura (solo con un único
-                        // tipo): 21->5.2, 10->1.4, 4->0.5. Nunca se aplica sola —
-                        // el gestor confirma con este botón.
-                        if (vatLines.length !== 1) return null;
-                        const vatRate = parseFloat(vatLines[0].vatRate);
-                        if (isNaN(vatRate)) return null;
-                        const suggested = equivalenceSurchargeRateForVat(vatRate);
-                        if (suggested == null) return null;
-                        return (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEquivalenceSurchargeRate(String(suggested));
-                              const base = vatTotals.sumBase;
-                              if (base) setEquivalenceSurchargeAmount(((base * suggested) / 100).toFixed(2));
-                            }}
-                            className="rounded-md border border-blue-200 px-2 py-0.5 text-[11px] font-medium text-blue-700 hover:bg-blue-50"
-                            title={`Según el ${vatRate}% de IVA de esta factura`}
-                          >
-                            Según IVA ({suggested}%)
-                          </button>
-                        );
-                      })()}
-                    </div>
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-[11px] font-medium text-slate-500">Cuota Recargo</label>
-                    <input
-                      className={inputClass}
-                      type="number"
-                      step="0.01"
-                      value={equivalenceSurchargeAmount}
-                      onChange={(e) => setEquivalenceSurchargeAmount(e.target.value)}
-                      placeholder="0.00"
-                    />
-                  </div>
-                </div>
-                {equivalenceSurchargeRate && !equivalenceSurchargeAmount && vatTotals.sumBase > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setEquivalenceSurchargeAmount(
-                      ((vatTotals.sumBase * (parseFloat(equivalenceSurchargeRate) || 0)) / 100).toFixed(2),
-                    )}
-                    className="mt-2 text-[11px] font-medium text-blue-600 hover:underline"
-                  >
-                    Calcular cuota desde la base ({vatTotals.sumBase.toFixed(2)} €)
-                  </button>
-                )}
-              </fieldset>
-            )}
 
           </div>
 

@@ -490,29 +490,48 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
 
     // ── Recargo de equivalencia ─────────────────────────────────────────
     //
-    // Solo aplica a COMPRAS de clientes minoristas acogidos a RE (el
-    // proveedor les repercute el recargo ademas del IVA normal). Nunca lo
-    // inventamos por el simple hecho de que el IVA sea 21/10/4 — exige que
-    // el cliente este marcado explicitamente (Client.equivalenceSurchargeCustomer).
+    // Va POR LINEA de IVA, no por factura: cada tipo (21/10/4) puede llevar
+    // su propio recargo, y una linea concreta (p.ej. portes) puede no
+    // llevarlo aunque el resto de la factura si. Solo aplica a COMPRAS de
+    // clientes minoristas acogidos a RE (el proveedor les repercute el
+    // recargo ademas del IVA normal). Nunca lo inventamos por el simple
+    // hecho de que el IVA sea 21/10/4 — exige que el cliente este marcado
+    // explicitamente (Client.equivalenceSurchargeCustomer).
     //
-    // 1) Si el OCR/IA vio explicitamente % y cuota en el documento, se
-    //    conservan tal cual (mas fiables que cualquier mapeo).
-    // 2) Si no, y el cliente esta en RE con una unica linea de IVA, se
-    //    propone el mapeo habitual (21->5.2, 10->1.4, 4->0.5) sobre la base
-    //    ya firmada (respeta el signo en rectificativas).
-    let equivalenceSurchargeRate: number | null = extracted.equivalenceSurchargeRate ?? null;
-    let equivalenceSurchargeAmount: number | null = extracted.equivalenceSurchargeAmount ?? null;
-    if (
-      equivalenceSurchargeRate == null &&
-      invoice.type === "PURCHASE" &&
-      clientRecord?.equivalenceSurchargeCustomer &&
-      signed.lines.length === 1
-    ) {
-      const mapped = equivalenceSurchargeRateForVat(signed.lines[0].vatRate);
-      if (mapped != null) {
-        equivalenceSurchargeRate = mapped;
-        equivalenceSurchargeAmount = parseFloat(((signed.lines[0].taxBase * mapped) / 100).toFixed(2));
+    // Por cada linea:
+    // 1) Si el OCR/IA vio explicitamente % y/o cuota para ESA linea en el
+    //    documento, se conservan tal cual (mas fiables que cualquier mapeo).
+    // 2) Si no, y el cliente esta en RE, se propone el mapeo habitual
+    //    (21->5.2, 10->1.4, 4->0.5) sobre la base YA FIRMADA de esa misma
+    //    linea (respeta el signo en rectificativas).
+    const lineSurcharges = signed.lines.map((l, i) => {
+      let rate: number | null = extracted.vatLines[i]?.equivalenceSurchargeRate ?? null;
+      let amount: number | null = extracted.vatLines[i]?.equivalenceSurchargeAmount ?? null;
+      if (rate == null && invoice.type === "PURCHASE" && clientRecord?.equivalenceSurchargeCustomer) {
+        const mapped = equivalenceSurchargeRateForVat(l.vatRate);
+        if (mapped != null) {
+          rate = mapped;
+          amount = parseFloat(((l.taxBase * mapped) / 100).toFixed(2));
+        }
       }
+      return { rate, amount };
+    });
+    const totalSurchargeAmount = lineSurcharges.reduce((s, ls) => s + (ls.amount ?? 0), 0);
+
+    // isValid final: Σ(bases) + Σ(cuotas) + Σ(recargo) - IRPF = Total, con
+    // los importes YA FIRMADOS (el `isValid` de mas arriba es un diagnostico
+    // de la extraccion cruda del OCR, previo al signo y al recargo).
+    let finalIsValid: boolean | null = null;
+    if (signed.lines.length > 0 && signed.totalAmount !== null) {
+      const sBase = signed.lines.reduce((s, l) => s + l.taxBase, 0);
+      const sAmount = signed.lines.reduce((s, l) => s + l.vatAmount, 0);
+      const expected = sBase + sAmount + totalSurchargeAmount - (signed.irpfAmount ?? 0);
+      const diff = Math.abs(
+        Math.round(expected * 100) - Math.round(signed.totalAmount * 100)
+      );
+      finalIsValid = diff <= 2;
+    } else {
+      finalIsValid = isValid;
     }
 
     // Copy OCR data to Invoice (datos finales — gestor los editará)
@@ -527,6 +546,8 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
               taxBase:   l.taxBase,
               vatRate:   l.vatRate,
               vatAmount: l.vatAmount,
+              equivalenceSurchargeRate:   lineSurcharges[i].rate,
+              equivalenceSurchargeAmount: lineSurcharges[i].amount,
             })),
           })]
         : []),
@@ -562,13 +583,15 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
           irpfAmount:    signed.irpfAmount,
           retentionType,
           retentionBase: signed.retentionBase,
-          equivalenceSurchargeRate,
-          equivalenceSurchargeAmount,
           totalAmount:   signed.totalAmount,
           // Si este OCR no ve la moneda se conserva la que ya tenia (p.ej. la
           // heredada de la factura madre al dividir un PDF en USD).
           currency:      extracted.currency ?? invoice.currency,
-          isValid,
+          // isValid final: recalculado con los importes YA FIRMADOS y el
+          // recargo de equivalencia por linea (el `isValid` de mas arriba es
+          // un diagnostico de la extraccion cruda, sin firmar ni recargo — se
+          // guarda tal cual en InvoiceExtraction, no aqui).
+          isValid: finalIsValid,
           lastOcrError:  null,
         },
       }),

@@ -172,12 +172,17 @@ export default async function ReviewPage({
         taxBase: Number(l.taxBase),
         vatRate: Number(l.vatRate),
         vatAmount: Number(l.vatAmount),
+        equivalenceSurchargeRate: l.equivalenceSurchargeRate != null ? Number(l.equivalenceSurchargeRate) : null,
+        equivalenceSurchargeAmount: l.equivalenceSurchargeAmount != null ? Number(l.equivalenceSurchargeAmount) : null,
       }))
     : (invoice.taxBase != null || invoice.vatAmount != null || invoice.vatRate != null)
       ? [{
           taxBase: invoice.taxBase ? Number(invoice.taxBase) : 0,
           vatRate: invoice.vatRate ? Number(invoice.vatRate) : 0,
           vatAmount: invoice.vatAmount ? Number(invoice.vatAmount) : 0,
+          // Datos legacy sin InvoiceVatLine: no hay donde habia guardado recargo.
+          equivalenceSurchargeRate: null,
+          equivalenceSurchargeAmount: null,
         }]
       : [];
 
@@ -213,8 +218,6 @@ export default async function ReviewPage({
     irpfAmount:    toNum(invoiceRaw.irpfAmount),
     retentionBase: toNum(invoiceRaw.retentionBase),
     totalAmount:   toNum(invoiceRaw.totalAmount),
-    equivalenceSurchargeRate:   toNum(invoiceRaw.equivalenceSurchargeRate),
-    equivalenceSurchargeAmount: toNum(invoiceRaw.equivalenceSurchargeAmount),
   };
 
   return (
