@@ -865,6 +865,15 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
 
   const inputClass = "w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[13px] text-slate-800 outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-100";
 
+  // Cuenta Proveedor/Cliente y Cuenta Gasto/Ingreso: resalta en ambar la
+  // que este vacia, en vez de un aviso de texto aparte. Asi se ve donde
+  // falta aunque el boton de Validar este ocupado avisando de otra cosa
+  // (p.ej. el descuadre matematico).
+  const accountInputClass = (missing: boolean) =>
+    `w-full rounded-lg border px-3 py-1.5 text-[13px] outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-100 ${
+      missing ? "border-amber-300 bg-amber-50 text-amber-900 placeholder:text-amber-400" : "border-slate-200 bg-white text-slate-800"
+    }`;
+
   // Props de estilo + tabIndex en funcion de la confianza OCR de cada campo.
   // Campos "seguros" (score alto) reciben tabIndex={-1} y color apagado:
   // Tab los salta y el gestor va directo a los dudosos.
@@ -2019,7 +2028,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                     {type === "SALE" ? "Cuenta Cliente (43x)" : "Cuenta Proveedor (4xx)"}
                   </label>
                   <input
-                    className={inputClass}
+                    className={accountInputClass(!supplierAccountVal.trim())}
                     value={supplierAccountVal}
                     onChange={(e) => setSupplierAccount(sanitizeAccountingAccountInput(e.target.value))}
                     onBlur={(e) => setSupplierAccount(padAccountingAccount(e.target.value))}
@@ -2031,7 +2040,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                     {type === "SALE" ? "Cuenta Ingreso (7xx)" : "Cuenta Gasto (6xx)"}
                   </label>
                   <input
-                    className={inputClass}
+                    className={accountInputClass(!expenseAccountVal.trim())}
                     value={expenseAccountVal}
                     onChange={(e) => {
                       const value = sanitizeAccountingAccountInput(e.target.value);
@@ -2062,16 +2071,6 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                   />
                 </div>
               </div>
-              {/* Aviso propio de cuentas incompletas: el boton de Validar solo
-                  puede mostrar un mensaje a la vez (prioriza el descuadre si
-                  tambien lo hay), asi que este aviso queda visible aqui aunque
-                  el boton este ocupado avisando de otra cosa. */}
-              {accountsIncomplete && (
-                <div className="mt-3 flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-700">
-                  <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
-                  Faltan cuentas contables — revisa antes de validar.
-                </div>
-              )}
               {/* Cuenta genérica para tickets/simplificadas sin datos: vuelca
                   la cuenta configurada por cliente con un clic. */}
               {genericAccounts?.supplier && (
