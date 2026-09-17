@@ -2062,6 +2062,16 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                   />
                 </div>
               </div>
+              {/* Aviso propio de cuentas incompletas: el boton de Validar solo
+                  puede mostrar un mensaje a la vez (prioriza el descuadre si
+                  tambien lo hay), asi que este aviso queda visible aqui aunque
+                  el boton este ocupado avisando de otra cosa. */}
+              {accountsIncomplete && (
+                <div className="mt-3 flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-700">
+                  <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
+                  Faltan cuentas contables — revisa antes de validar.
+                </div>
+              )}
               {/* Cuenta genérica para tickets/simplificadas sin datos: vuelca
                   la cuenta configurada por cliente con un clic. */}
               {genericAccounts?.supplier && (
@@ -2148,9 +2158,13 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
               title={
                 cifConflict
                   ? "Corrige el CIF antes de validar (coincide con el cliente)"
-                  : accountsIncomplete
-                    ? "Faltan cuentas contables — se puede validar, pero mejor rellenarlas antes"
-                    : "Validar y pasar a la siguiente (Enter)"
+                  : mathOk === false && accountsIncomplete
+                    ? "El importe no cuadra y faltan cuentas contables — revisa antes de validar"
+                    : mathOk === false
+                      ? "El importe no cuadra — revisa antes de validar"
+                      : accountsIncomplete
+                        ? "Faltan cuentas contables — se puede validar, pero mejor rellenarlas antes"
+                        : "Validar y pasar a la siguiente (Enter)"
               }
               className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-[13px] font-semibold text-white transition disabled:opacity-50 ${
                 cifConflict
