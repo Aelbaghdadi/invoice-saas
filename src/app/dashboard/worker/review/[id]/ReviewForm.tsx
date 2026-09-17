@@ -497,6 +497,11 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     return Boolean(a) && a === b;
   }, [editableIssuerCif, editableReceiverCif]);
 
+  // Sin cuenta contable el boton de Validar no se pone verde — no bloquea
+  // (el exportador a A3 ya avisa si falta), pero evita que parezca "todo
+  // listo" cuando aun falta contabilizar. Pedido por un gestor.
+  const accountsIncomplete = !supplierAccountVal.trim() || !expenseAccountVal.trim();
+
   const updateVatLine = (idx: number, field: keyof VatLineInput, value: string) => {
     setVatLines((prev) => {
       const copy = [...prev];
@@ -1060,24 +1065,6 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
           }}
         >
           <div className="flex-1 px-4 py-3 space-y-2.5">
-
-            {/* Semaphore */}
-            {hasValues && (
-              <div className={`flex items-center gap-2.5 rounded-xl px-4 py-3 ${
-                mathOk ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"
-              }`}>
-                {mathOk
-                  ? <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
-                  : <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-                }
-                <span className="text-[12px] font-medium">
-                  {mathOk
-                    ? `Validación matemática correcta — Σ Bases + Σ Cuotas${retentionAmount > 0 ? " − Retención" : ""} = Total`
-                    : `Error: ${(vatTotals.sumBase + vatTotals.sumAmount - retentionAmount).toFixed(2)} ≠ ${totalNum.toFixed(2)} (diferencia: ${Math.abs(vatTotals.sumBase + vatTotals.sumAmount - retentionAmount - totalNum).toFixed(2)} €)`
-                  }
-                </span>
-              </div>
-            )}
 
             {/* Moneda extranjera: A3 solo admite euros y la validacion
                 matematica no lo detecta (la factura cuadra en su moneda). */}
@@ -1966,6 +1953,26 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
               </div>
             </fieldset>
 
+            {/* Semaforo de cuadre matematico. Se muestra aqui, justo encima de
+                las cuentas contables, para que se vea sin desplazarse hasta
+                arriba en pantallas pequenas (a peticion de una gestora). */}
+            {hasValues && (
+              <div className={`flex items-center gap-2.5 rounded-xl px-4 py-3 ${
+                mathOk ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"
+              }`}>
+                {mathOk
+                  ? <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
+                  : <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                }
+                <span className="text-[12px] font-medium">
+                  {mathOk
+                    ? `Validación matemática correcta — Σ Bases + Σ Cuotas${retentionAmount > 0 ? " − Retención" : ""} = Total`
+                    : `Error: ${(vatTotals.sumBase + vatTotals.sumAmount - retentionAmount).toFixed(2)} ≠ ${totalNum.toFixed(2)} (diferencia: ${Math.abs(vatTotals.sumBase + vatTotals.sumAmount - retentionAmount - totalNum).toFixed(2)} €)`
+                  }
+                </span>
+              </div>
+            )}
+
             {/* Cuentas contables */}
             <fieldset className="rounded-xl border border-slate-200 bg-white p-3">
               <legend className="px-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
@@ -2138,11 +2145,17 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
               type="button"
               onClick={handleValidate}
               disabled={isPendingValidate || cifConflict}
-              title={cifConflict ? "Corrige el CIF antes de validar (coincide con el cliente)" : "Validar y pasar a la siguiente (Enter)"}
+              title={
+                cifConflict
+                  ? "Corrige el CIF antes de validar (coincide con el cliente)"
+                  : accountsIncomplete
+                    ? "Faltan cuentas contables — se puede validar, pero mejor rellenarlas antes"
+                    : "Validar y pasar a la siguiente (Enter)"
+              }
               className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-[13px] font-semibold text-white transition disabled:opacity-50 ${
                 cifConflict
                   ? "bg-red-500 hover:bg-red-600"
-                  : mathOk === false
+                  : mathOk === false || accountsIncomplete
                     ? "bg-orange-500 hover:bg-orange-600"
                     : "bg-green-600 hover:bg-green-700"
               }`}
@@ -2155,7 +2168,9 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                 ? "CIF duplicado"
                 : mathOk === false
                   ? "Validar igualmente"
-                  : "Validar factura"}
+                  : accountsIncomplete
+                    ? "Falta cuenta contable"
+                    : "Validar factura"}
               <kbd className="ml-1 rounded bg-white/20 px-1 text-[10px] font-semibold text-white">Enter</kbd>
               {nextId && <ChevronRight className="h-4 w-4" />}
             </button>
