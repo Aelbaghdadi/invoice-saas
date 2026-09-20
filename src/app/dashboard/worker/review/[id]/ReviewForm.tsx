@@ -798,6 +798,30 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     runValidate("");
   };
 
+  // Si faltan cuentas contables el boton no llega a estar disabled (asi
+  // puede capturar el click) pero tampoco valida: en vez de un texto en el
+  // boton, resalta con un shake los campos de cuenta para que el aviso
+  // salga de donde esta el problema.
+  const shakeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [shakeAccounts, setShakeAccounts] = useState(false);
+  const triggerAccountsShake = () => {
+    if (shakeTimeoutRef.current) clearTimeout(shakeTimeoutRef.current);
+    setShakeAccounts(false);
+    requestAnimationFrame(() => {
+      setShakeAccounts(true);
+      shakeTimeoutRef.current = setTimeout(() => setShakeAccounts(false), 400);
+    });
+  };
+
+  const attemptValidate = () => {
+    if (isPendingValidate || cifConflict || mathOk === false) return;
+    if (accountsIncomplete) {
+      triggerAccountsShake();
+      return;
+    }
+    handleValidate();
+  };
+
   const handleReject = () => {
     if (!rejectReason.trim()) return;
     startReject(async () => {
@@ -871,15 +895,6 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
 
   const inputClass = "w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[13px] text-slate-800 outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-100";
 
-  // Cuenta Proveedor/Cliente y Cuenta Gasto/Ingreso: resalta en ambar la
-  // que este vacia, en vez de un aviso de texto aparte. Asi se ve donde
-  // falta aunque el boton de Validar este ocupado avisando de otra cosa
-  // (p.ej. el descuadre matematico).
-  const accountInputClass = (missing: boolean) =>
-    `w-full rounded-lg border px-3 py-1.5 text-[13px] outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-100 ${
-      missing ? "border-amber-300 bg-amber-50 text-amber-900 placeholder:text-amber-400" : "border-slate-200 bg-white text-slate-800"
-    }`;
-
   // Props de estilo + tabIndex en funcion de la confianza OCR de cada campo.
   // Campos "seguros" (score alto) reciben tabIndex={-1} y color apagado:
   // Tab los salta y el gestor va directo a los dudosos.
@@ -888,7 +903,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
   // Atajos de teclado globales. Enter valida, R abre rechazo, D marca
   // duplicado, Ctrl/Cmd+S guarda borrador, Alt+Arrow navega, "?" abre ayuda.
   useReviewShortcuts({
-    onValidate: () => { if (!isPendingValidate) handleValidate(); },
+    onValidate: () => { attemptValidate(); },
     onSave: () => { if (!isPendingSave) handleSave(); },
     onReject: () => setShowRejectModal(true),
     onMarkDuplicate: () => {
@@ -2034,7 +2049,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                     {type === "SALE" ? "Cuenta Cliente (43x)" : "Cuenta Proveedor (4xx)"}
                   </label>
                   <input
-                    className={accountInputClass(!supplierAccountVal.trim())}
+                    className={`${inputClass} ${shakeAccounts && !supplierAccountVal.trim() ? "animate-shake" : ""}`}
                     value={supplierAccountVal}
                     onChange={(e) => setSupplierAccount(sanitizeAccountingAccountInput(e.target.value))}
                     onBlur={(e) => setSupplierAccount(padAccountingAccount(e.target.value))}
@@ -2046,7 +2061,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                     {type === "SALE" ? "Cuenta Ingreso (7xx)" : "Cuenta Gasto (6xx)"}
                   </label>
                   <input
-                    className={accountInputClass(!expenseAccountVal.trim())}
+                    className={`${inputClass} ${shakeAccounts && !expenseAccountVal.trim() ? "animate-shake" : ""}`}
                     value={expenseAccountVal}
                     onChange={(e) => {
                       const value = sanitizeAccountingAccountInput(e.target.value);
@@ -2158,24 +2173,22 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
             </button>
             <button
               type="button"
-              onClick={handleValidate}
-              disabled={isPendingValidate || cifConflict}
+              onClick={attemptValidate}
+              disabled={isPendingValidate || cifConflict || mathOk === false}
               title={
                 cifConflict
                   ? "Corrige el CIF antes de validar (coincide con el cliente)"
-                  : mathOk === false && accountsIncomplete
-                    ? "El importe no cuadra y faltan cuentas contables — revisa antes de validar"
-                    : mathOk === false
-                      ? "El importe no cuadra — revisa antes de validar"
-                      : accountsIncomplete
-                        ? "Faltan cuentas contables — se puede validar, pero mejor rellenarlas antes"
-                        : "Validar y pasar a la siguiente (Enter)"
+                  : mathOk === false
+                    ? "El importe no cuadra — corrígelo antes de validar"
+                    : accountsIncomplete
+                      ? "Faltan cuentas contables — rellénalas antes de validar"
+                      : "Validar y pasar a la siguiente (Enter)"
               }
               className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-[13px] font-semibold text-white transition disabled:opacity-50 ${
                 cifConflict
                   ? "bg-red-500 hover:bg-red-600"
-                  : mathOk === false || accountsIncomplete
-                    ? "bg-orange-500 hover:bg-orange-600"
+                  : accountsIncomplete
+                    ? "bg-green-600 opacity-50 cursor-not-allowed"
                     : "bg-green-600 hover:bg-green-700"
               }`}
             >
@@ -2183,13 +2196,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                 ? <Loader2 className="h-4 w-4 animate-spin" />
                 : <CheckCircle2 className="h-4 w-4" />
               }
-              {cifConflict
-                ? "CIF duplicado"
-                : mathOk === false
-                  ? "Validar igualmente"
-                  : accountsIncomplete
-                    ? "Falta cuenta contable"
-                    : "Validar factura"}
+              {cifConflict ? "CIF duplicado" : "Validar factura"}
               <kbd className="ml-1 rounded bg-white/20 px-1 text-[10px] font-semibold text-white">Enter</kbd>
               {nextId && <ChevronRight className="h-4 w-4" />}
             </button>
