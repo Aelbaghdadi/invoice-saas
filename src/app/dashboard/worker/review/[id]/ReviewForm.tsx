@@ -641,6 +641,8 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     total: totalNum,
   });
   const mathOk = hasValues ? balanceDiffCents === 0 : null;
+  // Lo que suman las lineas, para ensenarlo junto al total cuando no cuadra.
+  const calculado = vatTotals.sumBase + vatTotals.sumAmount + vatTotals.sumSurcharge - retentionAmount;
 
   // Aviso si la fecha de la factura no corresponde al periodo del lote.
   const periodMismatch = useMemo(() => {
@@ -2035,7 +2037,7 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                       no cuadraba con la que hacia ponerse rojo al semaforo. */}
                   {mathOk
                     ? `Validación matemática correcta — Σ Bases + Σ Cuotas${vatTotals.sumSurcharge !== 0 ? " + Σ Recargo" : ""}${retentionAmount > 0 ? " − Retención" : ""} = Total`
-                    : `Error: ${(calculated / 100).toFixed(2)} ≠ ${totalNum.toFixed(2)} (diferencia: ${(Math.abs(calculated - actual) / 100).toFixed(2)} €)`
+                    : `Error: ${calculado.toFixed(2)} ≠ ${totalNum.toFixed(2)} (diferencia: ${(Math.abs(balanceDiffCents) / 100).toFixed(2)} €)`
                   }
                 </span>
               </div>

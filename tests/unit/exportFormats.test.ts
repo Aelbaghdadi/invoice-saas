@@ -201,9 +201,19 @@ describe("validateForA3Export", () => {
     expect(res[0].warnings.some((w) => w.includes("Descuadre"))).toBe(true);
   });
 
-  it("does not warn on rounding within 1 cent", () => {
+  it("avisa aunque el descuadre sea de un solo centimo", () => {
+    // El cuadre pasa a ser exacto (invoiceBalanceDiffCents): antes se
+    // toleraban uno o dos centimos y ahi es donde se escondia el recargo
+    // calculado sobre la base total en vez de articulo a articulo.
     const res = validateForA3Export([
       mkInvoice({ taxBase: 100 as any, vatAmount: 21 as any, totalAmount: 121.005 as any }),
+    ]);
+    expect(res.some((r) => r.warnings.some((w) => w.includes("Descuadre")))).toBe(true);
+  });
+
+  it("no avisa cuando la factura cuadra exacta", () => {
+    const res = validateForA3Export([
+      mkInvoice({ taxBase: 100 as any, vatAmount: 21 as any, totalAmount: 121 as any }),
     ]);
     expect(res).toEqual([]);
   });
