@@ -9,6 +9,7 @@ import {
 } from "@/lib/validators";
 import { isForeignCurrency } from "@/lib/currency";
 import { goodsTypeFromSaleAccount } from "@/lib/intracomGoods";
+import { invoiceBalanceDiffCents } from "@/lib/invoiceBalance";
 
 export type ExportFormat = "sage50" | "contasol" | "a3con" | "a3excel";
 
@@ -349,10 +350,11 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
       const sumAmt  = lines.reduce((s, l) => s + l.vatAmount, 0);
       const sumSurcharge = lines.reduce((s, l) => s + l.equivalenceSurchargeAmount, 0);
       const irpf    = inv.irpfAmount ? Number(inv.irpfAmount) : 0;
-      const expected = sumBase + sumAmt + sumSurcharge - irpf;
       if (Math.abs(sumBase) > 0 || Math.abs(sumAmt) > 0) {
-        const diff = Math.abs(Math.round(expected * 100) - Math.round(totalNum * 100));
-        if (diff > 1) warnings.push(`Descuadre Base+IVA vs Total: ${(diff / 100).toFixed(2)}`);
+        const diff = Math.abs(invoiceBalanceDiffCents({
+          sumBase, sumAmount: sumAmt, sumSurcharge, irpf, total: totalNum,
+        }));
+        if (diff > 0) warnings.push(`Descuadre Base+IVA vs Total: ${(diff / 100).toFixed(2)}`);
       }
     }
 

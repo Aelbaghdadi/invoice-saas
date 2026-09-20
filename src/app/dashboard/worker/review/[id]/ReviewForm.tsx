@@ -27,6 +27,7 @@ import {
   type IntracomGoodsTypeName,
 } from "@/lib/validators";
 import { dateMatchesPeriod, periodLabel, type PeriodTypeName } from "@/lib/period";
+import { invoiceBalanceDiffCents } from "@/lib/invoiceBalance";
 import { sanitizeAccountingAccountInput, padAccountingAccount } from "@/lib/accountingAccount";
 import {
   isIntracomOperation,
@@ -604,9 +605,14 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
   // Math semaphore: Total = Σ Bases + Σ Cuotas + Σ Recargo - Retencion IRPF
   const totalNum   = parseFloat(totalAmount) || 0;
   const hasValues  = vatTotals.anyFilled && totalAmount;
-  const calculated = Math.round((vatTotals.sumBase + vatTotals.sumAmount + vatTotals.sumSurcharge - retentionAmount) * 100);
-  const actual     = Math.round(totalNum * 100);
-  const mathOk     = hasValues ? Math.abs(calculated - actual) <= 2 : null;
+  const balanceDiffCents = invoiceBalanceDiffCents({
+    sumBase: vatTotals.sumBase,
+    sumAmount: vatTotals.sumAmount,
+    sumSurcharge: vatTotals.sumSurcharge,
+    irpf: retentionAmount,
+    total: totalNum,
+  });
+  const mathOk = hasValues ? balanceDiffCents === 0 : null;
 
   // Aviso si la fecha de la factura no corresponde al periodo del lote.
   const periodMismatch = useMemo(() => {
