@@ -31,7 +31,15 @@ export function textMentionsRectificative(rawText: string | null | undefined): b
   return RECTIFICATIVE_RE.test(norm);
 }
 
-type Line = { taxBase: number; vatRate: number; vatAmount: number };
+/** El recargo de equivalencia va por linea y tiene que cambiar de signo con
+ *  ella: un abono con recargo positivo descuadra y llega asi al Excel de A3. */
+type Line = {
+  taxBase: number;
+  vatRate: number;
+  vatAmount: number;
+  equivalenceSurchargeRate?: number | null;
+  equivalenceSurchargeAmount?: number | null;
+};
 
 export type RectificativeAmounts = {
   lines: Line[];
@@ -44,7 +52,7 @@ export type RectificativeAmounts = {
 
 /** ¿Hay ya algún importe negativo? (los % de IVA no cuentan, nunca llevan signo). */
 function anyNegativeAmount(a: RectificativeAmounts): boolean {
-  if (a.lines.some((l) => l.taxBase < 0 || l.vatAmount < 0)) return true;
+  if (a.lines.some((l) => l.taxBase < 0 || l.vatAmount < 0 || (l.equivalenceSurchargeAmount ?? 0) < 0)) return true;
   return [a.taxBase, a.vatAmount, a.totalAmount, a.irpfAmount, a.retentionBase].some(
     (v) => v != null && v < 0,
   );
@@ -60,9 +68,13 @@ export function applyRectificativeSign(a: RectificativeAmounts): RectificativeAm
   const neg = (v: number | null): number | null => (v == null ? v : -Math.abs(v));
   return {
     lines: a.lines.map((l) => ({
+      ...l,
       taxBase: -Math.abs(l.taxBase),
       vatRate: l.vatRate, // el % no cambia de signo
       vatAmount: -Math.abs(l.vatAmount),
+      // El % de recargo tampoco cambia de signo; su cuota si.
+      equivalenceSurchargeAmount:
+        l.equivalenceSurchargeAmount == null ? l.equivalenceSurchargeAmount : -Math.abs(l.equivalenceSurchargeAmount),
     })),
     taxBase: neg(a.taxBase),
     vatAmount: neg(a.vatAmount),

@@ -271,6 +271,34 @@ export function parseTaxId(raw: string | null | undefined): ParsedTaxId {
 }
 
 /**
+ * Inverso de parseTaxId: recompone el NIF como lo quiere A3, con el prefijo
+ * de pais delante. Guardamos el NIF limpio y el pais aparte, y la columna E
+ * del Excel salia sin prefijo: A3 rechazaba la fila con "el NIF 515160873 no
+ * existe en la tabla", porque en su plan el tercero es "PT515160873".
+ *
+ * Solo para presentar. Lo que se guarda en Invoice.issuerCif sigue limpio:
+ * es la clave del plan de cuentas (accountEntryKey) y del dedupe por
+ * CIF + numero.
+ *
+ * El guard de "ya viene prefijado" no puede distinguir un NIF ya compuesto
+ * de un VAT cuyo cuerpo empieza por las letras de su pais. Es la MISMA
+ * ambiguedad que tiene cleanKey en supplierMatching: importa que las dos se
+ * equivoquen igual, porque asi la clave del plan y el NIF exportado siguen
+ * apuntando al mismo tercero.
+ */
+export function taxIdWithCountry(
+  cif: string | null | undefined,
+  country: string | null | undefined,
+): string {
+  if (!cif) return "";
+  // Char(2) en Postgres rellena con espacios: sin el trim saldria "PT 515160873".
+  const code = (country ?? "").trim().toUpperCase();
+  if (!code || code === "ES") return cif;
+  if (cif.toUpperCase().startsWith(code)) return cif;
+  return code + cif;
+}
+
+/**
  * Valida un NIF/VAT tal y como lo ve el gestor en el formulario, con o
  * sin prefijo de pais. Nacional (ES o sin prefijo) -> algoritmo español
  * completo. Extranjero -> solo formato plausible tras el prefijo: la

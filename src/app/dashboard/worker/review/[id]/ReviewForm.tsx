@@ -22,6 +22,7 @@ import {
   RETENTION_DEFAULT_RATE,
   INTRACOM_GOODS_TYPE_LABEL,
   equivalenceSurchargeRateForVat,
+  taxIdWithCountry,
   type OperationTypeName,
   type RetentionTypeName,
   type IntracomGoodsTypeName,
@@ -395,16 +396,13 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
   // estamos contabilizando una factura del cliente consigo mismo.
   // Para NIFs internacionales mostramos el prefijo de país (p.ej. "DE123456789")
   // para que el gestor lo vea claramente. La action parseTaxId lo volverá a separar.
-  const cifWithPrefix = (cif: string | null, country: string | null) => {
-    if (!cif) return "";
-    if (!country || country === "ES") return cif;
-    return country + cif;
-  };
+  // Es el mismo helper que compone la columna E del Excel de A3: lo que el
+  // gestor ve aqui es exactamente lo que acaba en el fichero.
   const [editableIssuerCif, setEditableIssuerCif] = useState(
-    cifWithPrefix(invoice.issuerCif, invoice.issuerCountry),
+    taxIdWithCountry(invoice.issuerCif, invoice.issuerCountry),
   );
   const [editableReceiverCif, setEditableReceiverCif] = useState(
-    cifWithPrefix(invoice.receiverCif, invoice.receiverCountry),
+    taxIdWithCountry(invoice.receiverCif, invoice.receiverCountry),
   );
 
   // NIF de la "otra parte" (la que no es el cliente): emisor en compras,
@@ -416,8 +414,8 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
   // servidor no pisa lo que tuviera asignado el otro tercero sin haberlo visto.
   const loadedDirection = invoice.type === "SALE" ? "SALE" : "PURCHASE";
   const loadedCounterpartyNif = loadedDirection === "SALE"
-    ? cifWithPrefix(invoice.receiverCif, invoice.receiverCountry)
-    : cifWithPrefix(invoice.issuerCif, invoice.issuerCountry);
+    ? taxIdWithCountry(invoice.receiverCif, invoice.receiverCountry)
+    : taxIdWithCountry(invoice.issuerCif, invoice.issuerCountry);
   const counterpartyChanged = type !== loadedDirection
     || parseTaxId(counterpartyNif).clean !== parseTaxId(loadedCounterpartyNif).clean;
   const assignedGoodsType = counterpartyChanged ? null : thirdPartyGoodsType;
@@ -515,11 +513,25 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
           copy[idx].vatAmount = (Math.round(b * r) / 100).toFixed(2);
         }
       }
-      // Idem para la cuota de recargo cuando se edita el % de recargo.
+      // La cuota de recargo depende de la base: si se corrige la base y no se
+      // recalcula, queda el recargo de la base anterior y la factura descuadra
+      // sin que se vea de donde viene.
+      if (field === "taxBase" && copy[idx].equivalenceSurchargeRate !== "") {
+        const b = parseFloat(value);
+        const r = parseFloat(copy[idx].equivalenceSurchargeRate);
+        if (!isNaN(b) && !isNaN(r)) {
+          copy[idx].equivalenceSurchargeAmount = ((b * r) / 100).toFixed(2);
+        }
+      }
+      // Idem para la cuota de recargo cuando se edita el % de recargo. Si se
+      // borra el %, se borra la cuota: si no, se guardaba una cuota huerfana
+      // y al recargar se le volvia a deducir el % (recargo fantasma).
       if (field === "equivalenceSurchargeRate") {
         const b = parseFloat(copy[idx].taxBase);
         const r = parseFloat(value);
-        if (!isNaN(b) && !isNaN(r)) {
+        if (value.trim() === "") {
+          copy[idx].equivalenceSurchargeAmount = "";
+        } else if (!isNaN(b) && !isNaN(r)) {
           copy[idx].equivalenceSurchargeAmount = ((b * r) / 100).toFixed(2);
         }
       }
@@ -531,8 +543,19 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
     setVatLines((prev) => [...prev, { taxBase: "", vatRate: "", vatAmount: "", equivalenceSurchargeRate: "", equivalenceSurchargeAmount: "" }]);
   };
 
+  // Lineas con el recargo abierto a mano. Un tipo de IVA sin recargo habitual
+  // (5 %, o la linea aun sin %) no propone ningun valor, y la casilla se
+  // quedaba muerta: se marcaba, no salia ningun campo y volvia a desmarcarse.
+  const [openSurchargeLines, setOpenSurchargeLines] = useState<Set<number>>(new Set());
+
   const removeVatLine = (idx: number) => {
-    setVatLines((prev) => prev.length === 1 ? prev : prev.filter((_, i) => i !== idx));
+    if (vatLines.length === 1) return;
+    setVatLines((prev) => prev.filter((_, i) => i !== idx));
+    setOpenSurchargeLines((prev) => {
+      const next = new Set<number>();
+      prev.forEach((i) => { if (i < idx) next.add(i); else if (i > idx) next.add(i - 1); });
+      return next;
+    });
   };
 
   // Casilla de recargo de una linea: al marcarla se propone el mapeo
@@ -541,6 +564,11 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
   // no confundir con "0"). El gestor puede editar el valor propuesto o
   // ponerlo a 0 en lineas concretas (p.ej. portes).
   const toggleLineSurcharge = (idx: number, checked: boolean) => {
+    setOpenSurchargeLines((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(idx); else next.delete(idx);
+      return next;
+    });
     setVatLines((prev) => {
       const copy = [...prev];
       if (!checked) {
@@ -1897,16 +1925,23 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                     }`}
                   />
                 </button>
+                {/* Fuera del panel a proposito: el panel arranca plegado
+                    cuando ninguna linea trae recargo, que es justo el caso en
+                    el que hay que avisar. Dentro, el aviso no se veia nunca. */}
+                {sessionContext?.equivalenceSurchargeCustomer && vatTotals.sumSurcharge === 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowSurchargePanel(true)}
+                    className="mt-1 flex w-full items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-left text-[12px] text-amber-700"
+                  >
+                    <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
+                    Cliente en Recargo de Equivalencia — revisa si esta factura lo lleva
+                  </button>
+                )}
                 {showSurchargePanel && (
                   <div className="mt-2 space-y-2">
-                    {sessionContext?.equivalenceSurchargeCustomer && vatTotals.sumSurcharge === 0 && (
-                      <div className="flex items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-700">
-                        <AlertTriangle className="h-3.5 w-3.5" />
-                        Cliente en Recargo de Equivalencia — revisa si esta factura lo lleva
-                      </div>
-                    )}
                     {vatLines.map((line, idx) => {
-                      const hasSurcharge = line.equivalenceSurchargeRate !== "";
+                      const hasSurcharge = line.equivalenceSurchargeRate !== "" || openSurchargeLines.has(idx);
                       return (
                         <div key={idx} className="flex items-center gap-2 rounded-lg border border-slate-200 p-2">
                           <label className="flex w-24 flex-shrink-0 items-center gap-1.5 text-[12px] font-medium text-slate-600">
@@ -1995,9 +2030,12 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                   : <AlertTriangle className="h-4 w-4 flex-shrink-0" />
                 }
                 <span className="text-[12px] font-medium">
+                  {/* El recargo cuenta en el calculo desde que va por linea:
+                      sin el, el mensaje de error ensenaba una diferencia que
+                      no cuadraba con la que hacia ponerse rojo al semaforo. */}
                   {mathOk
-                    ? `Validación matemática correcta — Σ Bases + Σ Cuotas${retentionAmount > 0 ? " − Retención" : ""} = Total`
-                    : `Error: ${(vatTotals.sumBase + vatTotals.sumAmount - retentionAmount).toFixed(2)} ≠ ${totalNum.toFixed(2)} (diferencia: ${Math.abs(vatTotals.sumBase + vatTotals.sumAmount - retentionAmount - totalNum).toFixed(2)} €)`
+                    ? `Validación matemática correcta — Σ Bases + Σ Cuotas${vatTotals.sumSurcharge !== 0 ? " + Σ Recargo" : ""}${retentionAmount > 0 ? " − Retención" : ""} = Total`
+                    : `Error: ${(calculated / 100).toFixed(2)} ≠ ${totalNum.toFixed(2)} (diferencia: ${(Math.abs(calculated - actual) / 100).toFixed(2)} €)`
                   }
                 </span>
               </div>
@@ -2014,6 +2052,17 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
                   {accountMatchedByName
                     ? `Auto-asignada por nombre (${suggestedAccount.name}) — el NIF de este proveedor no es fiable, verifica que sea el tercero correcto`
                     : `Auto-asignada desde plan de cuentas (${suggestedAccount.name})`}
+                </div>
+              )}
+              {/* El tercero esta en el plan pero por el otro lado: en A3 una
+                  misma empresa tiene ficha de proveedor (41x) y de cliente
+                  (43x), y el campo sale vacio sin explicar por que. */}
+              {suggestedAccount && !suggestedAccount.supplierAccount && !accountNameMismatch && (
+                <div className="mb-3 flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-700">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+                  <span>
+                    «{suggestedAccount.name}» está en el plan de cuentas, pero sin cuenta de {type === "SALE" ? "cliente" : "proveedor"}: en A3 cada tercero tiene una ficha por cada lado. La que escribas se guardará en la suya al validar.
+                  </span>
                 </div>
               )}
               {!suggestedAccount && counterpartyNif && (

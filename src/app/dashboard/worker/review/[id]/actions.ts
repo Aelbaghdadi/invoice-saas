@@ -16,7 +16,7 @@ import {
 import { appendAuditLogs } from "@/lib/auditLog";
 import { canAccessClient } from "@/lib/accessibleClients";
 import { parseTaxId, isPersonaFisica, operationTypeLabel, OPERATION_TYPE_OPTIONS, OPERATION_TYPE_LABEL, type OperationTypeName } from "@/lib/validators";
-import { partyAccountMatchesType, resultAccountMatchesType } from "@/lib/accountingAccount";
+import { learnAccountsForDirection } from "@/lib/accountingAccount";
 import { accountEntryKey, entryNameMatches, NO_RELIABLE_NIF_PREFIX } from "@/lib/supplierMatching";
 import {
   isIntracomOperation,
@@ -28,6 +28,7 @@ import {
 } from "@/lib/intracomGoods";
 import { normalizeCurrency } from "@/lib/currency";
 import { applyRectificativeSign } from "@/lib/rectificative";
+import { foldSurchargeLines, completeReadSurcharges, surchargeAuditValue } from "@/lib/equivalenceSurcharge";
 import { appError, type AppError } from "@/lib/errorCodes";
 import { putObject, getObjectBytes, sanitizeFilenameForStorage, isStorageConfigured } from "@/lib/storage";
 
@@ -138,7 +139,10 @@ function parseVatLines(raw: string): ParsedVatLine[] {
       equivalenceSurchargeAmount: isNaN(saNum) ? null : saNum,
     });
   }
-  return lines;
+  // La IA devuelve a veces el recargo como si fuera otra linea de IVA (tipo
+  // 5,2 / 1,4 / 0,5) y el formulario la reenvia tal cual. Se pliega sobre su
+  // linea antes de guardar: en A3 seria un IVA que no existe.
+  return completeReadSurcharges(foldSurchargeLines(lines).lines);
 }
 
 async function parseAndSave(invoiceId: string, userId: string, data: FieldData, validate: boolean, expectedUpdatedAt?: string) {
@@ -147,7 +151,7 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
 
   const invoice = await prisma.invoice.findUnique({
     where: { id: invoiceId },
-    include: { client: true },
+    include: { client: true, vatLines: { orderBy: { position: "asc" } } },
   });
   if (!invoice) return { error: "Factura no encontrada" };
 
@@ -353,14 +357,13 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
   newData.irpfAmount    = signedLines.irpfAmount;
   newData.retentionBase = signedLines.retentionBase;
 
-  // applyRectificativeSign solo conserva {taxBase,vatRate,vatAmount} por
-  // linea: el recargo de equivalencia (por linea, no cubierto por esa
-  // funcion) se vuelve a pegar aqui por indice — mismo orden, misma
-  // longitud que vatLines de donde salio signedLines.lines.
-  const linesToSave = signedLines.lines.map((l, i) => ({
+  // applyRectificativeSign ya firma tambien la cuota de recargo de cada
+  // linea, asi que se guardan sus lineas tal cual: repegar el recargo de
+  // vatLines por indice devolvia el recargo en positivo en un abono.
+  const linesToSave = signedLines.lines.map((l) => ({
     ...l,
-    equivalenceSurchargeRate:   vatLines[i]?.equivalenceSurchargeRate   ?? null,
-    equivalenceSurchargeAmount: vatLines[i]?.equivalenceSurchargeAmount ?? null,
+    equivalenceSurchargeRate:   l.equivalenceSurchargeRate   ?? null,
+    equivalenceSurchargeAmount: l.equivalenceSurchargeAmount ?? null,
   }));
   const sumSurcharge = linesToSave.reduce((s, l) => s + (l.equivalenceSurchargeAmount ?? 0), 0);
 
@@ -395,6 +398,21 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     if (oldVal !== newVal) {
       auditEntries.push({ field, oldValue: oldVal, newValue: newVal });
     }
+  }
+
+  // El recargo dejo de ser un campo de Invoice y paso a las lineas, con lo
+  // que se quedo fuera de trackedFields: cambiarlo no dejaba rastro ninguno.
+  // Se audita como un resumen por linea.
+  const oldSurcharge = surchargeAuditValue(invoice.vatLines.map((l) => ({
+    taxBase:   Number(l.taxBase),
+    vatRate:   Number(l.vatRate),
+    vatAmount: Number(l.vatAmount),
+    equivalenceSurchargeRate:   l.equivalenceSurchargeRate   == null ? null : Number(l.equivalenceSurchargeRate),
+    equivalenceSurchargeAmount: l.equivalenceSurchargeAmount == null ? null : Number(l.equivalenceSurchargeAmount),
+  })));
+  const newSurcharge = surchargeAuditValue(linesToSave);
+  if (oldSurcharge !== newSurcharge) {
+    auditEntries.push({ field: "equivalenceSurcharge", oldValue: oldSurcharge, newValue: newSurcharge });
   }
 
   if (validate && !isValid && isValid !== null) {
@@ -467,17 +485,17 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     // prefijo (issuerCif/receiverCif se guardan limpios) — sin el, un VAT
     // extranjero real se validaria como NIF espanol y fallaria por error.
     const learnKey = accountEntryKey(learnNif, learnName, learnCountry);
-    // Solo aprendemos la cuenta si es de la familia que toca a este sentido.
-    // AccountEntry tiene una sola pareja de cuentas por (cliente, NIF): sin
-    // este filtro, validar una venta a un tercero que tambien es proveedor
-    // machacaba su cuenta 400x/6xx con la 43x/7xx y corrompia el autorelleno
-    // de las siguientes compras.
-    const rawSupplier = newData.supplierAccount?.trim();
-    const rawExpense = newData.expenseAccount?.trim();
-    const learnSupplier = partyAccountMatchesType(rawSupplier, isPurchase ? "PURCHASE" : "SALE")
-      ? rawSupplier : undefined;
-    const learnExpense = resultAccountMatchesType(rawExpense, isPurchase ? "PURCHASE" : "SALE")
-      ? rawExpense : undefined;
+    // Cada cuenta se aprende en la columna de SU sentido: la ficha guarda a la
+    // vez la pareja de proveedor (40x/41x + gasto) y la de cliente (43x +
+    // ingreso), que en A3 son dos fichas del mismo tercero. Ademas se
+    // descarta la cuenta de la familia contraria (un 43x tecleado en una
+    // compra): se usa en esa factura, pero no se guarda.
+    const learnDirection = isPurchase ? "PURCHASE" as const : "SALE" as const;
+    const learnedAccounts = learnAccountsForDirection(
+      newData.supplierAccount, newData.expenseAccount, learnDirection,
+    );
+    const learnParty  = isPurchase ? learnedAccounts.supplierAccount : learnedAccounts.customerAccount;
+    const learnResult = isPurchase ? learnedAccounts.expenseAccount  : learnedAccounts.incomeAccount;
     // defaultVatRate solo lo aprendemos cuando hay un unico tipo (multi-IVA
     // no tiene un "tipo por defecto" significativo).
     const learnVatRate = vatLines.length === 1 ? vatLines[0].vatRate : null;
@@ -520,15 +538,14 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
           ? { intracomGoodsTypePurchase: goodsLearning.preference }
           : { intracomGoodsTypeSale: goodsLearning.preference })
       : {};
-    if (learnKey && !otherThirdParty && (learnSupplier || learnExpense || newData.operationType)) {
+    if (learnKey && !otherThirdParty && (learnParty || learnResult || newData.operationType)) {
       await prisma.accountEntry.upsert({
         where: { clientId_nif: { clientId: invoice.clientId, nif: learnKey } },
         create: {
           clientId: invoice.clientId,
           nif: learnKey,
           name: learnName || learnNif || learnKey,
-          supplierAccount: learnSupplier || "",
-          expenseAccount: learnExpense || "",
+          ...learnedAccounts,
           defaultVatRate: learnVatRate != null ? (learnVatRate as any) : null,
           defaultOperationType: newData.operationType,
           defaultRetentionType: learnRetentionType,
@@ -537,8 +554,15 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
         },
         update: {
           ...(learnName ? { name: learnName } : {}),
-          ...(learnSupplier ? { supplierAccount: learnSupplier } : {}),
-          ...(learnExpense && !goodsLearning.isException ? { expenseAccount: learnExpense } : {}),
+          ...(learnParty ? (isPurchase
+            ? { supplierAccount: learnParty }
+            : { customerAccount: learnParty }) : {}),
+          // La cuenta de resultado de una excepcion (bienes/servicios solo
+          // para esta factura) no se aprende: la siguiente factura de este
+          // tercero saldria con la 700/705 de la excepcion.
+          ...(learnResult && !goodsLearning.isException ? (isPurchase
+            ? { expenseAccount: learnResult }
+            : { incomeAccount: learnResult }) : {}),
           ...(learnVatRate != null ? { defaultVatRate: learnVatRate as any } : {}),
           ...(goodsLearning.isException ? {} : { defaultOperationType: newData.operationType }),
           ...goodsPreference,

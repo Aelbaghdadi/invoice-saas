@@ -88,4 +88,21 @@ describe("applyRectificativeSign", () => {
     expect(out.totalAmount).toBe(-121);
     expect(out.taxBase).toBeNull();
   });
+
+  it("pasa a negativo la cuota de recargo, pero no su %", () => {
+    const out = applyRectificativeSign({
+      lines: [{ taxBase: 100, vatRate: 21, vatAmount: 21, equivalenceSurchargeRate: 5.2, equivalenceSurchargeAmount: 5.2 }],
+      taxBase: 100, vatAmount: 21, totalAmount: 126.2, irpfAmount: null, retentionBase: null,
+    });
+    expect(out.lines[0].equivalenceSurchargeRate).toBe(5.2);
+    expect(out.lines[0].equivalenceSurchargeAmount).toBe(-5.2);
+  });
+
+  it("un abono que ya trae el recargo en negativo no se vuelve a tocar", () => {
+    const input = {
+      lines: [{ taxBase: -100, vatRate: 21, vatAmount: -21, equivalenceSurchargeRate: 5.2, equivalenceSurchargeAmount: -5.2 }],
+      taxBase: -100, vatAmount: -21, totalAmount: -126.2, irpfAmount: null, retentionBase: null,
+    };
+    expect(applyRectificativeSign(input)).toEqual(input);
+  });
 });

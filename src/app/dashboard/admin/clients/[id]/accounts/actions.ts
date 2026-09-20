@@ -60,12 +60,18 @@ export async function importAccountsFromExcel(
           nif: entry.nif,
           name: entry.name || entry.nif,
           supplierAccount: entry.supplierAccount,
+          customerAccount: entry.customerAccount,
           expenseAccount: entry.expenseAccount,
+          incomeAccount: entry.incomeAccount,
         },
+        // Solo se pisa lo que trae el Excel: si esta importacion no incluye la
+        // ficha de cliente de un tercero, no se borra la que ya hubiera.
         update: {
           name: entry.name || undefined,
           ...(entry.supplierAccount ? { supplierAccount: entry.supplierAccount } : {}),
+          ...(entry.customerAccount ? { customerAccount: entry.customerAccount } : {}),
           ...(entry.expenseAccount ? { expenseAccount: entry.expenseAccount } : {}),
+          ...(entry.incomeAccount ? { incomeAccount: entry.incomeAccount } : {}),
         },
       });
       imported++;
@@ -85,10 +91,18 @@ const accountSchema = z.object({
   // exactamente la misma.
   nif: z.string().trim().min(1, "NIF obligatorio"),
   name: z.string().min(1, "Nombre obligatorio"),
-  supplierAccount: z.string().trim().min(1, "Cuenta proveedor obligatoria").transform(normalizePlanAccount),
-  expenseAccount: z.string().trim().min(1, "Cuenta gasto obligatoria").transform(normalizePlanAccount),
+  // Ninguna cuenta es obligatoria por separado: un tercero al que solo se le
+  // compra no tiene cuenta de cliente, y al reves. Lo que no vale es una
+  // ficha sin ninguna cuenta.
+  supplierAccount: z.string().trim().transform(normalizePlanAccount),
+  customerAccount: z.string().trim().transform(normalizePlanAccount),
+  expenseAccount: z.string().trim().transform(normalizePlanAccount),
+  incomeAccount: z.string().trim().transform(normalizePlanAccount),
   defaultVatRate: z.coerce.number().min(0).max(100).optional(),
-});
+}).refine(
+  (d) => d.supplierAccount || d.customerAccount || d.expenseAccount || d.incomeAccount,
+  { message: "Indica al menos una cuenta" },
+);
 
 export async function createAccountEntry(
   clientId: string,
@@ -105,8 +119,10 @@ export async function createAccountEntry(
   const parsed = accountSchema.safeParse({
     nif: formData.get("nif"),
     name: formData.get("name"),
-    supplierAccount: formData.get("supplierAccount"),
-    expenseAccount: formData.get("expenseAccount"),
+    supplierAccount: formData.get("supplierAccount") ?? "",
+    customerAccount: formData.get("customerAccount") ?? "",
+    expenseAccount: formData.get("expenseAccount") ?? "",
+    incomeAccount: formData.get("incomeAccount") ?? "",
     defaultVatRate: formData.get("defaultVatRate") || undefined,
   });
   if (!parsed.success) return { error: parsed.error.issues.map((i) => i.message).join(", ") };
@@ -149,8 +165,10 @@ export async function updateAccountEntry(
   const parsed = accountSchema.safeParse({
     nif: formData.get("nif"),
     name: formData.get("name"),
-    supplierAccount: formData.get("supplierAccount"),
-    expenseAccount: formData.get("expenseAccount"),
+    supplierAccount: formData.get("supplierAccount") ?? "",
+    customerAccount: formData.get("customerAccount") ?? "",
+    expenseAccount: formData.get("expenseAccount") ?? "",
+    incomeAccount: formData.get("incomeAccount") ?? "",
     defaultVatRate: formData.get("defaultVatRate") || undefined,
   });
   if (!parsed.success) return { error: parsed.error.issues.map((i) => i.message).join(", ") };

@@ -1,7 +1,7 @@
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { canAccessClient } from "@/lib/accessibleClients";
-import { partyAccountMatchesType, resultAccountMatchesType } from "@/lib/accountingAccount";
+import { accountsForDirection } from "@/lib/accountingAccount";
 import { redirect, notFound } from "next/navigation";
 import { ReviewForm } from "./ReviewForm";
 import {
@@ -139,19 +139,16 @@ export default async function ReviewPage({
   const accountNameMismatch =
     suggestedAccount != null && !accountMatchedByName && !entryNameMatches(suggestedAccount, counterpartyName);
 
-  // Solo sugerimos la cuenta si pertenece a la familia del sentido de esta
-  // factura. Un tercero que es proveedor y cliente a la vez comparte fila en
-  // AccountEntry, y sin este filtro una emitida se autorrellenaba con la
-  // cuenta 400x/6xx aprendida en sus compras.
+  // Las cuentas del sentido de esta factura. La ficha del tercero guarda las
+  // dos parejas (proveedor/gasto y cliente/ingreso) porque en A3 el mismo
+  // tercero puede ser las dos cosas: FARMACIA AGUACATE es 41000486 cuando
+  // nos vende y 43000053 cuando le vendemos.
   const invoiceType = invoice.type === "SALE" ? "SALE" : "PURCHASE";
+  const direction = accountsForDirection(suggestedAccount, invoiceType);
   const accountData = suggestedAccount
     ? {
-        supplierAccount: partyAccountMatchesType(suggestedAccount.supplierAccount, invoiceType)
-          ? suggestedAccount.supplierAccount
-          : "",
-        expenseAccount: resultAccountMatchesType(suggestedAccount.expenseAccount, invoiceType)
-          ? suggestedAccount.expenseAccount
-          : "",
+        supplierAccount: direction.party,
+        expenseAccount: direction.result,
         defaultVatRate: suggestedAccount.defaultVatRate ? Number(suggestedAccount.defaultVatRate) : null,
         name: suggestedAccount.name,
       }

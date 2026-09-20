@@ -319,8 +319,9 @@ model Invoice {
   /// Por defecto INTERIOR; se cambia automáticamente si el NIF del
   /// emisor tiene prefijo no-ES, o manualmente por el gestor.
   operationType OperationType @default(INTERIOR)
-  /// Codigo ISO del pais del emisor ("ES", "DE", "FR"...) o null si
-  /// no se detecto prefijo y se asume nacional.
+  /// Prefijo VAT del pais del emisor ("ES", "DE", "FR"...) o null si no se
+  /// detecto prefijo y se asume nacional. OJO: es el prefijo VAT, no el
+  /// codigo ISO — Grecia es "EL", no "GR", y asi lo quieren A3 y VIES.
   issuerCountry   String?   @db.Char(2)
   /// Codigo ISO del pais del receptor, analogo a issuerCountry.
   receiverCountry String?   @db.Char(2)
@@ -617,8 +618,17 @@ model AccountEntry {
   id              String   @id @default(cuid())
   nif             String
   name            String
-  supplierAccount String   // Cuenta proveedor 400.xxxxx / 410.xxxxx
-  expenseAccount  String   // Cuenta gasto/ingreso 6xx.xxxxx / 7xx.xxxxx
+  /// Cuentas por SENTIDO, no por fila: en A3 el mismo tercero puede tener
+  /// ficha de proveedor (40x/41x) y de cliente (43x) a la vez — FARMACIA
+  /// AGUACATE CB, E87329710, es 41000486 comprando y 43000053 vendiendo.
+  /// Con una sola pareja, la ultima cuenta que entraba pisaba a la otra y el
+  /// autorelleno se quedaba en blanco una factura si y otra tambien.
+  /// "" (no null) = sin cuenta para ese sentido, que es lo que ya usaba el
+  /// aprendizaje al validar.
+  supplierAccount String   @default("") // Cuenta proveedor 400.xxxxx / 410.xxxxx
+  customerAccount String   @default("") // Cuenta cliente 430.xxxxx
+  expenseAccount  String   @default("") // Cuenta gasto 6xx.xxxxx (o contrapartida 2xx/3xx)
+  incomeAccount   String   @default("") // Cuenta ingreso 7xx.xxxxx
   defaultVatRate  Decimal? @db.Decimal(5, 2)
   /// Tipo de operación fiscal por defecto para este NIF. Se aprende al
   /// validar la primera factura: si el gestor cambia el tipo (ej. detecta
@@ -644,6 +654,9 @@ model AccountEntry {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Una sola fila por tercero, con el sentido en columnas. Partirla en dos
+  // filas (una de compras y otra de ventas) duplicaria nombre, % de IVA,
+  // tipo de operacion y retencion, que no dependen del sentido.
   @@unique([clientId, nif])
   @@index([clientId])
 }

@@ -232,6 +232,40 @@ describe("validateForA3Export", () => {
     ]);
     expect(res.flatMap((r) => r.warnings).filter((w) => w.includes("Descuadre"))).toEqual([]);
   });
+
+  it("avisa del recargo colado como una linea de IVA mas (caso Galma)", () => {
+    // 286,63 al 21 % + una "linea" al 5,2 % que es el recargo: cuadra con el
+    // total, asi que ningun otro aviso la ve, pero en A3 entra como IVA.
+    const res = validateForA3Export([
+      mkInvoice({
+        taxBase: null,
+        vatAmount: null,
+        totalAmount: 361.72 as any,
+        vatLines: [
+          { id: "v1", invoiceId: "inv-1", position: 0, taxBase: 286.63 as any, vatRate: 21 as any, vatAmount: 60.19 as any, createdAt: new Date() },
+          { id: "v2", invoiceId: "inv-1", position: 1, taxBase: 0 as any, vatRate: 5.2 as any, vatAmount: 14.90 as any, createdAt: new Date() },
+        ] as any,
+      }),
+    ]);
+    const warnings = res.flatMap((r) => r.warnings);
+    expect(warnings.some((w) => w.includes("5.2%") && w.includes("recargo"))).toBe(true);
+    expect(warnings.filter((w) => w.includes("Descuadre"))).toEqual([]);
+  });
+
+  it("no avisa de los tipos de IVA normales, el 0 % incluido", () => {
+    const res = validateForA3Export([
+      mkInvoice({
+        taxBase: null,
+        vatAmount: null,
+        totalAmount: 221 as any,
+        vatLines: [
+          { id: "v1", invoiceId: "inv-1", position: 0, taxBase: 100 as any, vatRate: 21 as any, vatAmount: 21 as any, createdAt: new Date() },
+          { id: "v2", invoiceId: "inv-1", position: 1, taxBase: 100 as any, vatRate: 0 as any, vatAmount: 0 as any, createdAt: new Date() },
+        ] as any,
+      }),
+    ]);
+    expect(res.flatMap((r) => r.warnings).filter((w) => w.includes("Tipo de IVA"))).toEqual([]);
+  });
 });
 
 describe("validateForA3Export — facturas emitidas y moneda", () => {
@@ -402,5 +436,83 @@ describe("generateA3Excel — recargo de equivalencia", () => {
     expect(rows[1][12]).toBe(5.2);
     expect(rows[2][12]).toBe(0);
     expect(rows[2][13]).toBe(0);
+  });
+});
+
+describe("generateA3Excel — prefijo de pais en la columna E", () => {
+  function readRows(buf: Buffer, sheetName: string): unknown[][] {
+    const wb = XLSX.read(buf, { type: "buffer" });
+    return XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header: 1 }) as unknown[][];
+  }
+
+  it("una compra intracomunitaria sale con el prefijo (A3 lo exige)", () => {
+    const buf = generateA3Excel([mkInvoice({ issuerCif: "515160873", issuerCountry: "PT" as any })]);
+    expect(readRows(buf, "Facturas recibidas")[1][4]).toBe("PT515160873");
+  });
+
+  it("una compra nacional sigue saliendo sin prefijo", () => {
+    const buf = generateA3Excel([mkInvoice()]);
+    expect(readRows(buf, "Facturas recibidas")[1][4]).toBe("B12345674");
+    const buf2 = generateA3Excel([mkInvoice({ issuerCountry: "ES" as any })]);
+    expect(readRows(buf2, "Facturas recibidas")[1][4]).toBe("B12345674");
+  });
+
+  it("en una emitida el pais sale del receptor, no del emisor", () => {
+    const buf = generateA3Excel([mkInvoice({
+      type: "SALE",
+      receiverCif: "123456789",
+      receiverCountry: "DE" as any,
+      issuerCountry: null,
+    })]);
+    expect(readRows(buf, "Facturas expedidas")[1][4]).toBe("DE123456789");
+  });
+
+  it("extra-UE tambien lleva prefijo: el plan de A3 guarda CN418306763", () => {
+    const buf = generateA3Excel([mkInvoice({ issuerCif: "418306763", issuerCountry: "CN" as any })]);
+    expect(readRows(buf, "Facturas recibidas")[1][4]).toBe("CN418306763");
+  });
+
+  it("en multi-IVA las dos filas llevan el mismo NIF prefijado", () => {
+    const buf = generateA3Excel([mkInvoice({
+      issuerCif: "515160873",
+      issuerCountry: "PT" as any,
+      taxBase: null, vatAmount: null, totalAmount: 130 as any,
+      vatLines: [
+        { id: "v1", invoiceId: "inv-1", position: 0, taxBase: 100 as any, vatRate: 21 as any, vatAmount: 21 as any, createdAt: new Date() },
+        { id: "v2", invoiceId: "inv-1", position: 1, taxBase: 10 as any, vatRate: 10 as any, vatAmount: 1 as any, createdAt: new Date() },
+      ] as any,
+    })]);
+    const rows = readRows(buf, "Facturas recibidas");
+    expect(rows[1][4]).toBe("PT515160873");
+    expect(rows[2][4]).toBe("PT515160873");
+  });
+});
+
+describe("validateForA3Export — pais del NIF", () => {
+  it("avisa de la intracomunitaria sin pais detectado (la portuguesa que no imprime el prefijo)", () => {
+    const res = validateForA3Export([mkInvoice({
+      operationType: "INTRACOM" as any,
+      issuerCountry: null,
+      vatAmount: 0 as any, taxBase: 100 as any, totalAmount: 100 as any,
+    })]);
+    expect(res.some((r) => r.warnings.some((w) => w.includes("sin país en el NIF")))).toBe(true);
+  });
+
+  it("no avisa si la intracomunitaria ya trae el pais", () => {
+    const res = validateForA3Export([mkInvoice({
+      operationType: "INTRACOM" as any,
+      issuerCountry: "PT" as any,
+      vatAmount: 0 as any, taxBase: 100 as any, totalAmount: 100 as any,
+    })]);
+    expect(res.flatMap((r) => r.warnings).filter((w) => w.includes("sin país en el NIF"))).toEqual([]);
+  });
+
+  it("avisa del NIF extranjero marcado como operacion interior", () => {
+    const res = validateForA3Export([mkInvoice({ issuerCountry: "FR" as any })]);
+    expect(res.some((r) => r.warnings.some((w) => w.includes("Interior")))).toBe(true);
+  });
+
+  it("una factura nacional normal no genera ningun aviso de pais", () => {
+    expect(validateForA3Export([mkInvoice()])).toEqual([]);
   });
 });

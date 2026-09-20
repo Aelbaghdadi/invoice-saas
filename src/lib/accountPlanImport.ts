@@ -4,8 +4,12 @@ import { accountEntryKey, sameThirdParty } from "./supplierMatching";
 export type PlanImportEntry = {
   nif: string;
   name: string;
+  /** Cuentas por sentido: un mismo tercero puede tener ficha de proveedor
+   *  (40x/41x + gasto) y de cliente (43x + ingreso) en el mismo Excel. */
   supplierAccount: string;
+  customerAccount: string;
   expenseAccount: string;
+  incomeAccount: string;
 };
 
 /**
@@ -22,7 +26,7 @@ export type PlanImportEntry = {
  */
 export function groupPlanRows(rows: unknown[][]): { entries: PlanImportEntry[]; errors: string[] } {
   const entries = new Map<string, PlanImportEntry>();
-  const partyRows = new Map<string, { row: number; name: string; account: string }[]>();
+  const partyRows = new Map<string, { row: number; name: string; account: string; familia: string }[]>();
   const errors: string[] = [];
 
   for (let i = 1; i < rows.length; i++) {
@@ -45,6 +49,12 @@ export function groupPlanRows(rows: unknown[][]): { entries: PlanImportEntry[]; 
     // con una cuenta sin punto ("40000022", el formato de A3 a 8 digitos)
     // devolvia la cuenta entera y la mandaba siempre a "prefijo desconocido".
     const prefixNum = accountGroup(cuenta) ?? NaN;
+    // 400-429 proveedores, 430-439 clientes. El resto del grupo 4 (44x
+    // deudores, 46x, 47x) no dice el sentido: sigue contando como cuenta de
+    // tercero para la regla de "sin NIF solo entran 4xx", pero se reparte
+    // por el fallback de mas abajo.
+    const isSupplierAccount = prefixNum >= 400 && prefixNum < 430;
+    const isCustomerAccount = prefixNum >= 430 && prefixNum < 440;
     const isPartyAccount = prefixNum >= 400 && prefixNum < 500;
 
     // Sin NIF solo entra si la cuenta es de tercero (4xx): un proveedor sin
@@ -61,15 +71,27 @@ export function groupPlanRows(rows: unknown[][]): { entries: PlanImportEntry[]; 
     const key = accountEntryKey(rawNif, descripcion);
     if (!key) continue;
 
-    const existing = entries.get(key) ?? { nif: key, name: descripcion, supplierAccount: "", expenseAccount: "" };
+    const existing = entries.get(key) ?? {
+      nif: key, name: descripcion,
+      supplierAccount: "", customerAccount: "", expenseAccount: "", incomeAccount: "",
+    };
 
-    if (isPartyAccount) {
-      // 4xx = cuenta proveedor/cliente
+    if (isSupplierAccount || isCustomerAccount) {
+      // Cada familia a su columna: antes las dos caian en supplierAccount y
+      // la segunda fila del mismo tercero borraba a la primera, con lo que
+      // sobrevivia la que el Excel trajera mas abajo.
+      if (isSupplierAccount) existing.supplierAccount = cuenta;
+      else existing.customerAccount = cuenta;
+      partyRows.set(key, [...(partyRows.get(key) ?? []), { row: i + 1, name: descripcion, account: cuenta, familia: isSupplierAccount ? "proveedor" : "cliente" }]);
+    } else if (isPartyAccount) {
+      // 44x/46x/47x: es cuenta de tercero, pero no dice de que lado. Se deja
+      // en la de proveedor, que es donde estaban hasta ahora.
       existing.supplierAccount = cuenta;
-      partyRows.set(key, [...(partyRows.get(key) ?? []), { row: i + 1, name: descripcion, account: cuenta }]);
-    } else if ((prefixNum >= 600 && prefixNum < 700) || (prefixNum >= 700 && prefixNum < 800)) {
-      // 6xx = gasto, 7xx = ingreso
+      partyRows.set(key, [...(partyRows.get(key) ?? []), { row: i + 1, name: descripcion, account: cuenta, familia: "proveedor" }]);
+    } else if (prefixNum >= 600 && prefixNum < 700) {
       existing.expenseAccount = cuenta;
+    } else if (prefixNum >= 700 && prefixNum < 800) {
+      existing.incomeAccount = cuenta;
     } else {
       // Unknown prefix — try to assign intelligently
       if (!existing.supplierAccount) {
@@ -84,8 +106,12 @@ export function groupPlanRows(rows: unknown[][]): { entries: PlanImportEntry[]; 
   }
 
   for (const [key, seen] of partyRows) {
+    // Dos cuentas de FAMILIAS distintas (43x cliente y 41x proveedor) son el
+    // mismo tercero por los dos lados, no dos terceros que chocan: ahora cada
+    // una tiene su columna. Solo se comparan las de la misma familia.
     const differentThirdParties = seen.some((a, idx) =>
-      seen.slice(idx + 1).some((b) => a.account !== b.account && !sameThirdParty(a.name, b.name)),
+      seen.slice(idx + 1).some((b) =>
+        a.familia === b.familia && a.account !== b.account && !sameThirdParty(a.name, b.name)),
     );
     if (!differentThirdParties) continue;
     entries.delete(key);

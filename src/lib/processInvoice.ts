@@ -17,10 +17,14 @@ import {
   isPersonaFisica,
   textMentionsRetention,
   RETENTION_DEFAULT_RATE,
-  equivalenceSurchargeRateForVat,
   OPERATION_TYPE_OPTIONS,
   type RetentionTypeName,
 } from "@/lib/validators";
+import {
+  foldSurchargeLines,
+  completeReadSurcharges,
+  proposeSurchargesFromTotal,
+} from "@/lib/equivalenceSurcharge";
 import { textMentionsRectificative, applyRectificativeSign } from "@/lib/rectificative";
 import { routeByCif, clientSideCif, routeByText, detectInvoiceType } from "@/lib/invoiceRouting";
 import { lookupProviderClient } from "@/lib/providerRouting";
@@ -127,6 +131,13 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     }
 
     const extracted = ocrResult.extracted;
+    // El recargo de equivalencia llega a veces como una linea de IVA mas, con
+    // el tipo del recargo (5,2 / 1,4 / 0,5) y el importe en la cuota o en la
+    // base, porque en la factura aparece como otra fila del cuadro de
+    // impuestos ("REC 5,2% ... 14,90"). Se pliega sobre su linea de IVA antes
+    // de tocar nada mas, y si solo vino la mitad (% sin cuota o al reves) se
+    // completa. Ver src/lib/equivalenceSurcharge.ts.
+    extracted.vatLines = completeReadSurcharges(foldSurchargeLines(extracted.vatLines).lines);
     // rawResponse ahora es la respuesta CRUDA del proveedor (entities +
     // text para Doc AI; XML literal para Facturae). Antes guardabamos el
     // resultado ya mapeado, lo cual no servia para debugging.
@@ -499,24 +510,23 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     // (Client.equivalenceSurchargeCustomer).
     //
     // Por cada linea:
-    // 1) Si el OCR/IA vio explicitamente % y/o cuota para ESA linea en el
-    //    documento (recibida o emitida), se conservan tal cual (mas fiables
-    //    que cualquier mapeo).
-    // 2) Si no, y el cliente esta en RE, se propone el mapeo habitual
-    //    (21->5.2, 10->1.4, 4->0.5) sobre la base YA FIRMADA de esa misma
-    //    linea (respeta el signo en rectificativas).
-    const lineSurcharges = signed.lines.map((l, i) => {
-      let rate: number | null = extracted.vatLines[i]?.equivalenceSurchargeRate ?? null;
-      let amount: number | null = extracted.vatLines[i]?.equivalenceSurchargeAmount ?? null;
-      if (rate == null && clientRecord?.equivalenceSurchargeCustomer) {
-        const mapped = equivalenceSurchargeRateForVat(l.vatRate);
-        if (mapped != null) {
-          rate = mapped;
-          amount = parseFloat(((l.taxBase * mapped) / 100).toFixed(2));
-        }
+    // 1) Lo que el OCR/IA leyo en el documento para ESA linea manda, y viene
+    //    ya firmado si es un abono (applyRectificativeSign tambien niega el
+    //    recargo).
+    // 2) Si el cliente esta en RE y la factura no llega a su total por si
+    //    sola, se propone el recargo SOLO en las lineas cuya suma explique esa
+    //    diferencia, ajustando el ultimo centimo. Asi no se le cuelga recargo
+    //    a los portes ni nos desviamos del importe impreso, que es lo que
+    //    pasaba al aplicar el mapeo a ciegas linea por linea.
+    const lineSurcharges: { rate: number | null; amount: number | null }[] = signed.lines.map((l) => ({
+      rate: l.equivalenceSurchargeRate ?? null,
+      amount: l.equivalenceSurchargeAmount ?? null,
+    }));
+    if (clientRecord?.equivalenceSurchargeCustomer) {
+      for (const p of proposeSurchargesFromTotal(signed.lines, signed.totalAmount, signed.irpfAmount)) {
+        lineSurcharges[p.index] = { rate: p.rate, amount: p.amount };
       }
-      return { rate, amount };
-    });
+    }
     const totalSurchargeAmount = lineSurcharges.reduce((s, ls) => s + (ls.amount ?? 0), 0);
 
     // isValid final: Σ(bases) + Σ(cuotas) + Σ(recargo) - IRPF = Total, con

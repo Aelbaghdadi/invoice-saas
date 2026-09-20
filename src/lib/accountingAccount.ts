@@ -45,14 +45,14 @@ export function padAccountingAccount(value: string): string {
 }
 
 /**
- * AccountEntry guarda UN solo par de cuentas por (cliente, NIF), sin
- * distinguir sentido. Si el mismo tercero es proveedor y cliente a la vez,
- * la entrada aprendida en compras (400x/6xx) se ofreceria tal cual en una
- * venta, donde tocan 43x/7xx. Estas comprobaciones evitan sugerir —y
- * exportar— una cuenta de la familia equivocada.
+ * AccountEntry ya guarda las cuentas por sentido (supplier/expense en
+ * compras, customer/income en ventas), asi que estas dos comprobaciones ya
+ * no eligen entre cuentas guardadas: eso lo hace `accountsForDirection`.
  *
- * El arreglo de fondo es añadir el sentido a AccountEntry, que necesita
- * migracion y esta pendiente de confirmar el plan contable con el asesor.
+ * Lo que hacen ahora es guardar la ESCRITURA. Son la unica red que impide
+ * que un 43000053 tecleado por error en una compra se aprenda como cuenta de
+ * proveedor, o que un 40000046 tecleado en una venta caiga en la de cliente
+ * y vuelva a dejar la ficha mezclada.
  */
 export function partyAccountMatchesType(
   account: string | null | undefined,
@@ -93,4 +93,52 @@ export function normalizePlanAccount(raw: string): string {
 export function accountGroup(account: string): number | null {
   const digits = account.replace(/[^0-9]/g, "");
   return digits.length >= 3 ? parseInt(digits.slice(0, 3), 10) : null;
+}
+
+/** Las cuentas de una ficha de tercero segun el sentido de la factura. */
+export type DirectionAccounts = { party: string; result: string };
+
+/**
+ * Cuentas que tocan a una factura segun su sentido: en una compra las del
+ * proveedor (40x/41x + gasto), en una venta las del cliente (43x + ingreso).
+ *
+ * Se elige por SENTIDO, no por prefijo: la cuenta de resultado de una compra
+ * puede ser legitimamente un inmovilizado 2xx o unas existencias 3xx, y
+ * filtrar por "6xx" las dejaria fuera.
+ */
+export function accountsForDirection(
+  entry: {
+    supplierAccount?: string | null;
+    customerAccount?: string | null;
+    expenseAccount?: string | null;
+    incomeAccount?: string | null;
+  } | null | undefined,
+  invoiceType: "PURCHASE" | "SALE",
+): DirectionAccounts {
+  if (!entry) return { party: "", result: "" };
+  return invoiceType === "SALE"
+    ? { party: entry.customerAccount ?? "", result: entry.incomeAccount ?? "" }
+    : { party: entry.supplierAccount ?? "", result: entry.expenseAccount ?? "" };
+}
+
+/**
+ * Columnas donde se aprende una cuenta segun el sentido. Devuelve solo las
+ * que pasan el guardian de familia: una cuenta de la familia contraria no se
+ * aprende (se sigue usando en ESA factura, pero no se guarda en la ficha).
+ */
+export function learnAccountsForDirection(
+  partyAccount: string | null | undefined,
+  resultAccount: string | null | undefined,
+  invoiceType: "PURCHASE" | "SALE",
+): Partial<Record<"supplierAccount" | "customerAccount" | "expenseAccount" | "incomeAccount", string>> {
+  const out: Partial<Record<"supplierAccount" | "customerAccount" | "expenseAccount" | "incomeAccount", string>> = {};
+  const party = partyAccount?.trim();
+  const result = resultAccount?.trim();
+  if (party && partyAccountMatchesType(party, invoiceType)) {
+    out[invoiceType === "SALE" ? "customerAccount" : "supplierAccount"] = party;
+  }
+  if (result && resultAccountMatchesType(result, invoiceType)) {
+    out[invoiceType === "SALE" ? "incomeAccount" : "expenseAccount"] = result;
+  }
+  return out;
 }

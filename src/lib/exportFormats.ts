@@ -5,11 +5,13 @@ import {
   OPERATION_TYPE_LABEL,
   OPERATION_TYPE_OPTIONS,
   INTRACOM_GOODS_TYPE_LABEL,
+  taxIdWithCountry,
   type OperationTypeName,
 } from "@/lib/validators";
 import { isForeignCurrency } from "@/lib/currency";
 import { goodsTypeFromSaleAccount } from "@/lib/intracomGoods";
 import { invoiceBalanceDiffCents } from "@/lib/invoiceBalance";
+import { isStandardVatRate, isSurchargeRate } from "@/lib/equivalenceSurcharge";
 
 export type ExportFormat = "sage50" | "contasol" | "a3con" | "a3excel";
 
@@ -218,6 +220,11 @@ function buildA3Row(
   config?: ExportConfig,
 ): (string | number | null)[] {
   const isPurchase = inv.type === "PURCHASE";
+  // NIF y pais SIEMPRE del mismo lado: en una venta el NIF sale del receptor,
+  // asi que el pais tiene que ser receiverCountry (issuerCountry es el del
+  // propio cliente y vale null). Se calculan juntos para que no se despareje.
+  const terceroCif     = isPurchase ? inv.issuerCif     : inv.receiverCif;
+  const terceroCountry = isPurchase ? inv.issuerCountry : inv.receiverCountry;
   // Codigo numerico de tipo de operacion para A3. Si por algun motivo
   // viene null/desconocido, caemos a 1 (Interior) que es el caso comun.
   const opTypeCode = inv.operationType
@@ -249,7 +256,7 @@ function buildA3Row(
     fechaFactura,                                              // B: Fecha contabilización (OBLIGATORIA)
     exportNumber,                                              // C: Concepto
     exportNumber,                                              // D: Numero factura (con _R si rectificativa)
-    (isPurchase ? inv.issuerCif : inv.receiverCif) ?? "",     // E: NIF
+    taxIdWithCountry(terceroCif, terceroCountry),              // E: NIF (con prefijo de pais: A3 lo exige)
     (isPurchase ? inv.issuerName : inv.receiverName) ?? "",   // F: Nombre
     opTypeCode,                                                // G: Tipo operación (1/2/3/4/6/7/8)
     inv.supplierAccount ?? "",                                 // H: Cuenta proveedor/cliente
@@ -278,6 +285,7 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
     const warnings: string[] = [];
     const isPurchase = inv.type === "PURCHASE";
     const nif = isPurchase ? inv.issuerCif : inv.receiverCif;
+    const country = isPurchase ? inv.issuerCountry : inv.receiverCountry;
 
     if (!nif) warnings.push("NIF vacío");
 
@@ -309,6 +317,26 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
       if (Math.abs(sumVat) > 0.01) {
         warnings.push("Operación intracomunitaria con IVA declarado (debería ir a 0%)");
       }
+      // El pais solo se detecta si el prefijo venia IMPRESO en la factura.
+      // Una portuguesa que ponga "NIF 515160873" a secas se guarda sin pais y
+      // sale sin prefijo, que es justo lo que A3 rechaza. El gestor lo arregla
+      // tecleando el prefijo en la revision (parseTaxId lo vuelve a separar).
+      if (!country || country.trim() === "ES") {
+        warnings.push(
+          "Operación intracomunitaria sin país en el NIF: A3 la rechazará "
+          + "(«el NIF no existe en la tabla»). Corrige el NIF en la revisión con su prefijo, p.ej. PT515160873",
+        );
+      }
+    }
+    // Prefijo extranjero con operacion Interior: el NIF sale con prefijo pero
+    // la columna G va a 1, y el 303/349 sale mal. Uno de los dos esta mal.
+    // Sin tipo de operacion, buildA3Row emite el codigo 1 (Interior): para
+    // este aviso cuenta igual que si lo llevara puesto.
+    if (country && country.trim() !== "ES" && (!inv.operationType || inv.operationType === "INTERIOR")) {
+      warnings.push(
+        `NIF con prefijo extranjero (${country.trim()}) pero tipo de operación Interior: `
+        + "revisa cuál de los dos está mal antes de exportar",
+      );
     }
 
     // Venta intracomunitaria sin clasificar bienes/servicios: necesaria para
@@ -341,6 +369,22 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
     const totalNum = Number(inv.totalAmount ?? 0);
     if (Math.abs(totalNum) < 0.005) {
       warnings.push("Total = 0 (excluida del export — A3 no acepta importes cero)");
+    }
+
+    // Un "tipo de IVA" que en realidad es el del recargo (5,2 / 1,4 / 0,5)
+    // es el recargo colado como una linea de IVA mas. La factura cuadra igual
+    // con el total, asi que ningun otro aviso lo ve, pero A3 se trae un IVA
+    // que no existe (paso con 6 facturas, 3 ya exportadas).
+    const tiposRaros = Array.from(new Set(
+      getExportLines(inv).map((l) => l.vatRate).filter((r) => !isStandardVatRate(r)),
+    ));
+    if (tiposRaros.length > 0) {
+      warnings.push(
+        `Tipo de IVA no habitual (${tiposRaros.map((r) => `${r}%`).join(", ")})`
+        + (tiposRaros.some(isSurchargeRate)
+            ? ": parece el recargo de equivalencia metido como línea de IVA"
+            : ""),
+      );
     }
 
     // Base + IVA + Recargo - IRPF = Total. Suma sobre las lineas si las hay.
@@ -404,7 +448,7 @@ export function generateA3Excel(
       { wch: 16 }, // B: Fecha contabilización
       { wch: 20 }, // C: Concepto
       { wch: 16 }, // D: Nº Factura
-      { wch: 12 }, // E: Nif
+      { wch: 16 }, // E: Nif (cabe un VAT con prefijo, p.ej. FR + 11 digitos)
       { wch: 30 }, // F: Nombre
       { wch: 12 }, // G: Tipo op.
       { wch: 16 }, // H: Cuenta cli/prov

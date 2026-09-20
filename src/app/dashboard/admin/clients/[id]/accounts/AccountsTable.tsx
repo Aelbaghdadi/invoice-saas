@@ -98,7 +98,9 @@ export function AccountsTable({ entries, clientId }: Props) {
               { label: "NIF", hide: false },
               { label: "Nombre / Razón Social", hide: false },
               { label: "Cuenta Proveedor", hide: false },
+              { label: "Cuenta Cliente", hide: true },
               { label: "Cuenta Gasto", hide: true },
+              { label: "Cuenta Ingreso", hide: true },
               { label: "IVA %", hide: true },
               { label: "", hide: false },
             ].map((h) => (
@@ -120,7 +122,7 @@ export function AccountsTable({ entries, clientId }: Props) {
 
           {filtered.length === 0 && !showAdd ? (
             <tr>
-              <td colSpan={6} className="px-5 py-12 text-center text-[13px] text-slate-400">
+              <td colSpan={8} className="px-5 py-12 text-center text-[13px] text-slate-400">
                 {entries.length === 0
                   ? "Sin cuentas registradas. Importa un Excel o añade cuentas manualmente."
                   : "No se encontraron resultados."}
@@ -151,8 +153,10 @@ export function AccountsTable({ entries, clientId }: Props) {
                     )}
                   </td>
                   <td className="px-3 md:px-5 py-3 text-[13px] text-slate-700">{entry.name}</td>
-                  <td className="px-3 md:px-5 py-3 text-[13px] font-mono text-slate-600">{entry.supplierAccount}</td>
-                  <td className="hidden md:table-cell px-3 md:px-5 py-3 text-[13px] font-mono text-slate-600">{entry.expenseAccount}</td>
+                  <td className="px-3 md:px-5 py-3 text-[13px] font-mono text-slate-600">{entry.supplierAccount || "—"}</td>
+                  <td className="hidden md:table-cell px-3 md:px-5 py-3 text-[13px] font-mono text-slate-600">{entry.customerAccount || "—"}</td>
+                  <td className="hidden md:table-cell px-3 md:px-5 py-3 text-[13px] font-mono text-slate-600">{entry.expenseAccount || "—"}</td>
+                  <td className="hidden md:table-cell px-3 md:px-5 py-3 text-[13px] font-mono text-slate-600">{entry.incomeAccount || "—"}</td>
                   <td className="hidden md:table-cell px-3 md:px-5 py-3 text-[13px] text-slate-500">
                     {entry.defaultVatRate != null ? `${entry.defaultVatRate}%` : "—"}
                   </td>
@@ -225,11 +229,20 @@ function InlineForm({
       <td className="px-5 py-2">
         <input form="account-form" name="name" defaultValue={initial?.name ?? ""} placeholder="Razón Social" className={inputCls} required />
       </td>
+      {/* Las cuatro cuentas son opcionales por separado: un tercero al que
+          solo se le compra no tiene cuenta de cliente. La action exige que
+          haya al menos una. */}
       <td className="px-5 py-2">
-        <input form="account-form" name="supplierAccount" defaultValue={initial?.supplierAccount ?? ""} placeholder="400.00001" className={inputCls} required />
+        <input form="account-form" name="supplierAccount" defaultValue={initial?.supplierAccount ?? ""} placeholder="400.00001" className={inputCls} />
       </td>
       <td className="px-5 py-2">
-        <input form="account-form" name="expenseAccount" defaultValue={initial?.expenseAccount ?? ""} placeholder="629.00000" className={inputCls} required />
+        <input form="account-form" name="customerAccount" defaultValue={initial?.customerAccount ?? ""} placeholder="430.00001" className={inputCls} />
+      </td>
+      <td className="px-5 py-2">
+        <input form="account-form" name="expenseAccount" defaultValue={initial?.expenseAccount ?? ""} placeholder="629.00000" className={inputCls} />
+      </td>
+      <td className="px-5 py-2">
+        <input form="account-form" name="incomeAccount" defaultValue={initial?.incomeAccount ?? ""} placeholder="700.00000" className={inputCls} />
       </td>
       <td className="px-5 py-2">
         <input form="account-form" name="defaultVatRate" type="number" step="0.01" defaultValue={initial?.defaultVatRate?.toString() ?? ""} placeholder="21" className={inputCls} />

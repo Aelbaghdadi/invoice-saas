@@ -10,6 +10,8 @@ import {
   operationTypeLabel,
   equivalenceSurchargeRateForVat,
   normalizeBusinessName,
+  taxIdWithCountry,
+  parseTaxId,
 } from "@/lib/validators";
 
 describe("isValidNIF", () => {
@@ -159,5 +161,47 @@ describe("normalizeBusinessName", () => {
   it("distingue nombres realmente distintos", () => {
     expect(normalizeBusinessName("Guangzhou Blings Bag"))
       .not.toBe(normalizeBusinessName("Guangzhou Hongxin Cosmetics"));
+  });
+});
+
+describe("taxIdWithCountry", () => {
+  it("antepone el prefijo de pais extranjero", () => {
+    expect(taxIdWithCountry("515160873", "PT")).toBe("PT515160873");
+  });
+
+  it("no toca los nacionales: sin pais o con ES sale el NIF limpio", () => {
+    expect(taxIdWithCountry("B12345674", null)).toBe("B12345674");
+    expect(taxIdWithCountry("B12345674", "ES")).toBe("B12345674");
+  });
+
+  it("sin NIF devuelve vacio, nunca el prefijo suelto", () => {
+    expect(taxIdWithCountry(null, "PT")).toBe("");
+    expect(taxIdWithCountry("", "PT")).toBe("");
+  });
+
+  it("no duplica un prefijo que ya venia puesto", () => {
+    expect(taxIdWithCountry("PT515160873", "PT")).toBe("PT515160873");
+  });
+
+  it("no confunde el cuerpo del VAT con un prefijo de otro pais", () => {
+    expect(taxIdWithCountry("AT123456789", "FR")).toBe("FRAT123456789");
+  });
+
+  it("ignora el relleno de Char(2) de Postgres", () => {
+    expect(taxIdWithCountry("515160873", "PT ")).toBe("PT515160873");
+  });
+
+  it("Grecia va con el prefijo VAT EL, no con el ISO GR", () => {
+    expect(taxIdWithCountry("123456789", "EL")).toBe("EL123456789");
+  });
+
+  it("es el inverso de parseTaxId para un NIF extranjero", () => {
+    const parsed = parseTaxId("PT 515160873");
+    expect(taxIdWithCountry(parsed.clean, parsed.countryCode)).toBe("PT515160873");
+  });
+
+  it("de un ESB12345674 sale B12345674 a proposito: en A3 el nacional va sin prefijo", () => {
+    const parsed = parseTaxId("ESB12345674");
+    expect(taxIdWithCountry(parsed.clean, parsed.countryCode)).toBe("B12345674");
   });
 });

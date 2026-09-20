@@ -12,7 +12,7 @@ describe("groupPlanRows — importación del plan de cuentas", () => {
     ]);
     expect(errors).toEqual([]);
     expect(entries).toEqual([
-      { nif: "B12345674", name: "SUMINISTROS PEPE SL", supplierAccount: "40000001", expenseAccount: "60000001" },
+      { nif: "B12345674", name: "SUMINISTROS PEPE SL", supplierAccount: "40000001", customerAccount: "", expenseAccount: "60000001", incomeAccount: "" },
     ]);
   });
 
@@ -67,8 +67,55 @@ describe("groupPlanRows — importación del plan de cuentas", () => {
       ["40000099", "PROVEEDOR CHINO SIN VAT", ""],
     ]);
     expect(entries).toEqual([
-      { nif: "SINNIF:PROVEEDOR CHINO SIN VAT", name: "PROVEEDOR CHINO SIN VAT", supplierAccount: "40000099", expenseAccount: "" },
+      { nif: "SINNIF:PROVEEDOR CHINO SIN VAT", name: "PROVEEDOR CHINO SIN VAT", supplierAccount: "40000099", customerAccount: "", expenseAccount: "", incomeAccount: "" },
     ]);
+  });
+
+  it("el mismo tercero como cliente y como proveedor guarda las dos cuentas (caso FARMACIA AGUACATE)", () => {
+    const { entries, errors } = groupPlanRows([
+      header,
+      ["41000486", "FARMACIA AGUACATE CB", "E87329710"],
+      ["43000053", "FARMACIA AGUACATE CB", "E87329710"],
+      ["62900000", "FARMACIA AGUACATE CB", "E87329710"],
+      ["70000000", "FARMACIA AGUACATE CB", "E87329710"],
+    ]);
+    expect(errors).toEqual([]);
+    expect(entries).toEqual([
+      {
+        nif: "E87329710", name: "FARMACIA AGUACATE CB",
+        supplierAccount: "41000486", customerAccount: "43000053",
+        expenseAccount: "62900000", incomeAccount: "70000000",
+      },
+    ]);
+  });
+
+  it("dar la vuelta al Excel no cambia el resultado: ya no gana la ultima fila", () => {
+    const { entries } = groupPlanRows([
+      header,
+      ["43000053", "FARMACIA AGUACATE CB", "E87329710"],
+      ["41000486", "FARMACIA AGUACATE CB", "E87329710"],
+    ]);
+    expect(entries[0].supplierAccount).toBe("41000486");
+    expect(entries[0].customerAccount).toBe("43000053");
+  });
+
+  it("dos terceros distintos con el mismo numero siguen siendo conflicto dentro de su familia", () => {
+    const { entries, errors } = groupPlanRows([
+      header,
+      ["40000046", "GUANGZHOU BLINGS BAG CO LTD", "CN418306763"],
+      ["41000192", "GUANGZHOU HONGXIN COSMETICS AP", "418306763"],
+    ]);
+    expect(entries).toEqual([]);
+    expect(errors).toHaveLength(1);
+  });
+
+  it("una 44x sin sentido claro se queda en la cuenta de proveedor", () => {
+    const { entries } = groupPlanRows([
+      header,
+      ["44000001", "DEUDOR VARIOS SL", "B12345674"],
+    ]);
+    expect(entries[0].supplierAccount).toBe("44000001");
+    expect(entries[0].customerAccount).toBe("");
   });
 
   it("avisa de una cuenta guardada como número con decimales y no la importa", () => {

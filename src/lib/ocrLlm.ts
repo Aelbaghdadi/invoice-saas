@@ -243,7 +243,8 @@ Reglas:
 - vatLines: una entrada por tipo de IVA (4%, 10%, 21%, etc.)
 - irpfRate/irpfAmount: solo si aparece retención explícita en la factura
 - currency: código ISO de 3 letras solo si la factura muestra la moneda (símbolo o código); null si no aparece
-- equivalenceSurchargeRate/equivalenceSurchargeAmount de cada línea de vatLines: SOLO si el documento menciona explícitamente "Recargo de Equivalencia" (o "R.E.") con su % y/o cuota PARA ESE TIPO DE IVA; null en caso contrario. NUNCA los derives del % de IVA. El recargo puede ir en unas líneas y no en otras de la misma factura (p.ej. portes sin recargo).
+- equivalenceSurchargeRate/equivalenceSurchargeAmount de cada línea de vatLines: SOLO si el documento muestra el recargo de equivalencia con su % y/o cuota PARA ESE TIPO DE IVA; null en caso contrario. Aparece con muchos nombres: "Recargo de Equivalencia", "Rec. Equiv.", "R.E.", "RE 5,2%", "REC 5,2%", o como una fila/columna más del cuadro de impuestos con el 5,2 / 1,4 / 0,5. NUNCA los derives del % de IVA. El recargo puede ir en unas líneas y no en otras de la misma factura (p.ej. portes sin recargo).
+- El recargo NO es una línea de vatLines: va en los campos de recargo de la línea del IVA al que acompaña (5,2 con el 21%, 1,4 con el 10%, 0,5 con el 4%). No crees NUNCA una entrada de vatLines con vatRate 5,2 / 1,4 / 0,5 aunque en la factura aparezca como una fila más.
 - supplyType: qué se factura según los conceptos. "BIENES" si son productos o mercancías que se entregan (aunque se cobren portes aparte); "SERVICIOS" si es un servicio (software, suscripciones, licencias, publicidad, marketing, consultoría, comisiones, formación, alojamiento, reparaciones, transporte o logística facturados solos...). Si hay de las dos cosas, la de mayor importe. null si no se puede saber.
 - confidence: 0.0-1.0 según tu certeza; 0.0 para campos no encontrados
 - invoiceDate: siempre YYYY-MM-DD
@@ -301,7 +302,8 @@ Reglas:
 - vatLines: una entrada por tipo de IVA (4%, 10%, 21%, etc.)
 - irpfRate/irpfAmount: solo si aparece retención explícita en la factura
 - currency: código ISO de 3 letras solo si la factura muestra la moneda (símbolo o código); null si no aparece
-- equivalenceSurchargeRate/equivalenceSurchargeAmount de cada línea de vatLines: SOLO si el documento menciona explícitamente "Recargo de Equivalencia" (o "R.E.") con su % y/o cuota PARA ESE TIPO DE IVA; null en caso contrario. NUNCA los derives del % de IVA. El recargo puede ir en unas líneas y no en otras de la misma factura (p.ej. portes sin recargo).
+- equivalenceSurchargeRate/equivalenceSurchargeAmount de cada línea de vatLines: SOLO si el documento muestra el recargo de equivalencia con su % y/o cuota PARA ESE TIPO DE IVA; null en caso contrario. Aparece con muchos nombres: "Recargo de Equivalencia", "Rec. Equiv.", "R.E.", "RE 5,2%", "REC 5,2%", o como una fila/columna más del cuadro de impuestos con el 5,2 / 1,4 / 0,5. NUNCA los derives del % de IVA. El recargo puede ir en unas líneas y no en otras de la misma factura (p.ej. portes sin recargo).
+- El recargo NO es una línea de vatLines: va en los campos de recargo de la línea del IVA al que acompaña (5,2 con el 21%, 1,4 con el 10%, 0,5 con el 4%). No crees NUNCA una entrada de vatLines con vatRate 5,2 / 1,4 / 0,5 aunque en la factura aparezca como una fila más.
 - supplyType: qué se factura según los conceptos. "BIENES" si son productos o mercancías que se entregan (aunque se cobren portes aparte); "SERVICIOS" si es un servicio (software, suscripciones, licencias, publicidad, marketing, consultoría, comisiones, formación, alojamiento, reparaciones, transporte o logística facturados solos...). Si hay de las dos cosas, la de mayor importe. null si no se puede saber.
 - confidence: 0.0-1.0 según tu certeza; 0.0 para campos no encontrados
 - invoiceDate: siempre YYYY-MM-DD
