@@ -145,3 +145,30 @@ describe("surchargeAuditValue", () => {
     expect(surchargeAuditValue([line(100, 21, 21)])).toBeNull();
   });
 });
+
+describe("lineas REC sin importes", () => {
+  it("quita la fila del recargo vacia sin marcar un recargo de 0,00", () => {
+    const { lines, plegadas } = foldSurchargeLines([
+      line(526.03, 21, 110.45),
+      line(0, 5.2, 0),
+    ]);
+    expect(plegadas).toBe(1);
+    expect(lines).toHaveLength(1);
+    expect(lines[0].equivalenceSurchargeAmount).toBeNull();
+  });
+
+  it("y asi el importe real se puede proponer desde el total (caso F261064)", () => {
+    const { lines } = foldSurchargeLines([
+      line(526.03, 21, 110.45),
+      line(0, 5.2, 0),
+    ]);
+    expect(proposeSurchargesFromTotal(lines, 663.85, null)).toEqual([
+      { index: 0, rate: 5.2, amount: 27.37 },
+    ]);
+  });
+
+  it("no propone recargo de 0,00 en una linea de base cero", () => {
+    const p = proposeSurchargesFromTotal([line(0, 21, 0), line(1000, 21, 210)], 1262, null);
+    expect(p).toEqual([{ index: 1, rate: 5.2, amount: 52 }]);
+  });
+});

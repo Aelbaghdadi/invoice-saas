@@ -106,16 +106,17 @@ export function groupPlanRows(rows: unknown[][]): { entries: PlanImportEntry[]; 
   }
 
   for (const [key, seen] of partyRows) {
-    // Dos cuentas de FAMILIAS distintas (43x cliente y 41x proveedor) son el
-    // mismo tercero por los dos lados, no dos terceros que chocan: ahora cada
-    // una tiene su columna. Solo se comparan las de la misma familia.
+    // El mismo tercero con ficha de cliente y de proveedor (43x y 41x) NO es
+    // un conflicto, pero eso ya lo resuelve el nombre: en las dos filas es el
+    // mismo, y sameThirdParty lo reconoce. No se compara por familia: dos
+    // terceros distintos que comparten numero tienen que saltar aunque uno
+    // llegue como cliente y el otro como proveedor.
     const differentThirdParties = seen.some((a, idx) =>
-      seen.slice(idx + 1).some((b) =>
-        a.familia === b.familia && a.account !== b.account && !sameThirdParty(a.name, b.name)),
+      seen.slice(idx + 1).some((b) => a.account !== b.account && !sameThirdParty(a.name, b.name)),
     );
     if (!differentThirdParties) continue;
     entries.delete(key);
-    const detail = seen.map((s) => `fila ${s.row} («${s.name}», cuenta ${s.account})`).join(" y ");
+    const detail = seen.map((s) => `fila ${s.row} («${s.name}», cuenta ${s.account} de ${s.familia})`).join(" y ");
     errors.push(`NIF ${key}: ${detail} tienen el mismo número y nombres distintos. No se ha importado ninguna para no mezclar dos terceros: revísalas a mano.`);
   }
 

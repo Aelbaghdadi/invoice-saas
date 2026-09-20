@@ -124,3 +124,29 @@ describe("groupPlanRows — importación del plan de cuentas", () => {
     expect(errors[0]).toContain("Fila 2");
   });
 });
+
+describe("groupPlanRows — dos terceros con el mismo numero en familias distintas", () => {
+  const header = ["Cuenta", "Descripción", "NIF"];
+
+  it("no los fusiona aunque uno llegue como cliente y el otro como proveedor", () => {
+    const { entries, errors } = groupPlanRows([
+      header,
+      ["43000053", "GUANGZHOU BLINGS BAG CO LTD", "CN418306763"],
+      ["41000192", "GUANGZHOU HONGXIN COSMETICS AP", "418306763"],
+    ]);
+    expect(entries).toEqual([]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain("418306763");
+  });
+
+  it("el mismo tercero por los dos lados sigue entrando en una sola ficha", () => {
+    const { entries, errors } = groupPlanRows([
+      header,
+      ["41000486", "FARMACIA AGUACATE CB", "E87329710"],
+      ["43000053", "FARMACIA AGUACATE, C.B.", "E87329710"],
+    ]);
+    expect(errors).toEqual([]);
+    expect(entries[0].supplierAccount).toBe("41000486");
+    expect(entries[0].customerAccount).toBe("43000053");
+  });
+});

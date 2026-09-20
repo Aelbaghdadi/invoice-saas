@@ -269,6 +269,29 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     const receiverParsed = parseTaxId(extracted.receiverCif);
     const operationTypeHint = (invoice.type === "PURCHASE" ? issuerParsed : receiverParsed).operationType;
 
+    // El cliente hace falta ya aqui: su marca de Recargo de Equivalencia
+    // decide si se propone el recargo, y eso tiene que estar hecho ANTES de
+    // detectar incidencias.
+    const clientRecord = isUnclassified
+      ? null
+      : await prisma.client.findUnique({
+          where: { id: invoice.clientId },
+          select: { name: true, cif: true, equivalenceSurchargeCustomer: true },
+        });
+
+    // Recargo de equivalencia propuesto desde el total. Va antes de
+    // detectIssues a proposito: si no, el detector ve la factura descuadrada
+    // justo por el importe del recargo y persiste un "Error matematico" que
+    // contradice a los datos que se guardan unas lineas mas abajo, ademas de
+    // mandar la factura a "Requiere atencion". Con Document AI el recargo no
+    // se lee NUNCA, asi que le pasaba a todas las facturas de un cliente en RE.
+    if (clientRecord?.equivalenceSurchargeCustomer) {
+      for (const p of proposeSurchargesFromTotal(extracted.vatLines, extracted.totalAmount, extracted.irpfAmount)) {
+        extracted.vatLines[p.index].equivalenceSurchargeRate = p.rate;
+        extracted.vatLines[p.index].equivalenceSurchargeAmount = p.amount;
+      }
+    }
+
     // Detect issues (duplicates, low confidence, math mismatch, IVA no-cero
     // en intracomunitarias, etc.). En las "Por clasificar" no tiene sentido
     // (aún no hay cliente real).
@@ -293,12 +316,8 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     // En "Por clasificar" no forzamos ninguna parte como cliente (no sabemos
     // cuál es): se guardan los datos del OCR tal cual para mostrarlos al
     // clasificar. Si está ruteada, invoice.clientId ya es el cliente real.
-    const clientRecord = isUnclassified
-      ? null
-      : await prisma.client.findUnique({
-          where: { id: invoice.clientId },
-          select: { name: true, cif: true, equivalenceSurchargeCustomer: true },
-        });
+    // (clientRecord se lee mas arriba: hace falta antes de detectar
+    // incidencias para saber si el cliente va en Recargo de Equivalencia.)
 
     // ── Detección del tipo cuando se subió como "No lo sé" ─────────────
     // El lado donde aparece el CIF del cliente decide: receptor -> compra,
@@ -522,6 +541,9 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       rate: l.equivalenceSurchargeRate ?? null,
       amount: l.equivalenceSurchargeAmount ?? null,
     }));
+    // Segunda pasada sobre los importes YA FIRMADOS. Normalmente no hace nada
+    // (la propuesta de antes de detectIssues ya dejo el recargo puesto): solo
+    // entra cuando el signo del abono cambia lo que falta para el total.
     if (clientRecord?.equivalenceSurchargeCustomer) {
       for (const p of proposeSurchargesFromTotal(signed.lines, signed.totalAmount, signed.irpfAmount)) {
         lineSurcharges[p.index] = { rate: p.rate, amount: p.amount };

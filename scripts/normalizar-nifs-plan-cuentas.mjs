@@ -38,7 +38,8 @@ const db = new pg.Client({ connectionString: process.env.DATABASE_URL });
 await db.connect();
 
 const { rows } = await db.query(
-  `SELECT id, "clientId", nif, name, "supplierAccount", "expenseAccount",
+  `SELECT id, "clientId", nif, name,
+          "supplierAccount", "customerAccount", "expenseAccount", "incomeAccount",
           "defaultVatRate", "defaultOperationType", "defaultRetentionType", "defaultRetentionRate",
           "intracomGoodsTypePurchase", "intracomGoodsTypeSale"
      FROM "AccountEntry" ORDER BY "createdAt"`
@@ -82,7 +83,9 @@ try {
       if (
         difieren(nombreReal(destino), nombreReal(r)) ||
         difieren(destino.supplierAccount, r.supplierAccount) ||
+        difieren(destino.customerAccount, r.customerAccount) ||
         difieren(destino.expenseAccount, r.expenseAccount) ||
+        difieren(destino.incomeAccount, r.incomeAccount) ||
         // Bienes/servicios asignado "siempre": si cada fila dice una cosa, lo
         // decide el gestor; fusionar perderia una de las dos asignaciones.
         difieren(destino.intracomGoodsTypePurchase, r.intracomGoodsTypePurchase) ||
@@ -103,8 +106,13 @@ try {
       if ((vacio(destino.name) || destino.name === destino.nif) && !vacio(r.name) && r.name !== r.nif) {
         rellena("name", r.name);
       }
+      // Las cuatro cuentas, no solo las dos de compras: desde la migracion 9
+      // la ficha guarda tambien la de cliente y la de ingreso, y absorber una
+      // fila sin mirarlas borraba esas dos al hacer el DELETE.
       if (vacio(destino.supplierAccount) && !vacio(r.supplierAccount)) rellena("supplierAccount", r.supplierAccount);
+      if (vacio(destino.customerAccount) && !vacio(r.customerAccount)) rellena("customerAccount", r.customerAccount);
       if (vacio(destino.expenseAccount)  && !vacio(r.expenseAccount))  rellena("expenseAccount",  r.expenseAccount);
+      if (vacio(destino.incomeAccount)   && !vacio(r.incomeAccount))   rellena("incomeAccount",   r.incomeAccount);
       if (destino.defaultVatRate == null       && r.defaultVatRate != null)       rellena("defaultVatRate", r.defaultVatRate);
       if (destino.defaultOperationType == null && r.defaultOperationType != null) rellena("defaultOperationType", r.defaultOperationType);
       if (destino.defaultRetentionType == null && r.defaultRetentionType != null) rellena("defaultRetentionType", r.defaultRetentionType);

@@ -85,6 +85,12 @@ export function foldSurchargeLines<T extends SurchargeLine>(
       // Ya estaba bien puesto: la linea falsa era una copia (se contaba dos veces).
       return;
     }
+    if (amount === 0) {
+      // Fila "REC 5,2%" sin importes: se quita igual (en A3 seria un IVA que
+      // no existe), pero no se escribe un recargo de 0,00 — eso taparia la
+      // linea y luego no se le podria proponer el importe real desde el total.
+      return;
+    }
     target.equivalenceSurchargeRate = line.vatRate;
     target.equivalenceSurchargeAmount = round2(amount);
   });
@@ -141,7 +147,11 @@ export function proposeSurchargesFromTotal(
   const candidates = lines
     .map((l, index) => ({ index, rate: equivalenceSurchargeRateForVat(l.vatRate), taxBase: l.taxBase }))
     .filter((c): c is { index: number; rate: number; taxBase: number } =>
-      c.rate != null && lines[c.index].equivalenceSurchargeAmount == null);
+      c.rate != null && lines[c.index].equivalenceSurchargeAmount == null
+      // Una linea cuyo recargo daria 0,00 no explica ninguna diferencia, y
+      // como candidata solo sirve para colarse en los empates y marcar con
+      // "recargo 5,2 % de 0,00" una linea que no lleva recargo.
+      && round2((c.taxBase * c.rate) / 100) !== 0);
   // 2^n combinaciones: con mas de 8 lineas de IVA (jamas visto) no se intenta.
   if (candidates.length === 0 || candidates.length > 8) return [];
 
