@@ -11,6 +11,7 @@ import {
 import { isForeignCurrency } from "@/lib/currency";
 import { goodsTypeFromSaleAccount } from "@/lib/intracomGoods";
 import { invoiceBalanceDiffCents } from "@/lib/invoiceBalance";
+import { findNumberingGaps } from "@/lib/invoiceNumbering";
 import { isStandardVatRate, isSurchargeRate } from "@/lib/equivalenceSurcharge";
 
 export type ExportFormat = "sage50" | "contasol" | "a3con" | "a3excel";
@@ -404,6 +405,32 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
 
     if (warnings.length > 0) {
       results.push({ invoiceId: inv.id, invoiceNumber: inv.invoiceNumber, warnings });
+    }
+  }
+
+  // Huecos en la numeracion: por emisor en recibidas (o receptor en
+  // emitidas, que en la practica es siempre el propio cliente) + sentido,
+  // porque cada proveedor lleva su propia secuencia. Sin NIF no hay grupo
+  // fiable donde ubicarla (ya avisa "NIF vacío" por separado).
+  const bySeries = new Map<string, InvoiceWithClient[]>();
+  for (const inv of invoices) {
+    const nif = (inv.type === "PURCHASE" ? inv.issuerCif : inv.receiverCif) ?? "";
+    if (!nif) continue;
+    const key = `${inv.type}:${nif}`;
+    const list = bySeries.get(key) ?? [];
+    list.push(inv);
+    bySeries.set(key, list);
+  }
+  for (const group of bySeries.values()) {
+    const gaps = findNumberingGaps(group.map((i) => ({ id: i.id, invoiceNumber: i.invoiceNumber })));
+    for (const [invoiceId, missing] of gaps) {
+      const inv = group.find((i) => i.id === invoiceId)!;
+      const warning = missing.length === 1
+        ? `Posible hueco en la numeración: falta el nº ${missing[0]}`
+        : `Posible hueco en la numeración: faltan los nº ${missing.join(", ")}`;
+      const existing = results.find((r) => r.invoiceId === invoiceId);
+      if (existing) existing.warnings.push(warning);
+      else results.push({ invoiceId, invoiceNumber: inv.invoiceNumber, warnings: [warning] });
     }
   }
 

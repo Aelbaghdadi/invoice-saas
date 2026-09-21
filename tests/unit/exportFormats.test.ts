@@ -526,3 +526,43 @@ describe("validateForA3Export — pais del NIF", () => {
     expect(validateForA3Export([mkInvoice()])).toEqual([]);
   });
 });
+
+describe("validateForA3Export — huecos en la numeración", () => {
+  it("avisa cuando falta un numero entre facturas del mismo emisor", () => {
+    const res = validateForA3Export([
+      mkInvoice({ id: "inv-1", invoiceNumber: "1" }),
+      mkInvoice({ id: "inv-2", invoiceNumber: "2" }),
+      mkInvoice({ id: "inv-4", invoiceNumber: "4" }),
+    ]);
+    const hit = res.find((r) => r.invoiceId === "inv-4");
+    expect(hit?.warnings.some((w) => w.includes("hueco") && w.includes("3"))).toBe(true);
+    expect(res.find((r) => r.invoiceId === "inv-1")).toBeUndefined();
+  });
+
+  it("no avisa si la numeracion es correlativa", () => {
+    const res = validateForA3Export([
+      mkInvoice({ id: "inv-1", invoiceNumber: "1" }),
+      mkInvoice({ id: "inv-2", invoiceNumber: "2" }),
+    ]);
+    expect(res.some((r) => r.warnings.some((w) => w.includes("hueco")))).toBe(false);
+  });
+
+  it("no mezcla emisores distintos", () => {
+    const res = validateForA3Export([
+      mkInvoice({ id: "inv-1", issuerCif: "B11111111", invoiceNumber: "1" }),
+      mkInvoice({ id: "inv-2", issuerCif: "B22222222", invoiceNumber: "3" }),
+    ]);
+    expect(res.some((r) => r.warnings.some((w) => w.includes("hueco")))).toBe(false);
+  });
+
+  it("se acumula junto a otros avisos de la misma factura", () => {
+    const res = validateForA3Export([
+      mkInvoice({ id: "inv-1", invoiceNumber: "1" }),
+      mkInvoice({ id: "inv-3", invoiceNumber: "3", supplierAccount: null }),
+    ]);
+    const hit = res.find((r) => r.invoiceId === "inv-3");
+    expect(hit?.warnings).toEqual(
+      expect.arrayContaining(["Sin cuenta proveedor", expect.stringContaining("hueco")]),
+    );
+  });
+});
