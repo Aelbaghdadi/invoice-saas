@@ -47,9 +47,13 @@ export async function GET(req: NextRequest) {
         ? month
         : undefined;
 
-  // Export only VALIDATED invoices scoped to the admin's firm
+  // Export only VALIDATED invoices scoped to the admin's firm.
+  // exportBatchId: null — exportar no cambia el estado (sigue VALIDATED),
+  // asi que sin este filtro cada exportacion del mismo periodo repetia las
+  // facturas ya exportadas en un lote anterior.
   const where = {
     status: "VALIDATED" as InvoiceStatus,
+    exportBatchId: null,
     client: { advisoryFirmId: firmId },
     ...(clientId ? { clientId } : {}),
     ...(monthFilter !== undefined
