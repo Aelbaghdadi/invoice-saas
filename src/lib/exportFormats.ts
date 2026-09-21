@@ -408,26 +408,32 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
     }
   }
 
-  // Huecos en la numeracion: por emisor en recibidas (o receptor en
-  // emitidas, que en la practica es siempre el propio cliente) + sentido,
-  // porque cada proveedor lleva su propia secuencia. Sin NIF no hay grupo
-  // fiable donde ubicarla (ya avisa "NIF vacío" por separado).
+  // Huecos en la numeracion: siempre por EMISOR (quien numera) + sentido:
+  // en recibidas cada proveedor lleva su secuencia y en emitidas es la del
+  // propio cliente. Sin NIF no hay grupo fiable donde ubicarla (ya avisa
+  // "NIF vacío" por separado).
   const bySeries = new Map<string, InvoiceWithClient[]>();
   for (const inv of invoices) {
-    const nif = (inv.type === "PURCHASE" ? inv.issuerCif : inv.receiverCif) ?? "";
-    if (!nif) continue;
-    const key = `${inv.type}:${nif}`;
+    if (!inv.issuerCif) continue;
+    const key = `${inv.type}:${inv.issuerCif}`;
     const list = bySeries.get(key) ?? [];
     list.push(inv);
     bySeries.set(key, list);
   }
   for (const group of bySeries.values()) {
     const gaps = findNumberingGaps(group.map((i) => ({ id: i.id, invoiceNumber: i.invoiceNumber })));
-    for (const [invoiceId, missing] of gaps) {
+    for (const [invoiceId, gap] of gaps) {
       const inv = group.find((i) => i.id === invoiceId)!;
-      const warning = missing.length === 1
-        ? `Posible hueco en la numeración: falta el nº ${missing[0]}`
-        : `Posible hueco en la numeración: faltan los nº ${missing.join(", ")}`;
+      const shown = gap.missing.slice(0, 5);
+      const list = shown.length > 1
+        ? `${shown.slice(0, -1).join(", ")} y ${shown[shown.length - 1]}`
+        : shown[0];
+      const more = gap.missing.length > shown.length ? ` (y ${gap.missing.length - shown.length} más)` : "";
+      const who = `${inv.issuerName ?? "el emisor"} (${inv.issuerCif})`;
+      const warning =
+        `Salto de numeración de ${who}: entre la ${gap.previousNumber} y la ${inv.invoiceNumber} `
+        + `${gap.missing.length === 1 ? "falta la factura" : "faltan las facturas"} ${list}${more}. `
+        + `Revisa si falta subirla o si el emisor se saltó el número`;
       const existing = results.find((r) => r.invoiceId === invoiceId);
       if (existing) existing.warnings.push(warning);
       else results.push({ invoiceId, invoiceNumber: inv.invoiceNumber, warnings: [warning] });

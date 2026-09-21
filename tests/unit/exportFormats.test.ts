@@ -528,15 +528,33 @@ describe("validateForA3Export — pais del NIF", () => {
 });
 
 describe("validateForA3Export — huecos en la numeración", () => {
-  it("avisa cuando falta un numero entre facturas del mismo emisor", () => {
+  it("avisa con un mensaje claro cuando falta un numero del mismo emisor", () => {
     const res = validateForA3Export([
       mkInvoice({ id: "inv-1", invoiceNumber: "1" }),
       mkInvoice({ id: "inv-2", invoiceNumber: "2" }),
       mkInvoice({ id: "inv-4", invoiceNumber: "4" }),
     ]);
     const hit = res.find((r) => r.invoiceId === "inv-4");
-    expect(hit?.warnings.some((w) => w.includes("hueco") && w.includes("3"))).toBe(true);
+    const msg = hit?.warnings.find((w) => w.includes("Salto de numeración"));
+    expect(msg).toContain("Suministros S.L. (B12345674)");
+    expect(msg).toContain("entre la 2 y la 4 falta la factura 3");
     expect(res.find((r) => r.invoiceId === "inv-1")).toBeUndefined();
+  });
+
+  it("con varios huecos usa plural y los enumera", () => {
+    const res = validateForA3Export([
+      mkInvoice({ id: "inv-1", invoiceNumber: "1" }),
+      mkInvoice({ id: "inv-5", invoiceNumber: "5" }),
+    ]);
+    expect(res[0].warnings.join()).toContain("faltan las facturas 2, 3 y 4");
+  });
+
+  it("entiende el formato NNNN/AAAA", () => {
+    const res = validateForA3Export([
+      mkInvoice({ id: "inv-1", invoiceNumber: "EXP-0006/2026" }),
+      mkInvoice({ id: "inv-2", invoiceNumber: "EXP-0008/2026" }),
+    ]);
+    expect(res[0].warnings.join()).toContain("falta la factura EXP-0007/2026");
   });
 
   it("no avisa si la numeracion es correlativa", () => {
@@ -544,7 +562,7 @@ describe("validateForA3Export — huecos en la numeración", () => {
       mkInvoice({ id: "inv-1", invoiceNumber: "1" }),
       mkInvoice({ id: "inv-2", invoiceNumber: "2" }),
     ]);
-    expect(res.some((r) => r.warnings.some((w) => w.includes("hueco")))).toBe(false);
+    expect(res.some((r) => r.warnings.some((w) => w.includes("Salto de numeración")))).toBe(false);
   });
 
   it("no mezcla emisores distintos", () => {
@@ -552,7 +570,15 @@ describe("validateForA3Export — huecos en la numeración", () => {
       mkInvoice({ id: "inv-1", issuerCif: "B11111111", invoiceNumber: "1" }),
       mkInvoice({ id: "inv-2", issuerCif: "B22222222", invoiceNumber: "3" }),
     ]);
-    expect(res.some((r) => r.warnings.some((w) => w.includes("hueco")))).toBe(false);
+    expect(res.some((r) => r.warnings.some((w) => w.includes("Salto de numeración")))).toBe(false);
+  });
+
+  it("en emitidas agrupa por el emisor (el cliente), no por cada receptor", () => {
+    const res = validateForA3Export([
+      mkInvoice({ id: "inv-1", type: "SALE", issuerCif: "B87654321", receiverCif: "B11111111", invoiceNumber: "1" }),
+      mkInvoice({ id: "inv-3", type: "SALE", issuerCif: "B87654321", receiverCif: "B22222222", invoiceNumber: "3" }),
+    ]);
+    expect(res.find((r) => r.invoiceId === "inv-3")?.warnings.join()).toContain("falta la factura 2");
   });
 
   it("se acumula junto a otros avisos de la misma factura", () => {
@@ -562,7 +588,7 @@ describe("validateForA3Export — huecos en la numeración", () => {
     ]);
     const hit = res.find((r) => r.invoiceId === "inv-3");
     expect(hit?.warnings).toEqual(
-      expect.arrayContaining(["Sin cuenta proveedor", expect.stringContaining("hueco")]),
+      expect.arrayContaining(["Sin cuenta proveedor", expect.stringContaining("Salto de numeración")]),
     );
   });
 });
