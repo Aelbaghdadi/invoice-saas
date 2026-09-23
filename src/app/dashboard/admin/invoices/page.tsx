@@ -108,6 +108,15 @@ export default async function InvoicesPage({
     totalAmount: inv.totalAmount !== null ? Number(inv.totalAmount) : null,
     client: { name: inv.client.name, cif: inv.client.cif },
     hasDuplicateWarning: (inv.auditLogs?.length ?? 0) > 0,
+    // El nombre del fichero no identifica nada cuando viene de un PDF
+    // dividido ("factura1.pdf"): el gestor busca por numero de factura o por
+    // el tercero, que es lo que ve en A3.
+    invoiceNumber: inv.invoiceNumber,
+    issuerName: inv.issuerName,
+    issuerCif: inv.issuerCif,
+    receiverName: inv.receiverName,
+    receiverCif: inv.receiverCif,
+    exported: inv.exportBatchId != null,
   }));
 
   // Build batch-scope filter chip pieces (client/month/year/type coming from "Ver todas")

@@ -18,7 +18,22 @@ type Invoice = {
   totalAmount: number | null;
   client: { name: string; cif: string };
   hasDuplicateWarning: boolean;
+  invoiceNumber: string | null;
+  issuerName: string | null;
+  issuerCif: string | null;
+  receiverName: string | null;
+  receiverCif: string | null;
+  /** Ya salio en un Excel para A3. El estado sigue siendo VALIDATED. */
+  exported: boolean;
 };
+
+/** El tercero de la factura: el emisor en recibidas, el receptor en emitidas
+ *  (la otra parte es el propio cliente). Es por donde la busca el gestor. */
+function tercero(inv: Invoice): { name: string | null; cif: string | null } {
+  return inv.type === "SALE"
+    ? { name: inv.receiverName, cif: inv.receiverCif }
+    : { name: inv.issuerName, cif: inv.issuerCif };
+}
 
 type SortKey = "client" | "filename" | "period" | "type" | "status" | "date" | "total";
 type SortDir = "asc" | "desc";
@@ -41,7 +56,7 @@ const ACTION_LABEL: Record<string, string> = {
   ANALYZING: "Ver",
   ANALYZED:  "Revisar",
   OCR_ERROR: "Ver error",
-  VALIDATED: "Exportar",
+  VALIDATED: "Ver / Corregir",
   REJECTED:  "Ver",
   EXPORTED:  "Archivar",
 };
@@ -71,6 +86,13 @@ export function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
         inv.client.name.toLowerCase().includes(q) ||
         inv.client.cif.toLowerCase().includes(q) ||
         inv.filename.toLowerCase().includes(q) ||
+        // Numero de factura y tercero: es por donde se busca una factura
+        // cuando se ve mal en A3 y hay que encontrarla aqui.
+        (inv.invoiceNumber ?? "").toLowerCase().includes(q) ||
+        (inv.issuerName ?? "").toLowerCase().includes(q) ||
+        (inv.issuerCif ?? "").toLowerCase().includes(q) ||
+        (inv.receiverName ?? "").toLowerCase().includes(q) ||
+        (inv.receiverCif ?? "").toLowerCase().includes(q) ||
         (inv.totalAmount !== null && String(inv.totalAmount).includes(q))
     );
   }, [invoices, search]);
@@ -157,7 +179,7 @@ export function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
 
   const columns: { key: SortKey; label: string; hideMobile?: boolean }[] = [
     { key: "client", label: "Cliente" },
-    { key: "filename", label: "Archivo" },
+    { key: "filename", label: "Factura" },
     { key: "period", label: "Periodo", hideMobile: true },
     { key: "type", label: "Tipo", hideMobile: true },
     { key: "status", label: "Estado" },
@@ -182,7 +204,7 @@ export function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
             type="text"
             value={search}
             onChange={(e) => { setSearch(e.target.value); setPage(0); }}
-            placeholder="Buscar por cliente, CIF o factura..."
+            placeholder="Buscar por nº de factura, proveedor, cliente o CIF..."
             className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-4 text-[13px] placeholder-slate-400 outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-100"
           />
         </div>
@@ -274,7 +296,16 @@ export function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
                     <td className="px-3 md:px-5 py-3.5">
                       <div className="flex items-center gap-2">
                         <FileText className="h-4 w-4 flex-shrink-0 text-slate-300" />
-                        <span className="max-w-[140px] truncate text-[13px] text-slate-600">{inv.filename}</span>
+                        <div className="min-w-0">
+                          <p className="max-w-[180px] truncate text-[13px] font-medium text-slate-700" title={inv.filename}>
+                            {inv.invoiceNumber ?? inv.filename}
+                          </p>
+                          {tercero(inv).name && (
+                            <p className="max-w-[180px] truncate text-[11px] text-slate-400" title={tercero(inv).cif ?? undefined}>
+                              {tercero(inv).name}
+                            </p>
+                          )}
+                        </div>
                         {inv.hasDuplicateWarning && (
                           <span className="inline-flex items-center rounded-full bg-amber-50 border border-amber-200 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 whitespace-nowrap">
                             Posible duplicado
@@ -291,7 +322,14 @@ export function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
                       </Badge>
                     </td>
                     <td className="px-3 md:px-5 py-3.5">
-                      <Badge variant={s.variant}>{s.label}</Badge>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Badge variant={s.variant}>{s.label}</Badge>
+                        {inv.exported && (
+                          <span className="inline-flex items-center rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 whitespace-nowrap">
+                            Exportada
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-5 py-3.5 text-[13px] font-medium text-slate-700">
                       {inv.totalAmount !== null ? `${Number(inv.totalAmount).toLocaleString("es-ES", { minimumFractionDigits: 2 })} \u20AC` : "\u2014"}
@@ -319,7 +357,13 @@ export function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
                           </>
                         ) : (
                           <Link
-                            href={`/dashboard/admin/invoices/${inv.id}`}
+                            /* Las validadas y exportadas van a la revision:
+                               es la unica pantalla donde se pueden corregir,
+                               y es a lo que se viene desde aqui. El resto, a
+                               la ficha de solo lectura. */
+                            href={inv.status === "VALIDATED" || inv.status === "EXPORTED"
+                              ? `/dashboard/worker/review/${inv.id}`
+                              : `/dashboard/admin/invoices/${inv.id}`}
                             className="rounded-lg bg-blue-50 px-3 py-1 text-[12px] font-semibold text-blue-600 hover:bg-blue-100 transition-colors"
                           >
                             {ACTION_LABEL[inv.status] ?? "Ver"}

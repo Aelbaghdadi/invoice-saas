@@ -15,6 +15,7 @@ const FIELD_LABELS: Record<string, string> = {
   taxBase: "Base imponible", vatRate: "% IVA", vatAmount: "Cuota IVA",
   irpfRate: "% IRPF", irpfAmount: "Cuota IRPF", totalAmount: "Total",
   export: "Exportación", duplicate_warning: "Duplicado",
+  reexport: "Pdte. de reexportar", equivalenceSurcharge: "Recargo equiv.",
 };
 
 function initials(name: string) {

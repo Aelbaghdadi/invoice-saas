@@ -39,6 +39,9 @@ export default async function ReviewPage({
     include: {
       client: true,
       vatLines: { orderBy: { position: "asc" } },
+      // Para avisar en pantalla de que esta factura ya salio en un Excel:
+      // corregirla ahora obliga a volver a exportarla (o a tocar A3).
+      exportBatch: { select: { createdAt: true } },
     },
   });
   if (!invoice) notFound();
@@ -225,6 +228,7 @@ export default async function ReviewPage({
            guardar borraba lo que el OCR acababa de extraer. */
         key={invoice.status === "UPLOADED" || invoice.status === "ANALYZING" ? "ocr" : "ready"}
         invoice={invoiceForForm}
+        exportedAt={invoice.exportBatch ? invoice.exportBatch.createdAt.toISOString() : null}
         initialVatLines={initialVatLines}
         prevId={prevId}
         nextId={nextId}

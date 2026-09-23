@@ -29,6 +29,7 @@ import {
 import { normalizeCurrency } from "@/lib/currency";
 import { applyRectificativeSign } from "@/lib/rectificative";
 import { foldSurchargeLines, completeReadSurcharges, surchargeAuditValue } from "@/lib/equivalenceSurcharge";
+import { exportFingerprint } from "@/lib/exportFingerprint";
 import { appError, type AppError } from "@/lib/errorCodes";
 import { putObject, getObjectBytes, sanitizeFilenameForStorage, isStorageConfigured } from "@/lib/storage";
 
@@ -456,6 +457,28 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
       },
     }),
   ]);
+
+  // Correccion de una factura que YA se exporto: si cambia algo de lo que
+  // viaja al Excel de A3, se desmarca como exportada para que entre en la
+  // siguiente exportacion. Sin esto, el gestor corrige, ve el cambio en
+  // pantalla y A3 se queda con el dato viejo para siempre.
+  // El rastro del export anterior no se pierde: vive en ExportBatchItem con
+  // su snapshot, que es lo que permite saber que salio y cuando.
+  if (invoice.exportBatchId) {
+    const antes = exportFingerprint({ ...invoice, vatLines: invoice.vatLines });
+    const despues = exportFingerprint({ ...invoice, ...newData, vatLines: linesToSave });
+    if (antes !== despues) {
+      await prisma.invoice.update({
+        where: { id: invoiceId },
+        data: { exportBatchId: null },
+      });
+      auditEntries.push({
+        field: "reexport",
+        oldValue: `exportada en el lote ${invoice.exportBatchId}`,
+        newValue: "pendiente de volver a exportar",
+      });
+    }
+  }
 
   if (validate) {
     auditEntries.push({ field: "status", oldValue: invoice.status, newValue: "VALIDATED" });

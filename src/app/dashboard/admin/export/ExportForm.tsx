@@ -50,6 +50,9 @@ export function ExportForm({ clients }: Props) {
   // corresponde al sentido...). Se recortan a 20 en el servidor.
   const [warnings,     setWarnings]     = useState<A3Warning[]>([]);
   const [warningCount, setWarningCount] = useState(0);
+  // Facturas del periodo que ya salieron en un Excel anterior: no se vuelven
+  // a incluir, pero hay que decirlo o el recuento no se entiende.
+  const [alreadyExported, setAlreadyExported] = useState(0);
   const [counting, setCounting] = useState(false);
   const [success,  setSuccess]  = useState(false);
   const [error,    setError]    = useState<string | null>(null);
@@ -75,6 +78,7 @@ export function ExportForm({ clients }: Props) {
       setCount(data.count ?? 0);
       setWarnings(data.warnings ?? []);
       setWarningCount(data.warningCount ?? 0);
+      setAlreadyExported(data.alreadyExported ?? 0);
     } catch {
       setCount(null);
       setWarnings([]);
@@ -265,7 +269,16 @@ export function ExportForm({ clients }: Props) {
 
             {count === 0 && !counting && (
               <p className="mt-2 text-center text-[12px] text-amber-600">
-                No hay facturas exportables con estos filtros.
+                {alreadyExported > 0
+                  ? `Todas las facturas de este periodo (${alreadyExported}) ya se exportaron antes. Solo vuelven a salir si las corriges en la revisión.`
+                  : "No hay facturas exportables con estos filtros."}
+              </p>
+            )}
+            {count !== 0 && alreadyExported > 0 && !counting && (
+              <p className="mt-2 text-center text-[12px] text-slate-400">
+                {alreadyExported === 1
+                  ? "Otra factura de este periodo ya se exportó antes y no se repite."
+                  : `Otras ${alreadyExported} facturas de este periodo ya se exportaron antes y no se repiten.`}
               </p>
             )}
           </div>

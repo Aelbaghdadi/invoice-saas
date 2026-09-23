@@ -76,8 +76,15 @@ export async function GET(req: NextRequest) {
       orderBy: [{ periodYear: "asc" }, { periodMonth: "asc" }, { invoiceDate: "asc" }],
     });
     const allWarnings = validateForA3Export(previewInvoices);
+    // Cuantas se quedan fuera por haber salido ya en un Excel anterior. Sin
+    // este numero, un trimestre ya exportado sale como "0 facturas" y parece
+    // que el programa no las encuentra.
+    const alreadyExported = await prisma.invoice.count({
+      where: { ...where, exportBatchId: { not: null } },
+    });
     return NextResponse.json({
       count: previewInvoices.length,
+      alreadyExported,
       warningCount: allWarnings.length,
       // Se recorta la lista: con un lote grande no tiene sentido volcar
       // cientos de avisos al navegador, el gestor arranca por los primeros.
@@ -154,6 +161,7 @@ export async function GET(req: NextRequest) {
         retentionType: inv.retentionType,
         retentionBase: inv.retentionBase,
         issuerCountry: inv.issuerCountry,
+        receiverCountry: inv.receiverCountry,
         isRectificative: inv.isRectificative,
         rectifiedInvoiceSeries: inv.rectifiedInvoiceSeries,
         rectifiedInvoiceNumber: inv.rectifiedInvoiceNumber,

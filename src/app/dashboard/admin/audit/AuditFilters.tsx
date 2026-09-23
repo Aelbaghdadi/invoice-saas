@@ -25,6 +25,8 @@ const FIELD_LABELS: Record<string, string> = {
   totalAmount: "Total",
   export: "Exportación",
   duplicate_warning: "Duplicado",
+  reexport: "Pdte. de reexportar",
+  equivalenceSurcharge: "Recargo equiv.",
 };
 
 export function AuditFilters({ users, fields }: Props) {

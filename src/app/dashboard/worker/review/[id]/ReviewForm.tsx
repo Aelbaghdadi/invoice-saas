@@ -147,6 +147,9 @@ type SerializedInvoice = Omit<
 
 type Props = {
   invoice: SerializedInvoice;
+  /** Fecha del Excel en el que salio esta factura, o null si aun no se ha
+   *  exportado. Corregir una ya exportada obliga a volver a exportarla. */
+  exportedAt?: string | null;
   /** Lineas de IVA iniciales (de InvoiceVatLine, o sintetizada desde los
    *  campos planos de la factura para datos legacy). Vacio si nunca se
    *  procesaron datos. El recargo de equivalencia va por linea: null =
@@ -265,7 +268,7 @@ function fmtDate(d: Date | null | undefined) {
   return new Date(d).toISOString().slice(0, 10);
 }
 
-export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position, batchTotal, backHref, extraction, issues, suggestedAccount, accountMatchedByName, accountNameMismatch = false, thirdPartyGoodsType = null, canRememberGoodsType = false, boundingBoxes, queueSuffix = "", bucket = "all", sessionContext, avgOcrDurationMs, genericAccounts }: Props) {
+export function ReviewForm({ invoice, exportedAt = null, initialVatLines, prevId, nextId, position, batchTotal, backHref, extraction, issues, suggestedAccount, accountMatchedByName, accountNameMismatch = false, thirdPartyGoodsType = null, canRememberGoodsType = false, boundingBoxes, queueSuffix = "", bucket = "all", sessionContext, avgOcrDurationMs, genericAccounts }: Props) {
   const { success, error } = useToast();
   const isImage = invoice.fileType.startsWith("image/");
   const isPdf   = invoice.fileType === "application/pdf";
@@ -1125,6 +1128,23 @@ export function ReviewForm({ invoice, initialVatLines, prevId, nextId, position,
           }}
         >
           <div className="flex-1 px-4 py-3 space-y-2.5">
+
+            {/* Ya exportada: el gestor tiene que saber que lo que corrija
+                aqui NO esta en A3 hasta que se vuelva a exportar. */}
+            {exportedAt && (
+              <div className="flex items-start gap-2.5 rounded-xl bg-amber-50 px-4 py-3 text-amber-800">
+                <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                <div className="flex-1 text-[12px]">
+                  <p className="font-medium">
+                    Ya exportada el {new Date(exportedAt).toLocaleDateString("es-ES")}
+                  </p>
+                  <p className="mt-0.5">
+                    Si corriges algo que va al Excel, la factura vuelve a entrar en la próxima exportación.
+                    En A3 tendrás que corregir el asiento o borrarlo antes de volver a importarla.
+                  </p>
+                </div>
+              </div>
+            )}
 
             {/* Moneda extranjera: A3 solo admite euros y la validacion
                 matematica no lo detecta (la factura cuadra en su moneda). */}
