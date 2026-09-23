@@ -25,7 +25,15 @@ type Invoice = {
   receiverCif: string | null;
   /** Ya salio en un Excel para A3. El estado sigue siendo VALIDATED. */
   exported: boolean;
+  /** Salio en un Excel y despues se corrigio: A3 tiene el dato viejo. */
+  pendingReexport: boolean;
 };
+
+/** Compara sin tildes ni mayusculas: el gestor teclea "carnicas" y la factura
+ *  pone "Cárnicas Joselito". */
+function sinTildes(value: string | null | undefined): string {
+  return (value ?? "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
 
 /** El tercero de la factura: el emisor en recibidas, el receptor en emitidas
  *  (la otra parte es el propio cliente). Es por donde la busca el gestor. */
@@ -80,19 +88,21 @@ export function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
   // Filter
   const filtered = useMemo(() => {
     if (!search.trim()) return invoices;
-    const q = search.toLowerCase();
+    // Se recorta: copiar el numero desde A3 o desde el PDF arrastra espacios
+    // y sin esto la tabla decia "sin resultados" con la factura delante.
+    const q = sinTildes(search.trim());
     return invoices.filter(
       (inv) =>
-        inv.client.name.toLowerCase().includes(q) ||
-        inv.client.cif.toLowerCase().includes(q) ||
-        inv.filename.toLowerCase().includes(q) ||
+        sinTildes(inv.client.name).includes(q) ||
+        sinTildes(inv.client.cif).includes(q) ||
+        sinTildes(inv.filename).includes(q) ||
         // Numero de factura y tercero: es por donde se busca una factura
         // cuando se ve mal en A3 y hay que encontrarla aqui.
-        (inv.invoiceNumber ?? "").toLowerCase().includes(q) ||
-        (inv.issuerName ?? "").toLowerCase().includes(q) ||
-        (inv.issuerCif ?? "").toLowerCase().includes(q) ||
-        (inv.receiverName ?? "").toLowerCase().includes(q) ||
-        (inv.receiverCif ?? "").toLowerCase().includes(q) ||
+        sinTildes(inv.invoiceNumber).includes(q) ||
+        sinTildes(inv.issuerName).includes(q) ||
+        sinTildes(inv.issuerCif).includes(q) ||
+        sinTildes(inv.receiverName).includes(q) ||
+        sinTildes(inv.receiverCif).includes(q) ||
         (inv.totalAmount !== null && String(inv.totalAmount).includes(q))
     );
   }, [invoices, search]);
@@ -104,7 +114,10 @@ export function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
       let cmp = 0;
       switch (sortKey) {
         case "client":   cmp = a.client.name.localeCompare(b.client.name); break;
-        case "filename": cmp = a.filename.localeCompare(b.filename); break;
+        // Ordena por lo que se ve en la columna (el numero de factura), no por
+        // el nombre del fichero. numeric: "0002" antes que "0010".
+        case "filename": cmp = (a.invoiceNumber ?? a.filename)
+          .localeCompare(b.invoiceNumber ?? b.filename, "es", { numeric: true }); break;
         case "period":   cmp = (a.periodYear * 100 + a.periodMonth) - (b.periodYear * 100 + b.periodMonth); break;
         case "type":     cmp = a.type.localeCompare(b.type); break;
         case "status":   cmp = (STATUS_ORDER[a.status] ?? 0) - (STATUS_ORDER[b.status] ?? 0); break;
@@ -325,9 +338,18 @@ export function InvoicesTable({ invoices }: { invoices: Invoice[] }) {
                       <div className="flex flex-wrap items-center gap-1.5">
                         <Badge variant={s.variant}>{s.label}</Badge>
                         {inv.exported && (
-                          <span className="inline-flex items-center rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 whitespace-nowrap">
-                            Exportada
-                          </span>
+                          inv.pendingReexport ? (
+                            <span
+                              className="inline-flex items-center rounded-full bg-amber-50 border border-amber-200 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 whitespace-nowrap"
+                              title="Salió en un Excel y se corrigió después: A3 tiene el dato viejo hasta que se vuelva a exportar"
+                            >
+                              Pdte. reexportar
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 whitespace-nowrap">
+                              Exportada
+                            </span>
+                          )
                         )}
                       </div>
                     </td>

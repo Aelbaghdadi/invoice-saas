@@ -124,11 +124,16 @@ export const BATCH_REJECT_EXCLUDED_STATUSES: InvoiceStatus[] = [
 ];
 
 /** Si "Rechazar lote" tocaria esta factura. Exportar no cambia el estado
- *  (queda VALIDATED + exportBatchId), por eso tambien se mira exportBatchId. */
+ *  (queda VALIDATED + exportBatchId), por eso hay que mirar el historial.
+ *
+ *  Se mira si la factura SALIO ALGUNA VEZ en un Excel (tiene ExportBatchItem),
+ *  no el puntero exportBatchId: corregir una factura exportada lo pone a null
+ *  para que vuelva a la cola, y con el puntero a secas una factura que ya esta
+ *  en la contabilidad del cliente volvia a poder rechazarse en bloque. */
 export function isBatchRejectable(invoice: {
   status: InvoiceStatus;
-  exportBatchId: string | null;
+  exportBatchItems?: { id: string }[];
 }): boolean {
-  return invoice.exportBatchId == null
-    && !BATCH_REJECT_EXCLUDED_STATUSES.includes(invoice.status);
+  const seExporto = (invoice.exportBatchItems?.length ?? 0) > 0;
+  return !seExporto && !BATCH_REJECT_EXCLUDED_STATUSES.includes(invoice.status);
 }

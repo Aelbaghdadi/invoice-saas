@@ -80,7 +80,11 @@ export default async function BatchPage({
       ...(monthNum ? { periodMonth: monthNum } : {}),
       ...(typeParam ? { type: typeParam } : {}),
     },
-    include: { client: { select: { id: true, name: true, cif: true } } },
+    include: {
+      client: { select: { id: true, name: true, cif: true } },
+      // Salio alguna vez en un Excel (ver isBatchRejectable).
+      exportBatchItems: { take: 1, select: { id: true } },
+    },
     // createdAt asc para que `firstPendingId` sea la mas vieja del lote
     // y coincida con el orden de la cola de revision (que tambien usa
     // asc). Asi al pulsar "Revisar" entras por la 1 de N, no por la N.
@@ -127,11 +131,12 @@ export default async function BatchPage({
       case "PENDING_REVIEW":   g.pendingReview++; break;
       case "NEEDS_ATTENTION":  g.needsAttention++; break;
       case "OCR_ERROR":        g.ocrError++; break;
-      // Exportar no cambia el estado (queda VALIDATED + exportBatchId). Sin
-      // esto las exportadas salian como validadas y no cuadraban con lo que
-      // "Rechazar lote" anuncia que va a tocar.
+      // Exportar no cambia el estado. Sin esto las exportadas salian como
+      // validadas y no cuadraban con lo que "Rechazar lote" anuncia que va a
+      // tocar. Se mira el historial, no exportBatchId: al corregir una
+      // factura exportada el puntero se pone a null y sigue estando en A3.
       case "VALIDATED":
-        if (inv.exportBatchId != null) g.exported++;
+        if (inv.exportBatchItems.length > 0) g.exported++;
         else g.validated++;
         break;
       case "REJECTED":         g.rejected++; break;

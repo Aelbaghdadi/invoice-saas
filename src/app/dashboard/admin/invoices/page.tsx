@@ -72,6 +72,10 @@ export default async function InvoicesPage({
     include: {
       client: true,
       auditLogs: { where: { field: "duplicate_warning" }, take: 1 },
+      // Si salio alguna vez en un Excel. No vale mirar exportBatchId: al
+      // corregir una factura ya exportada ese puntero se pone a null para que
+      // vuelva a la cola, y la factura sigue estando en A3.
+      exportBatchItems: { take: 1, select: { id: true } },
     },
   }).catch(() => []);
 
@@ -116,7 +120,10 @@ export default async function InvoicesPage({
     issuerCif: inv.issuerCif,
     receiverName: inv.receiverName,
     receiverCif: inv.receiverCif,
-    exported: inv.exportBatchId != null,
+    exported: (inv.exportBatchItems?.length ?? 0) > 0,
+    // Exportada y corregida despues: A3 tiene el dato viejo hasta que se
+    // vuelva a exportar.
+    pendingReexport: (inv.exportBatchItems?.length ?? 0) > 0 && inv.exportBatchId == null,
   }));
 
   // Build batch-scope filter chip pieces (client/month/year/type coming from "Ver todas")

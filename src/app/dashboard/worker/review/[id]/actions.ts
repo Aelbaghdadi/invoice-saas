@@ -29,7 +29,7 @@ import {
 import { normalizeCurrency } from "@/lib/currency";
 import { applyRectificativeSign } from "@/lib/rectificative";
 import { foldSurchargeLines, completeReadSurcharges, surchargeAuditValue } from "@/lib/equivalenceSurcharge";
-import { exportFingerprint } from "@/lib/exportFingerprint";
+import { exportFingerprint, type FingerprintInvoice } from "@/lib/exportFingerprint";
 import { appError, type AppError } from "@/lib/errorCodes";
 import { putObject, getObjectBytes, sanitizeFilenameForStorage, isStorageConfigured } from "@/lib/storage";
 
@@ -152,7 +152,18 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
 
   const invoice = await prisma.invoice.findUnique({
     where: { id: invoiceId },
-    include: { client: true, vatLines: { orderBy: { position: "asc" } } },
+    include: {
+      client: true,
+      vatLines: { orderBy: { position: "asc" } },
+      // Ultimo Excel en el que salio esta factura, con el snapshot de lo que
+      // se le mando a A3: es contra eso contra lo que hay que comparar una
+      // correccion, no contra la fila viva.
+      exportBatchItems: {
+        orderBy: { createdAt: "desc" },
+        take: 1,
+        select: { exportBatchId: true, snapshot: true },
+      },
+    },
   });
   if (!invoice) return { error: "Factura no encontrada" };
 
@@ -427,6 +438,42 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     ? "PENDING_REVIEW"
     : undefined;
 
+  // ¿Esta correccion cambia lo que A3 tiene de esta factura?
+  //
+  // Se compara contra el snapshot del ultimo Excel en el que salio, no contra
+  // la fila que hay ahora en BD. Asi, si el gestor corrige y luego deshace la
+  // correccion, la factura vuelve a quedar como exportada en vez de colarse
+  // en el siguiente fichero con una fila identica a la que A3 ya tiene.
+  //  - difiere  -> exportBatchId a null: vuelve a la cola de exportacion.
+  //  - coincide -> se le devuelve su lote: A3 ya tiene esos datos.
+  // undefined = no hay nada que tocar (la factura nunca se exporto, o ya
+  // estaba en el estado que toca).
+  let nuevoExportBatchId: string | null | undefined;
+  const ultimoExport = invoice.exportBatchItems[0] ?? null;
+  if (ultimoExport) {
+    let exportado: FingerprintInvoice | null = null;
+    try {
+      exportado = JSON.parse(ultimoExport.snapshot) as FingerprintInvoice;
+    } catch {
+      exportado = null; // snapshot ilegible: se trata como "difiere"
+    }
+    const coincide = exportado != null
+      && exportFingerprint(exportado) === exportFingerprint({ ...invoice, ...newData, vatLines: linesToSave });
+    const destino = coincide ? ultimoExport.exportBatchId : null;
+    if (destino !== invoice.exportBatchId) {
+      nuevoExportBatchId = destino;
+      auditEntries.push({
+        field: "reexport",
+        oldValue: invoice.exportBatchId
+          ? `exportada (lote ${invoice.exportBatchId})`
+          : "pendiente de volver a exportar",
+        newValue: destino
+          ? `vuelve a coincidir con lo exportado (lote ${destino})`
+          : "pendiente de volver a exportar",
+      });
+    }
+  }
+
   // Persistir factura + lineas en una transaccion. Borramos las lineas
   // previas y reinsertamos: la UI envia el array completo.
   await prisma.$transaction([
@@ -453,32 +500,14 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
         // la sacamos de la "cola de pospuestas" para que vuelva al
         // orden normal.
         deferredAt: null,
+        // Va en la misma escritura que los datos corregidos: si se hiciera
+        // aparte y fallara, quedaria la factura corregida pero marcada como
+        // exportada, y ya no habria forma de que volviera al Excel.
+        ...(nuevoExportBatchId !== undefined ? { exportBatchId: nuevoExportBatchId } : {}),
         ...(validate ? { status: "VALIDATED" as const } : saveStatus ? { status: saveStatus as "PENDING_REVIEW" } : {}),
       },
     }),
   ]);
-
-  // Correccion de una factura que YA se exporto: si cambia algo de lo que
-  // viaja al Excel de A3, se desmarca como exportada para que entre en la
-  // siguiente exportacion. Sin esto, el gestor corrige, ve el cambio en
-  // pantalla y A3 se queda con el dato viejo para siempre.
-  // El rastro del export anterior no se pierde: vive en ExportBatchItem con
-  // su snapshot, que es lo que permite saber que salio y cuando.
-  if (invoice.exportBatchId) {
-    const antes = exportFingerprint({ ...invoice, vatLines: invoice.vatLines });
-    const despues = exportFingerprint({ ...invoice, ...newData, vatLines: linesToSave });
-    if (antes !== despues) {
-      await prisma.invoice.update({
-        where: { id: invoiceId },
-        data: { exportBatchId: null },
-      });
-      auditEntries.push({
-        field: "reexport",
-        oldValue: `exportada en el lote ${invoice.exportBatchId}`,
-        newValue: "pendiente de volver a exportar",
-      });
-    }
-  }
 
   if (validate) {
     auditEntries.push({ field: "status", oldValue: invoice.status, newValue: "VALIDATED" });

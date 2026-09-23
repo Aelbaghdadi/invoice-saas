@@ -175,7 +175,10 @@ export async function rejectBatch(
     periodYear: parsed.year,
     periodType: parsed.periodType,
     type: parsed.type,
-    exportBatchId: null,
+    // Nunca exportada: se mira el historial, no el puntero. Al corregir una
+    // factura ya exportada el puntero se pone a null para que vuelva a la cola
+    // de exportacion, y esa factura SI esta en A3.
+    exportBatchItems: { none: {} },
     status: { notIn: BATCH_REJECT_EXCLUDED_STATUSES },
   };
 

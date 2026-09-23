@@ -1,0 +1,130 @@
+
+===== CONFIRMADOS (7) =====
+
+- [alta] norm() colapsa los campos de texto a número: corregir ceros a la izquierda o espacios del nº de factura (o de un NIF todo dígitos) no desmarca la factura
+  src/lib/exportFingerprint.ts
+  CASO: norm() aplica Number(...).toFixed(2) a CUALQUIER valor que parsee como número, incluidos los campos que A3 recibe como texto literal. Verificado ejecutando exportFingerprint: invoiceNumber "0004525" y "4525" (y " 4525") producen la MISMA huella ("...|4525.00|..."), y issuerCif "01234567890" con país IT da la misma huella que "1234567890". Caso concreto: factura ya exportada cuyo número real es 0004525 y el OCR leyó 4525; el gestor lo corrige en l
+  ARREGLO: Normalizar numéricamente sólo lo que A3 recibe como número (bases, tipos, cuotas, totales, recargo, IRPF) y comparar los campos de texto (invoiceNumber, issuerName/receiverName, CIFs, cuentas) literalmente, sin Number() ni trim(). Lo más robusto: construir la huella desde la fila real, getExportLine
+
+- [alta] Guardar una compra ya exportada la desmarca sin que cambie nada en el Excel (issuerCountry "ES" → null): duplicado en A3
+  src/lib/exportFingerprint.ts
+  CASO: Factura recibida ya exportada con issuerCif="B12345678" e issuerCountry="ES" (el OCR leyó "ESB12345678", parseTaxId separa cuerpo y prefijo). El gestor abre la revisión desde la lista del admin y guarda o valida SIN tocar nada relevante: el formulario pinta el NIF con taxIdWithCountry(cif,"ES") = "B12345678" (sin prefijo), la action hace parseTaxId("B12345678").countryCode = null y persiste issuerCountry=null. La huella incluye issuerCountry en c
+  ARREGLO: En exportFingerprint no meter issuerCountry/receiverCountry en crudo: meter exactamente lo que emite la columna E, es decir taxIdWithCountry(terceroCif, terceroCountry) según el sentido (o normalizar ""/"ES" al mismo valor). Así un país que A3 no distingue no saca la factura otra vez.
+
+- [media] norm() convierte a número cualquier texto numérico: corregir el nº de factura "23"→"0023" no desmarca la factura y la corrección no llega nunca a A3
+  src/lib/exportFingerprint.ts
+  CASO: norm() hace Number(String(value)).toFixed(2) para todo lo que parsee como número, incluidos campos de texto. Factura ya exportada cuyo número el OCR leyó "23" cuando el papel dice "0023" (serie con ceros, habitual). El gestor lo corrige en la revisión y guarda: antes y despues dan "23.00" en la posición del invoiceNumber, la huella es idéntica (verificado en vitest: huella_igual_23_0023===true), exportBatchId se queda apuntando al lote viejo y la
+  ARREGLO: Comparar como texto los campos que A3 trata como texto (invoiceNumber, cif, país, nombres, cuentas contables) y reservar la normalización numérica (toFixed(2)) para importes y porcentajes: pasar norm solo a los campos numéricos de la cabecera y a lineFingerprint, y usar String(x ?? "").trim() para e
+
+- [media] La columna "Factura" ordena por nombre de fichero, no por el numero que enseña
+  src/app/dashboard/admin/invoices/InvoicesTable.tsx
+  CASO: La columna se renombro a "Factura" y ahora pinta `inv.invoiceNumber ?? inv.filename` (linea 301), pero su SortKey sigue siendo "filename" y el comparador es `a.filename.localeCompare(b.filename)`. Con las 7 facturas del PDF dividido de Mariano (ficheros factura1.pdf..factura7.pdf y numeros "240148", "A/25/7", "FRA-88"), pulsar la cabecera "Factura" en ascendente deja el orden factura1.pdf, factura2.pdf, factura3.pdf..., es decir la columna visibl
+  ARREGLO: Ordenar por el valor mostrado: `case "filename": cmp = (a.invoiceNumber ?? a.filename).localeCompare(b.invoiceNumber ?? b.filename, "es", { numeric: true }); break;` (y, si se quiere, renombrar la SortKey a "invoice" para que no engañe).
+
+- [media] La busqueda no quita tildes: "carnicas" no encuentra "Cárnicas Joselito"
+  src/app/dashboard/admin/invoices/InvoicesTable.tsx
+  CASO: El filtro solo hace `toLowerCase()` y `includes`. Una factura con issuerName = "Cárnicas Joselito" (el nombre que el OCR extrae con tilde) no aparece si el gestor teclea "carnicas", que es como lo escribe cuando lo copia de A3 o cuando va rapido; igual con "Panadería"/"panaderia" o "Muñoz"/"munoz". El resultado es "Sin resultados para esta busqueda" y el gestor concluye que la factura no esta en el programa — exactamente el problema que el commit
+  ARREGLO: Normalizar los dos lados antes de comparar, reutilizando `normalizeBusinessName` de src/lib/validators.ts:205 (es codigo puro, se puede importar en el componente cliente) o un helper local: `const fold = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();` aplicado a `q` y a cada 
+
+- [alta] La descarga no comprueba la respuesta: un fallo se anuncia como éxito y esas facturas ya no vuelven a salir nunca
+  src/app/dashboard/admin/export/ExportForm.tsx
+  CASO: El servidor crea el ExportBatch, los ExportBatchItem y pone exportBatchId en las facturas (route.ts 118-182) ANTES de generar el fichero (route.ts 211). Si generateA3Excel lanza (dato que la librería xlsx no digiere, fecha inválida...), responde 500 con ERR-EXPORT-002 y el comentario del catch dice literalmente 'no rebobinamos la BD'. En el cliente, handleDownload hace a.click() y a continuación setSuccess(true) sin esperar nada, y setError nunca
+  ARREGLO: Descargar con fetch: comprobar res.ok, si falla leer data.error y setError(...) (y no setSuccess); si va bien, blob + URL.createObjectURL + revokeObjectURL. En route.ts, generar el fichero antes de crear el batch/marcar las facturas, o meter createMany + updateMany + appendAuditLogs en una transacci
+
+- [media] El aviso 'Todas las facturas de este periodo ya se exportaron antes' afirma más de lo que miran las consultas
+  src/app/dashboard/admin/export/ExportForm.tsx
+  CASO: Tanto count como alreadyExported salen del mismo where, que filtra status: 'VALIDATED' y el tipo seleccionado (route.ts 54-64 y 82-84). Caso concreto: cliente con 10 facturas en T3, 3 validadas y ya exportadas y 7 en PENDING_REVIEW. La vista previa devuelve count 0 y alreadyExported 3, y la pantalla dice 'Todas las facturas de este periodo (3) ya se exportaron antes' — el asesor da el trimestre por cerrado cuando hay 7 facturas sin revisar que no
+  ARREGLO: Redactarlo con el alcance real ('todas las facturas validadas de este periodo' / del tipo seleccionado) o devolver en el preview también el recuento de facturas del periodo que aún no están validadas y avisar de ellas por separado.
+
+===== SINVERIFICAR (17) =====
+
+- [media] Falsos positivos: la huella incluye campos que no viajan al Excel (moneda y metadatos de rectificativa)
+  src/lib/exportFingerprint.ts
+  CASO: buildA3Row no usa currency, rectifiedInvoiceSeries, rectifiedInvoiceNumber, rectificativeType ni art80Tres (de la rectificativa sólo sale el sufijo _R, que depende de isRectificative), y generateA3Excel sólo excluye por total 0 -- la moneda no decide exportabilidad, al revés de lo que dice el comentario de cabecera. Caso concreto 1: rectificativa ya exportada en la que el gestor rellena "nº de la factura rectificada" (dato de control interno) y g
+  ARREGLO: Quitar currency, art80Tres, rectificativeType y rectifiedInvoiceSeries/Number de la huella (isRectificative sí debe quedarse por el _R). Si interesa avisar de la moneda, hacerlo por separado, no colándola en la huella.
+
+- [media] Falsos positivos: se comparan los campos planos y el null/0 que el exportador ignora o colapsa
+  src/lib/exportFingerprint.ts
+  CASO: getExportLines usa los campos planos (taxBase/vatRate/vatAmount) SÓLO si no hay vatLines, y convierte null y 0 en el mismo 0 (`l.equivalenceSurchargeRate ? Number(...) : 0`, y en buildA3Row `isFirstLine && inv.irpfRate ? ... : 0`). La huella, en cambio, compara siempre los planos y distingue null ("") de 0 ("0.00"). Caso concreto: factura multi-IVA validada con "Validar seleccionadas" (bulkValidateInvoices, src/app/dashboard/admin/invoices/action
+  ARREGLO: Comparar la salida real del exportador en vez de los campos crudos: huella = getExportLines(inv) + los valores que buildA3Row deriva. Así los planos sólo cuentan cuando no hay líneas y el null/0 colapsa exactamente igual que en el fichero.
+
+- [baja] Al desmarcar se borra el único aviso en pantalla de que A3 tiene el dato viejo
+  src/app/dashboard/worker/review/[id]/actions.ts
+  CASO: El banner "Ya exportada el ..." sale de invoice.exportBatch (page.tsx: exportedAt = invoice.exportBatch ? ... : null) y el chip "Exportada" de la lista de exportBatchId != null. Caso concreto: el gestor corrige "OTO MOYA S.L." por "Carnicas Joselito" en una factura ya exportada y guarda; al recargar la revisión el banner ha desaparecido y en la lista se ha ido el chip, porque exportBatchId ya es null. Si no exporta en ese momento (o pasa el trime
+  ARREGLO: Sacar el aviso del histórico (último ExportBatchItem de la factura) en vez de exportBatchId, y distinguir dos estados en la revisión y en la lista: "exportada" y "exportada, pendiente de volver a exportar".
+
+- [media] El desmarcado es de una sola dirección: deshacer una corrección deja la factura pendiente de exportar y A3 recibe un duplicado exacto
+  src/app/dashboard/worker/review/[id]/actions.ts
+  CASO: La huella se compara contra la fila viva (invoice) y no contra lo que se envió a A3 (ExportBatchItem.snapshot). Secuencia: factura exportada en el lote B con issuerName "OTO MOYA S.L."; el gestor lo corrige a "Carnicas Joselito" y guarda → exportBatchId=null (correcto); se da cuenta de que se equivocó (o otro gestor lo deshace) y vuelve a dejar "OTO MOYA S.L." y guarda → ahora invoice.exportBatchId ya es null, así que el bloque no entra y nada vu
+  ARREGLO: Comparar contra la huella de lo último exportado: leer el ExportBatchItem más reciente de la factura (snapshot JSON) y desmarcar solo si difiere, o guardar la huella del export en ExportBatchItem/Invoice al exportar. Con eso, volver a los valores exportados deja la factura marcada y no se duplica en
+
+- [media] Al perder el puntero exportBatchId, "Rechazar lote" vuelve a poder rechazar una factura que ya está en la contabilidad del cliente
+  src/lib/invoiceStatuses.ts
+  CASO: isBatchRejectable (y el where de rejectBatch en src/app/dashboard/worker/batch/actions.ts:178) usan exportBatchId == null como única garantía de "esta factura no está en A3". Factura exportada en el lote B (ya importada en A3); el gestor corrige el proveedor → exportBatchId=null, status sigue VALIDATED; después alguien rechaza el lote de ese cliente/periodo/tipo: la factura pasa a REJECTED, sale de la consulta del export (que exige VALIDATED) y l
+  ARREGLO: No usar exportBatchId como prueba de "ya exportada alguna vez": añadir un dato durable (p.ej. Invoice.exportedAt / reexportPending, o comprobar la existencia de ExportBatchItem) y usarlo en BATCH_REJECT_EXCLUDED/isBatchRejectable y en el where de rejectBatch, dejando exportBatchId solo como "pendien
+
+- [media] Tras corregir, desaparece el único aviso de que la factura está en A3 (banner y chip "Exportada")
+  src/app/dashboard/worker/review/[id]/page.tsx
+  CASO: El banner de la revisión sale de la relación FK invoice.exportBatch y el chip "Exportada" de la lista del admin de inv.exportBatchId != null. Al corregir se pone exportBatchId=null, así que al recargar la revisión ya no aparece "Ya exportada el 12/09/2026 ... en A3 tendrás que corregir el asiento o borrarlo antes de volver a importarla" y en la lista la factura queda indistinguible de una que nunca se exportó, sin ninguna marca de "pendiente de v
+  ARREGLO: Pintar el estado desde el histórico y no desde el puntero: leer el último ExportBatchItem (o un flag exportedAt) en page.tsx y en la lista, y mostrar "Exportada el X — pendiente de volver a exportar" mientras exportBatchId sea null pero exista export previo.
+
+- [baja] El desmarcado va fuera de la transacción del guardado y sin try/catch: si falla, datos corregidos + factura marcada como exportada para siempre y excepción a la UI
+  src/app/dashboard/worker/review/[id]/actions.ts
+  CASO: El prisma.invoice.update({data:{exportBatchId:null}}) se hace después del $transaction que ya persistió factura y líneas, y sin try/catch. Si esa segunda escritura falla (timeout del statement, caída del pool), el guardado ya está hecho: la factura queda corregida pero con exportBatchId apuntando al lote viejo, sin entrada "reexport" en la auditoría y sin forma de recuperarla (en el siguiente guardado antes===despues, ver hallazgo del desmarcado 
+  ARREGLO: Calcular antes/despues antes del $transaction y meter ...(desmarcar ? { exportBatchId: null } : {}) en el data del prisma.invoice.update que ya está dentro de la transacción: una sola escritura atómica, sin ventana de divergencia y sin código nuevo fuera del try del guardado.
+
+- [baja] El texto de busqueda no se recorta: pegar el numero de A3 con un espacio no encuentra nada
+  src/app/dashboard/admin/invoices/InvoicesTable.tsx
+  CASO: `const q = search.toLowerCase()` sin `trim()` (el `trim()` de la linea 82 solo decide si el filtro esta vacio). Si el gestor copia el numero desde A3 o desde el PDF y pega "240148 " (con el espacio final que arrastra casi cualquier copia de una rejilla), q = "240148 " no esta contenido en ningun campo y la tabla dice "Sin resultados para esta busqueda" aunque la factura este ahi. El flujo del commit es precisamente traer el numero desde A3 y pega
+  ARREGLO: `const q = search.trim().toLowerCase();`
+
+- [baja] Tras corregirla, la lista ya no marca que la factura salio en un Excel
+  src/app/dashboard/admin/invoices/page.tsx
+  CASO: `exported: inv.exportBatchId != null` es el unico origen del distintivo "Exportada", y el nuevo flujo de correccion pone `exportBatchId` a null (actions.ts del review). Secuencia real: factura exportada el 20/09 en el Excel del 3T; el 23/09 el gestor corrige "OTO MOYA S.L." por "Carnicas Joselito"; al guardar, la fila pasa a mostrar solo "Validada", indistinguible de una que nunca se exporto, y el banner "Ya exportada el ..." de la revision tambi
+  ARREGLO: No derivar el distintivo solo de `exportBatchId`: añadir al findMany `exportBatchItems: { take: 1, select: { id: true } }` y pasar dos banderas, p. ej. `exported` (exportBatchId != null) y `pendienteReexportar` (tiene exportBatchItems y exportBatchId == null), pintando "Exportada" o "Pendiente de re
+
+- [baja] En una EXPORTED el boton dice "Archivar" pero abre la pantalla de correccion
+  src/app/dashboard/admin/invoices/InvoicesTable.tsx
+  CASO: El nuevo destino incluye `inv.status === "EXPORTED"` (linea 364) pero ACTION_LABEL.EXPORTED sigue siendo "Archivar". EXPORTED es estado legacy pero existe en datos de produccion (src/lib/invoiceStatuses.ts:60 lo lista como LEGACY y src/app/dashboard/admin/batch/page.tsx:138 lo cuenta). Caso: factura legacy en EXPORTED; el gestor pulsa "Archivar" creyendo que la archiva y aterriza en /dashboard/worker/review/[id], el formulario editable — donde, p
+  ARREGLO: `EXPORTED: "Ver / Corregir"` en ACTION_LABEL (igual que VALIDATED), o dejar EXPORTED apuntando a la ficha de solo lectura si se quiere mantener el texto.
+
+- [baja] "Seleccionar todo" borra la seleccion cuando la pagina tiene tantas filas como lo ya seleccionado
+  src/app/dashboard/admin/invoices/InvoicesTable.tsx
+  CASO: `toggleAll` decide por `selected.size === paginated.length`, mientras la casilla de cabecera usa otro predicado (`paginated.every(...)`, linea 253). Con 25 facturas: en la pagina 1 se marcan 5 filas, se pasa a la pagina 2 (5 filas), la casilla de cabecera aparece desmarcada y al pulsarla `selected.size` (5) === `paginated.length` (5), asi que limpia la seleccion en vez de marcar las 5 visibles: la casilla sigue desmarcada y el gestor no consigue 
+  ARREGLO: Usar el mismo predicado que la cabecera: `const allSelected = paginated.length > 0 && paginated.every(i => selected.has(i.id)); if (allSelected) setSelected(prev => { const n = new Set(prev); paginated.forEach(i => n.delete(i.id)); return n; }); else setSelected(prev => new Set([...prev, ...paginate
+
+- [baja] La pagina activa no se reajusta al cambiar de pestaña: tabla vacia y sin controles para volver
+  src/app/dashboard/admin/invoices/InvoicesTable.tsx
+  CASO: `page` es estado del componente cliente y no se recorta cuando cambia el prop `invoices`; solo se reinicia al escribir en el buscador (linea 206). Al navegar entre pestañas de estado la ruta es la misma (?status=...), asi que el componente no se remonta y el estado sobrevive: desde la pagina 3 de "Todas" (60 facturas) se pulsa "Rechazadas" (5 facturas) y `paginated = sorted.slice(40, 60)` = [] -> la tabla dice "Sin facturas" mientras la cabecera 
+  ARREGLO: Recortar la pagina al rango valido, p. ej. `const safePage = Math.min(page, totalPages - 1);` usado en el slice y en el paginador, o un `useEffect` que haga `setPage(p => Math.min(p, totalPages - 1))` cuando cambie `sorted.length`.
+
+- [media] Segundo clic en Descargar: la vista previa dice N y la descarga devuelve un 404 que se come la pantalla
+  src/app/dashboard/admin/export/ExportForm.tsx
+  CASO: Preview dice 5 facturas exportables, el usuario pulsa Descargar y el xlsx se baja y marca las 5. El botón sigue habilitado: count continúa valiendo 5 hasta el refresco de los 2,5 s (línea 105) y counting es false. Si vuelve a pulsar (algo habitual cuando no se ve claro que la descarga haya ocurrido), el servidor ya no encuentra facturas y responde 404 con JSON de ERR-EXPORT-001 y sin Content-Disposition; como la descarga se lanza navegando con un
+  ARREGLO: Deshabilitar el botón desde el clic hasta que termine el refresco (un estado downloading, además de success), y hacer la descarga por fetch para poder mostrar ERR-EXPORT-001 dentro de la página en vez de navegar.
+
+- [baja] alreadyExported no se reinicia cuando falla el preview, y la condición se cumple con count = null
+  src/app/dashboard/admin/export/ExportForm.tsx
+  CASO: El catch de fetchCount (líneas 82-86) reinicia count, warnings y warningCount pero no alreadyExported, y el bloque nuevo se pinta con count !== 0, que también es cierto cuando count es null. Caso concreto: cliente A, T1, 4 ya exportadas → 'Otras 4 facturas de este periodo ya se exportaron antes y no se repiten'. Se cambia al cliente B y la petición falla (sesión caducada: /api/export responde 401 con cuerpo de texto plano 'Unauthorized', así que 
+  ARREGLO: Añadir setAlreadyExported(0) en el catch (junto a los otros reset) y condicionar el bloque a count != null && count > 0 en vez de count !== 0.
+
+- [baja] Plural forzado en el mensaje de periodo ya exportado cuando solo hay una factura
+  src/app/dashboard/admin/export/ExportForm.tsx
+  CASO: Periodo con una sola factura validada y ya exportada: count 0, alreadyExported 1 → 'Todas las facturas de este periodo (1) ya se exportaron antes. Solo vuelven a salir si las corriges en la revisión.' El otro texto nuevo del mismo bloque (línea 279) sí distingue singular, así que la incoherencia salta a la vista en el caso más frecuente de un cliente pequeño.
+  ARREGLO: Rama singular: 'La única factura de este periodo ya se exportó antes. Solo vuelve a salir si la corriges en la revisión.'
+
+- [baja] El COUNT nuevo se serializa detrás del findMany pesado del preview
+  src/app/api/export/route.ts
+  CASO: El preview se relanza en cada cambio de filtro (cliente, mes, trimestre, año, tipo: useEffect sobre fetchCount). Ese findMany ya trae todas las facturas del periodo con client y vatLines incluidos, y ahora encima se espera un segundo await para el count. Con 200 facturas por trimestre cada clic del asesor paga dos viajes a la BD en serie donde uno bastaba en paralelo. (No hay input de texto en esta pantalla, así que no hay COUNT por tecleo.)
+  ARREGLO: const [previewInvoices, alreadyExported] = await Promise.all([prisma.invoice.findMany(...), prisma.invoice.count({ where: { ...where, exportBatchId: { not: null } } })]); el override del spread está bien, mantiene client.advisoryFirmId y solo sustituye exportBatchId.
+
+- [baja] Respuestas de preview fuera de orden: la tarjeta puede mostrar el recuento de otro filtro
+  src/app/dashboard/admin/export/ExportForm.tsx
+  CASO: fetchCount no tiene AbortController ni guarda de secuencia. Con el tipo 'Todas' seleccionado (200 facturas, preview lento) se pulsa 'Emitidas' (2 facturas, preview rápido): la respuesta de Emitidas llega primero y después la de Todas la sobreescribe. La pantalla queda con Tipo = Emitidas, 'Facturas exportables: 200', el badge del botón en 200 y el texto de alreadyExported del otro filtro; al descargar solo bajan 2 facturas. Con el count añadido e
+  ARREGLO: Guardar un id de petición incrementado en cada llamada (o un AbortController en el cleanup del useEffect) y descartar la respuesta si ya no es la última antes de hacer los setState.
+
+===== REFUTADOS (1) =====
+
+- [?] En una factura legacy con status EXPORTED, desmarcar exportBatchId la deja fuera del export para siempre
+  src/app/dashboard/worker/review/[id]/actions.ts
+  RAZON: El mecanismo del codigo es correcto tal como se describe (EXPORTED no esta en draftStatuses de actions.ts:425, el bloque de reexport no toca el status, el where del export exige status "VALIDATED", y no hay guard de stat

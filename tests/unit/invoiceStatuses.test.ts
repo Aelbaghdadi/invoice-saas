@@ -66,25 +66,31 @@ describe("status lists", () => {
 describe("isBatchRejectable", () => {
   it("includes invoices still pending work, OCR errors among them", () => {
     for (const status of ["PENDING_REVIEW", "NEEDS_ATTENTION", "OCR_ERROR", "ANALYZED"] as const) {
-      expect(isBatchRejectable({ status, exportBatchId: null })).toBe(true);
+      expect(isBatchRejectable({ status, exportBatchItems: [] })).toBe(true);
     }
   });
 
   it("includes validated invoices that were never exported", () => {
-    expect(isBatchRejectable({ status: "VALIDATED", exportBatchId: null })).toBe(true);
+    expect(isBatchRejectable({ status: "VALIDATED", exportBatchItems: [] })).toBe(true);
   });
 
   it("excludes validated invoices already exported (status stays VALIDATED)", () => {
-    expect(isBatchRejectable({ status: "VALIDATED", exportBatchId: "batch_1" })).toBe(false);
+    expect(isBatchRejectable({ status: "VALIDATED", exportBatchItems: [{ id: "item_1" }] })).toBe(false);
   });
 
   it("excludes any invoice with an export batch, whatever its status", () => {
-    expect(isBatchRejectable({ status: "PENDING_REVIEW", exportBatchId: "batch_1" })).toBe(false);
+    expect(isBatchRejectable({ status: "PENDING_REVIEW", exportBatchItems: [{ id: "item_1" }] })).toBe(false);
+  });
+
+  it("una factura exportada y luego corregida sigue sin poder rechazarse", () => {
+    // Al corregirla, exportBatchId se pone a null para que vuelva a la cola
+    // de exportacion, pero su asiento ya esta en A3.
+    expect(isBatchRejectable({ status: "VALIDATED", exportBatchItems: [{ id: "item_1" }] })).toBe(false);
   });
 
   it("excludes every status in BATCH_REJECT_EXCLUDED_STATUSES", () => {
     for (const status of BATCH_REJECT_EXCLUDED_STATUSES) {
-      expect(isBatchRejectable({ status, exportBatchId: null })).toBe(false);
+      expect(isBatchRejectable({ status, exportBatchItems: [] })).toBe(false);
     }
   });
 

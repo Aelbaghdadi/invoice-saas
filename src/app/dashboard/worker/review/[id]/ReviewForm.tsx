@@ -147,9 +147,11 @@ type SerializedInvoice = Omit<
 
 type Props = {
   invoice: SerializedInvoice;
-  /** Fecha del Excel en el que salio esta factura, o null si aun no se ha
-   *  exportado. Corregir una ya exportada obliga a volver a exportarla. */
+  /** Fecha del ultimo Excel en el que salio esta factura, o null si nunca se
+   *  ha exportado. Corregir una ya exportada obliga a volver a exportarla. */
   exportedAt?: string | null;
+  /** Salio en un Excel y se corrigio despues: A3 tiene el dato viejo. */
+  pendingReexport?: boolean;
   /** Lineas de IVA iniciales (de InvoiceVatLine, o sintetizada desde los
    *  campos planos de la factura para datos legacy). Vacio si nunca se
    *  procesaron datos. El recargo de equivalencia va por linea: null =
@@ -268,7 +270,7 @@ function fmtDate(d: Date | null | undefined) {
   return new Date(d).toISOString().slice(0, 10);
 }
 
-export function ReviewForm({ invoice, exportedAt = null, initialVatLines, prevId, nextId, position, batchTotal, backHref, extraction, issues, suggestedAccount, accountMatchedByName, accountNameMismatch = false, thirdPartyGoodsType = null, canRememberGoodsType = false, boundingBoxes, queueSuffix = "", bucket = "all", sessionContext, avgOcrDurationMs, genericAccounts }: Props) {
+export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false, initialVatLines, prevId, nextId, position, batchTotal, backHref, extraction, issues, suggestedAccount, accountMatchedByName, accountNameMismatch = false, thirdPartyGoodsType = null, canRememberGoodsType = false, boundingBoxes, queueSuffix = "", bucket = "all", sessionContext, avgOcrDurationMs, genericAccounts }: Props) {
   const { success, error } = useToast();
   const isImage = invoice.fileType.startsWith("image/");
   const isPdf   = invoice.fileType === "application/pdf";
@@ -1136,11 +1138,14 @@ export function ReviewForm({ invoice, exportedAt = null, initialVatLines, prevId
                 <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
                 <div className="flex-1 text-[12px]">
                   <p className="font-medium">
-                    Ya exportada el {new Date(exportedAt).toLocaleDateString("es-ES")}
+                    {pendingReexport
+                      ? `Exportada el ${new Date(exportedAt).toLocaleDateString("es-ES")} y corregida después`
+                      : `Ya exportada el ${new Date(exportedAt).toLocaleDateString("es-ES")}`}
                   </p>
                   <p className="mt-0.5">
-                    Si corriges algo que va al Excel, la factura vuelve a entrar en la próxima exportación.
-                    En A3 tendrás que corregir el asiento o borrarlo antes de volver a importarla.
+                    {pendingReexport
+                      ? "A3 tiene todavía los datos anteriores: vuelve a exportarla para que le lleguen las correcciones, y allí corrige el asiento o bórralo antes de importarla otra vez."
+                      : "Si corriges algo que va al Excel, la factura vuelve a entrar en la próxima exportación. En A3 tendrás que corregir el asiento o borrarlo antes de volver a importarla."}
                   </p>
                 </div>
               </div>

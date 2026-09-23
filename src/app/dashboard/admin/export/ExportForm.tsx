@@ -96,13 +96,42 @@ export function ExportForm({ clients }: Props) {
     const sp = new URLSearchParams({
       clientId, periodType, month: String(effectiveMonth), year: String(year), type, format,
     });
-    // Trigger file download
-    const a = document.createElement("a");
-    a.href = `/api/export?${sp}`;
-    a.click();
-    setSuccess(true);
-    // Refresh count (they'll now be EXPORTED)
-    setTimeout(() => { fetchCount(); setSuccess(false); }, 2500);
+    // Se descarga con fetch y NO con un <a href>: al exportar, el servidor
+    // marca las facturas como exportadas, y con el enlace a secas un fallo
+    // (500, sesion caducada, 404 por filtros) se anunciaba igual como exito.
+    // El gestor se quedaba sin fichero y sin poder volver a sacar esas
+    // facturas, porque ya constaban exportadas.
+    setError(null);
+    setSuccess(false);
+    try {
+      const res = await fetch(`/api/export?${sp}`);
+      if (!res.ok) {
+        let msg = "No se ha podido generar el Excel. Vuelve a intentarlo.";
+        try {
+          const data = await res.json();
+          if (data?.error) msg = String(data.error);
+        } catch { /* la respuesta no era JSON: se queda el mensaje generico */ }
+        setError(msg);
+        fetchCount();
+        return;
+      }
+      const blob = await res.blob();
+      // Nombre del fichero que propone el servidor (Content-Disposition).
+      const disposition = res.headers.get("Content-Disposition") ?? "";
+      const match = disposition.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = match ? decodeURIComponent(match[1]) : "export.xlsx";
+      a.click();
+      URL.revokeObjectURL(url);
+      setSuccess(true);
+      // Las descargadas ya constan exportadas: se refresca el recuento.
+      setTimeout(() => { fetchCount(); setSuccess(false); }, 2500);
+    } catch {
+      setError("Error de conexión al generar el Excel. Comprueba si se ha descargado antes de repetirlo.");
+      fetchCount();
+    }
   };
 
   const selectedClient = clients.find((c) => c.id === clientId);

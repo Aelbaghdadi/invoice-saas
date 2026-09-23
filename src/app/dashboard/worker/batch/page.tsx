@@ -99,6 +99,9 @@ export default async function WorkerBatchPage({
     include: {
       client: { select: { id: true, name: true, cif: true } },
       issues: { where: { status: "OPEN" }, select: { id: true } },
+      // Si salio alguna vez en un Excel: es lo que decide "exportada" y lo
+      // que "Rechazar lote" no puede tocar.
+      exportBatchItems: { take: 1, select: { id: true } },
     },
     orderBy: [{ periodYear: "desc" }, { periodMonth: "desc" }, { createdAt: "asc" }],
   });
@@ -141,10 +144,12 @@ export default async function WorkerBatchPage({
     const hasOpenIssue = inv.issues.length > 0;
 
     // Clasificacion en buckets. Prioridad: terminal > atencion > clean > processing.
-    // Exportar no cambia el estado (queda VALIDATED + exportBatchId), asi que
-    // "exportada" se mira por exportBatchId; el estado EXPORTED es legacy.
-    // Antes este contador era siempre 0 y "rechazar lote" incluia las exportadas.
-    const isExported = inv.status === "EXPORTED" || (inv.status === "VALIDATED" && inv.exportBatchId != null);
+    // Exportar no cambia el estado, asi que "exportada" se mira por el
+    // historial de exportaciones; el estado EXPORTED es legacy. Se mira el
+    // historial y no exportBatchId porque al corregir una factura exportada
+    // ese puntero se pone a null (vuelve a la cola) y seguiria estando en A3.
+    const isExported = inv.status === "EXPORTED"
+      || (inv.status === "VALIDATED" && inv.exportBatchItems.length > 0);
     if (isExported) g.exported++;
     else if (inv.status === "VALIDATED") g.validated++;
     else if (inv.status === "REJECTED") g.rejected++;
