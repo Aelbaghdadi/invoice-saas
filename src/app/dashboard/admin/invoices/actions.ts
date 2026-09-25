@@ -54,7 +54,9 @@ export async function reprocessAllOcrErrors() {
     userId,
     field: "status",
     oldValue: inv.status,
-    newValue: "UPLOADED (reprocess masivo)",
+    // Mismo valor que el reproceso de una sola factura: es el que la
+    // auditoria sabe traducir ("Subida (reprocesar)").
+    newValue: "UPLOADED (reprocess)",
   }));
 
   for (const inv of invoices) {

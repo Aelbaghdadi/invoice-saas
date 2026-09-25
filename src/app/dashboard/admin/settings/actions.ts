@@ -43,6 +43,8 @@ export async function updateFirm(_prev: ActionState, fd: FormData): Promise<Acti
     return { error: "Ese CIF ya está registrado." };
   }
 
+  // El nombre de la asesoria sale en la barra lateral (layout).
+  revalidatePath("/dashboard", "layout");
   return { success: true };
 }
 
@@ -162,5 +164,7 @@ export async function updateProfile(_prev: ActionState, fd: FormData): Promise<A
     return { error: "Ese email ya está en uso." };
   }
 
+  // Nombre y email salen en la barra lateral (layout).
+  revalidatePath("/dashboard", "layout");
   return { success: true };
 }

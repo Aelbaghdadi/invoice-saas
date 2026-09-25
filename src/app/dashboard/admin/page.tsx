@@ -12,25 +12,10 @@ import {
   Edit3,
 } from "lucide-react";
 import Link from "next/link";
-import { PENDING_WORK, completionPercent, formatAuditValue, STATUS_LABELS } from "@/lib/invoiceStatuses";
+import { PENDING_WORK, completionPercent, formatAuditValue } from "@/lib/invoiceStatuses";
 import { formatDateEs } from "@/lib/dates";
-import { Badge } from "@/components/ui/Badge";
-
-/* Estado → variante del Badge global; las labels salen de STATUS_LABELS
-   (una sola fuente de verdad para el sistema de estados). */
-const STATUS_VARIANT: Record<string, React.ComponentProps<typeof Badge>["variant"]> = {
-  UPLOADED: "blue",
-  ANALYZING: "yellow",
-  ANALYZED: "yellow",
-  OCR_ERROR: "red",
-  VALIDATED: "green",
-  REJECTED: "red",
-  EXPORTED: "slate",
-  PENDING_REVIEW: "blue",
-  NEEDS_ATTENTION: "yellow",
-  SPLIT_SOURCE: "slate",
-  PENDING_ROUTING: "orange",
-};
+import { periodLabel } from "@/lib/period";
+import { InvoiceStatusBadge } from "@/components/ui/InvoiceStatusBadge";
 
 function initials(name: string) {
   return name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase();
@@ -79,14 +64,17 @@ export default async function AdminDashboard() {
   ] = await Promise.all([
     prisma.invoice.count({ where: { client: { advisoryFirmId: firmId, isUnclassifiedBucket: false } } }),
     prisma.invoice.count({ where: { status: { in: PENDING_WORK }, client: { advisoryFirmId: firmId, isUnclassifiedBucket: false } } }),
-    prisma.invoice.count({ where: { status: "VALIDATED", client: { advisoryFirmId: firmId, isUnclassifiedBucket: false } } }),
+    // Exportar no cambia el estado: sin exportBatchId: null, las ya exportadas
+    // salian a la vez en "Validadas" y en "Exportadas". Las corregidas despues
+    // de exportar lo tienen a null y si estan listas para volver a exportarse.
+    prisma.invoice.count({ where: { status: "VALIDATED", exportBatchId: null, client: { advisoryFirmId: firmId, isUnclassifiedBucket: false } } }),
     prisma.invoice.count({ where: { exportBatchId: { not: null }, client: { advisoryFirmId: firmId, isUnclassifiedBucket: false } } }),
     prisma.client.count({ where: { advisoryFirmId: firmId, isUnclassifiedBucket: false } }),
     prisma.invoice.findMany({
       where: { client: { advisoryFirmId: firmId, isUnclassifiedBucket: false } },
       take: 5,
       orderBy: { createdAt: "desc" },
-      include: { client: true },
+      include: { client: true, exportBatchItems: { take: 1, select: { id: true } } },
     }),
     prisma.auditLog.findMany({
       where: { invoice: { client: { advisoryFirmId: firmId, isUnclassifiedBucket: false } } },
@@ -106,31 +94,32 @@ export default async function AdminDashboard() {
   // ── Stat cards (all from DB) ──────────────────────────────────────────
   // Chips de icono unificados en navy: un solo color de marca, sin arcoíris
   // de admin template. El punto de color del subtexto conserva la semántica.
+  // Locale explicito: en el contenedor no hay LANG y 1234 salia "1,234".
   const stats = [
     {
       label: "Total facturas",
-      value: (totalInvoices as number).toLocaleString(),
+      value: (totalInvoices as number).toLocaleString("es-ES"),
       sub: `${totalClients} cliente${(totalClients as number) !== 1 ? "s" : ""}`,
       subDotColor: "bg-blue-400",
       icon: Upload,
     },
     {
       label: "Pendientes de validar",
-      value: (pendingCount as number).toLocaleString(),
-      sub: "subidas + en análisis",
+      value: (pendingCount as number).toLocaleString("es-ES"),
+      sub: "por revisar, con incidencias o en OCR",
       subDotColor: "bg-amber-400",
       icon: ClipboardCheck,
     },
     {
       label: "Validadas",
-      value: (validatedCount as number).toLocaleString(),
+      value: (validatedCount as number).toLocaleString("es-ES"),
       sub: "listas para exportar",
       subDotColor: "bg-emerald-400",
       icon: CheckCircle2,
     },
     {
       label: "Exportadas",
-      value: (exportedCount as number).toLocaleString(),
+      value: (exportedCount as number).toLocaleString("es-ES"),
       sub: "enviadas a contabilidad",
       subDotColor: "bg-accent-500",
       icon: FileOutput,
@@ -213,10 +202,14 @@ export default async function AdminDashboard() {
         <table className="w-full">
           <thead>
             <tr className="border-b border-slate-100 bg-slate-50/80">
-              {["Cliente", "Archivo", "Período", "Estado", "Fecha", ""].map((h) => (
+              {/* Periodo y Subida el se ocultan igual que sus celdas: si no,
+                  por debajo de 2xl las cabeceras quedaban descuadradas. */}
+              {["Cliente", "Factura", "Periodo", "Estado", "Subida el", ""].map((h) => (
                 <th
                   key={h}
-                  className="px-6 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500"
+                  className={`px-6 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500 ${
+                    h === "Periodo" || h === "Subida el" ? "hidden 2xl:table-cell" : ""
+                  }`}
                 >
                   {h}
                 </th>
@@ -232,6 +225,8 @@ export default async function AdminDashboard() {
               </tr>
             ) : (
               (recentInvoices as any[]).map((inv) => {
+                const exported = (inv.exportBatchItems?.length ?? 0) > 0;
+                const counterpart: string | null = inv.type === "SALE" ? inv.receiverName : inv.issuerName;
                 return (
                   <tr key={inv.id} className="hover:bg-slate-50/80">
                     <td className="px-6 py-3.5">
@@ -244,16 +239,27 @@ export default async function AdminDashboard() {
                         </span>
                       </div>
                     </td>
-                    <td className="px-6 py-3.5 text-[13px] text-slate-600 max-w-[140px] truncate">
-                      {inv.filename}
+                    {/* El nombre del fichero no identifica nada ("factura1.pdf"):
+                        el numero y el tercero son lo que el gestor ve en A3. */}
+                    <td className="px-6 py-3.5">
+                      <p className="max-w-[180px] truncate text-[13px] font-semibold text-slate-800" title={inv.filename}>
+                        {inv.invoiceNumber ?? inv.filename}
+                      </p>
+                      {(counterpart || inv.invoiceNumber) && (
+                        <p className="max-w-[180px] truncate text-[11px] text-slate-400" title={counterpart ?? inv.filename}>
+                          {counterpart ?? inv.filename}
+                        </p>
+                      )}
                     </td>
                     <td className="hidden 2xl:table-cell px-6 py-3.5 text-[13px] text-slate-600">
-                      {new Date(0, inv.periodMonth - 1).toLocaleString("es", { month: "long" })} {inv.periodYear}
+                      {periodLabel(inv.periodType, inv.periodMonth, inv.periodYear)}
                     </td>
                     <td className="px-6 py-3.5">
-                      <Badge variant={STATUS_VARIANT[inv.status] ?? "slate"}>
-                        {STATUS_LABELS[inv.status as keyof typeof STATUS_LABELS] ?? inv.status}
-                      </Badge>
+                      <InvoiceStatusBadge
+                        status={inv.status}
+                        exported={exported}
+                        pendingReexport={exported && inv.exportBatchId == null}
+                      />
                     </td>
                     <td className="hidden 2xl:table-cell px-6 py-3.5 text-[13px] text-slate-500">
                       {formatDateEs(inv.createdAt)}
@@ -313,7 +319,9 @@ export default async function AdminDashboard() {
                           {" "}cambió{" "}
                           <span className="font-semibold text-slate-600">{FIELD_LABELS[log.field] ?? log.field}</span>
                           {" "}en{" "}
-                          <span className="font-medium">{log.invoice.filename}</span>
+                          <span className="font-medium" title={log.invoice.filename}>
+                            {log.invoice.invoiceNumber ?? log.invoice.filename}
+                          </span>
                         </p>
                         <span className="flex-shrink-0 text-[11px] text-slate-400">
                           {timeAgo(log.createdAt)}

@@ -9,6 +9,9 @@ import { validateUploadedFile, canonicalMime } from "@/lib/fileValidation";
 import { assertUploadClientAccess, assertUploadPeriodOpen } from "@/lib/uploadAccess";
 import { getOrCreateUnclassifiedClient } from "@/lib/unclassifiedClient";
 import { putObject, sanitizeFilenameForStorage, isStorageConfigured } from "@/lib/storage";
+import { formatDateEs } from "@/lib/dates";
+import { periodLabel } from "@/lib/period";
+import { STATUS_LABELS } from "@/lib/invoiceStatuses";
 import type { InvoiceType, PeriodType } from "@prisma/client";
 
 /**
@@ -29,8 +32,11 @@ const VALID_PERIOD_TYPES = new Set(["MONTHLY", "QUARTERLY"]);
 
 export async function POST(req: Request) {
   const session = await auth();
-  if (!session?.user || !["ADMIN", "WORKER", "CLIENT"].includes(session.user.role)) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!session?.user) {
+    return NextResponse.json({ error: appError("ERR-AUTH-001") }, { status: 401 });
+  }
+  if (!["ADMIN", "WORKER", "CLIENT"].includes(session.user.role)) {
+    return NextResponse.json({ error: appError("ERR-AUTH-002", `rol ${session.user.role}`) }, { status: 403 });
   }
   if (!isStorageConfigured()) {
     return NextResponse.json({ error: appError("ERR-UPLOAD-003", "Almacenamiento no configurado") }, { status: 500 });
@@ -123,9 +129,28 @@ export async function POST(req: Request) {
   if (!routingMode) {
     const existing = await prisma.invoice.findFirst({
       where: { clientId: effectiveClientId, fileHash, status: { not: "REJECTED" } },
-      select: { filename: true },
+      select: {
+        filename: true,
+        invoiceNumber: true,
+        createdAt: true,
+        periodType: true,
+        periodMonth: true,
+        periodYear: true,
+        status: true,
+      },
     });
-    if (existing) return NextResponse.json({ duplicate: true, of: existing.filename });
+    if (existing) {
+      // Los formularios de subida lo pintan tal cual tras "duplicado de". Solo
+      // con el nombre del fichero, al subir el mismo PDF se repetia su propio
+      // nombre y no se sabia cuando se subio ni como esta.
+      const of = [
+        existing.invoiceNumber ? `factura ${existing.invoiceNumber}` : existing.filename,
+        `subida el ${formatDateEs(existing.createdAt)}`,
+        periodLabel(existing.periodType, existing.periodMonth, existing.periodYear),
+        STATUS_LABELS[existing.status],
+      ].join(" · ");
+      return NextResponse.json({ duplicate: true, of });
+    }
   }
 
   // Subir a Garage. La key la construye el SERVIDOR (sin confiar en el cliente).
@@ -199,6 +224,7 @@ export async function POST(req: Request) {
             count: 1,
             periodMonth,
             periodYear,
+            periodType: periodType as PeriodType,
           });
         }
       } catch (err) {

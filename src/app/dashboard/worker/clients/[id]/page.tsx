@@ -7,18 +7,8 @@ import { ChevronLeft, Mail, Building2, FileText, Users } from "lucide-react";
 import Link from "next/link";
 import { PENDING_WORK } from "@/lib/invoiceStatuses";
 import { canAccessClient } from "@/lib/accessibleClients";
-
-const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
-  UPLOADED:        { label: "Subida",          variant: "blue" },
-  ANALYZING:       { label: "En análisis",     variant: "yellow" },
-  ANALYZED:        { label: "Analizada",       variant: "yellow" },
-  OCR_ERROR:       { label: "Error OCR",       variant: "red" },
-  VALIDATED:       { label: "Validada",        variant: "green" },
-  REJECTED:        { label: "Rechazada",       variant: "red" },
-  EXPORTED:        { label: "Exportada",       variant: "slate" },
-  PENDING_REVIEW:  { label: "Pte. revisión",   variant: "blue" },
-  NEEDS_ATTENTION: { label: "Con incidencias", variant: "yellow" },
-};
+import { periodLabel } from "@/lib/period";
+import { InvoiceStatusBadge } from "@/components/ui/InvoiceStatusBadge";
 
 export default async function WorkerClientDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const session = await auth();
@@ -33,20 +23,27 @@ export default async function WorkerClientDetailPage({ params }: { params: Promi
   const client = await prisma.client.findUnique({
     where: { id },
     include: {
-      invoices: { orderBy: { createdAt: "desc" }, take: 10 },
+      invoices: {
+        orderBy: { createdAt: "desc" },
+        take: 10,
+        include: { exportBatchItems: { take: 1, select: { id: true } } },
+      },
       assignedWorkers: { include: { worker: true } },
     },
   });
   if (!client) notFound();
 
+  // Las tarjetas se contaban sobre las 10 de la tabla: un cliente con 800
+  // facturas salia con "Total facturas 10".
+  const [totalInvoices, pendingInvoices] = await Promise.all([
+    prisma.invoice.count({ where: { clientId: id } }),
+    prisma.invoice.count({ where: { clientId: id, status: { in: PENDING_WORK } } }),
+  ]);
+
   const stats = [
-    { label: "Total facturas", value: client.invoices.length, icon: FileText },
+    { label: "Total facturas", value: totalInvoices.toLocaleString("es-ES"), icon: FileText },
     { label: "Gestores asignados", value: client.assignedWorkers.length, icon: Users },
-    {
-      label: "Pendientes",
-      value: client.invoices.filter((i) => PENDING_WORK.includes(i.status)).length,
-      icon: Building2,
-    },
+    { label: "Pendientes", value: pendingInvoices.toLocaleString("es-ES"), icon: Building2 },
   ];
 
   return (
@@ -70,7 +67,7 @@ export default async function WorkerClientDetailPage({ params }: { params: Promi
                 <Icon className="h-4 w-4" />
                 <span className="text-[12px] font-medium uppercase tracking-wide">{s.label}</span>
               </div>
-              <p className="mt-2 text-2xl font-bold text-slate-900">{s.value}</p>
+              <p className="mt-2 text-2xl font-bold tabular-nums text-slate-900">{s.value}</p>
             </div>
           );
         })}
@@ -109,7 +106,7 @@ export default async function WorkerClientDetailPage({ params }: { params: Promi
 
         <div className="col-span-2 rounded-xl border border-slate-200 bg-white shadow-sm">
           <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
-            <h2 className="text-[14px] font-semibold text-slate-800">Facturas recientes</h2>
+            <h2 className="text-[14px] font-semibold text-slate-800">Últimas facturas</h2>
             <Link
               href={`/dashboard/worker/invoices?clientId=${client.id}`}
               className="text-[12px] font-medium text-blue-600 hover:text-blue-700"
@@ -126,7 +123,7 @@ export default async function WorkerClientDetailPage({ params }: { params: Promi
             <table className="w-full">
               <thead>
                 <tr className="border-b border-slate-100">
-                  {["Archivo", "Período", "Tipo", "Estado", ""].map((h) => (
+                  {["Factura", "Periodo", "Tipo", "Estado", ""].map((h) => (
                     <th
                       key={h}
                       className="px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500"
@@ -138,20 +135,27 @@ export default async function WorkerClientDetailPage({ params }: { params: Promi
               </thead>
               <tbody className="divide-y divide-slate-50">
                 {client.invoices.map((inv) => {
-                  const s = STATUS_BADGE[inv.status] ?? STATUS_BADGE.UPLOADED;
+                  const exported = inv.exportBatchItems.length > 0;
+                  const counterpart = inv.type === "SALE" ? inv.receiverName : inv.issuerName;
                   return (
                     <tr key={inv.id} className="hover:bg-slate-50/60">
                       <td className="px-5 py-3">
                         <div className="flex items-center gap-2">
-                          <FileText className="h-4 w-4 text-slate-300" />
-                          <span className="text-[13px] text-slate-700 truncate max-w-[160px]">
-                            {inv.filename}
-                          </span>
+                          <FileText className="h-4 w-4 flex-shrink-0 text-slate-300" />
+                          <div className="min-w-0">
+                            <p className="max-w-[200px] truncate text-[13px] font-semibold text-slate-800" title={inv.filename}>
+                              {inv.invoiceNumber ?? inv.filename}
+                            </p>
+                            {(counterpart || inv.invoiceNumber) && (
+                              <p className="max-w-[200px] truncate text-[11px] text-slate-400" title={counterpart ?? inv.filename}>
+                                {counterpart ?? inv.filename}
+                              </p>
+                            )}
+                          </div>
                         </div>
                       </td>
                       <td className="px-5 py-3 text-[13px] text-slate-500">
-                        {new Date(0, inv.periodMonth - 1).toLocaleString("es", { month: "short" })}{" "}
-                        {inv.periodYear}
+                        {periodLabel(inv.periodType, inv.periodMonth, inv.periodYear)}
                       </td>
                       <td className="px-5 py-3">
                         <Badge variant={inv.type === "PURCHASE" ? "blue" : "purple"}>
@@ -159,7 +163,11 @@ export default async function WorkerClientDetailPage({ params }: { params: Promi
                         </Badge>
                       </td>
                       <td className="px-5 py-3">
-                        <Badge variant={s.variant}>{s.label}</Badge>
+                        <InvoiceStatusBadge
+                          status={inv.status}
+                          exported={exported}
+                          pendingReexport={exported && inv.exportBatchId == null}
+                        />
                       </td>
                       <td className="px-5 py-3">
                         <Link

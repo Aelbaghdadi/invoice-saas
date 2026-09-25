@@ -2,6 +2,19 @@ import Link from "next/link";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import type { PageWindow } from "@/lib/listing";
 
+// Singular de los nombres que ya pasan los listados como texto, para no
+// poner "de 1 registros" sin tener que cambiar cada llamada.
+const SINGULAR: Record<string, string> = {
+  facturas: "factura",
+  registros: "registro",
+  exportaciones: "exportación",
+  cierres: "cierre",
+  periodos: "periodo",
+  incidencias: "incidencia",
+  clientes: "cliente",
+  cuentas: "cuenta",
+};
+
 /**
  * Pie de un listado paginado: "Mostrando 26–50 de 212" y los enlaces de
  * pagina. Son enlaces normales (la pagina va en la URL), asi que funciona sin
@@ -10,15 +23,18 @@ import type { PageWindow } from "@/lib/listing";
 export function Pagination({
   window,
   hrefFor,
-  noun = "facturas",
+  noun = ["factura", "facturas"],
 }: {
   window: PageWindow;
   /** URL de una pagina concreta, conservando los filtros actuales. */
   hrefFor: (page: number) => string;
-  noun?: string;
+  /** Plural ("facturas") o [singular, plural] (["factura", "facturas"]). */
+  noun?: string | readonly [string, string];
 }) {
   const { page, totalPages, from, to, total } = window;
   if (total === 0) return null;
+
+  const [singular, plural] = typeof noun === "string" ? [SINGULAR[noun] ?? noun, noun] : noun;
 
   // Pocas paginas alrededor de la actual; las demas se saltan con "…".
   const pages: (number | "…")[] = [];
@@ -32,8 +48,17 @@ export function Pagination({
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-5 py-3">
       <p className="text-[12px] text-slate-500 tabular-nums">
-        Mostrando <span className="font-semibold text-slate-700">{from}–{to}</span> de{" "}
-        <span className="font-semibold text-slate-700">{total}</span> {noun}
+        {total === 1 ? (
+          <>
+            <span className="font-semibold text-slate-700">1</span> {singular}
+          </>
+        ) : (
+          <>
+            Mostrando{" "}
+            <span className="font-semibold text-slate-700">{from === to ? from : `${from}–${to}`}</span> de{" "}
+            <span className="font-semibold text-slate-700">{total}</span> {plural}
+          </>
+        )}
       </p>
       {totalPages > 1 && (
         <nav className="flex items-center gap-1" aria-label="Paginación">

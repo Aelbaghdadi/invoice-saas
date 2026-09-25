@@ -13,13 +13,15 @@ export default async function WorkerClientsPage() {
 
   // ADMIN ve todos los clientes de su firma; WORKER solo los asignados.
   // Empaquetamos como `{ client }` para no cambiar el render.
+  // Solo recuentos: traer las facturas de cada cliente para contarlas eran
+  // decenas de miles de filas en cada carga.
   const assignments = session.user.role === "ADMIN"
     ? await prisma.client
         .findMany({
           where: session.user.advisoryFirmId
             ? { advisoryFirmId: session.user.advisoryFirmId, isUnclassifiedBucket: false }
             : { id: { in: [] } },
-          include: { invoices: { orderBy: { createdAt: "desc" } } },
+          include: { _count: { select: { invoices: true } } },
           orderBy: { name: "asc" },
         })
         .then((cs) => cs.map((client) => ({ client })))
@@ -29,11 +31,24 @@ export default async function WorkerClientsPage() {
           where: { workerId: session.user.id },
           include: {
             client: {
-              include: { invoices: { orderBy: { createdAt: "desc" } } },
+              include: { _count: { select: { invoices: true } } },
             },
           },
+          orderBy: { client: { name: "asc" } },
         })
         .catch(() => []);
+
+  const clientIds = assignments.map(({ client }) => client.id);
+  const pendingRows = clientIds.length === 0
+    ? []
+    : await prisma.invoice
+        .groupBy({
+          by: ["clientId"],
+          where: { clientId: { in: clientIds }, status: { in: PENDING_WORK } },
+          _count: true,
+        })
+        .catch(() => []);
+  const pendingByClient = new Map(pendingRows.map((row) => [row.clientId, row._count]));
 
   return (
     <div>
@@ -60,7 +75,7 @@ export default async function WorkerClientsPage() {
                 {["Cliente", "CIF", "Facturas", "Pendientes", "Acciones"].map((h) => (
                   <th
                     key={h}
-                    className="px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500"
+                    className={`px-5 py-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500 ${h === "Facturas" ? "text-right" : "text-left"}`}
                   >
                     {h}
                   </th>
@@ -69,9 +84,7 @@ export default async function WorkerClientsPage() {
             </thead>
             <tbody className="divide-y divide-slate-50">
               {assignments.map(({ client }) => {
-                const pending = client.invoices.filter((i) =>
-                  PENDING_WORK.includes(i.status)
-                ).length;
+                const pending = pendingByClient.get(client.id) ?? 0;
                 return (
                   <tr key={client.id} className="hover:bg-slate-50/60">
                     <td className="px-5 py-3">
@@ -90,8 +103,8 @@ export default async function WorkerClientsPage() {
                     <td className="px-5 py-3 font-mono text-[12px] text-slate-500">
                       {client.cif}
                     </td>
-                    <td className="px-5 py-3 text-[13px] text-slate-600">
-                      {client.invoices.length}
+                    <td className="px-5 py-3 text-right text-[13px] tabular-nums text-slate-600">
+                      {client._count.invoices.toLocaleString("es-ES")}
                     </td>
                     <td className="px-5 py-3">
                       {pending > 0 ? (

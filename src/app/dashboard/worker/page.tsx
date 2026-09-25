@@ -5,7 +5,11 @@ import {
   Layers, PenLine,
 } from "lucide-react";
 import Link from "next/link";
-import { PENDING_WORK } from "@/lib/invoiceStatuses";
+import type { PeriodType } from "@prisma/client";
+import { DONE_WORK, PENDING_WORK, PERIOD_BLOCKING_STATUSES } from "@/lib/invoiceStatuses";
+import { periodLabel } from "@/lib/period";
+import { QUEUE_ORDER } from "@/lib/reviewQueue";
+import { reviewHref } from "@/lib/reviewNavigation";
 
 /**
  * Mesa de trabajo del gestor.
@@ -22,6 +26,7 @@ import { PENDING_WORK } from "@/lib/invoiceStatuses";
 type BatchRow = {
   clientId: string;
   clientName: string;
+  periodType: PeriodType;
   periodMonth: number;
   periodYear: number;
   type: "PURCHASE" | "SALE";
@@ -32,6 +37,32 @@ type BatchRow = {
   firstAttentionId: string | null;
   firstCleanId: string | null;
 };
+
+function madridParts(d: Date): Record<string, string> {
+  return Object.fromEntries(
+    new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Europe/Madrid",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      hourCycle: "h23",
+    })
+      .formatToParts(d)
+      .map((p) => [p.type, p.value]),
+  );
+}
+
+/** Las 00:00 de hoy en Madrid. Madrid va a UTC+1 o UTC+2, asi que su
+ *  medianoche cae a las 22:00 o a las 23:00 UTC del dia anterior: se prueba
+ *  la de verano y, si alli no son las 00, es la de invierno. Con el dia en
+ *  UTC, de 00:00 a 02:00 se contaba el dia anterior. */
+function startOfTodayInMadrid(now = new Date()): Date {
+  const today = madridParts(now);
+  const utcMidnight = Date.UTC(Number(today.year), Number(today.month) - 1, Number(today.day));
+  const summer = new Date(utcMidnight - 2 * 3600_000);
+  return madridParts(summer).hour === "00" ? summer : new Date(utcMidnight - 3600_000);
+}
 
 export default async function WorkerDashboard() {
   const session = await auth();
@@ -49,24 +80,32 @@ export default async function WorkerDashboard() {
   // Cargamos de una vez las facturas relevantes + issues abiertas.
   const invoices = clientIds.length
     ? await prisma.invoice.findMany({
-        where: { clientId: { in: clientIds } },
+        // El buzon "Sin clasificar" no es un cliente: si el gestor lo tiene
+        // asignado, saldria como periodo listo para cerrar.
+        where: { clientId: { in: clientIds }, client: { isUnclassifiedBucket: false } },
         include: {
           client: { select: { id: true, name: true } },
           issues: { where: { status: "OPEN" }, select: { id: true } },
         },
-        orderBy: [{ periodYear: "desc" }, { periodMonth: "desc" }, { createdAt: "asc" }],
+        // Dentro de cada lote, el orden de la cola: la primera que se abre
+        // es la 1 de la revision, no una pospuesta.
+        orderBy: [{ periodYear: "desc" }, { periodMonth: "desc" }, ...QUEUE_ORDER],
       })
     : [];
 
   // Agrupar por lote (cliente + periodo + tipo) para tarjetas accionables.
   const batchMap = new Map<string, BatchRow>();
   for (const inv of invoices) {
-    const key = `${inv.clientId}-${inv.periodYear}-${inv.periodMonth}-${inv.type}`;
+    // La original de una division no es una factura mas (sus hijas ya
+    // cuentan): dejaba el lote en "4/5" y el periodo pendiente para siempre.
+    if (inv.status === "SPLIT_SOURCE") continue;
+    const key = `${inv.clientId}-${inv.periodYear}-${inv.periodMonth}-${inv.periodType}-${inv.type}`;
     let b = batchMap.get(key);
     if (!b) {
       b = {
         clientId: inv.clientId,
         clientName: inv.client.name,
+        periodType: inv.periodType,
         periodMonth: inv.periodMonth,
         periodYear: inv.periodYear,
         type: inv.type as "PURCHASE" | "SALE",
@@ -81,7 +120,7 @@ export default async function WorkerDashboard() {
     }
     b.total++;
     const hasIssue = inv.issues.length > 0;
-    if (["VALIDATED", "REJECTED", "EXPORTED"].includes(inv.status)) {
+    if (DONE_WORK.includes(inv.status)) {
       b.done++;
     } else if (["NEEDS_ATTENTION", "OCR_ERROR"].includes(inv.status)) {
       b.attentionCount++;
@@ -100,24 +139,38 @@ export default async function WorkerDashboard() {
   const batches = Array.from(batchMap.values());
 
   // KPIs de cabecera.
-  const todayStr = new Date().toISOString().slice(0, 10);
   const attentionTotal = batches.reduce((a, b) => a + b.attentionCount, 0);
   const cleanTotal = batches.reduce((a, b) => a + b.cleanCount, 0);
-  const validatedToday = invoices.filter(
-    (i) => i.status === "VALIDATED" && i.updatedAt.toISOString().slice(0, 10) === todayStr,
-  ).length;
+  // Del historial de estados y no de updatedAt: exportar tambien toca
+  // updatedAt, y el dia que el admin exportaba salian cientos "validadas hoy".
+  const validatedToday = clientIds.length
+    ? (
+        await prisma.invoiceStatusHistory.findMany({
+          where: {
+            toStatus: "VALIDATED",
+            changedBy: session.user.id,
+            createdAt: { gte: startOfTodayInMadrid() },
+            invoice: { clientId: { in: clientIds } },
+          },
+          distinct: ["invoiceId"],
+          select: { invoiceId: true },
+        })
+      ).length
+    : 0;
   const pendingTotal = invoices.filter((i) => PENDING_WORK.includes(i.status)).length;
 
   // Cierres: periodos listos para cerrar (todo done y no cerrados).
   const pendingByPeriod = new Map<string, number>();
-  const totalByPeriod = new Map<string, { clientId: string; clientName: string; month: number; year: number; done: number; total: number }>();
+  const totalByPeriod = new Map<string, { clientId: string; clientName: string; periodType: PeriodType; month: number; year: number; done: number; total: number }>();
   for (const inv of invoices) {
+    if (inv.status === "SPLIT_SOURCE") continue;
     const key = `${inv.clientId}-${inv.periodYear}-${inv.periodMonth}`;
     let acc = totalByPeriod.get(key);
     if (!acc) {
       acc = {
         clientId: inv.clientId,
         clientName: inv.client.name,
+        periodType: inv.periodType,
         month: inv.periodMonth,
         year: inv.periodYear,
         done: 0,
@@ -125,8 +178,12 @@ export default async function WorkerDashboard() {
       };
       totalByPeriod.set(key, acc);
     }
+    // El cierre va por cliente + mes + año: si en ese mes conviven lotes
+    // mensuales y trimestrales, se nombra por el mes.
+    if (acc.periodType !== inv.periodType) acc.periodType = "MONTHLY";
     acc.total++;
-    const pending = !["VALIDATED", "REJECTED", "EXPORTED"].includes(inv.status);
+    // Mismo criterio que la accion de cerrar periodo y la pantalla de lotes.
+    const pending = PERIOD_BLOCKING_STATUSES.includes(inv.status);
     if (!pending) acc.done++;
     if (pending) pendingByPeriod.set(key, (pendingByPeriod.get(key) ?? 0) + 1);
   }
@@ -158,12 +215,9 @@ export default async function WorkerDashboard() {
   const attentionBatches = batches.filter((b) => b.attentionCount > 0).slice(0, 4);
   const cleanBatches = batches.filter((b) => b.cleanCount > 0 && b.attentionCount === 0).slice(0, 4);
 
-  const monthName = (m: number) =>
-    new Date(2000, m - 1).toLocaleString("es-ES", { month: "long" });
-
   const stats = [
     {
-      label: "Requieren accion",
+      label: "Con incidencias",
       value: attentionTotal,
       icon: AlertTriangle,
       color: "text-amber-600",
@@ -184,7 +238,7 @@ export default async function WorkerDashboard() {
       bg: "bg-slate-50",
     },
     {
-      label: "Validadas hoy",
+      label: "Validadas hoy por ti",
       value: validatedToday,
       icon: CheckCircle2,
       color: "text-green-600",
@@ -241,10 +295,9 @@ export default async function WorkerDashboard() {
           <div className="grid grid-cols-2 gap-3">
             {attentionBatches.map((b) => (
               <BatchCard
-                key={`att-${b.clientId}-${b.periodYear}-${b.periodMonth}-${b.type}`}
+                key={`att-${b.clientId}-${b.periodYear}-${b.periodMonth}-${b.periodType}-${b.type}`}
                 row={b}
                 kind="attention"
-                monthName={monthName}
               />
             ))}
           </div>
@@ -257,7 +310,7 @@ export default async function WorkerDashboard() {
           <div className="mb-3 flex items-center justify-between">
             <h2 className="flex items-center gap-2 text-[14px] font-semibold text-slate-800">
               <Zap className="h-4 w-4 text-blue-600" />
-              Trabajo rapido: validaciones listas
+              Trabajo rápido: validaciones listas
             </h2>
             <Link
               href="/dashboard/worker/invoices?bucket=clean"
@@ -269,10 +322,9 @@ export default async function WorkerDashboard() {
           <div className="grid grid-cols-2 gap-3">
             {cleanBatches.map((b) => (
               <BatchCard
-                key={`cle-${b.clientId}-${b.periodYear}-${b.periodMonth}-${b.type}`}
+                key={`cle-${b.clientId}-${b.periodYear}-${b.periodMonth}-${b.periodType}-${b.type}`}
                 row={b}
                 kind="clean"
-                monthName={monthName}
               />
             ))}
           </div>
@@ -287,8 +339,10 @@ export default async function WorkerDashboard() {
               <Lock className="h-4 w-4 text-emerald-600" />
               Periodos listos para cerrar
             </h2>
+            {/* Lotes abre por defecto en "Pendientes", que esconde justo
+                los completos: sin el estado, el periodo no aparecia. */}
             <Link
-              href="/dashboard/worker/batch"
+              href="/dashboard/worker/batch?estado=por_cerrar"
               className="flex items-center gap-1 text-[12px] font-medium text-blue-600 hover:text-blue-700"
             >
               Ir a lotes <ArrowRight className="h-3.5 w-3.5" />
@@ -304,15 +358,15 @@ export default async function WorkerDashboard() {
                   <div className="text-[13px]">
                     <span className="font-medium text-slate-800">{r.clientName}</span>
                     <span className="ml-2 text-slate-500">
-                      <span className="capitalize">{monthName(r.month)}</span> {r.year}
+                      {periodLabel(r.periodType, r.month, r.year)}
                     </span>
                   </div>
                   <Link
-                    href="/dashboard/worker/batch"
+                    href={`/dashboard/worker/batch?clientId=${r.clientId}&year=${r.year}&month=${r.month}&estado=por_cerrar`}
                     className="inline-flex items-center gap-1 rounded-lg bg-white px-2.5 py-1 text-[11px] font-medium text-emerald-700 hover:bg-emerald-50 border border-emerald-200"
                   >
                     <Lock className="h-3 w-3" />
-                    Cerrar
+                    Ir a cerrar
                   </Link>
                 </li>
               ))}
@@ -327,7 +381,7 @@ export default async function WorkerDashboard() {
         readyToClose.length === 0 && (
           <div className="mt-6 rounded-xl border border-slate-200 bg-white p-10 text-center shadow-sm">
             <CheckCircle2 className="mx-auto mb-3 h-10 w-10 text-green-400" />
-            <p className="text-[14px] font-semibold text-slate-700">Todo al dia</p>
+            <p className="text-[14px] font-semibold text-slate-700">Todo al día</p>
             <p className="mt-1 text-[13px] text-slate-500">
               No hay facturas pendientes ni incidencias. Vuelve cuando lleguen subidas nuevas.
             </p>
@@ -348,11 +402,9 @@ export default async function WorkerDashboard() {
 function BatchCard({
   row,
   kind,
-  monthName,
 }: {
   row: BatchRow;
   kind: "attention" | "clean";
-  monthName: (m: number) => string;
 }) {
   const count = kind === "attention" ? row.attentionCount : row.cleanCount;
   const firstId = kind === "attention" ? row.firstAttentionId : row.firstCleanId;
@@ -373,8 +425,8 @@ function BatchCard({
           <p className="text-[13px] font-semibold text-slate-800 truncate">
             {row.clientName}
           </p>
-          <p className="text-[11px] text-slate-500 capitalize">
-            {monthName(row.periodMonth)} {row.periodYear}
+          <p className="text-[11px] text-slate-500">
+            {periodLabel(row.periodType, row.periodMonth, row.periodYear)}
             {" · "}
             {row.type === "PURCHASE" ? "Recibidas" : "Emitidas"}
           </p>
@@ -385,7 +437,7 @@ function BatchCard({
       </div>
       {firstId && (
         <Link
-          href={`/dashboard/worker/review/${firstId}?bucket=${kind}`}
+          href={reviewHref(firstId, { bucket: kind, back: "/dashboard/worker" })}
           prefetch
           className={`mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-[12px] font-semibold ${btnClass}`}
         >

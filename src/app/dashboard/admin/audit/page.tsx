@@ -5,7 +5,8 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ClipboardList, ArrowRight } from "lucide-react";
 import { AuditFilters } from "./AuditFilters";
-import { formatAuditValue } from "@/lib/invoiceStatuses";
+import { auditFieldLabel, formatAuditValue } from "@/lib/invoiceStatuses";
+import { formatDateTimeEs } from "@/lib/dates";
 import { Pagination } from "@/components/ui/Pagination";
 import { parsePage, pageWindow } from "@/lib/listing";
 import Link from "next/link";
@@ -13,16 +14,6 @@ import Link from "next/link";
 /** Registros por pagina. Mas que en facturas: son filas cortas y se leen en
  *  secuencia. */
 const AUDIT_PAGE_SIZE = 50;
-
-const FIELD_LABELS: Record<string, string> = {
-  status: "Estado", issuerName: "Emisor", issuerCif: "CIF emisor",
-  receiverName: "Receptor", receiverCif: "CIF receptor",
-  invoiceNumber: "Nº factura", invoiceDate: "Fecha",
-  taxBase: "Base imponible", vatRate: "% IVA", vatAmount: "Cuota IVA",
-  irpfRate: "% IRPF", irpfAmount: "Cuota IRPF", totalAmount: "Total",
-  export: "Exportación", duplicate_warning: "Duplicado",
-  reexport: "Pdte. de reexportar", equivalenceSurcharge: "Recargo equiv.",
-};
 
 function initials(name: string) {
   return name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase();
@@ -114,7 +105,10 @@ export default async function AuditLogPage({ searchParams }: Props) {
     }).catch(() => []),
   ]);
 
-  const fields = distinctFields.map((d) => d.field);
+  // Por nombre legible, que es lo que se lee en el desplegable.
+  const fieldOptions = distinctFields
+    .map((d) => ({ value: d.field, label: auditFieldLabel(d.field) }))
+    .sort((a, b) => a.label.localeCompare(b.label, "es"));
 
   return (
     <div>
@@ -123,7 +117,7 @@ export default async function AuditLogPage({ searchParams }: Props) {
         description="Historial completo de cambios realizados en las facturas"
       />
 
-      <AuditFilters users={allUsers} fields={fields} />
+      <AuditFilters users={allUsers} fields={fieldOptions} />
 
       <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
         {logs.length === 0 ? (
@@ -151,9 +145,10 @@ export default async function AuditLogPage({ searchParams }: Props) {
                 {logs.map((log) => (
                   <tr key={log.id} className="hover:bg-slate-50/60 transition-colors">
                     <td className="px-5 py-3 text-[12px] text-slate-500 whitespace-nowrap">
-                      {log.createdAt.toLocaleDateString("es-ES", { day: "2-digit", month: "short", year: "numeric" })}
+                      {/* Hora de Madrid, no la del servidor (UTC). */}
+                      {formatDateTimeEs(log.createdAt).split(" ")[0]}
                       {" "}
-                      <span className="text-slate-400">{log.createdAt.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}</span>
+                      <span className="text-slate-400">{formatDateTimeEs(log.createdAt).split(" ")[1]}</span>
                     </td>
                     <td className="px-5 py-3">
                       <div className="flex items-center gap-2">
@@ -177,7 +172,7 @@ export default async function AuditLogPage({ searchParams }: Props) {
                     <td className="px-5 py-3 text-[13px] text-slate-500">{log.invoice.client.name}</td>
                     <td className="px-5 py-3">
                       <span className="rounded-lg bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
-                        {FIELD_LABELS[log.field] ?? log.field}
+                        {auditFieldLabel(log.field)}
                       </span>
                     </td>
                     <td className="px-5 py-3">

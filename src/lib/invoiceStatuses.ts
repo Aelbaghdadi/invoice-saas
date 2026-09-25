@@ -15,6 +15,7 @@
  */
 
 import type { InvoiceStatus } from "@prisma/client";
+import { OPERATION_TYPE_LABEL, INTRACOM_GOODS_TYPE_LABEL } from "@/lib/validators";
 
 /** Pte. de que el gestor haga algo (revisar, re-procesar o subir). */
 export const PENDING_WORK: InvoiceStatus[] = [
@@ -65,7 +66,9 @@ export const STATUS_LABELS: Record<InvoiceStatus, string> = {
   ANALYZING:        "En análisis",
   ANALYZED:         "Analizada",       // legacy
   OCR_ERROR:        "Error OCR",
-  PENDING_REVIEW:   "Pte. revisión",
+  // "Pte." no es la abreviatura de pendiente, y "Pdte." en otras pantallas.
+  // Sin abreviar es igual de corto y no hay duda.
+  PENDING_REVIEW:   "Por revisar",
   NEEDS_ATTENTION:  "Con incidencias",
   VALIDATED:        "Validada",
   REJECTED:         "Rechazada",
@@ -76,6 +79,60 @@ export const STATUS_LABELS: Record<InvoiceStatus, string> = {
   // contadores normales hasta que se asigna a su cliente real.
   PENDING_ROUTING:  "Por clasificar",
 };
+
+/** Color del distintivo de cada estado. Estaba copiado en cada pantalla, y
+ *  un estado que faltaba en una copia salia como "Subida". */
+export const STATUS_BADGE_VARIANT: Record<InvoiceStatus, "blue" | "yellow" | "green" | "slate" | "red" | "purple" | "orange"> = {
+  UPLOADED:        "blue",
+  ANALYZING:       "yellow",
+  ANALYZED:        "yellow",
+  OCR_ERROR:       "red",
+  PENDING_REVIEW:  "blue",
+  NEEDS_ATTENTION: "yellow",
+  VALIDATED:       "green",
+  REJECTED:        "red",
+  EXPORTED:        "slate",
+  SPLIT_SOURCE:    "purple",
+  PENDING_ROUTING: "orange",
+};
+
+/**
+ * Nombre de cada campo de la auditoria tal como lo ve el gestor. Habia tres
+ * copias que no coincidian (pantalla de auditoria, su filtro y la actividad
+ * reciente del panel) y a ninguna le constaban campos que si se auditan, asi
+ * que salian en crudo: "operationType", "isRectificative"...
+ */
+export const AUDIT_FIELD_LABELS: Record<string, string> = {
+  status: "Estado",
+  type: "Tipo (emitida/recibida)",
+  issuerName: "Emisor",
+  issuerCif: "CIF emisor",
+  receiverName: "Receptor",
+  receiverCif: "CIF receptor",
+  invoiceNumber: "Nº factura",
+  invoiceDate: "Fecha",
+  taxBase: "Base imponible",
+  vatRate: "% IVA",
+  vatAmount: "Cuota IVA",
+  irpfRate: "% IRPF",
+  irpfAmount: "Cuota IRPF",
+  totalAmount: "Total",
+  currency: "Moneda",
+  operationType: "Tipo de operación",
+  intracomGoodsType: "Bienes o servicios",
+  isRectificative: "Rectificativa",
+  rectifiedInvoiceNumber: "Factura rectificada",
+  rectificativeType: "Tipo de rectificación",
+  equivalenceSurcharge: "Recargo de equivalencia",
+  export: "Exportación",
+  reexport: "Por reexportar",
+  duplicate_warning: "Posible duplicado",
+};
+
+/** Nombre legible de un campo de la auditoria (el propio nombre si no se conoce). */
+export function auditFieldLabel(field: string): string {
+  return AUDIT_FIELD_LABELS[field] ?? field;
+}
 
 /** Tipo de operación (emitida/recibida) para la UI. */
 export const OPERATION_LABELS: Record<string, string> = {
@@ -92,14 +149,24 @@ export const OPERATION_LABELS: Record<string, string> = {
  */
 export function formatAuditValue(value: string | null | undefined): string {
   if (value == null || value === "") return "—";
-  const reproc = value.match(/^(.+?)\s*\(reprocess\)$/i);
+  // "(reprocess masivo)" es como lo escribia el reproceso en bloque: la
+  // auditoria es inmutable y esas filas se siguen viendo.
+  const reproc = value.match(/^(.+?)\s*\(reprocess(?: masivo)?\)$/i);
   if (reproc) {
     const base = reproc[1];
     const label =
       STATUS_LABELS[base as InvoiceStatus] ?? OPERATION_LABELS[base] ?? base;
     return `${label} (reprocesar)`;
   }
-  return STATUS_LABELS[value as InvoiceStatus] ?? OPERATION_LABELS[value] ?? value;
+  if (value === "true") return "Sí";
+  if (value === "false") return "No";
+  return (
+    STATUS_LABELS[value as InvoiceStatus]
+    ?? OPERATION_LABELS[value]
+    ?? OPERATION_TYPE_LABEL[value as keyof typeof OPERATION_TYPE_LABEL]
+    ?? INTRACOM_GOODS_TYPE_LABEL[value as keyof typeof INTRACOM_GOODS_TYPE_LABEL]
+    ?? value
+  );
 }
 
 /** Estados que impiden cerrar un periodo: facturas aun sin procesar del todo.

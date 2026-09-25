@@ -1,10 +1,14 @@
 import { prisma } from "@/lib/prisma";
 import { ResetPasswordForm } from "./ResetPasswordForm";
-import { Receipt, AlertTriangle } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
+import Image from "next/image";
 import Link from "next/link";
+import { BRAND } from "@/lib/brand";
 
+// Aqui llega tambien el cliente nuevo desde el correo de invitacion, que no
+// restablece nada: los textos hablan de "nueva contraseña".
 export const metadata = {
-  title: "Restablecer contraseña — Faktury",
+  title: `Nueva contraseña — ${BRAND}`,
 };
 
 interface ResetPasswordPageProps {
@@ -21,14 +25,14 @@ export default async function ResetPasswordPage({
   let errorMessage = "";
 
   if (!token) {
-    errorMessage = "No se proporcionó ningún token de restablecimiento.";
+    errorMessage = "El enlace está incompleto.";
   } else {
     const resetToken = await prisma.passwordResetToken.findUnique({
       where: { token },
     });
 
     if (!resetToken) {
-      errorMessage = "El enlace de restablecimiento no es válido.";
+      errorMessage = "El enlace no es válido.";
     } else if (resetToken.expiresAt < new Date()) {
       errorMessage = "El enlace ha expirado.";
     } else {
@@ -39,15 +43,17 @@ export default async function ResetPasswordPage({
   return (
     <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
       <div className="w-full max-w-sm">
-        {/* Logo */}
-        <div className="mb-8 flex items-center justify-center gap-2.5">
-          <Link href="/login" className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600">
-              <Receipt className="h-4 w-4 text-white" />
-            </div>
-            <span className="text-[15px] font-semibold text-slate-900">
-              Faktury
-            </span>
+        <div className="mb-8 flex items-center justify-center">
+          {/* El mismo logo que el login. */}
+          <Link href="/login">
+            <Image
+              src="/brand/faktury-logo.svg"
+              alt={BRAND}
+              width={192}
+              height={64}
+              priority
+              className="h-16 w-auto"
+            />
           </Link>
         </div>
 
@@ -78,7 +84,7 @@ export default async function ResetPasswordPage({
               </div>
               <p className="mt-4 text-sm text-slate-500">{errorMessage}</p>
               <p className="mt-1 text-sm text-slate-500">
-                Solicita un nuevo enlace de restablecimiento.
+                Solicita un nuevo enlace para establecer tu contraseña.
               </p>
               <div className="mt-6 space-y-3">
                 <Link

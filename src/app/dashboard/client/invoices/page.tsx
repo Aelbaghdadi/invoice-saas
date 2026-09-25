@@ -4,24 +4,22 @@ import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Badge } from "@/components/ui/Badge";
+import { Pagination } from "@/components/ui/Pagination";
 import { FileText, Upload } from "lucide-react";
 import Link from "next/link";
 import { ReuploadButton } from "./ReuploadButton";
 import { formatDateEs } from "@/lib/dates";
+import { periodLabel } from "@/lib/period";
+import { pageWindow, parsePage } from "@/lib/listing";
+import { CLIENT_STATUS_BADGE } from "../clientStatus";
 
-const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
-  UPLOADED:  { label: "Subida",       variant: "blue" },
-  ANALYZING: { label: "En análisis",  variant: "yellow" },
-  ANALYZED:  { label: "Analizada",    variant: "yellow" },
-  OCR_ERROR: { label: "Error OCR",    variant: "red" },
-  VALIDATED: { label: "Validada",     variant: "green" },
-  REJECTED:  { label: "Rechazada",    variant: "red" },
-  EXPORTED:        { label: "Exportada",      variant: "slate" },
-  PENDING_REVIEW:  { label: "Pte. revisión",  variant: "blue" },
-  NEEDS_ATTENTION: { label: "Con incidencias", variant: "yellow" },
-};
+const BASE_PATH = "/dashboard/client/invoices";
 
-export default async function ClientInvoicesPage() {
+export default async function ClientInvoicesPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ page?: string }>;
+}) {
   const session = await auth();
   if (!session?.user) redirect("/login");
 
@@ -31,23 +29,32 @@ export default async function ClientInvoicesPage() {
   if (session.user.role !== "CLIENT") redirect("/login");
 
   const client = await prisma.client
-    .findUnique({
-      where: { userId: session.user.id },
-      include: {
-        invoices: { orderBy: { createdAt: "desc" } },
-      },
-    })
+    .findUnique({ where: { userId: session.user.id }, select: { id: true } })
     .catch(() => null);
 
   if (!client) redirect("/dashboard/client");
 
-  const invoices = client.invoices;
+  const params = await searchParams;
+
+  // Paginado en BD: un cliente que sube 50-100 facturas al mes pasa de mil
+  // filas en un año, y antes venian todas de golpe.
+  const where = { clientId: client.id };
+  const total = await prisma.invoice.count({ where }).catch(() => 0);
+  const window = pageWindow(parsePage(params.page), total);
+  const invoices = await prisma.invoice
+    .findMany({
+      where,
+      orderBy: [{ createdAt: "desc" }, { id: "asc" }],
+      skip: window.skip,
+      take: window.take,
+    })
+    .catch(() => []);
 
   return (
     <div>
       <PageHeader
         title="Mis Facturas"
-        description={`${invoices.length} factura${invoices.length !== 1 ? "s" : ""} en total`}
+        description={`${total} factura${total !== 1 ? "s" : ""} en total`}
         action={
           <Link
             href="/dashboard/client/upload"
@@ -79,7 +86,8 @@ export default async function ClientInvoicesPage() {
           <table className="w-full">
             <thead>
               <tr className="border-b border-slate-100">
-                {["Archivo", "Período", "Tipo", "Estado", "Fecha"].map((h) => (
+                {/* "Subida el" y no "Fecha": es cuando se subio, no la fecha de la factura. */}
+                {["Factura", "Periodo", "Tipo", "Estado", "Subida el"].map((h) => (
                   <th
                     key={h}
                     className="px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500"
@@ -91,11 +99,7 @@ export default async function ClientInvoicesPage() {
             </thead>
             <tbody className="divide-y divide-slate-50">
               {invoices.map((inv) => {
-                const s = STATUS_BADGE[inv.status] ?? STATUS_BADGE.UPLOADED;
-                const monthName = new Date(0, inv.periodMonth - 1).toLocaleString(
-                  "es",
-                  { month: "long" }
-                );
+                const s = CLIENT_STATUS_BADGE[inv.status];
                 return (
                   <tr key={inv.id} className="hover:bg-slate-50/60">
                     <td className="px-5 py-3">
@@ -104,9 +108,19 @@ export default async function ClientInvoicesPage() {
                           <FileText className="h-3.5 w-3.5 text-slate-400" />
                         </div>
                         <div className="min-w-0">
-                          <span className="block max-w-[200px] truncate text-[13px] font-medium text-slate-700">
-                            {inv.filename}
+                          <span
+                            className="block max-w-[200px] truncate text-[13px] font-medium text-slate-700"
+                            title={inv.filename}
+                          >
+                            {inv.invoiceNumber ?? inv.filename}
                           </span>
+                          {/* Con numero, el nombre del archivo sigue a la vista:
+                              es lo que el cliente reconoce de lo que subio. */}
+                          {inv.invoiceNumber && (
+                            <span className="block max-w-[200px] truncate text-[11px] text-slate-400">
+                              {inv.filename}
+                            </span>
+                          )}
                           {inv.status === "REJECTED" && inv.rejectionReason && (
                             <p className="text-[11px] text-red-500 mt-0.5">{inv.rejectionReason}</p>
                           )}
@@ -116,8 +130,8 @@ export default async function ClientInvoicesPage() {
                         </div>
                       </div>
                     </td>
-                    <td className="px-5 py-3 text-[13px] capitalize text-slate-500">
-                      {monthName} {inv.periodYear}
+                    <td className="px-5 py-3 text-[13px] text-slate-500 whitespace-nowrap">
+                      {periodLabel(inv.periodType, inv.periodMonth, inv.periodYear)}
                     </td>
                     <td className="px-5 py-3">
                       <Badge variant={inv.type === "PURCHASE" ? "blue" : "purple"}>
@@ -136,6 +150,11 @@ export default async function ClientInvoicesPage() {
             </tbody>
           </table>
         )}
+        <Pagination
+          window={window}
+          noun="facturas"
+          hrefFor={(p) => (p > 1 ? `${BASE_PATH}?page=${p}` : BASE_PATH)}
+        />
       </div>
     </div>
   );

@@ -57,8 +57,8 @@ export function OcrProcessingBanner({ startedAt, avgDurationMs = 10000 }: Props)
           </p>
           <p className="text-[11px] text-blue-700/80 mt-0.5">
             {overTime
-              ? `${elapsedSec}s transcurridos — está tardando más de lo habitual, la cola puede estar saturada.`
-              : `${elapsedSec}s transcurridos · ~${remainingSec}s restantes (media de la firma: ${avgSec}s)`
+              ? `${elapsedSec} s transcurridos — está tardando más de lo habitual, la cola puede estar saturada.`
+              : `${elapsedSec} s transcurridos · ~${remainingSec} s restantes · suele tardar unos ${avgSec} s`
             }
           </p>
         </div>

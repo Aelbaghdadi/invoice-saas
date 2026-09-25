@@ -12,6 +12,7 @@ import {
   Maximize2,
   Loader2,
   RotateCw,
+  ExternalLink,
 } from "lucide-react";
 import type { BoundingBox } from "@/lib/boundingBoxes";
 
@@ -116,6 +117,9 @@ type Props = {
   activeBox?: BoundingBox | null;
   onTextSelect?: (text: string) => void;
   copyTargetLabel?: string;
+  /** Enlace "Abrir en pestaña" en la barra. Se quita donde la pantalla ya
+   *  tiene el suyo, para no enseñarlo dos veces. */
+  showOpenInTab?: boolean;
 };
 
 export default function PdfViewer({
@@ -125,6 +129,7 @@ export default function PdfViewer({
   activeBox,
   onTextSelect,
   copyTargetLabel,
+  showOpenInTab = true,
 }: Props) {
   const [numPages, setNumPages] = useState<number>(0);
   const [page, setPage]         = useState(1);
@@ -215,7 +220,7 @@ export default function PdfViewer({
 
   const zoomIn  = () => setZoom((z) => ZOOM_STEPS[ZOOM_STEPS.findIndex((s) => s >= z) + 1] ?? z);
   const zoomOut = () => setZoom((z) => ZOOM_STEPS[ZOOM_STEPS.findIndex((s) => s >= z) - 1] ?? z);
-  const reset   = () => setZoom(DEFAULT_ZOOM);
+  const reset   = () => { setZoom(DEFAULT_ZOOM); setRotation(0); };
   const rotate  = () => setRotation((r) => (r + 90) % 360);
 
   return (
@@ -224,27 +229,20 @@ export default function PdfViewer({
       <div className="flex flex-shrink-0 items-center justify-between border-b border-white/10 bg-[#16161f] px-4 py-2">
         <div className="flex items-center gap-2">
           <button
+            type="button"
             onClick={() => setPage((p) => Math.max(1, p - 1))}
             disabled={page <= 1}
+            title="Página anterior"
+            aria-label="Página anterior"
             className="flex h-7 w-7 items-center justify-center rounded-lg text-white/60 transition hover:bg-white/10 hover:text-white disabled:opacity-30"
           >
             <ChevronLeft className="h-4 w-4" />
           </button>
 
           {numPages > 1 ? (
-            <div className="flex items-center gap-2">
-              <input
-                type="range"
-                min={1}
-                max={numPages}
-                value={page}
-                onChange={(e) => setPage(Number(e.target.value))}
-                className="w-24 accent-blue-500"
-              />
-              <span className="min-w-[52px] text-center text-[12px] text-white/60">
-                {page} / {numPages}
-              </span>
-            </div>
+            <span className="min-w-[52px] text-center text-[12px] tabular-nums text-white/60">
+              {page} / {numPages}
+            </span>
           ) : (
             <span className="text-[12px] text-white/40">
               {loading ? "—" : `${numPages} pág.`}
@@ -252,8 +250,11 @@ export default function PdfViewer({
           )}
 
           <button
+            type="button"
             onClick={() => setPage((p) => Math.min(numPages, p + 1))}
             disabled={page >= numPages}
+            title="Página siguiente"
+            aria-label="Página siguiente"
             className="flex h-7 w-7 items-center justify-center rounded-lg text-white/60 transition hover:bg-white/10 hover:text-white disabled:opacity-30"
           >
             <ChevronRight className="h-4 w-4" />
@@ -269,27 +270,36 @@ export default function PdfViewer({
 
         <div className="flex items-center gap-1.5">
           <button
+            type="button"
             onClick={zoomOut}
             disabled={zoom <= ZOOM_STEPS[0]}
+            title="Reducir"
+            aria-label="Reducir"
             className="flex h-7 w-7 items-center justify-center rounded-lg text-white/60 transition hover:bg-white/10 hover:text-white disabled:opacity-30"
           >
             <ZoomOut className="h-4 w-4" />
           </button>
           <button
+            type="button"
             onClick={reset}
+            title="Restablecer zoom y rotación"
             className="min-w-[46px] rounded-lg px-2 py-1 text-[12px] font-medium text-white/60 transition hover:bg-white/10 hover:text-white"
           >
             {Math.round(zoom * 100)}%
           </button>
           <button
+            type="button"
             onClick={zoomIn}
             disabled={zoom >= ZOOM_STEPS[ZOOM_STEPS.length - 1]}
+            title="Ampliar"
+            aria-label="Ampliar"
             className="flex h-7 w-7 items-center justify-center rounded-lg text-white/60 transition hover:bg-white/10 hover:text-white disabled:opacity-30"
           >
             <ZoomIn className="h-4 w-4" />
           </button>
           <div className="mx-1 h-4 w-px bg-white/10" />
           <button
+            type="button"
             onClick={rotate}
             title={`Rotar 90° (actual: ${rotation}°)`}
             className="flex h-7 w-7 items-center justify-center rounded-lg text-white/60 transition hover:bg-white/10 hover:text-white"
@@ -297,18 +307,37 @@ export default function PdfViewer({
             <RotateCw className="h-3.5 w-3.5" />
           </button>
           <button
+            type="button"
             onClick={reset}
-            title="Restablecer zoom"
+            title="Restablecer zoom y rotación"
+            aria-label="Restablecer zoom y rotación"
             className="flex h-7 w-7 items-center justify-center rounded-lg text-white/60 transition hover:bg-white/10 hover:text-white"
           >
             <Maximize2 className="h-3.5 w-3.5" />
           </button>
+          {showOpenInTab && (
+            <>
+              <div className="mx-1 h-4 w-px bg-white/10" />
+              <a
+                href={url}
+                target="_blank"
+                rel="noreferrer"
+                title="Abrir en pestaña"
+                aria-label="Abrir en pestaña"
+                className="flex h-7 w-7 items-center justify-center rounded-lg text-white/60 transition hover:bg-white/10 hover:text-white"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+              </a>
+            </>
+          )}
         </div>
       </div>
 
-      {/* PDF canvas */}
+      {/* PDF canvas. justify-center-safe y no justify-center: con la página
+          más ancha que el panel (zoom alto o girada) el centrado normal la
+          sacaba por la izquierda, fuera del alcance del scroll. */}
       <div
-        className="flex flex-1 items-start justify-center overflow-auto p-6"
+        className="flex flex-1 items-start justify-center-safe overflow-auto p-6"
         onMouseUp={() => {
           if (!onTextSelect) return;
           const sel = window.getSelection()?.toString().trim();

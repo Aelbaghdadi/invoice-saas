@@ -66,7 +66,7 @@ export function ConfidenceHint({
     return (
       <span
         className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-amber-600"
-        title="OCR no encontro este campo"
+        title="El OCR no encontró este campo"
       >
         <AlertTriangle className="h-3 w-3" />
         falta
@@ -77,7 +77,7 @@ export function ConfidenceHint({
     return (
       <CheckCircle2
         className="h-3 w-3 text-green-500"
-        aria-label={`OCR seguro: ${Math.round(score * 100)}%`}
+        aria-label={`Confianza OCR: ${Math.round(score * 100)} %`}
       />
     );
   }

@@ -5,13 +5,16 @@ import { createHash } from "crypto";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
-import { revalidatePath } from "next/cache";
+import { revalidatePath, refresh } from "next/cache";
 import { notifyClientInvoiceValidated, notifyClientInvoiceRejected } from "@/lib/email";
 import {
   filterFromInvoice,
   getNextInQueue,
+  parseBackHref,
   parseBucket,
   queueToSearchParams,
+  type QueueBucket,
+  type QueueFilter,
 } from "@/lib/reviewQueue";
 import { appendAuditLogs } from "@/lib/auditLog";
 import { canAccessClient } from "@/lib/accessibleClients";
@@ -431,6 +434,12 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     // Allow validating with warning but don't block
   }
 
+  // Volver a validar una factura ya validada (se vuelve a ella con "<" o desde
+  // el listado para corregirla) es guardar la correccion: el estado no cambia,
+  // asi que ni historial VALIDATED -> VALIDATED ni entrada de estado en la
+  // auditoria. EXPORTED es el estado legacy de "validada y exportada".
+  const alreadyValidated = invoice.status === "VALIDATED" || invoice.status === "EXPORTED";
+
   // When saving without validating, transition to PENDING_REVIEW if coming from initial states
   // ANALYZED es legacy (pre-refactor); si aun existe en BD se acepta como draft.
   const draftStatuses = ["ANALYZED", "NEEDS_ATTENTION", "PENDING_REVIEW", "OCR_ERROR"];
@@ -504,22 +513,26 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
         // aparte y fallara, quedaria la factura corregida pero marcada como
         // exportada, y ya no habria forma de que volviera al Excel.
         ...(nuevoExportBatchId !== undefined ? { exportBatchId: nuevoExportBatchId } : {}),
-        ...(validate ? { status: "VALIDATED" as const } : saveStatus ? { status: saveStatus as "PENDING_REVIEW" } : {}),
+        ...(validate && !alreadyValidated
+          ? { status: "VALIDATED" as const }
+          : saveStatus ? { status: saveStatus as "PENDING_REVIEW" } : {}),
       },
     }),
   ]);
 
   if (validate) {
-    auditEntries.push({ field: "status", oldValue: invoice.status, newValue: "VALIDATED" });
-    // Record status transition
-    await prisma.invoiceStatusHistory.create({
-      data: {
-        invoiceId,
-        fromStatus: invoice.status,
-        toStatus: "VALIDATED",
-        changedBy: userId,
-      },
-    });
+    if (!alreadyValidated) {
+      auditEntries.push({ field: "status", oldValue: invoice.status, newValue: "VALIDATED" });
+      // Record status transition
+      await prisma.invoiceStatusHistory.create({
+        data: {
+          invoiceId,
+          fromStatus: invoice.status,
+          toStatus: "VALIDATED",
+          changedBy: userId,
+        },
+      });
+    }
 
     // Aprender plan de cuentas + operationType para la "otra parte"
     // (la que NO es el cliente). En PURCHASE es el emisor (proveedor),
@@ -654,7 +667,11 @@ export async function saveInvoiceFields(
   const id = formData.get("invoiceId") as string;
   const expectedUpdatedAt = formData.get("updatedAt") as string | null;
   const err = await parseAndSave(id, session.user.id, extractFields(formData), false, expectedUpdatedAt ?? undefined);
-  return err ?? null;
+  if (err) return err;
+  // Sin esto la pagina seguia con el updatedAt de antes de guardar, y el
+  // siguiente Guardar o Validar fallaba con "modificada por otro usuario".
+  refresh();
+  return null;
 }
 
 export async function validateInvoice(
@@ -668,9 +685,28 @@ export async function validateInvoice(
   const id = formData.get("invoiceId") as string;
   const fallbackNext = formData.get("nextId") as string | null;
   const bucket = parseBucket(formData.get("bucket"));
+  const back = parseBackHref(formData.get("back"));
   const expectedUpdatedAt = formData.get("updatedAt") as string | null;
+  // Lote y estado de ANTES de guardar. Si al validar se cambia el tipo
+  // (recibida -> emitida), la factura pasa al otro lote, y la siguiente tiene
+  // que salir del lote en el que estaba trabajando el gestor.
+  const before = await prisma.invoice.findUnique({
+    where: { id },
+    select: { status: true, clientId: true, periodMonth: true, periodYear: true, type: true },
+  }).catch(() => null);
   const err = await parseAndSave(id, session.user.id, extractFields(formData), true, expectedUpdatedAt ?? undefined);
   if (err) return err;
+
+  // Correccion de una factura ya validada: se guarda y el gestor se queda en
+  // ella (vino a corregirla, no a seguir el lote). Al cliente ya se le aviso
+  // la primera vez.
+  if (before && (before.status === "VALIDATED" || before.status === "EXPORTED")) {
+    revalidatePath("/dashboard/worker/invoices");
+    revalidatePath("/dashboard/admin/invoices");
+    revalidatePath("/dashboard/admin/export");
+    refresh();
+    return null;
+  }
 
   // Notify client via email (after response)
   after(async () => {
@@ -694,7 +730,7 @@ export async function validateInvoice(
 
   // Recomputar el siguiente respetando el bucket actual (puede haber
   // cambiado desde que cargo la pagina: otro gestor valido, etc).
-  const nextId = await resolveNextId(id, bucket, fallbackNext);
+  const nextId = await resolveNextId(id, before ? filterFromInvoice(before, bucket) : null, fallbackNext);
   // Invalidar el cache de la siguiente factura: Next.js la habia
   // prefetcheado mientras la actual aun estaba PENDING, asi que el
   // contador X/N quedaria desfasado (p.ej. "2/8" en vez de "2/7").
@@ -702,37 +738,39 @@ export async function validateInvoice(
   revalidatePath("/dashboard/worker/invoices");
   revalidatePath("/dashboard/worker/batch", "layout");
   revalidatePath("/dashboard/admin/batch", "layout");
-  if (nextId) {
-    const suffix = queueToSearchParams({ bucket }).toString();
-    redirect(`/dashboard/worker/review/${nextId}${suffix ? `?${suffix}` : ""}`);
-  }
-  redirect("/dashboard/worker/invoices");
+  goToNext(nextId, bucket, back);
 }
 
 /**
- * Dado un invoiceId recien procesado, devuelve el siguiente id pendiente
- * de la misma cola (mismo cliente + periodo + tipo + bucket). Si algo
- * falla (factura no encontrada, etc) cae en el fallback que venia del
- * formulario.
+ * Siguiente pendiente de la cola (mismo cliente + periodo + tipo + bucket)
+ * despues de la actual, o null si no queda ninguna. El id que manda el
+ * formulario (calculado al abrir la pagina) solo se usa si la consulta
+ * falla: si la consulta dice que no queda ninguna, ese id puede ser una
+ * factura que otro gestor ya ha validado mientras tanto.
  */
 async function resolveNextId(
   currentId: string,
-  bucket: "clean" | "attention" | "all",
+  filter: QueueFilter | null,
   fallback: string | null,
 ): Promise<string | null> {
+  if (!filter) return fallback || null;
   try {
-    const inv = await prisma.invoice.findUnique({
-      where: { id: currentId },
-      select: { clientId: true, periodMonth: true, periodYear: true, type: true },
-    });
-    if (!inv) return fallback || null;
-    const filter = filterFromInvoice(inv, bucket);
-    const next = await getNextInQueue(currentId, filter);
-    return next ?? fallback ?? null;
+    return await getNextInQueue(currentId, filter);
   } catch {
     return fallback || null;
   }
 }
+
+/** A la siguiente pendiente, conservando la cola y el listado de origen; si
+ *  no queda ninguna, de vuelta a ese listado. */
+function goToNext(nextId: string | null, bucket: QueueBucket, back: string | null): never {
+  const suffix = queueToSearchParams({ bucket, back }).toString();
+  if (nextId) redirect(`/dashboard/worker/review/${nextId}${suffix ? `?${suffix}` : ""}`);
+  redirect(back ?? "/dashboard/worker/invoices");
+}
+
+/** Estados en los que una factura esta por revisar (lo unico que se pospone). */
+const POSPONIBLES: string[] = ["PENDING_REVIEW", "NEEDS_ATTENTION", "OCR_ERROR"];
 
 /**
  * "Posponer" una factura: la marca con `deferredAt = now()` (sin
@@ -752,6 +790,7 @@ export async function deferInvoice(
   const id = formData.get("invoiceId") as string;
   const fallbackNext = formData.get("nextId") as string | null;
   const bucket = parseBucket(formData.get("bucket"));
+  const back = parseBackHref(formData.get("back"));
 
   const invoice = await prisma.invoice.findUnique({ where: { id } });
   if (!invoice) return { error: "Factura no encontrada" };
@@ -759,12 +798,18 @@ export async function deferInvoice(
   const accessErr = await assertInvoiceAccess(session, invoice.clientId);
   if (accessErr) return accessErr;
 
+  // Posponer una ya validada la mandaria al final del lote y descolocaria las
+  // flechas, sin ningun sentido: ya no esta en la cola.
+  if (!POSPONIBLES.includes(invoice.status)) {
+    return { error: "Solo se pueden posponer las facturas que están por revisar." };
+  }
+
   await prisma.invoice.update({
     where: { id },
     data: { deferredAt: new Date() },
   });
 
-  const nextId = await resolveNextId(id, bucket, fallbackNext);
+  const nextId = await resolveNextId(id, filterFromInvoice(invoice, bucket), fallbackNext);
   // Posponer no marca la factura como "hecha" — el contador X/N no
   // cambia. Solo invalidamos las listas para que los lotes muestren el
   // nuevo orden.
@@ -772,11 +817,7 @@ export async function deferInvoice(
   revalidatePath("/dashboard/worker/invoices");
   revalidatePath("/dashboard/worker/batch", "layout");
   revalidatePath("/dashboard/admin/batch", "layout");
-  if (nextId) {
-    const suffix = queueToSearchParams({ bucket }).toString();
-    redirect(`/dashboard/worker/review/${nextId}${suffix ? `?${suffix}` : ""}`);
-  }
-  redirect("/dashboard/worker/invoices");
+  goToNext(nextId, bucket, back);
 }
 
 /**
@@ -857,6 +898,7 @@ export async function rejectInvoice(
   const category = formData.get("rejectionCategory") as string | null;
   const fallbackNext = formData.get("nextId") as string | null;
   const bucket = parseBucket(formData.get("bucket"));
+  const back = parseBackHref(formData.get("back"));
 
   if (!reason) {
     return { error: "Debes indicar el motivo del rechazo." };
@@ -867,12 +909,25 @@ export async function rejectInvoice(
     return { error: "Categoría de rechazo no válida." };
   }
 
-  const invoice = await prisma.invoice.findUnique({ where: { id } });
+  const invoice = await prisma.invoice.findUnique({
+    where: { id },
+    include: { exportBatchItems: { take: 1, select: { id: true } } },
+  });
   if (!invoice) return { error: "Factura no encontrada" };
 
   // Workers can only reject invoices of assigned clients
   const accessErr = await assertInvoiceAccess(session, invoice.clientId);
   if (accessErr) return accessErr;
+
+  // Con las flechas se llega a facturas ya terminadas. Una que ya salio en un
+  // Excel esta en la contabilidad de A3: rechazarla aqui no la quita de alli
+  // y al cliente le llegaria un rechazo de algo ya contabilizado.
+  if (invoice.exportBatchItems.length > 0) {
+    return { error: "Esta factura ya se exportó a A3 y no se puede rechazar. Si hay que corregirla, corrígela y vuelve a exportarla." };
+  }
+  if (invoice.status === "REJECTED") {
+    return { error: "Esta factura ya está rechazada." };
+  }
 
   await prisma.invoice.update({
     where: { id },
@@ -922,18 +977,14 @@ export async function rejectInvoice(
     }
   });
 
-  const nextId = await resolveNextId(id, bucket, fallbackNext);
+  const nextId = await resolveNextId(id, filterFromInvoice(invoice, bucket), fallbackNext);
   // Mismo motivo que en validateInvoice: prefetch del siguiente puede
   // tener un contador X/N desfasado tras rechazar la actual.
   if (nextId) revalidatePath(`/dashboard/worker/review/${nextId}`);
   revalidatePath("/dashboard/worker/invoices");
   revalidatePath("/dashboard/worker/batch", "layout");
   revalidatePath("/dashboard/admin/batch", "layout");
-  if (nextId) {
-    const suffix = queueToSearchParams({ bucket }).toString();
-    redirect(`/dashboard/worker/review/${nextId}${suffix ? `?${suffix}` : ""}`);
-  }
-  redirect("/dashboard/worker/invoices");
+  goToNext(nextId, bucket, back);
 }
 
 // ── División multi-ticket ──────────────────────────────────────────────────
@@ -954,6 +1005,7 @@ export async function splitInvoice(
   invoiceId: string,
   tickets: SplitTicket[],
   bucket: string,
+  back?: string | null,
 ): Promise<{ error?: string }> {
   const session = await auth();
   if (!session?.user || !["ADMIN", "WORKER"].includes(session.user.role)) {
@@ -965,12 +1017,18 @@ export async function splitInvoice(
 
   const invoice = await prisma.invoice.findUnique({
     where: { id: invoiceId },
-    include: { client: true },
+    include: { client: true, exportBatchItems: { take: 1, select: { id: true } } },
   });
   if (!invoice) return { error: "Factura no encontrada" };
 
   const accessErr = await assertInvoiceAccess(session, invoice.clientId);
   if (accessErr) return accessErr as { error: string };
+
+  // Ya esta en A3 como una sola factura: dividirla aqui dejaria el asiento
+  // de alli sin su original.
+  if (invoice.exportBatchItems.length > 0) {
+    return { error: "Esta factura ya se exportó a A3 y no se puede dividir." };
+  }
 
   if (!isStorageConfigured()) return { error: "Almacenamiento no configurado" };
   const createdIds: string[] = [];
@@ -1062,18 +1120,13 @@ export async function splitInvoice(
 
   // Calcular el siguiente pendiente en la cola y redirigir
   const parsedBucket = parseBucket(bucket);
-  const filter = filterFromInvoice(invoice, parsedBucket);
-  const nextId = await getNextInQueue(invoiceId, filter);
+  const nextId = await resolveNextId(invoiceId, filterFromInvoice(invoice, parsedBucket), null);
 
   revalidatePath("/dashboard/worker/invoices");
   revalidatePath("/dashboard/worker/batch", "layout");
   revalidatePath("/dashboard/admin/batch", "layout");
 
-  const suffix = queueToSearchParams({ bucket: parsedBucket }).toString();
-  if (nextId) {
-    redirect(`/dashboard/worker/review/${nextId}${suffix ? `?${suffix}` : ""}`);
-  }
-  redirect("/dashboard/worker/invoices");
+  goToNext(nextId, parsedBucket, parseBackHref(back));
 }
 
 // ── División PDF multi-factura ────────────────────────────────────────────────
@@ -1096,6 +1149,7 @@ export async function splitPdfInvoice(
   invoiceId: string,
   parts: PdfSplitPart[],
   bucket: string,
+  back?: string | null,
 ): Promise<{ error?: string }> {
   const session = await auth();
   if (!session?.user || !["ADMIN", "WORKER"].includes(session.user.role)) {
@@ -1107,12 +1161,18 @@ export async function splitPdfInvoice(
 
   const invoice = await prisma.invoice.findUnique({
     where: { id: invoiceId },
-    include: { client: true },
+    include: { client: true, exportBatchItems: { take: 1, select: { id: true } } },
   });
   if (!invoice) return { error: "Factura no encontrada" };
 
   const accessErr = await assertInvoiceAccess(session, invoice.clientId);
   if (accessErr) return accessErr as { error: string };
+
+  // Ya esta en A3 como una sola factura: dividirla aqui dejaria el asiento
+  // de alli sin su original.
+  if (invoice.exportBatchItems.length > 0) {
+    return { error: "Esta factura ya se exportó a A3 y no se puede dividir." };
+  }
 
   if (!isStorageConfigured()) return { error: "Almacenamiento no configurado" };
 
@@ -1228,18 +1288,13 @@ export async function splitPdfInvoice(
   });
 
   const parsedBucket = parseBucket(bucket);
-  const filter = filterFromInvoice(invoice, parsedBucket);
-  const nextId = await getNextInQueue(invoiceId, filter);
+  const nextId = await resolveNextId(invoiceId, filterFromInvoice(invoice, parsedBucket), null);
 
   revalidatePath("/dashboard/worker/invoices");
   revalidatePath("/dashboard/worker/batch", "layout");
   revalidatePath("/dashboard/admin/batch", "layout");
 
-  const suffix = queueToSearchParams({ bucket: parsedBucket }).toString();
-  if (nextId) {
-    redirect(`/dashboard/worker/review/${nextId}${suffix ? `?${suffix}` : ""}`);
-  }
-  redirect("/dashboard/worker/invoices");
+  goToNext(nextId, parsedBucket, parseBackHref(back));
 }
 
 function extractFields(fd: FormData): FieldData {

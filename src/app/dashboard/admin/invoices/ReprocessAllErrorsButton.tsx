@@ -17,7 +17,7 @@ export function ReprocessAllErrorsButton({ count }: { count: number }) {
         setToast({ msg: res.error, type: "err" });
         return;
       }
-      setToast({ msg: `${res.count} factura(s) puestas en cola para reprocesar`, type: "ok" });
+      setToast({ msg: `${res.count} ${res.count === 1 ? "factura puesta" : "facturas puestas"} en cola para reprocesar`, type: "ok" });
       router.refresh();
     });
   }

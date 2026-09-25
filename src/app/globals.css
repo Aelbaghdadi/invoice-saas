@@ -78,21 +78,52 @@ select:focus-visible {
 ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
 
 /* ── Inputs ────────────────────────────────────────────────────────────── */
-.input {
-  border-radius: 0.75rem;
-  border: 1px solid var(--border);
-  background: #fff;
-  padding: 0.5rem 0.875rem;
-  font-size: 0.8125rem;
-  color: #1e293b;
-  outline: none;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+/* Mismos valores que los campos de Ajustes (rounded-lg, border-slate-200,
+   px-3.5 py-2.5, foco accent-500 + ring-2 accent-100) para que ClientForm y
+   WorkerForm casen con el <Select> de al lado. En @layer components para que
+   las utilidades del JSX (disabled:bg-slate-50...) puedan pisarlo. */
+@layer components {
+  .input {
+    border-radius: 0.5rem;
+    border: 1px solid #e2e8f0;
+    background: #fff;
+    padding: 0.625rem 0.875rem;
+    font-size: 0.8125rem;
+    color: #1e293b;
+    outline: none;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  .input:focus {
+    border-color: #22d6d0;
+    box-shadow: 0 0 0 2px #d7f8f6;
+  }
+  .input::placeholder { color: var(--muted); }
 }
-.input:focus {
-  border-color: #14ada8;
-  box-shadow: 0 0 0 3px rgb(34 214 208 / 0.15);
+
+/* Casillas y radios con el navy de la app. Las clases text-blue-600 que
+   llevan son del plugin @tailwindcss/forms, que no esta instalado: se
+   pintaban con el azul del sistema operativo. */
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--color-blue-600, #062A63);
 }
-.input::placeholder { color: var(--muted); }
+input[type="checkbox"]:focus-visible,
+input[type="radio"]:focus-visible {
+  outline: 2px solid rgb(34 214 208 / 0.7);
+  outline-offset: 2px;
+}
+
+/* Importes sin las flechitas del navegador: en la columna estrecha del
+   % IVA tapaban el numero, y nadie sube un importe de 0,01 en 0,01. */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
 
 /* ── Animations ────────────────────────────────────────────────────────── */
 @keyframes fade-in-up {

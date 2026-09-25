@@ -2,6 +2,9 @@ import { prisma } from "@/lib/prisma";
 import type { ExtractedInvoice } from "@/lib/ocr";
 import type { Invoice, IssueType } from "@prisma/client";
 import type { OperationTypeName } from "@/lib/validators";
+import { formatEur } from "@/lib/format";
+import { formatDateEs } from "@/lib/dates";
+import { periodLabel } from "@/lib/period";
 
 type IssueData = {
   type: IssueType;
@@ -10,6 +13,31 @@ type IssueData = {
 };
 
 const CONFIDENCE_THRESHOLD = 0.7;
+
+export const DUPLICATE_SELECT = {
+  invoiceNumber: true,
+  filename: true,
+  createdAt: true,
+  periodType: true,
+  periodMonth: true,
+  periodYear: true,
+} as const;
+
+/** La factura ya registrada en el aviso de duplicado: numero, fecha de subida
+ *  y periodo. Con el nombre del fichero a secas, si se subia el mismo PDF dos
+ *  veces el aviso repetia el nombre del propio fichero y no decia cual era. */
+export function describeExisting(existing: {
+  invoiceNumber: string | null;
+  filename: string;
+  createdAt: Date;
+  periodType: "MONTHLY" | "QUARTERLY";
+  periodMonth: number;
+  periodYear: number;
+}): string {
+  const ref = existing.invoiceNumber ?? `«${existing.filename}»`;
+  const period = periodLabel(existing.periodType, existing.periodMonth, existing.periodYear);
+  return `la factura ${ref} subida el ${formatDateEs(existing.createdAt)} (${period})`;
+}
 
 /**
  * Detects issues after OCR extraction and creates InvoiceIssue records.
@@ -89,7 +117,7 @@ export async function detectIssues(
       const formula = `Base + IVA${sumSurcharge ? " + Rec. Equiv." : ""}${extraction.irpfAmount ? " - IRPF" : ""}`;
       issues.push({
         type: "MATH_MISMATCH",
-        description: `El total (${extraction.totalAmount}) no coincide con ${formula} (${expected.toFixed(2)}). Diferencia: ${(diff / 100).toFixed(2)}\u20AC.`,
+        description: `El total (${formatEur(extraction.totalAmount)}) no coincide con ${formula} (${formatEur(expected)}). Diferencia: ${formatEur(diff / 100)}.`,
       });
     }
   }
@@ -129,12 +157,12 @@ export async function detectIssues(
     if (extraction.invoiceNumber) {
       const dupByNumber = await prisma.invoice.findFirst({
         where: { ...baseWhere, invoiceNumber: extraction.invoiceNumber },
-        select: { id: true, filename: true },
+        select: DUPLICATE_SELECT,
       });
       if (dupByNumber) {
         issues.push({
           type: "POSSIBLE_DUPLICATE",
-          description: `Posible duplicado de "${dupByNumber.filename}" (misma factura ${extraction.invoiceNumber} de ${extraction.issuerCif}).`,
+          description: `Posible duplicado de ${describeExisting(dupByNumber)}: mismo número y mismo CIF emisor (${extraction.issuerCif}).`,
         });
       }
     }
@@ -157,12 +185,12 @@ export async function detectIssues(
           totalAmount: extraction.totalAmount,
           invoiceDate: validDate,
         },
-        select: { id: true, filename: true },
+        select: DUPLICATE_SELECT,
       });
       if (dupByFields) {
         issues.push({
           type: "POSSIBLE_DUPLICATE",
-          description: `Posible duplicado de "${dupByFields.filename}" (mismo CIF ${extraction.issuerCif}, total ${extraction.totalAmount} y fecha).`,
+          description: `Posible duplicado de ${describeExisting(dupByFields)}: mismo CIF emisor (${extraction.issuerCif}), total (${formatEur(extraction.totalAmount)}) y fecha.`,
         });
       }
     }

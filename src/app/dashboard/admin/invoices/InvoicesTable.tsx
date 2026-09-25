@@ -2,6 +2,9 @@
 
 import { useState } from "react";
 import { Badge } from "@/components/ui/Badge";
+import { InvoiceStatusBadge } from "@/components/ui/InvoiceStatusBadge";
+import { formatEur } from "@/lib/format";
+import { reviewHref } from "@/lib/reviewNavigation";
 import { FileText, ArrowUpDown, ArrowUp, ArrowDown, RefreshCw } from "lucide-react";
 import Link from "next/link";
 
@@ -37,19 +40,6 @@ function tercero(inv: Invoice): { name: string | null; cif: string | null } {
     : { name: inv.issuerName, cif: inv.issuerCif };
 }
 
-const STATUS_BADGE: Record<string, { label: string; variant: "blue" | "yellow" | "red" | "green" | "slate" | "purple" }> = {
-  UPLOADED:  { label: "Subida",      variant: "blue" },
-  ANALYZING: { label: "En análisis", variant: "yellow" },
-  ANALYZED:  { label: "Analizada",   variant: "yellow" },
-  OCR_ERROR: { label: "Error OCR",   variant: "red" },
-  VALIDATED: { label: "Validada",    variant: "green" },
-  REJECTED:  { label: "Rechazada",   variant: "red" },
-  EXPORTED:        { label: "Exportada",      variant: "slate" },
-  PENDING_REVIEW:  { label: "Pte. revisión",  variant: "blue" },
-  NEEDS_ATTENTION: { label: "Con incidencias", variant: "yellow" },
-  SPLIT_SOURCE:    { label: "Dividida",        variant: "purple" },
-};
-
 const ACTION_LABEL: Record<string, string> = {
   UPLOADED:  "Revisar",
   ANALYZING: "Ver",
@@ -73,12 +63,15 @@ export function InvoicesTable({
   sort,
   dir,
   sortHrefs,
+  listHref,
 }: {
   invoices: Invoice[];
   sort: SortKey;
   dir: "asc" | "desc";
   /** URL que ordena por cada columna (la calcula el servidor con los filtros). */
   sortHrefs: Record<SortKey, string>;
+  /** Esta pagina del listado, con filtros y orden: a donde vuelve la revision. */
+  listHref: string;
 }) {
   const [toast, setToast] = useState<{ msg: string; type: "ok" | "err" } | null>(null);
 
@@ -158,7 +151,6 @@ export function InvoicesTable({
           </thead>
           <tbody className="divide-y divide-slate-50">
             {invoices.map((inv) => {
-              const s = STATUS_BADGE[inv.status] ?? STATUS_BADGE.UPLOADED;
               const t = tercero(inv);
               return (
                 <tr key={inv.id} className="hover:bg-slate-50/60 transition-colors">
@@ -195,26 +187,10 @@ export function InvoicesTable({
                     </Badge>
                   </td>
                   <td className="px-3 md:px-5 py-3.5">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <Badge variant={s.variant}>{s.label}</Badge>
-                      {inv.exported && (
-                        inv.pendingReexport ? (
-                          <span
-                            className="inline-flex items-center rounded-full bg-amber-50 border border-amber-200 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 whitespace-nowrap"
-                            title="Salió en un Excel y se corrigió después: A3 tiene el dato viejo hasta que se vuelva a exportar"
-                          >
-                            Pdte. reexportar
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 whitespace-nowrap">
-                            Exportada
-                          </span>
-                        )
-                      )}
-                    </div>
+                    <InvoiceStatusBadge status={inv.status} exported={inv.exported} pendingReexport={inv.pendingReexport} />
                   </td>
                   <td className="px-5 py-3.5 text-[13px] font-medium text-slate-700 tabular-nums whitespace-nowrap">
-                    {inv.totalAmount !== null ? `${Number(inv.totalAmount).toLocaleString("es-ES", { minimumFractionDigits: 2 })} €` : "—"}
+                    {formatEur(inv.totalAmount)}
                   </td>
                   <td className="hidden md:table-cell px-3 md:px-5 py-3.5 text-[13px] text-slate-400 tabular-nums">
                     {new Date(inv.createdAt).toLocaleDateString("es-ES")}
@@ -244,7 +220,7 @@ export function InvoicesTable({
                              lo que se viene desde aqui. El resto, a la ficha
                              de solo lectura. */
                           href={inv.status === "VALIDATED" || inv.status === "EXPORTED"
-                            ? `/dashboard/worker/review/${inv.id}`
+                            ? reviewHref(inv.id, { back: listHref })
                             : `/dashboard/admin/invoices/${inv.id}`}
                           className="whitespace-nowrap rounded-lg bg-blue-50 px-3 py-1 text-[12px] font-semibold text-blue-600 hover:bg-blue-100 transition-colors"
                         >

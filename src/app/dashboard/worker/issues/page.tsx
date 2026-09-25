@@ -3,13 +3,17 @@ import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { Badge } from "@/components/ui/Badge";
+import { Pagination } from "@/components/ui/Pagination";
+import { pageWindow, parsePage } from "@/lib/listing";
+import { periodLabel } from "@/lib/period";
+import { formatDateEs } from "@/lib/dates";
 import { IssueActions } from "./IssueActions";
 
 const TYPE_LABELS: Record<string, string> = {
   OCR_FAILED: "Error OCR",
   LOW_CONFIDENCE: "Baja confianza",
   POSSIBLE_DUPLICATE: "Posible duplicado",
-  MATH_MISMATCH: "Error matematico",
+  MATH_MISMATCH: "Error matemático",
   MANUAL: "Manual",
 };
 
@@ -30,7 +34,7 @@ const STATUS_VARIANT: Record<string, "green" | "slate" | "yellow"> = {
 export default async function WorkerIssuesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ type?: string; status?: string }>;
+  searchParams: Promise<{ type?: string; status?: string; page?: string }>;
 }) {
   const session = await auth();
   if (!session?.user || !["ADMIN", "WORKER"].includes(session.user.role))
@@ -58,19 +62,36 @@ export default async function WorkerIssuesPage({
     clientIds = assignments.map((a) => a.clientId);
   }
 
+  const where = {
+    ...(filterStatus !== "ALL" ? { status: filterStatus as "OPEN" | "RESOLVED" | "DISMISSED" } : {}),
+    ...(filterType !== "ALL" ? { type: filterType as "OCR_FAILED" | "LOW_CONFIDENCE" | "POSSIBLE_DUPLICATE" | "MATH_MISMATCH" | "MANUAL" } : {}),
+    invoice: { clientId: { in: clientIds } },
+  };
+
+  // Paginado en BD. Antes se cortaba en 100 sin avisar, y con "Resueltas" o
+  // "Todas" el historico pasa de 100 enseguida (cada factura con baja
+  // confianza abre una incidencia).
+  const total = await prisma.invoiceIssue.count({ where });
+  const pagination = pageWindow(parsePage(sp.page), total);
+
   const issues = await prisma.invoiceIssue.findMany({
-    where: {
-      ...(filterStatus !== "ALL" ? { status: filterStatus as "OPEN" | "RESOLVED" | "DISMISSED" } : {}),
-      ...(filterType !== "ALL" ? { type: filterType as "OCR_FAILED" | "LOW_CONFIDENCE" | "POSSIBLE_DUPLICATE" | "MATH_MISMATCH" | "MANUAL" } : {}),
-      invoice: { clientId: { in: clientIds } },
-    },
+    where,
     include: {
       invoice: {
-        select: { id: true, filename: true, invoiceNumber: true, client: { select: { name: true } } },
+        select: {
+          id: true,
+          filename: true,
+          invoiceNumber: true,
+          periodType: true,
+          periodMonth: true,
+          periodYear: true,
+          client: { select: { name: true } },
+        },
       },
     },
-    orderBy: { createdAt: "desc" },
-    take: 100,
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    skip: pagination.skip,
+    take: pagination.take,
   });
 
   return (
@@ -112,7 +133,7 @@ export default async function WorkerIssuesPage({
               { value: "ALL", label: "Todos" },
               { value: "OCR_FAILED", label: "OCR" },
               { value: "LOW_CONFIDENCE", label: "Confianza" },
-              { value: "MATH_MISMATCH", label: "Matematico" },
+              { value: "MATH_MISMATCH", label: "Matemático" },
               { value: "POSSIBLE_DUPLICATE", label: "Duplicado" },
               { value: "MANUAL", label: "Manual" },
             ].map((opt) => (
@@ -150,12 +171,17 @@ export default async function WorkerIssuesPage({
                   <div className="flex items-center gap-2 mt-0.5">
                     <Link
                       href={`/dashboard/worker/review/${issue.invoiceId}`}
+                      title={issue.invoice.filename}
                       className="text-[11px] text-blue-600 hover:underline truncate"
                     >
-                      {issue.invoice.filename}
+                      {issue.invoice.invoiceNumber || issue.invoice.filename}
                     </Link>
                     <span className="text-[11px] text-slate-400">{issue.invoice.client?.name}</span>
                   </div>
+                  <p className="mt-0.5 text-[11px] text-slate-400">
+                    {periodLabel(issue.invoice.periodType, issue.invoice.periodMonth, issue.invoice.periodYear)}
+                    {" · "}detectada el {formatDateEs(issue.createdAt)}
+                  </p>
                 </div>
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
@@ -166,6 +192,13 @@ export default async function WorkerIssuesPage({
               </div>
             </div>
           ))}
+          <Pagination
+            window={pagination}
+            noun="incidencias"
+            hrefFor={(p) =>
+              `/dashboard/worker/issues?status=${filterStatus}&type=${filterType}${p > 1 ? `&page=${p}` : ""}`
+            }
+          />
         </div>
       )}
     </div>

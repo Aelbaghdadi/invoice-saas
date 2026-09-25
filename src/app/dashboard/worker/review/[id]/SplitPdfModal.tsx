@@ -10,6 +10,8 @@ type Props = {
   invoiceId: string;
   pdfUrl: string;
   bucket: string;
+  /** Listado de origen, para volver a el al acabar el lote. */
+  back?: string | null;
   onClose: () => void;
 };
 
@@ -36,7 +38,7 @@ function distribuirPaginas(total: number, n: number): PartConfig[] {
   return parts;
 }
 
-export default function SplitPdfModal({ invoiceId, pdfUrl, bucket, onClose }: Props) {
+export default function SplitPdfModal({ invoiceId, pdfUrl, bucket, back = null, onClose }: Props) {
   const [totalPages, setTotalPages] = useState<number>(0);
   const [loadingPdf, setLoadingPdf] = useState(true);
   const [count, setCount] = useState(2);
@@ -112,7 +114,7 @@ export default function SplitPdfModal({ invoiceId, pdfUrl, bucket, onClose }: Pr
     }));
 
     startTransition(async () => {
-      const result = await splitPdfInvoice(invoiceId, splitParts, bucket);
+      const result = await splitPdfInvoice(invoiceId, splitParts, bucket, back);
       if (result?.error) setError(result.error);
     });
   }

@@ -6,6 +6,7 @@ import { canAccessClient } from "@/lib/accessibleClients";
 import { appendAuditLogs } from "@/lib/auditLog";
 import { learnProviderRule } from "@/lib/providerRouting";
 import { detectInvoiceType } from "@/lib/invoiceRouting";
+import { DUPLICATE_SELECT, describeExisting } from "@/lib/issueDetector";
 import { revalidatePath } from "next/cache";
 
 export type ClassifyState = { ok?: boolean; error?: string } | null;
@@ -85,7 +86,7 @@ export async function classifyInvoice(invoiceId: string, clientId: string): Prom
         receiverCif: isPurchase ? undefined : otherCif,
         invoiceNumber: invoice.invoiceNumber,
       },
-      select: { id: true, filename: true },
+      select: { id: true, ...DUPLICATE_SELECT },
     });
     if (dup) {
       isDuplicate = true;
@@ -93,7 +94,9 @@ export async function classifyInvoice(invoiceId: string, clientId: string): Prom
         data: {
           invoiceId,
           type: "POSSIBLE_DUPLICATE",
-          description: `Posible duplicado de "${dup.filename}" (misma factura ${invoice.invoiceNumber}).`,
+          // Mismo texto que el detector del OCR: el aviso se lee igual venga
+          // de donde venga.
+          description: `Posible duplicado de ${describeExisting(dup)}.`,
         },
       });
     }

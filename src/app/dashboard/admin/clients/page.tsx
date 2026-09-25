@@ -3,8 +3,10 @@ import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { Building2, Plus, Search, Users } from "lucide-react";
+import { Building2, FileText, Plus, Search, Users, X } from "lucide-react";
 import Link from "next/link";
+import Form from "next/form";
+import { matchesSearch } from "@/lib/listing";
 
 function clientInitials(name: string) {
   return name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase();
@@ -25,18 +27,29 @@ function avatarColor(name: string) {
   return AVATAR_COLORS[h % AVATAR_COLORS.length];
 }
 
-export default async function ClientsPage() {
+export default async function ClientsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ q?: string | string[] }>;
+}) {
   const session = await auth();
   if (!session?.user || session.user.role !== "ADMIN") redirect("/login");
   const firmId = session.user.advisoryFirmId ?? undefined;
 
+  const { q: rawQuery } = await searchParams;
+  const query = typeof rawQuery === "string" ? rawQuery.trim() : "";
+
   const clients = await prisma.client.findMany({
     where: { advisoryFirmId: firmId, isUnclassifiedBucket: false },
-    orderBy: { createdAt: "desc" },
+    orderBy: { name: "asc" },
     include: {
       _count: { select: { invoices: true, assignedWorkers: true } },
     },
   }).catch(() => []);
+
+  // Se filtra en memoria: son los clientes de una asesoria (decenas) y asi
+  // la busqueda ignora tildes igual que el resto de listados.
+  const visibleClients = clients.filter((c) => matchesSearch([c.name, c.cif, c.email], query));
 
   return (
     <div>
@@ -56,19 +69,40 @@ export default async function ClientsPage() {
 
       {/* Search + filters */}
       <div className="mb-4 flex items-center gap-3">
-        <div className="relative flex-1 max-w-sm">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+        <Form action="/dashboard/admin/clients" className="relative flex-1 max-w-sm">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          {/* key: al quitar la busqueda el campo tiene que vaciarse aunque
+              se hubiera escrito en el. */}
           <input
-            type="text"
-            placeholder="Buscar clientes..."
+            key={query}
+            type="search"
+            name="q"
+            defaultValue={query}
+            aria-label="Buscar clientes"
+            placeholder="Buscar por nombre, CIF o email…"
             className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-4 text-[13px] text-slate-700 placeholder-slate-400 outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-100"
           />
-        </div>
+        </Form>
+        {query && (
+          <Link
+            href="/dashboard/admin/clients"
+            className="inline-flex items-center gap-1 rounded-lg px-2.5 py-2 text-[12px] font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+          >
+            <X className="h-3.5 w-3.5" />
+            Quitar búsqueda
+          </Link>
+        )}
       </div>
 
       {/* Table */}
       <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
-        {clients.length === 0 ? (
+        {clients.length > 0 && visibleClients.length === 0 ? (
+          <EmptyState
+            icon={Search}
+            title="Sin resultados"
+            description={`Ningún cliente coincide con «${query}».`}
+          />
+        ) : clients.length === 0 ? (
           <EmptyState
             icon={Building2}
             title="Sin clientes"
@@ -87,15 +121,25 @@ export default async function ClientsPage() {
           <table className="w-full">
             <thead>
               <tr className="border-b border-slate-100">
-                {["Cliente", "CIF", "Software contable", "Facturas", "Gestores", "Acciones"].map((h) => (
-                  <th key={h} className="px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                    {h}
+                {[
+                  { label: "Cliente", numeric: false },
+                  { label: "CIF", numeric: false },
+                  { label: "Software contable", numeric: false },
+                  { label: "Facturas", numeric: true },
+                  { label: "Gestores", numeric: true },
+                  { label: "Acciones", numeric: false },
+                ].map((h) => (
+                  <th
+                    key={h.label}
+                    className={`px-5 py-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500 ${h.numeric ? "text-right" : "text-left"}`}
+                  >
+                    {h.label}
                   </th>
                 ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
-              {clients.map((client) => (
+              {visibleClients.map((client) => (
                 <tr key={client.id} className="group hover:bg-slate-50/60">
                   <td className="px-5 py-3.5">
                     <div className="flex items-center gap-3">
@@ -115,13 +159,13 @@ export default async function ClientsPage() {
                     )}
                   </td>
                   <td className="px-5 py-3.5">
-                    <div className="flex items-center gap-1.5 text-[13px] text-slate-600">
-                      <Building2 className="h-3.5 w-3.5 text-slate-400" />
-                      {client._count.invoices}
+                    <div className="flex items-center justify-end gap-1.5 text-[13px] tabular-nums text-slate-600">
+                      <FileText className="h-3.5 w-3.5 text-slate-400" />
+                      {client._count.invoices.toLocaleString("es-ES")}
                     </div>
                   </td>
                   <td className="px-5 py-3.5">
-                    <div className="flex items-center gap-1.5 text-[13px] text-slate-600">
+                    <div className="flex items-center justify-end gap-1.5 text-[13px] tabular-nums text-slate-600">
                       <Users className="h-3.5 w-3.5 text-slate-400" />
                       {client._count.assignedWorkers}
                     </div>

@@ -7,6 +7,9 @@ import {
   ChevronLeft, ChevronRight, Zap,
 } from "lucide-react";
 import { useToast } from "@/components/ui/Toast";
+import { Badge } from "@/components/ui/Badge";
+import { formatEur } from "@/lib/format";
+import { formatDateEs } from "@/lib/dates";
 import PdfViewer from "@/components/ui/PdfViewerDynamic";
 import ImageViewer from "@/components/ui/ImageViewer";
 import { classifyInvoice, discardUnclassified } from "./actions";
@@ -159,7 +162,8 @@ export function ClasificarTable({ rows }: { rows: Row[] }) {
               <th className="px-4 py-3">Archivo</th>
               <th className="px-4 py-3">Tipo</th>
               <th className="px-4 py-3">CIF detectado</th>
-              <th className="px-4 py-3">Total</th>
+              <th className="px-4 py-3">Fecha factura</th>
+              <th className="px-4 py-3 text-right">Total</th>
               <th className="px-4 py-3">Motivo</th>
               <th className="px-4 py-3">Sugerida</th>
               <th className="px-4 py-3"></th>
@@ -182,9 +186,14 @@ export function ClasificarTable({ rows }: { rows: Row[] }) {
                       <span className="truncate">{row.filename}</span>
                     </button>
                   </td>
-                  <td className="px-4 py-3">{row.type === "PURCHASE" ? "Recibida" : "Emitida"}</td>
+                  <td className={`px-4 py-3 ${isDone ? "opacity-40" : ""}`}>
+                    <Badge variant={row.type === "PURCHASE" ? "blue" : "purple"}>
+                      {row.type === "PURCHASE" ? "Recibida" : "Emitida"}
+                    </Badge>
+                  </td>
                   <td className="px-4 py-3 font-mono text-[12px]">{sideCif || <span className="text-slate-400">—</span>}</td>
-                  <td className="px-4 py-3 tabular-nums">{row.total != null ? `${row.total.toFixed(2)} €` : "—"}</td>
+                  <td className="px-4 py-3 whitespace-nowrap tabular-nums">{formatDateEs(row.date)}</td>
+                  <td className="px-4 py-3 whitespace-nowrap text-right tabular-nums">{formatEur(row.total)}</td>
                   <td className="px-4 py-3">
                     <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">
                       {REASON_LABEL[row.reason ?? ""] ?? "Por clasificar"}
@@ -284,9 +293,9 @@ function ChainOverlay({
               <p className="text-[13px]">Vista previa no disponible</p>
             </div>
           ) : isImage ? (
-            <ImageViewer url={url} alt={row.filename} />
+            <ImageViewer url={url} alt={row.filename} showOpenInTab={false} />
           ) : (
-            <PdfViewer url={url} />
+            <PdfViewer url={url} showOpenInTab={false} />
           )}
         </div>
 
@@ -294,7 +303,8 @@ function ChainOverlay({
         <div className="flex w-[320px] flex-shrink-0 flex-col gap-3 overflow-y-auto border-l border-slate-200 bg-white p-4">
           <div className="text-[12px] text-slate-500">
             <div>CIF detectado: <span className="font-mono text-slate-700">{sideCif || "—"}</span></div>
-            <div>Total: <span className="tabular-nums text-slate-700">{row.total != null ? `${row.total.toFixed(2)} €` : "—"}</span></div>
+            <div>Fecha factura: <span className="tabular-nums text-slate-700">{formatDateEs(row.date)}</span></div>
+            <div>Total: <span className="tabular-nums text-slate-700">{formatEur(row.total)}</span></div>
             <div className="mt-1">
               <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">
                 {REASON_LABEL[row.reason ?? ""] ?? "Por clasificar"}

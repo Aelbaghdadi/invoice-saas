@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { createAccountEntry, updateAccountEntry, deleteAccountEntry } from "./actions";
 import { Plus, Pencil, Trash2, Check, X, Search, Loader2, ChevronLeft, ChevronRight } from "lucide-react";
 import { matchesSearch, pageWindow } from "@/lib/listing";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 
 /** Fichas por pagina. Un plan importado de A3 son cientos de terceros y se
  *  pintaban todos de golpe. */
@@ -24,6 +25,7 @@ export function AccountsTable({ entries, clientId }: Props) {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
+  const { confirm, dialog } = useConfirm();
 
   // Sin tildes y tambien por numero de cuenta: el gestor ve "41000486" en A3
   // y quiere saber de quien es.
@@ -42,6 +44,14 @@ export function AccountsTable({ entries, clientId }: Props) {
         setError(res.error);
       } else {
         setShowAdd(false);
+        // Con paginacion, la ficha nueva puede caer en otra pagina y parecer
+        // que no se ha guardado: se busca para que se vea. Por el nombre, que
+        // se guarda tal cual; el NIF se guarda normalizado (sin guiones, o
+        // como SINNIF:... si no es fiable) y lo tecleado no lo encontraba.
+        const name = String(fd.get("name") ?? "").trim();
+        const nif = String(fd.get("nif") ?? "").replace(/[\s.\-/]/g, "");
+        if (name || nif) setSearch(name || nif);
+        setPage(1);
         router.refresh();
       }
     });
@@ -61,16 +71,23 @@ export function AccountsTable({ entries, clientId }: Props) {
     });
   };
 
-  const handleDelete = (entryId: string) => {
-    if (!confirm("¿Eliminar esta cuenta del plan?")) return;
+  const handleDelete = async (entry: AccountEntry) => {
+    const ok = await confirm({
+      title: "¿Eliminar esta cuenta del plan?",
+      message: <>Se eliminará la ficha de <span className="font-semibold text-slate-700">{entry.name}</span>. No se puede deshacer.</>,
+      confirmLabel: "Eliminar",
+      tone: "danger",
+    });
+    if (!ok) return;
     startTransition(async () => {
-      await deleteAccountEntry(entryId);
+      await deleteAccountEntry(entry.id);
       router.refresh();
     });
   };
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
+      {dialog}
       {/* Toolbar */}
       <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
         <div className="relative">
@@ -181,7 +198,7 @@ export function AccountsTable({ entries, clientId }: Props) {
                       </button>
                       <button
                         type="button"
-                        onClick={() => handleDelete(entry.id)}
+                        onClick={() => handleDelete(entry)}
                         className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-500"
                         title="Eliminar"
                       >
@@ -201,7 +218,9 @@ export function AccountsTable({ entries, clientId }: Props) {
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-5 py-3">
           <p className="text-[12px] text-slate-500 tabular-nums">
             {filtered.length === 0
-              ? `Ninguna de las ${entries.length} cuentas coincide`
+              ? entries.length === 1
+                ? "La única cuenta no coincide con la búsqueda"
+                : `Ninguna de las ${entries.length} cuentas coincide con la búsqueda`
               : <>Mostrando <span className="font-semibold text-slate-700">{window.from}–{window.to}</span> de{" "}
                   <span className="font-semibold text-slate-700">{filtered.length}</span>
                   {filtered.length !== entries.length && ` (de ${entries.length} en total)`}</>}

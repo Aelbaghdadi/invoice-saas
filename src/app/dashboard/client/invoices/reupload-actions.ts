@@ -40,10 +40,10 @@ export async function reuploadInvoiceAction(
     return { error: "Factura no encontrada." };
   }
   if (rejected.status !== "REJECTED") {
-    return { error: "Solo se pueden re-subir facturas rechazadas." };
+    return { error: "Solo se pueden volver a subir facturas rechazadas." };
   }
   if (rejected.replacedBy) {
-    return { error: "Esta factura ya fue re-subida." };
+    return { error: "Ya has subido una versión corregida de esta factura." };
   }
 
   const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB

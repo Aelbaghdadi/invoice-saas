@@ -17,7 +17,7 @@ export async function resetPasswordAction(
   const confirmPassword = formData.get("confirmPassword") as string | null;
 
   if (!token) {
-    return { error: "Token inválido. Solicita un nuevo enlace de restablecimiento." };
+    return { error: "El enlace no es válido. Solicita uno nuevo." };
   }
 
   if (!password || password.length < 8) {

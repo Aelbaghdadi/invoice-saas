@@ -113,7 +113,7 @@ export default async function ClasificarPage() {
         description="Facturas subidas en modo clasificar cuyo CIF no se pudo asignar automáticamente. Pulsa 'Clasificar de una en una' para verlas e ir asignándolas con el teclado."
       />
       {rows.length === 0 ? (
-        <EmptyState icon={Inbox} title="Nada por clasificar" description="Todas las facturas subidas se rutearon automáticamente a su empresa." />
+        <EmptyState icon={Inbox} title="Nada por clasificar" description="Todas las facturas subidas se han asignado solas a su empresa." />
       ) : (
         <ClasificarTable rows={rows} />
       )}

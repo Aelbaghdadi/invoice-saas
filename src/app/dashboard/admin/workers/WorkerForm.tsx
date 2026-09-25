@@ -26,7 +26,7 @@ export function WorkerForm() {
 
       <div>
         <label className="block text-[13px] font-medium text-slate-700">Email *</label>
-        <input name="email" type="email" required className="input mt-1.5 w-full" placeholder="ana@asesoría.com" />
+        <input name="email" type="email" required className="input mt-1.5 w-full" placeholder="ana@tuasesoria.es" />
         {state?.errors?.email && <p className="mt-1 text-[12px] text-red-500">{state.errors.email[0]}</p>}
       </div>
 

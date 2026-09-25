@@ -3,6 +3,7 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback } from "react";
 import { X } from "lucide-react";
+import { Select } from "@/components/ui/Select";
 
 type Props = {
   /** Clientes seleccionables (asignados al gestor / de la firma del admin). */
@@ -57,9 +58,6 @@ export function BatchFilters({ clients, basePath }: Props) {
   );
 
   const hasFilters = clientId || year || month || type || estado !== "pendientes";
-  const inputCls =
-    "w-full rounded-lg border border-slate-200 py-2 px-3 text-[12px] text-slate-700 outline-none focus:border-accent-500 focus:ring-1 focus:ring-accent-100";
-
   return (
     <div className="mb-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
       {/* Estado — segmentado, el filtro principal. */}
@@ -93,38 +91,48 @@ export function BatchFilters({ clients, basePath }: Props) {
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <div>
           <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-slate-400">Cliente</label>
-          <select value={clientId} onChange={(e) => apply({ clientId: e.target.value })} className={inputCls}>
-            <option value="">Todos</option>
-            {clients.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </select>
+          <Select
+            id="lotes-cliente"
+            aria-label="Cliente"
+            size="sm"
+            value={clientId}
+            onChange={(v) => apply({ clientId: v })}
+            options={[{ value: "", label: "Todos" }, ...clients.map((c) => ({ value: c.id, label: c.name }))]}
+            searchable={clients.length > 6}
+          />
         </div>
         <div>
           <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-slate-400">Año</label>
-          <select value={year} onChange={(e) => apply({ year: e.target.value })} className={inputCls}>
-            <option value="">Todos</option>
-            {years.map((y) => (
-              <option key={y} value={String(y)}>{y}</option>
-            ))}
-          </select>
+          <Select
+            id="lotes-anio"
+            aria-label="Año"
+            size="sm"
+            value={year}
+            onChange={(v) => apply({ year: v })}
+            options={[{ value: "", label: "Todos" }, ...years.map((y) => ({ value: String(y), label: String(y) }))]}
+          />
         </div>
         <div>
           <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-slate-400">Mes</label>
-          <select value={month} onChange={(e) => apply({ month: e.target.value })} className={inputCls}>
-            <option value="">Todos</option>
-            {MESES.map((m, i) => (
-              <option key={m} value={String(i + 1)}>{m}</option>
-            ))}
-          </select>
+          <Select
+            id="lotes-mes"
+            aria-label="Mes"
+            size="sm"
+            value={month}
+            onChange={(v) => apply({ month: v })}
+            options={[{ value: "", label: "Todos" }, ...MESES.map((m, i) => ({ value: String(i + 1), label: m }))]}
+          />
         </div>
         <div>
           <label className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-slate-400">Tipo</label>
-          <select value={type} onChange={(e) => apply({ type: e.target.value })} className={inputCls}>
-            <option value="">Todos</option>
-            <option value="PURCHASE">Recibidas</option>
-            <option value="SALE">Emitidas</option>
-          </select>
+          <Select
+            id="lotes-tipo"
+            aria-label="Tipo"
+            size="sm"
+            value={type}
+            onChange={(v) => apply({ type: v })}
+            options={[{ value: "", label: "Todos" }, { value: "PURCHASE", label: "Recibidas" }, { value: "SALE", label: "Emitidas" }]}
+          />
         </div>
       </div>
     </div>

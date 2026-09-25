@@ -1,6 +1,7 @@
 import { ForgotPasswordForm } from "./ForgotPasswordForm";
-import { Receipt } from "lucide-react";
+import Image from "next/image";
 import Link from "next/link";
+import { BRAND } from "@/lib/brand";
 
 export const metadata = {
   title: "¿Olvidaste tu contraseña? — Faktury",
@@ -10,15 +11,17 @@ export default function ForgotPasswordPage() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
       <div className="w-full max-w-sm">
-        {/* Logo */}
-        <div className="mb-8 flex items-center justify-center gap-2.5">
-          <Link href="/login" className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600">
-              <Receipt className="h-4 w-4 text-white" />
-            </div>
-            <span className="text-[15px] font-semibold text-slate-900">
-              Faktury
-            </span>
+        {/* Logo: el mismo que el login. */}
+        <div className="mb-8 flex items-center justify-center">
+          <Link href="/login">
+            <Image
+              src="/brand/faktury-logo.svg"
+              alt={BRAND}
+              width={192}
+              height={64}
+              priority
+              className="h-16 w-auto"
+            />
           </Link>
         </div>
 

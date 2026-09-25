@@ -128,7 +128,7 @@ export function BatchActions({
           <button
             type="button"
             onClick={() => setShowRejectConfirm(true)}
-            title="Rechaza de golpe todas las facturas del lote (p.ej. se subió por error)"
+            title="Rechaza de golpe todas las facturas del lote (p. ej. se subió por error)"
             className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-[12px] font-medium text-red-700 hover:bg-red-100"
           >
             <Ban className="h-3.5 w-3.5" />
@@ -152,7 +152,7 @@ export function BatchActions({
               required
               value={rejectReason}
               onChange={(e) => setRejectReason(e.target.value)}
-              placeholder="Motivo del rechazo (ej: lote subido por error)"
+              placeholder="Motivo del rechazo (p. ej. lote subido por error)"
               className="min-w-[220px] flex-1 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-[12px] text-slate-800 outline-none focus:border-red-400 focus:ring-2 focus:ring-red-100"
             />
             <button

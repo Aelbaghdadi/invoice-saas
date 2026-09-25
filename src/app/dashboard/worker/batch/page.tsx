@@ -11,6 +11,8 @@ import Link from "next/link";
 import type { InvoiceType, PeriodType } from "@prisma/client";
 import { completionPercent, isBatchRejectable, PERIOD_BLOCKING_STATUSES } from "@/lib/invoiceStatuses";
 import { periodLabel } from "@/lib/period";
+import { QUEUE_ORDER } from "@/lib/reviewQueue";
+import { reviewHref } from "@/lib/reviewNavigation";
 import { BatchActions } from "./BatchActions";
 import { getAccessibleClientIds } from "@/lib/accessibleClients";
 import { AutoRefresh } from "@/components/ui/AutoRefresh";
@@ -80,6 +82,22 @@ export default async function WorkerBatchPage({
   const yearNum = sp.year ? parseInt(sp.year, 10) : null;
   const monthNum = sp.month ? parseInt(sp.month, 10) : null;
   const typeParam = sp.type === "PURCHASE" || sp.type === "SALE" ? sp.type : null;
+  const hasFilters = Boolean(requestedClient || yearNum || monthNum || typeParam);
+
+  // URL de esta pantalla con los filtros activos y el estado dado: para
+  // "Ver todos" y para que "Volver" desde la revision traiga aqui.
+  const basePath = "/dashboard/worker/batch";
+  const listHref = (estadoValue: string) => {
+    const p = new URLSearchParams();
+    if (requestedClient) p.set("clientId", requestedClient);
+    if (yearNum) p.set("year", String(yearNum));
+    if (monthNum) p.set("month", String(monthNum));
+    if (typeParam) p.set("type", typeParam);
+    if (estadoValue !== "pendientes") p.set("estado", estadoValue);
+    const qs = p.toString();
+    return qs ? `${basePath}?${qs}` : basePath;
+  };
+  const thisListHref = listHref(estado);
 
   // Clientes para el desplegable de filtros (los asignados al gestor).
   const clientOptions = await prisma.client.findMany({
@@ -103,7 +121,9 @@ export default async function WorkerBatchPage({
       // que "Rechazar lote" no puede tocar.
       exportBatchItems: { take: 1, select: { id: true } },
     },
-    orderBy: [{ periodYear: "desc" }, { periodMonth: "desc" }, { createdAt: "asc" }],
+    // Dentro de cada lote, el orden de la cola: si la mas antigua estaba
+    // pospuesta, se entraba por ella y la revision marcaba "103 de 103".
+    orderBy: [{ periodYear: "desc" }, { periodMonth: "desc" }, ...QUEUE_ORDER],
   });
 
   // Group by client + period + type
@@ -276,15 +296,10 @@ export default async function WorkerBatchPage({
     return !closed && !allDone; // pendientes
   });
   const hiddenCount = groups.length - visibleGroups.length;
+  const hiddenPlural = hiddenCount !== 1 ? "s" : "";
 
   // "Ver todos" conserva los filtros activos y solo cambia el estado.
-  const verTodosParams = new URLSearchParams();
-  if (requestedClient) verTodosParams.set("clientId", requestedClient);
-  if (yearNum) verTodosParams.set("year", String(yearNum));
-  if (monthNum) verTodosParams.set("month", String(monthNum));
-  if (typeParam) verTodosParams.set("type", typeParam);
-  verTodosParams.set("estado", "todos");
-  const verTodosHref = `/dashboard/worker/batch?${verTodosParams.toString()}`;
+  const verTodosHref = listHref("todos");
 
   // Agrupar los lotes visibles por cliente para la vista en acordeón: la
   // pantalla muestra los clientes con lote activo y, al pulsar, sus lotes.
@@ -318,9 +333,11 @@ export default async function WorkerBatchPage({
         description="Sesiones de trabajo agrupadas por cliente y periodo — empieza por los que tienen incidencias"
       />
 
-      <BatchFilters clients={clientOptions} basePath="/dashboard/worker/batch" />
+      <BatchFilters clients={clientOptions} basePath={basePath} />
 
-      {groups.length === 0 ? (
+      {/* Tres vacios distintos: sin facturas, sin nada pendiente (con el
+          filtro por defecto) y sin resultados para los filtros elegidos. */}
+      {groups.length === 0 && !hasFilters ? (
         <EmptyState
           icon={Layers}
           title="Sin lotes pendientes"
@@ -328,11 +345,28 @@ export default async function WorkerBatchPage({
         />
       ) : visibleGroups.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-200 bg-white p-8 text-center text-[13px] text-slate-500">
-          No hay lotes que coincidan con este filtro.{" "}
-          {hiddenCount > 0 && (
-            <Link href={verTodosHref} className="font-medium text-blue-600 hover:underline">
-              Ver todos ({groups.length})
-            </Link>
+          {!hasFilters && estado === "pendientes" ? (
+            <>
+              {`No te queda ningún lote pendiente. ${hiddenCount} lote${hiddenPlural} completado${hiddenPlural} o cerrado${hiddenPlural}: `}
+              <Link href={verTodosHref} className="font-medium text-blue-600 hover:underline">
+                Ver todos
+              </Link>
+            </>
+          ) : (
+            <>
+              Ningún lote con estos filtros.{" "}
+              {hiddenCount > 0 && (
+                <>
+                  <Link href={verTodosHref} className="font-medium text-blue-600 hover:underline">
+                    Ver todos ({groups.length})
+                  </Link>
+                  {" · "}
+                </>
+              )}
+              <Link href={basePath} className="font-medium text-blue-600 hover:underline">
+                Quitar filtros
+              </Link>
+            </>
           )}
         </div>
       ) : (
@@ -347,7 +381,8 @@ export default async function WorkerBatchPage({
               invoiceCount={cg.invoiceSum}
               attentionCount={cg.attentionSum}
               allDone={cg.allDone}
-              defaultOpen={clientGroups.length === 1}
+              defaultOpen={clientGroups.length === 1 || cg.attentionSum > 0}
+              storageKey={cg.clientId}
             >
           {cg.lotes.map((g) => {
             const done = g.validated + g.rejected + g.exported;
@@ -392,7 +427,7 @@ export default async function WorkerBatchPage({
                         <Badge variant="green">Completado</Badge>
                       ) : hasWork ? (
                         <Badge variant={g.attentionCount > 0 ? "yellow" : "blue"}>
-                          {g.attentionCount > 0 ? "Requiere accion" : "En proceso"}
+                          {g.attentionCount > 0 ? "Con incidencias" : "En proceso"}
                         </Badge>
                       ) : null}
                       {g.ocrError > 0 && (
@@ -409,7 +444,7 @@ export default async function WorkerBatchPage({
                   <div className="flex flex-wrap items-center gap-2 flex-shrink-0 justify-end">
                     {g.firstAttentionId && (
                       <Link
-                        href={`/dashboard/worker/review/${g.firstAttentionId}?bucket=attention`}
+                        href={reviewHref(g.firstAttentionId, { bucket: "attention", back: thisListHref })}
                         prefetch
                         className="flex items-center gap-1.5 rounded-lg bg-amber-500 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-amber-600 transition-colors"
                       >
@@ -419,7 +454,7 @@ export default async function WorkerBatchPage({
                     )}
                     {g.firstCleanId && (
                       <Link
-                        href={`/dashboard/worker/review/${g.firstCleanId}?bucket=clean`}
+                        href={reviewHref(g.firstCleanId, { bucket: "clean", back: thisListHref })}
                         prefetch
                         className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-blue-700 transition-colors"
                       >
@@ -501,12 +536,12 @@ export default async function WorkerBatchPage({
                 {/* Status pills */}
                 <div className="mt-3 flex flex-wrap gap-2">
                   {[
-                    { label: "Incidencias",   count: g.attentionCount,   color: "bg-amber-50 text-amber-700" },
-                    { label: "Listas",        count: g.cleanCount,       color: "bg-blue-50 text-blue-700" },
-                    { label: "Procesando",    count: g.processingCount,  color: "bg-slate-100 text-slate-500" },
-                    { label: "Validadas",     count: g.validated,        color: "bg-green-50 text-green-700" },
-                    { label: "Rechazadas",    count: g.rejected,         color: "bg-red-50 text-red-600" },
-                    { label: "Exportadas",    count: g.exported,         color: "bg-slate-100 text-slate-500" },
+                    { label: "Con incidencias",     count: g.attentionCount,   color: "bg-amber-50 text-amber-700" },
+                    { label: "Listas para validar", count: g.cleanCount,       color: "bg-blue-50 text-blue-700" },
+                    { label: "En análisis",         count: g.processingCount,  color: "bg-slate-100 text-slate-500" },
+                    { label: "Validadas",           count: g.validated,        color: "bg-green-50 text-green-700" },
+                    { label: "Rechazadas",          count: g.rejected,         color: "bg-red-50 text-red-600" },
+                    { label: "Exportadas",          count: g.exported,         color: "bg-slate-100 text-slate-500" },
                   ].filter((s) => s.count > 0).map(({ label, count, color }) => (
                     <span
                       key={label}
@@ -546,7 +581,7 @@ export default async function WorkerBatchPage({
         </div>
         {hiddenCount > 0 && estado === "pendientes" && (
           <p className="mt-3 text-center text-[12px] text-slate-400">
-            {hiddenCount} lote{hiddenCount !== 1 ? "s" : ""} completado/cerrado oculto{hiddenCount !== 1 ? "s" : ""}.{" "}
+            {`${hiddenCount} lote${hiddenPlural} completado${hiddenPlural} o cerrado${hiddenPlural} no se muestra${hiddenCount !== 1 ? "n" : ""}. `}
             <Link href={verTodosHref} className="font-medium text-blue-600 hover:underline">Ver todos</Link>
           </p>
         )}

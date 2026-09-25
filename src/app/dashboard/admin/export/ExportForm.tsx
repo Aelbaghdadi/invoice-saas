@@ -3,26 +3,21 @@
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import {
-  Download, FileDown, CheckCircle2, AlertCircle,
+  Download, FileDown, CheckCircle2,
   Loader2, AlertTriangle,
 } from "lucide-react";
 import type { A3ValidationWarning as A3Warning } from "@/lib/exportFormats";
 import { Select } from "@/components/ui/Select";
-import { quarterStartMonth, QUARTER_OPTIONS } from "@/lib/period";
+import { ErrorBox } from "@/components/ui/ErrorBox";
+import type { AppError } from "@/lib/errorCodes";
+import { quarterStartMonth, periodLabel, MONTH_OPTIONS, QUARTER_OPTIONS } from "@/lib/period";
 
 type ClientOption = { id: string; name: string; cif: string };
 
 type Props = { clients: ClientOption[] };
 
-const MONTHS = [
-  { v: 1,  l: "Enero" },   { v: 2,  l: "Febrero" }, { v: 3,  l: "Marzo" },
-  { v: 4,  l: "Abril" },   { v: 5,  l: "Mayo" },    { v: 6,  l: "Junio" },
-  { v: 7,  l: "Julio" },   { v: 8,  l: "Agosto" },  { v: 9,  l: "Septiembre" },
-  { v: 10, l: "Octubre" }, { v: 11, l: "Noviembre"},{ v: 12, l: "Diciembre" },
-];
-
 const FORMATS = [
-  { v: "a3excel",  l: "A3 Excel",  desc: "A3asesor — Excel con cuentas contables (.xlsx)" },
+  { v: "a3excel",  l: "A3 Excel",  desc: "A3 Asesor — Excel con cuentas contables (.xlsx)" },
 ];
 
 const TYPES = [
@@ -54,17 +49,22 @@ export function ExportForm({ clients }: Props) {
   // a incluir, pero hay que decirlo o el recuento no se entiende.
   const [alreadyExported, setAlreadyExported] = useState(0);
   const [counting, setCounting] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const [success,  setSuccess]  = useState(false);
-  const [error,    setError]    = useState<string | null>(null);
+  const [error,    setError]    = useState<AppError | string | null>(null);
 
   // ── fetch preview count ─────────────────────────────────────────────────
   const effectiveMonth = periodType === "QUARTERLY" ? quarterStartMonth(quarter) : month;
 
-  const fetchCount = useCallback(async () => {
+  // keepMessages: tras una descarga se relee el recuento sin borrar el aviso
+  // de exito o de error que acaba de ponerse; al cambiar filtros si se borran.
+  const fetchCount = useCallback(async (keepMessages = false) => {
     if (!clientId) return;
     setCounting(true);
-    setSuccess(false);
-    setError(null);
+    if (!keepMessages) {
+      setSuccess(false);
+      setError(null);
+    }
     try {
       const sp = new URLSearchParams({
         clientId,
@@ -92,7 +92,9 @@ export function ExportForm({ clients }: Props) {
 
   // ── download ────────────────────────────────────────────────────────────
   const handleDownload = async () => {
-    if (!count) return;
+    // Sin este freno, un doble clic creaba dos lotes con las mismas facturas
+    // (asientos duplicados en A3) o sacaba el error de "nada que exportar".
+    if (!count || downloading) return;
     const sp = new URLSearchParams({
       clientId, periodType, month: String(effectiveMonth), year: String(year), type, format,
     });
@@ -103,16 +105,19 @@ export function ExportForm({ clients }: Props) {
     // facturas, porque ya constaban exportadas.
     setError(null);
     setSuccess(false);
+    setDownloading(true);
     try {
       const res = await fetch(`/api/export?${sp}`);
       if (!res.ok) {
-        let msg = "No se ha podido generar el Excel. Vuelve a intentarlo.";
+        let failure: AppError | string = "No se ha podido generar el Excel. Vuelve a intentarlo.";
         try {
           const data = await res.json();
-          if (data?.error) msg = String(data.error);
+          // La API devuelve {code, message, details}: con String() salia "[object Object]".
+          if (typeof data?.error === "string") failure = data.error;
+          else if (data?.error?.message) failure = data.error as AppError;
         } catch { /* la respuesta no era JSON: se queda el mensaje generico */ }
-        setError(msg);
-        fetchCount();
+        setError(failure);
+        fetchCount(true);
         return;
       }
       const blob = await res.blob();
@@ -126,11 +131,15 @@ export function ExportForm({ clients }: Props) {
       a.click();
       URL.revokeObjectURL(url);
       setSuccess(true);
-      // Las descargadas ya constan exportadas: se refresca el recuento.
-      setTimeout(() => { fetchCount(); setSuccess(false); }, 2500);
+      // Las descargadas ya constan exportadas: se refresca el recuento ya,
+      // no a los 2,5 s, o el boton seguia ofreciendo las mismas facturas.
+      fetchCount(true);
+      setTimeout(() => setSuccess(false), 2500);
     } catch {
       setError("Error de conexión al generar el Excel. Comprueba si se ha descargado antes de repetirlo.");
-      fetchCount();
+      fetchCount(true);
+    } finally {
+      setDownloading(false);
     }
   };
 
@@ -144,10 +153,11 @@ export function ExportForm({ clients }: Props) {
 
         {/* Client */}
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+          <label htmlFor="export-client" className="mb-3 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
             Cliente
-          </p>
+          </label>
           <Select
+            id="export-client"
             value={clientId}
             onChange={setClientId}
             options={clients.map((c) => ({ value: c.id, label: `${c.name} — ${c.cif}` }))}
@@ -155,9 +165,9 @@ export function ExportForm({ clients }: Props) {
         </div>
 
         {/* Period */}
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-            Período
+        <div role="group" aria-labelledby="export-period-label" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <p id="export-period-label" className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+            Periodo
           </p>
           {/* Toggle mensual / trimestral */}
           <div className="mb-3 flex gap-2">
@@ -166,6 +176,7 @@ export function ExportForm({ clients }: Props) {
                 key={pt}
                 type="button"
                 onClick={() => setPeriodType(pt)}
+                aria-pressed={periodType === pt}
                 className={`flex-1 rounded-lg border px-3 py-2 text-[12px] font-medium transition ${
                   periodType === pt
                     ? "border-blue-500 bg-blue-50 text-blue-700"
@@ -179,18 +190,24 @@ export function ExportForm({ clients }: Props) {
           <div className="grid grid-cols-2 gap-3">
             {periodType === "MONTHLY" ? (
               <Select
+                id="export-month"
+                aria-label="Mes"
                 value={String(month)}
                 onChange={(v) => setMonth(Number(v))}
-                options={MONTHS.map((m) => ({ value: String(m.v), label: m.l }))}
+                options={MONTH_OPTIONS}
               />
             ) : (
               <Select
+                id="export-quarter"
+                aria-label="Trimestre"
                 value={String(quarter)}
                 onChange={(v) => setQuarter(Number(v))}
                 options={QUARTER_OPTIONS.map((q) => ({ value: String(q.value), label: q.label }))}
               />
             )}
             <Select
+              id="export-year"
+              aria-label="Año"
               value={String(year)}
               onChange={(v) => setYear(Number(v))}
               options={YEARS.map((y) => ({ value: String(y), label: String(y) }))}
@@ -199,8 +216,8 @@ export function ExportForm({ clients }: Props) {
         </div>
 
         {/* Type */}
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+        <div role="group" aria-labelledby="export-type-label" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <p id="export-type-label" className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
             Tipo de factura
           </p>
           <div className="flex gap-2">
@@ -209,7 +226,8 @@ export function ExportForm({ clients }: Props) {
                 key={t.v}
                 type="button"
                 onClick={() => setType(t.v)}
-                className={`flex-1 rounded-xl border px-3 py-2 text-[12px] font-medium transition ${
+                aria-pressed={type === t.v}
+                className={`flex-1 rounded-lg border px-3 py-2 text-[12px] font-medium transition ${
                   type === t.v
                     ? "border-blue-500 bg-blue-50 text-blue-700"
                     : "border-slate-200 text-slate-500 hover:bg-slate-50"
@@ -222,8 +240,8 @@ export function ExportForm({ clients }: Props) {
         </div>
 
         {/* Format */}
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+        <div role="group" aria-labelledby="export-format-label" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <p id="export-format-label" className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
             Software contable destino
           </p>
           <div className="space-y-2">
@@ -232,6 +250,7 @@ export function ExportForm({ clients }: Props) {
                 key={f.v}
                 type="button"
                 onClick={() => setFormat(f.v)}
+                aria-pressed={format === f.v}
                 className={`flex w-full items-start gap-3 rounded-xl border px-4 py-3 text-left transition ${
                   format === f.v
                     ? "border-blue-500 bg-blue-50"
@@ -271,11 +290,7 @@ export function ExportForm({ clients }: Props) {
 
             <div className="space-y-3 text-[13px]">
               <Row label="Cliente"   value={selectedClient?.name ?? "—"} />
-              <Row label="Período"   value={
-                periodType === "QUARTERLY"
-                  ? `T${quarter} ${year}`
-                  : `${MONTHS.find(m => m.v === month)?.l} ${year}`
-              } />
+              <Row label="Periodo"   value={periodLabel(periodType, effectiveMonth, year)} />
               <Row label="Tipo"      value={TYPES.find(t => t.v === type)?.l ?? "—"} />
               <Row label="Formato"   value={selectedFormat?.l ?? "—"} />
             </div>
@@ -353,26 +368,30 @@ export function ExportForm({ clients }: Props) {
               Exportación completada. Las facturas han sido marcadas como Exportadas.
             </div>
           )}
-          {error && (
-            <div className="flex items-center gap-2 rounded-xl bg-red-50 px-4 py-3 text-[13px] text-red-600">
-              <AlertCircle className="h-4 w-4 flex-shrink-0" />
-              {error}
-            </div>
-          )}
+          {error && <ErrorBox error={error} variant="banner" />}
 
           {/* Download button */}
           <button
             type="button"
             onClick={handleDownload}
-            disabled={!count || counting || count === 0}
+            disabled={!count || counting || count === 0 || downloading}
             className="flex w-full items-center justify-center gap-2.5 rounded-lg bg-blue-600 px-5 py-3.5 text-[14px] font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            <Download className="h-4 w-4" />
-            Descargar Excel
-            {count != null && count > 0 && (
-              <span className="rounded-full bg-blue-500 px-2 py-0.5 text-[11px]">
-                {count}
-              </span>
+            {downloading ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Generando Excel…
+              </>
+            ) : (
+              <>
+                <Download className="h-4 w-4" />
+                Descargar Excel
+                {count != null && count > 0 && (
+                  <span className="rounded-full bg-blue-500 px-2 py-0.5 text-[11px]">
+                    {count}
+                  </span>
+                )}
+              </>
             )}
           </button>
 

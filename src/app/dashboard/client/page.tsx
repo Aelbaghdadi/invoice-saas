@@ -6,18 +6,8 @@ import { FileText, Clock, CheckCircle2, Upload, ArrowRight } from "lucide-react"
 import { Badge } from "@/components/ui/Badge";
 import Link from "next/link";
 import { PENDING_WORK } from "@/lib/invoiceStatuses";
-
-const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
-  UPLOADED:  { label: "Subida",       variant: "blue" },
-  ANALYZING: { label: "En análisis",  variant: "yellow" },
-  ANALYZED:  { label: "Analizada",    variant: "yellow" },
-  OCR_ERROR: { label: "Error OCR",    variant: "red" },
-  VALIDATED: { label: "Validada",     variant: "green" },
-  REJECTED:  { label: "Rechazada",    variant: "red" },
-  EXPORTED:        { label: "Exportada",      variant: "slate" },
-  PENDING_REVIEW:  { label: "Pte. revisión",  variant: "blue" },
-  NEEDS_ATTENTION: { label: "Con incidencias", variant: "yellow" },
-};
+import { periodLabel } from "@/lib/period";
+import { CLIENT_STATUS_BADGE } from "./clientStatus";
 
 export default async function ClientDashboard() {
   const session = await auth();
@@ -37,7 +27,7 @@ export default async function ClientDashboard() {
 
   const total     = client ? await prisma.invoice.count({ where: { clientId: client.id } }).catch(() => 0) : 0;
   const pending   = client ? await prisma.invoice.count({ where: { clientId: client.id, status: { in: PENDING_WORK } } }).catch(() => 0) : 0;
-  const validated = client ? await prisma.invoice.count({ where: { clientId: client.id, status: InvoiceStatus.VALIDATED } }).catch(() => 0) : 0;
+  const validated = client ? await prisma.invoice.count({ where: { clientId: client.id, status: { in: [InvoiceStatus.VALIDATED, InvoiceStatus.EXPORTED] } } }).catch(() => 0) : 0;
 
   const stats = [
     { label: "Total facturas",  value: total,     icon: FileText,    color: "text-blue-600",   bg: "bg-blue-50" },
@@ -96,8 +86,7 @@ export default async function ClientDashboard() {
           </div>
           <ul className="divide-y divide-slate-50">
             {client.invoices.map((invoice) => {
-              const s = STATUS_BADGE[invoice.status] ?? STATUS_BADGE.UPLOADED;
-              const monthName = new Date(0, invoice.periodMonth - 1).toLocaleString("es", { month: "short" });
+              const s = CLIENT_STATUS_BADGE[invoice.status];
               return (
                 <li key={invoice.id} className="flex items-center gap-3 px-5 py-3">
                   <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-slate-100">
@@ -107,8 +96,8 @@ export default async function ClientDashboard() {
                     <p className="truncate text-[13px] font-medium text-slate-700">
                       {invoice.filename}
                     </p>
-                    <p className="text-[11px] capitalize text-slate-400">
-                      {monthName} {invoice.periodYear} ·{" "}
+                    <p className="text-[11px] text-slate-400">
+                      {periodLabel(invoice.periodType, invoice.periodMonth, invoice.periodYear)} ·{" "}
                       {invoice.type === "PURCHASE" ? "Recibida" : "Emitida"}
                     </p>
                     {invoice.status === "REJECTED" && invoice.rejectionReason && (

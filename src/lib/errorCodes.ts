@@ -48,9 +48,10 @@ export type AppErrorCode =
 
 export const ERROR_MESSAGES: Record<AppErrorCode, string> = {
   "ERR-UPLOAD-001": "El archivo supera el tamaño máximo permitido (20 MB).",
-  "ERR-UPLOAD-002": "Tipo de archivo no permitido. Acepta PDF, JPG, PNG, WEBP o XML.",
+  "ERR-UPLOAD-002": "Tipo de archivo no permitido. Acepta PDF, XML, JPG, PNG, WEBP o HEIC.",
   "ERR-UPLOAD-003": "No se pudo guardar el archivo. Inténtalo de nuevo en unos segundos.",
-  "ERR-UPLOAD-004": "El periodo está cerrado. Reábrelo desde Cierres si necesitas modificarlo.",
+  // Solo un administrador puede reabrir periodos; esto lo ven gestores y clientes.
+  "ERR-UPLOAD-004": "El periodo está cerrado. Pide a un administrador de tu asesoría que lo reabra.",
   "ERR-UPLOAD-005": "No tienes acceso a este cliente.",
   "ERR-UPLOAD-006": "Esta factura ya estaba subida (duplicada por contenido).",
   "ERR-UPLOAD-007": "El nombre del archivo contiene caracteres no válidos.",
@@ -61,14 +62,14 @@ export const ERROR_MESSAGES: Record<AppErrorCode, string> = {
   "ERR-OCR-004": "El archivo original no se encuentra en almacenamiento. Vuelve a subirlo.",
 
   "ERR-VALIDATE-001": "El CIF del emisor y del receptor no pueden coincidir.",
-  "ERR-VALIDATE-002": "El periodo contable está cerrado. No se puede validar.",
+  "ERR-VALIDATE-002": "El periodo contable está cerrado. Pide a un administrador que lo reabra en Cierres para poder validar.",
   "ERR-VALIDATE-003": "Otro gestor modificó esta factura. Recarga la página para ver los cambios.",
   "ERR-VALIDATE-004": "Hay líneas de IVA con valores no válidos (revisa porcentajes y signos).",
 
   "ERR-EXPORT-001": "No hay facturas validadas para exportar en el rango seleccionado.",
   "ERR-EXPORT-002": "No se pudo generar el Excel. Reintenta o contacta con soporte.",
 
-  "ERR-AUTH-001": "No has iniciado sesión.",
+  "ERR-AUTH-001": "Tu sesión ha caducado. Vuelve a iniciar sesión.",
   "ERR-AUTH-002": "No tienes permisos para esta acción.",
   "ERR-AUTH-003": "No tienes asignado este cliente.",
 

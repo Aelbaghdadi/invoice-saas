@@ -10,7 +10,7 @@ import Link from "next/link";
 import { InvoicesTable } from "./InvoicesTable";
 import { ReprocessAllErrorsButton } from "./ReprocessAllErrorsButton";
 import { parsePage, parseIntInRange, periodMonthFilter } from "@/lib/listing";
-import { invoicePageIds, inIdOrder, invoiceOrderBy } from "@/lib/invoiceListing";
+import { invoicePageIds, inIdOrder, invoiceOrderBy, matchingInvoiceIds, withinIds } from "@/lib/invoiceListing";
 import type { InvoiceStatus, InvoiceType, Prisma } from "@prisma/client";
 
 const STATUS_BADGE: Record<string, { label: string }> = {
@@ -83,9 +83,13 @@ export default async function InvoicesPage({
     ...(statusFilter ? { status: statusFilter as InvoiceStatus } : {}),
   };
 
+  // El texto se resuelve una vez sobre el filtro base (sin estado), para que
+  // la lista y los contadores de las pestañas salgan del mismo conjunto.
+  const textIds = await matchingInvoiceIds(baseWhere, q);
+
   // Solo se cargan las facturas de la pagina que se ve. Antes venian todas
   // las de la asesoria y se paginaba en el navegador.
-  const { ids, window } = await invoicePageIds({ where: listWhere, orderBy, q, page });
+  const { ids, window } = await invoicePageIds({ where: withinIds(listWhere, textIds), orderBy, page });
   const invoices = ids.length === 0 ? [] : inIdOrder(
     await prisma.invoice.findMany({
       // Se repite el filtro de la asesoria aunque los ids ya salgan de el:
@@ -105,7 +109,7 @@ export default async function InvoicesPage({
 
   // Contadores por estado con el MISMO baseWhere que la lista (cliente/periodo/tipo).
   const [counts, yearRows] = await Promise.all([
-    prisma.invoice.groupBy({ by: ["status"], where: baseWhere, _count: true }).catch(() => []),
+    prisma.invoice.groupBy({ by: ["status"], where: withinIds(baseWhere, textIds), _count: true }).catch(() => []),
     // Años con facturas, para el desplegable.
     prisma.invoice.groupBy({
       by: ["periodYear"],
@@ -241,7 +245,13 @@ export default async function InvoicesPage({
         </div>
       ) : (
         <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <InvoicesTable invoices={serialized} sort={sort} dir={dir} sortHrefs={sortHrefs} />
+          <InvoicesTable
+            invoices={serialized}
+            sort={sort}
+            dir={dir}
+            sortHrefs={sortHrefs}
+            listHref={href({ status: statusFilter, ...sortParams, page: page > 1 ? String(page) : undefined })}
+          />
           <Pagination
             window={window}
             hrefFor={(p) => href({ status: statusFilter, ...sortParams, page: p > 1 ? String(p) : undefined })}

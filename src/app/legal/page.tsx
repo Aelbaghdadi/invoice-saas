@@ -1,7 +1,19 @@
+import Link from "next/link";
+import { ArrowLeft } from "lucide-react";
+
 export default function LegalPage() {
   return (
     <div className="mx-auto max-w-3xl px-6 py-12">
-      <h1 className="text-2xl font-bold text-slate-800">Aviso legal</h1>
+      {/* Pagina suelta, sin barra lateral: sin este enlace solo se salia con
+          el boton atras del navegador. */}
+      <Link
+        href="/dashboard"
+        className="inline-flex items-center gap-1.5 text-[13px] font-medium text-slate-500 transition-colors hover:text-slate-700"
+      >
+        <ArrowLeft className="h-4 w-4" />
+        Volver al panel
+      </Link>
+      <h1 className="mt-6 text-2xl font-bold text-slate-800">Aviso legal</h1>
 
       <div className="mt-6 space-y-6 text-[14px] leading-relaxed text-slate-600">
         <section>

@@ -11,6 +11,7 @@ import {
 import { isForeignCurrency } from "@/lib/currency";
 import { goodsTypeFromSaleAccount } from "@/lib/intracomGoods";
 import { invoiceBalanceDiffCents } from "@/lib/invoiceBalance";
+import { formatEur } from "@/lib/format";
 import { findNumberingGaps } from "@/lib/invoiceNumbering";
 import { isStandardVatRate, isSurchargeRate } from "@/lib/equivalenceSurcharge";
 
@@ -399,7 +400,7 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
         const diff = Math.abs(invoiceBalanceDiffCents({
           sumBase, sumAmount: sumAmt, sumSurcharge, irpf, total: totalNum,
         }));
-        if (diff > 0) warnings.push(`Descuadre Base+IVA vs Total: ${(diff / 100).toFixed(2)}`);
+        if (diff > 0) warnings.push(`Descuadre Base+IVA vs Total: ${formatEur(diff / 100)}`);
       }
     }
 
