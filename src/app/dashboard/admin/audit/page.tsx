@@ -5,8 +5,14 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ClipboardList, ArrowRight } from "lucide-react";
 import { AuditFilters } from "./AuditFilters";
-import { IntegrityCheck } from "./IntegrityCheck";
 import { formatAuditValue } from "@/lib/invoiceStatuses";
+import { Pagination } from "@/components/ui/Pagination";
+import { parsePage, pageWindow } from "@/lib/listing";
+import Link from "next/link";
+
+/** Registros por pagina. Mas que en facturas: son filas cortas y se leen en
+ *  secuencia. */
+const AUDIT_PAGE_SIZE = 50;
 
 const FIELD_LABELS: Record<string, string> = {
   status: "Estado", issuerName: "Emisor", issuerCif: "CIF emisor",
@@ -51,6 +57,7 @@ export default async function AuditLogPage({ searchParams }: Props) {
   const field = params.field ?? "";
   const dateFrom = params.from ?? "";
   const dateTo = params.to ?? "";
+  const page = parsePage(params.page);
 
   // Build where clause
   const where: Record<string, unknown> = {
@@ -69,6 +76,8 @@ export default async function AuditLogPage({ searchParams }: Props) {
 
   if (q) {
     where.OR = [
+      // Por numero de factura: es como se busca una factura concreta.
+      { invoice: { invoiceNumber: { contains: q, mode: "insensitive" } } },
       { invoice: { filename: { contains: q, mode: "insensitive" } } },
       { invoice: { client: { name: { contains: q, mode: "insensitive" } } } },
       { field: { contains: q, mode: "insensitive" } },
@@ -76,11 +85,17 @@ export default async function AuditLogPage({ searchParams }: Props) {
     ];
   }
 
+  // Paginado en BD. Antes se cortaba en 200 registros sin decirlo: lo mas
+  // antiguo no se podia ver y parecia que no existia.
+  const total = await prisma.auditLog.count({ where }).catch(() => 0);
+  const window = pageWindow(page, total, AUDIT_PAGE_SIZE);
+
   const [logs, allUsers, distinctFields] = await Promise.all([
     prisma.auditLog.findMany({
       where,
-      orderBy: { createdAt: "desc" },
-      take: 200,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      skip: window.skip,
+      take: window.take,
       include: {
         user: true,
         invoice: { include: { client: true } },
@@ -108,8 +123,6 @@ export default async function AuditLogPage({ searchParams }: Props) {
         description="Historial completo de cambios realizados en las facturas"
       />
 
-      <IntegrityCheck />
-
       <AuditFilters users={allUsers} fields={fields} />
 
       <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -124,7 +137,7 @@ export default async function AuditLogPage({ searchParams }: Props) {
         ) : (
           <div className="overflow-x-auto">
             <div className="px-5 py-3 border-b border-slate-100">
-              <p className="text-[12px] text-slate-400">{logs.length} registro{logs.length !== 1 ? "s" : ""}</p>
+              <p className="text-[12px] text-slate-400">{window.total} registro{window.total !== 1 ? "s" : ""}</p>
             </div>
             <table className="w-full">
               <thead>
@@ -150,8 +163,16 @@ export default async function AuditLogPage({ searchParams }: Props) {
                         <span className="text-[13px] font-medium text-slate-700">{log.user.name}</span>
                       </div>
                     </td>
-                    <td className="px-5 py-3 max-w-[160px]">
-                      <p className="truncate text-[13px] text-slate-600">{log.invoice.filename}</p>
+                    <td className="px-5 py-3 max-w-[180px]">
+                      {/* Numero de factura y no el fichero ("Cliente3_Factura_4.pdf"
+                          no dice cual es); el fichero queda en el tooltip. */}
+                      <Link
+                        href={`/dashboard/worker/review/${log.invoice.id}`}
+                        className="block truncate text-[13px] text-slate-600 hover:text-blue-600 hover:underline"
+                        title={log.invoice.filename}
+                      >
+                        {log.invoice.invoiceNumber ?? log.invoice.filename}
+                      </Link>
                     </td>
                     <td className="px-5 py-3 text-[13px] text-slate-500">{log.invoice.client.name}</td>
                     <td className="px-5 py-3">
@@ -170,6 +191,21 @@ export default async function AuditLogPage({ searchParams }: Props) {
                 ))}
               </tbody>
             </table>
+            <Pagination
+              window={window}
+              noun="registros"
+              hrefFor={(p) => {
+                const sp = new URLSearchParams();
+                if (q) sp.set("q", q);
+                if (userId) sp.set("user", userId);
+                if (field) sp.set("field", field);
+                if (dateFrom) sp.set("from", dateFrom);
+                if (dateTo) sp.set("to", dateTo);
+                if (p > 1) sp.set("page", String(p));
+                const qs = sp.toString();
+                return qs ? `/dashboard/admin/audit?${qs}` : "/dashboard/admin/audit";
+              }}
+            />
           </div>
         )}
       </div>

@@ -2,7 +2,12 @@
 
 import { useState, useTransition } from "react";
 import { createAccountEntry, updateAccountEntry, deleteAccountEntry } from "./actions";
-import { Plus, Pencil, Trash2, Check, X, Search, Loader2 } from "lucide-react";
+import { Plus, Pencil, Trash2, Check, X, Search, Loader2, ChevronLeft, ChevronRight } from "lucide-react";
+import { matchesSearch, pageWindow } from "@/lib/listing";
+
+/** Fichas por pagina. Un plan importado de A3 son cientos de terceros y se
+ *  pintaban todos de golpe. */
+const ACCOUNTS_PAGE_SIZE = 50;
 import type { AccountEntry } from "@prisma/client";
 import { useRouter } from "next/navigation";
 
@@ -18,12 +23,15 @@ export function AccountsTable({ entries, clientId }: Props) {
   const [showAdd, setShowAdd] = useState(false);
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
 
-  const filtered = entries.filter(
-    (e) =>
-      e.nif.toLowerCase().includes(search.toLowerCase()) ||
-      e.name.toLowerCase().includes(search.toLowerCase()),
+  // Sin tildes y tambien por numero de cuenta: el gestor ve "41000486" en A3
+  // y quiere saber de quien es.
+  const filtered = entries.filter((e) =>
+    matchesSearch([e.nif, e.name, e.supplierAccount, e.customerAccount, e.expenseAccount, e.incomeAccount], search),
   );
+  const window = pageWindow(page, filtered.length, ACCOUNTS_PAGE_SIZE);
+  const visibles = filtered.slice(window.skip, window.skip + window.take);
 
   const handleCreate = (fd: FormData) => {
     setError(null);
@@ -54,7 +62,7 @@ export function AccountsTable({ entries, clientId }: Props) {
   };
 
   const handleDelete = (entryId: string) => {
-    if (!confirm("Eliminar esta cuenta del plan?")) return;
+    if (!confirm("¿Eliminar esta cuenta del plan?")) return;
     startTransition(async () => {
       await deleteAccountEntry(entryId);
       router.refresh();
@@ -69,9 +77,10 @@ export function AccountsTable({ entries, clientId }: Props) {
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-300" />
           <input
             type="text"
-            placeholder="Buscar por NIF o nombre..."
+            placeholder="Buscar por NIF, nombre o cuenta…"
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            // Al buscar se vuelve a la primera pagina: la 5 puede no existir.
+            onChange={(e) => { setSearch(e.target.value); setPage(1); }}
             className="rounded-lg border border-slate-200 py-2 pl-9 pr-4 text-[13px] focus:border-accent-500 focus:outline-none focus:ring-1 focus:ring-accent-200"
           />
         </div>
@@ -129,7 +138,7 @@ export function AccountsTable({ entries, clientId }: Props) {
               </td>
             </tr>
           ) : (
-            filtered.map((entry) =>
+            visibles.map((entry) =>
               editId === entry.id ? (
                 <InlineForm
                   key={entry.id}
@@ -189,8 +198,39 @@ export function AccountsTable({ entries, clientId }: Props) {
       </div>
 
       {entries.length > 0 && (
-        <div className="border-t border-slate-100 px-5 py-3 text-[12px] text-slate-400">
-          {entries.length} cuenta{entries.length !== 1 ? "s" : ""} en total
+        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-5 py-3">
+          <p className="text-[12px] text-slate-500 tabular-nums">
+            {filtered.length === 0
+              ? `Ninguna de las ${entries.length} cuentas coincide`
+              : <>Mostrando <span className="font-semibold text-slate-700">{window.from}–{window.to}</span> de{" "}
+                  <span className="font-semibold text-slate-700">{filtered.length}</span>
+                  {filtered.length !== entries.length && ` (de ${entries.length} en total)`}</>}
+          </p>
+          {window.totalPages > 1 && (
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setPage(window.page - 1)}
+                disabled={window.page === 1}
+                aria-label="Página anterior"
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              <span className="px-2 text-[12px] text-slate-500 tabular-nums">
+                {window.page} / {window.totalPages}
+              </span>
+              <button
+                type="button"
+                onClick={() => setPage(window.page + 1)}
+                disabled={window.page === window.totalPages}
+                aria-label="Página siguiente"
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-30"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

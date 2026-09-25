@@ -3,11 +3,15 @@ import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { FileText, X } from "lucide-react";
+import { Pagination } from "@/components/ui/Pagination";
+import { InvoiceFilters } from "@/components/invoices/InvoiceFilters";
+import { FileText } from "lucide-react";
 import Link from "next/link";
 import { InvoicesTable } from "./InvoicesTable";
 import { ReprocessAllErrorsButton } from "./ReprocessAllErrorsButton";
-import type { InvoiceStatus, InvoiceType } from "@prisma/client";
+import { parsePage, parseIntInRange, periodMonthFilter } from "@/lib/listing";
+import { invoicePageIds, inIdOrder, invoiceOrderBy } from "@/lib/invoiceListing";
+import type { InvoiceStatus, InvoiceType, Prisma } from "@prisma/client";
 
 const STATUS_BADGE: Record<string, { label: string }> = {
   UPLOADED:  { label: "Subidas" },
@@ -21,6 +25,8 @@ const STATUS_BADGE: Record<string, { label: string }> = {
   NEEDS_ATTENTION: { label: "Con incidencias" },
 };
 
+const BASE_PATH = "/dashboard/admin/invoices";
+
 export default async function InvoicesPage({
   searchParams,
 }: {
@@ -29,7 +35,12 @@ export default async function InvoicesPage({
     type?: string;
     clientId?: string;
     month?: string;
+    quarter?: string;
     year?: string;
+    q?: string;
+    page?: string;
+    sort?: string;
+    dir?: string;
   }>;
 }) {
   const session = await auth();
@@ -37,59 +48,76 @@ export default async function InvoicesPage({
   const firmId = session.user.advisoryFirmId ?? undefined;
 
   const params = await searchParams;
-  const statusFilter = params.status;
-  const typeFilter = params.type;
-  const clientIdFilter = params.clientId;
-  const monthFilter = params.month ? parseInt(params.month, 10) || undefined : undefined;
-  const yearFilter = params.year ? parseInt(params.year, 10) || undefined : undefined;
+  const statusFilter = params.status && STATUS_BADGE[params.status] ? params.status : undefined;
+  const typeFilter = params.type === "PURCHASE" || params.type === "SALE" ? params.type : undefined;
+  const monthFilter = parseIntInRange(params.month, 1, 12);
+  const quarterFilter = parseIntInRange(params.quarter, 1, 4);
+  const yearFilter = parseIntInRange(params.year, 2000, 2100);
+  const q = (params.q ?? "").slice(0, 100);
+  const page = parsePage(params.page);
+  const { orderBy, sort, dir } = invoiceOrderBy(params.sort, params.dir);
 
-  // Resolve client name for the chip, if filtered by client
-  const filteredClient = clientIdFilter
-    ? await prisma.client.findFirst({
-        where: { id: clientIdFilter, advisoryFirmId: firmId },
-        select: { id: true, name: true },
-      }).catch(() => null)
-    : null;
+  // Clientes de la asesoria para el desplegable. El cliente de la URL solo se
+  // acepta si es uno de estos: un id de otra asesoria no filtra, se ignora.
+  const clients = await prisma.client.findMany({
+    where: { advisoryFirmId: firmId, isUnclassifiedBucket: false },
+    select: { id: true, name: true },
+    orderBy: { name: "asc" },
+  }).catch(() => []);
+  const clientIdFilter = clients.some((c) => c.id === params.clientId) ? params.clientId : undefined;
 
   // WHERE base SIN el filtro de estado: lo comparten la lista y los contadores
   // de las pestañas, así los números cuadran (antes los contadores eran
   // globales y un sub-conteo podía superar al total o contar con lista vacía).
   // Excluye el buzón "Sin clasificar" (sus facturas son PENDING_ROUTING).
-  const baseWhere = {
+  const periodMonth = periodMonthFilter(monthFilter, quarterFilter);
+  const baseWhere: Prisma.InvoiceWhereInput = {
     client: { advisoryFirmId: firmId, isUnclassifiedBucket: false },
     ...(typeFilter ? { type: typeFilter as InvoiceType } : {}),
     ...(clientIdFilter ? { clientId: clientIdFilter } : {}),
-    ...(monthFilter ? { periodMonth: monthFilter } : {}),
+    ...(periodMonth !== undefined ? { periodMonth } : {}),
     ...(yearFilter ? { periodYear: yearFilter } : {}),
   };
+  const listWhere: Prisma.InvoiceWhereInput = {
+    ...baseWhere,
+    ...(statusFilter ? { status: statusFilter as InvoiceStatus } : {}),
+  };
 
-  const invoices = await prisma.invoice.findMany({
-    where: {
-      ...baseWhere,
-      ...(statusFilter ? { status: statusFilter as InvoiceStatus } : {}),
-    },
-    orderBy: { createdAt: "desc" },
-    include: {
-      client: true,
-      auditLogs: { where: { field: "duplicate_warning" }, take: 1 },
-      // Si salio alguna vez en un Excel. No vale mirar exportBatchId: al
-      // corregir una factura ya exportada ese puntero se pone a null para que
-      // vuelva a la cola, y la factura sigue estando en A3.
-      exportBatchItems: { take: 1, select: { id: true } },
-    },
-  }).catch(() => []);
+  // Solo se cargan las facturas de la pagina que se ve. Antes venian todas
+  // las de la asesoria y se paginaba en el navegador.
+  const { ids, window } = await invoicePageIds({ where: listWhere, orderBy, q, page });
+  const invoices = ids.length === 0 ? [] : inIdOrder(
+    await prisma.invoice.findMany({
+      // Se repite el filtro de la asesoria aunque los ids ya salgan de el:
+      // una consulta por id suelta es justo la que acaba colando datos de otra.
+      where: { AND: [listWhere, { id: { in: ids } }] },
+      include: {
+        client: true,
+        auditLogs: { where: { field: "duplicate_warning" }, take: 1 },
+        // Si salio alguna vez en un Excel. No vale mirar exportBatchId: al
+        // corregir una factura ya exportada ese puntero se pone a null para
+        // que vuelva a la cola, y la factura sigue estando en A3.
+        exportBatchItems: { take: 1, select: { id: true } },
+      },
+    }).catch(() => []),
+    ids,
+  );
 
   // Contadores por estado con el MISMO baseWhere que la lista (cliente/periodo/tipo).
-  const counts = await prisma.invoice.groupBy({
-    by: ["status"],
-    where: baseWhere,
-    _count: true,
-  }).catch(() => []);
+  const [counts, yearRows] = await Promise.all([
+    prisma.invoice.groupBy({ by: ["status"], where: baseWhere, _count: true }).catch(() => []),
+    // Años con facturas, para el desplegable.
+    prisma.invoice.groupBy({
+      by: ["periodYear"],
+      where: { client: { advisoryFirmId: firmId, isUnclassifiedBucket: false } },
+      orderBy: { periodYear: "desc" },
+    }).catch(() => []),
+  ]);
 
   const countMap = Object.fromEntries(counts.map(c => [c.status, c._count]));
   const totalCount = counts.reduce((sum, c) => sum + (typeof c._count === "number" ? c._count : 0), 0);
 
-  const filters = [
+  const tabs = [
     { label: "Todas", value: "", count: totalCount },
     { label: "Subidas", value: "UPLOADED", count: countMap.UPLOADED ?? 0 },
     { label: "En análisis", value: "ANALYZING", count: countMap.ANALYZING ?? 0 },
@@ -100,8 +128,26 @@ export default async function InvoicesPage({
     { label: "Rechazadas", value: "REJECTED", count: countMap.REJECTED ?? 0 },
   ];
 
+  // Filtros actuales tal cual van a la URL. Las pestañas, el orden y la
+  // paginacion los conservan; cambiar de filtro vuelve a la primera pagina.
+  const filterParams: Record<string, string | undefined> = {
+    clientId: clientIdFilter,
+    quarter: quarterFilter ? String(quarterFilter) : undefined,
+    month: !quarterFilter && monthFilter ? String(monthFilter) : undefined,
+    year: yearFilter ? String(yearFilter) : undefined,
+    type: typeFilter,
+    q: q || undefined,
+  };
+  const href = (extra: Record<string, string | undefined>) => {
+    const sp = new URLSearchParams();
+    for (const [k, v] of Object.entries({ ...filterParams, ...extra })) if (v) sp.set(k, v);
+    const qs = sp.toString();
+    return qs ? `${BASE_PATH}?${qs}` : BASE_PATH;
+  };
+  const sortParams = { sort: sort === "fecha" ? undefined : sort, dir: dir === "desc" ? undefined : dir };
+
   // Serialize for client component
-  const serialized = invoices.map((inv: any) => ({
+  const serialized = invoices.map((inv) => ({
     id: inv.id,
     filename: inv.filename,
     status: inv.status,
@@ -126,61 +172,32 @@ export default async function InvoicesPage({
     pendingReexport: (inv.exportBatchItems?.length ?? 0) > 0 && inv.exportBatchId == null,
   }));
 
-  // Build batch-scope filter chip pieces (client/month/year/type coming from "Ver todas")
-  const monthName = (m: number) => new Date(2000, m - 1).toLocaleString("es-ES", { month: "long" });
-  const hasBatchFilter = !!(filteredClient || monthFilter || yearFilter || typeFilter);
-  const chipParts: string[] = [];
-  if (filteredClient) chipParts.push(filteredClient.name);
-  if (monthFilter && yearFilter) {
-    chipParts.push(`${monthName(monthFilter)} ${yearFilter}`);
-  } else if (yearFilter) {
-    chipParts.push(String(yearFilter));
-  }
-  if (typeFilter === "PURCHASE") chipParts.push("Recibidas");
-  else if (typeFilter === "SALE") chipParts.push("Emitidas");
+  // Enlaces de ordenacion por columna: pulsar la columna activa invierte el
+  // sentido. Van al servidor porque ordenar solo la pagina visible mentia.
+  const sortHrefs = Object.fromEntries(
+    (["fecha", "factura", "cliente", "periodo", "total"] as const).map((key) => {
+      const nextDir = sort === key ? (dir === "desc" ? "asc" : "desc") : key === "fecha" || key === "total" ? "desc" : "asc";
+      return [key, href({ status: statusFilter, sort: key === "fecha" && nextDir === "desc" ? undefined : key, dir: nextDir === "desc" ? undefined : nextDir })];
+    }),
+  ) as Record<"fecha" | "factura" | "cliente" | "periodo" | "total", string>;
 
-  // Preserve status in the "clear" link
-  const clearHref = statusFilter
-    ? `/dashboard/admin/invoices?status=${statusFilter}`
-    : "/dashboard/admin/invoices";
+  const hayFiltros = !!(clientIdFilter || monthFilter || quarterFilter || yearFilter || typeFilter || q);
 
   return (
     <div>
       <PageHeader
         title="Facturas"
-        description={`${invoices.length} factura${invoices.length !== 1 ? "s" : ""}${statusFilter ? ` \u00B7 ${STATUS_BADGE[statusFilter]?.label ?? statusFilter}` : ""}`}
+        description={`${window.total} factura${window.total !== 1 ? "s" : ""}${statusFilter ? ` · ${STATUS_BADGE[statusFilter]?.label ?? statusFilter}` : ""}`}
       />
 
-      {hasBatchFilter && (
-        <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-[12px] font-medium text-blue-700">
-          <span className="text-blue-400">Filtrado por:</span>
-          <span className="capitalize">{chipParts.join(" \u00B7 ")}</span>
-          <Link
-            href={clearHref}
-            className="ml-1 flex h-5 w-5 items-center justify-center rounded-full text-blue-400 hover:bg-blue-100 hover:text-blue-600"
-            title="Quitar filtro"
-          >
-            <X className="h-3 w-3" />
-          </Link>
-        </div>
-      )}
-
       {/* Status tabs */}
-      <div className="mb-4 flex items-center gap-1 rounded-lg border border-slate-200 bg-white p-1 w-fit shadow-sm">
-        {filters.map((f) => {
+      <div className="mb-4 flex w-fit flex-wrap items-center gap-1 rounded-lg border border-slate-200 bg-white p-1 shadow-sm">
+        {tabs.map((f) => {
           const active = (statusFilter ?? "") === f.value;
-          // Preserve batch-scope filters when switching status tabs
-          const tabParams = new URLSearchParams();
-          if (f.value) tabParams.set("status", f.value);
-          if (clientIdFilter) tabParams.set("clientId", clientIdFilter);
-          if (monthFilter) tabParams.set("month", String(monthFilter));
-          if (yearFilter) tabParams.set("year", String(yearFilter));
-          if (typeFilter) tabParams.set("type", typeFilter);
-          const qs = tabParams.toString();
           return (
             <Link
               key={f.value}
-              href={qs ? `/dashboard/admin/invoices?${qs}` : "/dashboard/admin/invoices"}
+              href={href({ status: f.value || undefined, ...sortParams })}
               className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[13px] font-medium transition-all ${
                 active ? "bg-blue-600 text-white shadow-sm" : "text-slate-500 hover:text-slate-700"
               }`}
@@ -194,6 +211,20 @@ export default async function InvoicesPage({
         })}
       </div>
 
+      <InvoiceFilters
+        basePath={BASE_PATH}
+        clients={clients}
+        years={yearRows.map((y) => y.periodYear)}
+        values={{
+          clientId: clientIdFilter ?? "",
+          period: quarterFilter ? `t${quarterFilter}` : monthFilter ? `m${monthFilter}` : "",
+          year: yearFilter ? String(yearFilter) : "",
+          type: typeFilter ?? "",
+          q,
+        }}
+        keep={{ status: statusFilter, ...sortParams }}
+      />
+
       {statusFilter === "OCR_ERROR" && (
         <ReprocessAllErrorsButton count={countMap.OCR_ERROR ?? 0} />
       )}
@@ -203,11 +234,19 @@ export default async function InvoicesPage({
           <EmptyState
             icon={FileText}
             title="Sin facturas"
-            description="Las facturas aparecerán aquí cuando los clientes suban archivos."
+            description={hayFiltros || statusFilter
+              ? "No hay facturas con estos filtros."
+              : "Las facturas aparecerán aquí cuando los clientes suban archivos."}
           />
         </div>
       ) : (
-        <InvoicesTable invoices={serialized} />
+        <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <InvoicesTable invoices={serialized} sort={sort} dir={dir} sortHrefs={sortHrefs} />
+          <Pagination
+            window={window}
+            hrefFor={(p) => href({ status: statusFilter, ...sortParams, page: p > 1 ? String(p) : undefined })}
+          />
+        </div>
       )}
     </div>
   );

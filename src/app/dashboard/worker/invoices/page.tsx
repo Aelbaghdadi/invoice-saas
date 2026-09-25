@@ -4,14 +4,20 @@ import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Badge } from "@/components/ui/Badge";
-import { FileText, PenLine, X, AlertTriangle } from "lucide-react";
+import { FileText, PenLine, AlertTriangle } from "lucide-react";
 import Link from "next/link";
 import type { InvoiceType, Prisma } from "@prisma/client";
 import { DuplicateRowActions } from "./DuplicateRowActions";
 import { getAccessibleClientIds } from "@/lib/accessibleClients";
 import { formatDateEs } from "@/lib/dates";
+import { Pagination } from "@/components/ui/Pagination";
+import { InvoiceFilters } from "@/components/invoices/InvoiceFilters";
+import { parsePage, parseIntInRange, periodMonthFilter } from "@/lib/listing";
+import { invoicePageIds, inIdOrder } from "@/lib/invoiceListing";
 
-const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
+const BASE_PATH = "/dashboard/worker/invoices";
+
+const STATUS_BADGE: Record<string, { label: string; variant: "blue" | "yellow" | "red" | "green" | "slate" | "purple" }> = {
   UPLOADED:  { label: "Subida",       variant: "blue" },
   ANALYZING: { label: "En análisis",  variant: "yellow" },
   ANALYZED:  { label: "Analizada",    variant: "yellow" },
@@ -71,9 +77,12 @@ export default async function WorkerInvoicesPage({
   searchParams: Promise<{
     clientId?: string;
     month?: string;
+    quarter?: string;
     year?: string;
     type?: string;
     bucket?: string;
+    q?: string;
+    page?: string;
   }>;
 }) {
   const session = await auth();
@@ -81,10 +90,13 @@ export default async function WorkerInvoicesPage({
 
   const params = await searchParams;
   const clientId = params.clientId;
-  const monthFilter = params.month ? parseInt(params.month, 10) || undefined : undefined;
-  const yearFilter = params.year ? parseInt(params.year, 10) || undefined : undefined;
-  const typeFilter = params.type;
+  const monthFilter = parseIntInRange(params.month, 1, 12);
+  const quarterFilter = parseIntInRange(params.quarter, 1, 4);
+  const yearFilter = parseIntInRange(params.year, 2000, 2100);
+  const typeFilter = params.type === "PURCHASE" || params.type === "SALE" ? params.type : undefined;
   const bucket = parseBucket(params.bucket);
+  const q = (params.q ?? "").slice(0, 100);
+  const page = parsePage(params.page);
 
   // ADMIN ve todos los clientes de su firma; WORKER solo los asignados.
   const allowedClientIds = await getAccessibleClientIds(session).catch(() => [] as string[]);
@@ -92,7 +104,9 @@ export default async function WorkerInvoicesPage({
 
   const baseWhere: Prisma.InvoiceWhereInput = {
     clientId: scopedClientId ?? { in: allowedClientIds },
-    ...(monthFilter ? { periodMonth: monthFilter } : {}),
+    ...(periodMonthFilter(monthFilter, quarterFilter) !== undefined
+      ? { periodMonth: periodMonthFilter(monthFilter, quarterFilter) }
+      : {}),
     ...(yearFilter ? { periodYear: yearFilter } : {}),
     ...(typeFilter ? { type: typeFilter as InvoiceType } : {}),
   };
@@ -106,48 +120,67 @@ export default async function WorkerInvoicesPage({
     prisma.invoice.count({ where: baseWhere }).catch(() => 0),
   ]);
 
-  const invoices = await prisma.invoice
-    .findMany({
-      where: whereForBucket(bucket, baseWhere),
-      include: {
-        client: true,
-        issues: {
-          where: { status: "OPEN" },
-          select: { id: true, type: true, description: true },
+  // Solo la pagina que se ve. Antes venia la bandeja entera de golpe.
+  const listWhere = whereForBucket(bucket, baseWhere);
+  const { ids, window } = await invoicePageIds({
+    where: listWhere,
+    orderBy: [{ createdAt: "desc" }, { id: "asc" }],
+    q,
+    page,
+  });
+  const invoices = ids.length === 0 ? [] : inIdOrder(
+    await prisma.invoice
+      .findMany({
+        // Se repite el filtro de clientes del gestor aunque los ids ya salgan
+        // de el: una consulta por id suelta es la que acaba colando datos.
+        where: { AND: [listWhere, { id: { in: ids } }] },
+        include: {
+          client: true,
+          issues: {
+            where: { status: "OPEN" },
+            select: { id: true, type: true, description: true },
+          },
+          // Si salio alguna vez en un Excel (ver isBatchRejectable).
+          exportBatchItems: { take: 1, select: { id: true } },
         },
-      },
-      orderBy: { createdAt: "desc" },
-    })
-    .catch(() => []);
+      })
+      .catch(() => []),
+    ids,
+  );
 
-  const filteredClient = scopedClientId
-    ? await prisma.client.findUnique({
-        where: { id: scopedClientId },
-        select: { name: true },
-      }).catch(() => null)
-    : null;
-
-  const monthName = (m: number) => new Date(2000, m - 1).toLocaleString("es-ES", { month: "long" });
-  const hasBatchFilter = !!(filteredClient || monthFilter || yearFilter || typeFilter);
-  const chipParts: string[] = [];
-  if (filteredClient) chipParts.push(filteredClient.name);
-  if (monthFilter && yearFilter) chipParts.push(`${monthName(monthFilter)} ${yearFilter}`);
-  else if (yearFilter) chipParts.push(String(yearFilter));
-  if (typeFilter === "PURCHASE") chipParts.push("Recibidas");
-  else if (typeFilter === "SALE") chipParts.push("Emitidas");
+  // Desplegables: solo los clientes que este gestor puede ver, y los años
+  // en los que hay facturas suyas.
+  const [clients, yearRows] = await Promise.all([
+    prisma.client.findMany({
+      where: { id: { in: allowedClientIds }, isUnclassifiedBucket: false },
+      select: { id: true, name: true },
+      orderBy: { name: "asc" },
+    }).catch(() => []),
+    prisma.invoice.groupBy({
+      by: ["periodYear"],
+      where: { clientId: { in: allowedClientIds } },
+      orderBy: { periodYear: "desc" },
+    }).catch(() => []),
+  ]);
 
   // Reconstruye la URL base manteniendo todos los filtros menos `bucket`,
   // para que al cambiar de tab se conserve el resto del contexto.
-  const makeTabHref = (b: Bucket) => {
-    const sp = new URLSearchParams();
-    if (scopedClientId) sp.set("clientId", scopedClientId);
-    if (monthFilter) sp.set("month", String(monthFilter));
-    if (yearFilter) sp.set("year", String(yearFilter));
-    if (typeFilter) sp.set("type", typeFilter);
-    if (b !== "attention") sp.set("bucket", b); // attention es default
-    const q = sp.toString();
-    return q ? `/dashboard/worker/invoices?${q}` : "/dashboard/worker/invoices";
+  const filterParams: Record<string, string | undefined> = {
+    clientId: scopedClientId ?? undefined,
+    quarter: quarterFilter ? String(quarterFilter) : undefined,
+    month: !quarterFilter && monthFilter ? String(monthFilter) : undefined,
+    year: yearFilter ? String(yearFilter) : undefined,
+    type: typeFilter,
+    q: q || undefined,
   };
+  const listHref = (extra: Record<string, string | undefined>) => {
+    const sp = new URLSearchParams();
+    for (const [k, v] of Object.entries({ ...filterParams, ...extra })) if (v) sp.set(k, v);
+    const qs = sp.toString();
+    return qs ? `${BASE_PATH}?${qs}` : BASE_PATH;
+  };
+  const bucketParam = bucket !== "attention" ? bucket : undefined; // attention es default
+  const makeTabHref = (b: Bucket) => listHref({ bucket: b !== "attention" ? b : undefined });
 
   // Sufijo para enlaces a /review/[id] que preserva el bucket actual
   // (solo pasa clean/attention, que es lo que reviewQueue entiende).
@@ -165,22 +198,8 @@ export default async function WorkerInvoicesPage({
     <div>
       <PageHeader
         title="Facturas"
-        description={`${invoices.length} factura${invoices.length !== 1 ? "s" : ""} en esta bandeja`}
+        description={`${window.total} factura${window.total !== 1 ? "s" : ""} en esta bandeja`}
       />
-
-      {hasBatchFilter && (
-        <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-blue-200 bg-blue-50 px-3 py-1.5 text-[12px] font-medium text-blue-700">
-          <span className="text-blue-400">Filtrado por:</span>
-          <span className="capitalize">{chipParts.join(" \u00B7 ")}</span>
-          <Link
-            href={bucket === "attention" ? "/dashboard/worker/invoices" : `/dashboard/worker/invoices?bucket=${bucket}`}
-            className="ml-1 flex h-5 w-5 items-center justify-center rounded-full text-blue-400 hover:bg-blue-100 hover:text-blue-600"
-            title="Quitar filtro"
-          >
-            <X className="h-3 w-3" />
-          </Link>
-        </div>
-      )}
 
       {/* Tabs de bandeja: el gestor entra siempre por "Con incidencias"
           porque es lo que requiere accion. */}
@@ -216,6 +235,20 @@ export default async function WorkerInvoicesPage({
         })}
       </nav>
 
+      <InvoiceFilters
+        basePath={BASE_PATH}
+        clients={clients}
+        years={yearRows.map((y) => y.periodYear)}
+        values={{
+          clientId: scopedClientId ?? "",
+          period: quarterFilter ? `t${quarterFilter}` : monthFilter ? `m${monthFilter}` : "",
+          year: yearFilter ? String(yearFilter) : "",
+          type: typeFilter ?? "",
+          q,
+        }}
+        keep={{ bucket: bucketParam }}
+      />
+
       <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
         {invoices.length === 0 ? (
           <EmptyState
@@ -239,7 +272,8 @@ export default async function WorkerInvoicesPage({
           <table className="w-full">
             <thead>
               <tr className="border-b border-slate-100">
-                {["Archivo", "Cliente", "Período", "Tipo", "Estado", "Fecha", ""].map((h) => (
+                {/* "Subida" y no "Fecha": es cuando se subio, no la fecha de la factura. */}
+                {["Factura", "Cliente", "Período", "Tipo", "Estado", "Subida", ""].map((h) => (
                   <th
                     key={h}
                     className="px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500"
@@ -263,9 +297,16 @@ export default async function WorkerInvoicesPage({
                           <FileText className="h-3.5 w-3.5 text-slate-400" />
                         </div>
                         <div className="min-w-0">
-                          <span className="block max-w-[180px] truncate text-[13px] font-medium text-slate-700">
-                            {inv.filename}
+                          {/* El nombre del fichero no identifica nada cuando
+                              viene de un PDF dividido ("factura1.pdf"). */}
+                          <span className="block max-w-[200px] truncate text-[13px] font-medium text-slate-700" title={inv.filename}>
+                            {inv.invoiceNumber ?? inv.filename}
                           </span>
+                          {(inv.type === "SALE" ? inv.receiverName : inv.issuerName) && (
+                            <span className="block max-w-[200px] truncate text-[11px] text-slate-400">
+                              {inv.type === "SALE" ? inv.receiverName : inv.issuerName}
+                            </span>
+                          )}
                           {duplicateIssue && (
                             <span
                               className="mt-0.5 inline-flex items-center gap-1 text-[11px] font-medium text-amber-600"
@@ -288,7 +329,23 @@ export default async function WorkerInvoicesPage({
                       </Badge>
                     </td>
                     <td className="px-5 py-3">
-                      <Badge variant={s.variant}>{s.label}</Badge>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Badge variant={s.variant}>{s.label}</Badge>
+                        {inv.exportBatchItems.length > 0 && (
+                          inv.exportBatchId == null ? (
+                            <span
+                              className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 whitespace-nowrap"
+                              title="Salió en un Excel y se corrigió después: A3 tiene el dato viejo hasta que se vuelva a exportar"
+                            >
+                              Pdte. reexportar
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 whitespace-nowrap">
+                              Exportada
+                            </span>
+                          )
+                        )}
+                      </div>
                     </td>
                     <td className="px-5 py-3 text-[12px] text-slate-400 whitespace-nowrap">
                       {formatDateEs(inv.createdAt)}
@@ -307,6 +364,17 @@ export default async function WorkerInvoicesPage({
                             Revisar
                           </Link>
                         )}
+                        {/* Una validada o exportada tambien se abre: si se
+                            ve mal en A3 hay que poder encontrarla y corregirla
+                            aqui. Antes no tenia ningun enlace. */}
+                        {(inv.status === "VALIDATED" || inv.status === "EXPORTED") && (
+                          <Link
+                            href={`/dashboard/worker/review/${inv.id}`}
+                            className="flex items-center gap-1 whitespace-nowrap rounded-lg bg-slate-50 px-2.5 py-1 text-[12px] font-medium text-slate-600 hover:bg-slate-100"
+                          >
+                            Ver / Corregir
+                          </Link>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -315,6 +383,10 @@ export default async function WorkerInvoicesPage({
             </tbody>
           </table>
         )}
+        <Pagination
+          window={window}
+          hrefFor={(p) => listHref({ bucket: bucketParam, page: p > 1 ? String(p) : undefined })}
+        />
       </div>
     </div>
   );
