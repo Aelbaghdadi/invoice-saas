@@ -40,7 +40,12 @@ function isTypingInput(el: EventTarget | null): boolean {
   if (!(el instanceof HTMLElement)) return false;
   const tag = el.tagName;
   if (tag === "TEXTAREA") return true;
-  if (tag === "SELECT") return false;
+  // Un desplegable ES un campo: con el foco en "Tipo", la R es para saltar a
+  // "Recibida", no para abrir el rechazo, y Enter no puede validar la
+  // factura. Antes devolvia false y pasaba justo eso (en produccion).
+  if (tag === "SELECT") return true;
+  // El desplegable propio (components/ui/Select) y su lista abierta, igual.
+  if (el.getAttribute("role") === "combobox" || el.closest("[role=listbox]")) return true;
   if (tag === "INPUT") {
     const type = (el as HTMLInputElement).type;
     // checkbox/radio/button no cuentan como typing
@@ -73,10 +78,18 @@ export function useReviewShortcuts(h: ReviewShortcutHandlers) {
       // tecleaba y pulsaba Enter por reflejo, se cambiaba de factura
       // sin haberla terminado de revisar. Ahora hace falta intencion.
       if (e.key === "Enter" && h.onValidate) {
+        // Ctrl/Cmd+Enter valida SIEMPRE, este el foco donde este: es lo que
+        // dice la ayuda. Antes, con el foco en un boton, se salia antes de
+        // mirar el Ctrl y no pasaba nada.
+        if (isMod) {
+          e.preventDefault();
+          h.onValidate();
+          return;
+        }
         const tag = (e.target as HTMLElement)?.tagName;
         // No interceptar Enter sobre boton/link (el navegador los activa).
         if (tag === "BUTTON" || tag === "A") return;
-        if (isMod || !inInput) {
+        if (!inInput) {
           e.preventDefault();
           h.onValidate();
           return;
