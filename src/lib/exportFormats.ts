@@ -408,17 +408,26 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
     }
   }
 
-  // Huecos en la numeracion: siempre por EMISOR (quien numera) + sentido:
-  // en recibidas cada proveedor lleva su secuencia y en emitidas es la del
-  // propio cliente. Sin NIF no hay grupo fiable donde ubicarla (ya avisa
-  // "NIF vacío" por separado).
+  // Huecos en la numeracion: SOLO en emitidas.
+  //
+  // Las emitidas las numera el propio cliente y tienen que ir correlativas,
+  // asi que un salto es una factura que falta o un numero que se salto al
+  // emitirla. En las recibidas no: cada proveedor numera para TODOS sus
+  // clientes a la vez, asi que entre dos facturas suyas hay saltos siempre
+  // (Galma le factura a un monton de tiendas y entre una suya y la siguiente
+  // se cuelan 30 de otras). Avisar de eso era ruido en cada exportacion.
+  // Confirmado por el asesor el 2026-09-24.
+  //
+  // Se agrupa por emisor, que en emitidas es el propio cliente: una asesoria
+  // exporta varios clientes a la vez y cada uno lleva su numeracion. Sin NIF
+  // no hay grupo fiable (ya avisa "NIF vacío" por separado).
   const bySeries = new Map<string, InvoiceWithClient[]>();
   for (const inv of invoices) {
+    if (inv.type !== "SALE") continue;
     if (!inv.issuerCif) continue;
-    const key = `${inv.type}:${inv.issuerCif}`;
-    const list = bySeries.get(key) ?? [];
+    const list = bySeries.get(inv.issuerCif) ?? [];
     list.push(inv);
-    bySeries.set(key, list);
+    bySeries.set(inv.issuerCif, list);
   }
   for (const group of bySeries.values()) {
     const gaps = findNumberingGaps(group.map((i) => ({ id: i.id, invoiceNumber: i.invoiceNumber })));
@@ -431,9 +440,9 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
       const more = gap.missing.length > shown.length ? ` (y ${gap.missing.length - shown.length} más)` : "";
       const who = `${inv.issuerName ?? "el emisor"} (${inv.issuerCif})`;
       const warning =
-        `Salto de numeración de ${who}: entre la ${gap.previousNumber} y la ${inv.invoiceNumber} `
+        `Salto de numeración en las facturas emitidas de ${who}: entre la ${gap.previousNumber} y la ${inv.invoiceNumber} `
         + `${gap.missing.length === 1 ? "falta la factura" : "faltan las facturas"} ${list}${more}. `
-        + `Revisa si falta subirla o si el emisor se saltó el número`;
+        + `Revisa si falta subirla o si se saltó el número al emitirla`;
       const existing = results.find((r) => r.invoiceId === invoiceId);
       if (existing) existing.warnings.push(warning);
       else results.push({ invoiceId, invoiceNumber: inv.invoiceNumber, warnings: [warning] });
