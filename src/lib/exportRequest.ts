@@ -64,3 +64,44 @@ export function exportInvoiceWhere(request: ExportRequest, firmId: string): Pris
     ...(request.type !== "ALL" ? { type: request.type } : {}),
   };
 }
+
+/**
+ * Barrera de la descarga (POST): que venga de la propia app y no de otra web.
+ *
+ * - Content-Type exactamente application/json. Un formulario de otra web solo
+ *   puede mandar text/plain, urlencoded o multipart sin preflight; con
+ *   `.includes()` pasaba "text/plain;x=application/json".
+ * - Sec-Fetch-Site, si viene, same-origin: lo pone el navegador, no la pagina.
+ * - Sin Sec-Fetch-Site (navegadores viejos), si viene Origin, su host tiene
+ *   que ser el de la peticion. Detras del proxy de Coolify el host publico
+ *   llega en x-forwarded-host (o host); la URL interna no sirve. Sin Origin
+ *   no se rechaza: no hay con que comparar.
+ */
+export function exportPostHeadersError(headers: {
+  contentType: string | null;
+  secFetchSite: string | null;
+  origin: string | null;
+  host: string | null;
+  forwardedHost: string | null;
+}): { status: 415 | 403; error: string } | null {
+  const mediaType = (headers.contentType ?? "").split(";")[0].trim().toLowerCase();
+  if (mediaType !== "application/json") {
+    return { status: 415, error: "Se esperaba JSON." };
+  }
+  if (headers.secFetchSite) {
+    return headers.secFetchSite === "same-origin" ? null : { status: 403, error: "Origen no permitido." };
+  }
+  if (headers.origin) {
+    const requestHost = (headers.forwardedHost ?? headers.host ?? "").split(",")[0].trim().toLowerCase();
+    let originHost = "";
+    try {
+      originHost = new URL(headers.origin).host.toLowerCase();
+    } catch {
+      // "null" (documento sin origen) u otra cosa que no es una URL.
+    }
+    if (!originHost || originHost !== requestHost) {
+      return { status: 403, error: "Origen no permitido." };
+    }
+  }
+  return null;
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { exportInvoiceWhere, parseExportRequest, type ExportRequest } from "@/lib/exportRequest";
+import { exportInvoiceWhere, exportPostHeadersError, parseExportRequest, type ExportRequest } from "@/lib/exportRequest";
 
 const valid = { clientId: "c1", periodType: "MONTHLY", month: 4, year: 2026 };
 
@@ -64,5 +64,46 @@ describe("exportInvoiceWhere", () => {
 
   it("filtra por sentido si se pide", () => {
     expect(exportInvoiceWhere({ ...request, type: "PURCHASE" }, "firm1").type).toBe("PURCHASE");
+  });
+});
+
+describe("exportPostHeadersError", () => {
+  const base = {
+    contentType: "application/json",
+    secFetchSite: "same-origin",
+    origin: "https://app.faktury.es",
+    host: "app.faktury.es",
+    forwardedHost: null,
+  };
+
+  it("deja pasar la petición de la propia app", () => {
+    expect(exportPostHeadersError(base)).toBeNull();
+    expect(exportPostHeadersError({ ...base, contentType: "Application/JSON; charset=utf-8" })).toBeNull();
+  });
+
+  it.each(["text/plain;x=application/json", "text/plain", "multipart/form-data", "", null])(
+    "rechaza Content-Type %j",
+    (contentType) => {
+      expect(exportPostHeadersError({ ...base, contentType })).toEqual({ status: 415, error: "Se esperaba JSON." });
+    },
+  );
+
+  it("rechaza Sec-Fetch-Site distinto de same-origin", () => {
+    for (const secFetchSite of ["cross-site", "same-site", "none"]) {
+      expect(exportPostHeadersError({ ...base, secFetchSite })?.status).toBe(403);
+    }
+  });
+
+  it("sin Sec-Fetch-Site mira Origin contra el host público (x-forwarded-host detrás del proxy)", () => {
+    const noFetchSite = { ...base, secFetchSite: null, host: "10.0.1.5:3000" };
+    expect(exportPostHeadersError({ ...noFetchSite, forwardedHost: "app.faktury.es" })).toBeNull();
+    expect(exportPostHeadersError({ ...noFetchSite, forwardedHost: "app.faktury.es, 10.0.1.5" })).toBeNull();
+    expect(exportPostHeadersError({ ...noFetchSite, forwardedHost: "otra.web" })?.status).toBe(403);
+    expect(exportPostHeadersError({ ...noFetchSite, forwardedHost: null })?.status).toBe(403);
+    expect(exportPostHeadersError({ ...base, secFetchSite: null, origin: "null" })?.status).toBe(403);
+  });
+
+  it("sin Sec-Fetch-Site ni Origin no rechaza: no hay con qué comparar", () => {
+    expect(exportPostHeadersError({ ...base, secFetchSite: null, origin: null })).toBeNull();
   });
 });

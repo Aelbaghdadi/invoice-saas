@@ -7,7 +7,7 @@ import { attachmentContentDisposition } from "@/lib/contentDisposition";
 import { commitExportBatch, committedBatchState, ExportConflictError, exportStorageKey } from "@/lib/exportBatch";
 import { deleteObject, isStorageConfigured, putObject } from "@/lib/storage";
 import { appError } from "@/lib/errorCodes";
-import { exportInvoiceWhere, parseExportRequest } from "@/lib/exportRequest";
+import { exportInvoiceWhere, exportPostHeadersError, parseExportRequest } from "@/lib/exportRequest";
 
 type AdminContext = { userId: string; firmId: string };
 
@@ -82,14 +82,16 @@ export async function POST(req: NextRequest) {
   if (admin instanceof NextResponse) return admin;
   const { userId, firmId } = admin;
 
-  // JSON y mismo origen: un formulario de otra web no puede mandar JSON sin
-  // preflight, y Sec-Fetch-Site lo dice el navegador, no la pagina.
-  if (!(req.headers.get("content-type") ?? "").includes("application/json")) {
-    return NextResponse.json({ error: "Se esperaba JSON." }, { status: 415 });
-  }
-  const fetchSite = req.headers.get("sec-fetch-site");
-  if (fetchSite && fetchSite !== "same-origin") {
-    return NextResponse.json({ error: "Origen no permitido." }, { status: 403 });
+  // Solo desde la propia app (ver exportPostHeadersError).
+  const headersError = exportPostHeadersError({
+    contentType: req.headers.get("content-type"),
+    secFetchSite: req.headers.get("sec-fetch-site"),
+    origin: req.headers.get("origin"),
+    host: req.headers.get("host"),
+    forwardedHost: req.headers.get("x-forwarded-host"),
+  });
+  if (headersError) {
+    return NextResponse.json({ error: headersError.error }, { status: headersError.status });
   }
   let input: unknown;
   try {
