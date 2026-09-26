@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -65,8 +65,14 @@ export function ExportForm({ clients }: Props) {
 
   // keepMessages: tras una descarga se relee el recuento sin borrar el aviso
   // de exito o de error que acaba de ponerse; al cambiar filtros si se borran.
+  // Cada vista previa lleva su numero: si vuelve otra mas reciente antes, la
+  // vieja se descarta y no pinta el recuento de otros filtros.
+  const requestSeq = useRef(0);
+
   const fetchCount = useCallback(async (keepMessages = false) => {
     if (!clientId) return;
+    const seq = ++requestSeq.current;
+    const stale = () => seq !== requestSeq.current;
     setCounting(true);
     if (!keepMessages) {
       setSuccess(null);
@@ -81,10 +87,13 @@ export function ExportForm({ clients }: Props) {
         type, format, preview: "1",
       });
       const res  = await fetch(`/api/export?${sp}`);
+      if (stale()) return;
       if (!res.ok) {
         // Sin esto un 401 dejaba count a 0 y salia "No hay facturas
         // exportables", que es falso: el recuento no se sabe.
-        setError(await readApiError(res, "No se ha podido cargar la vista previa. Recarga la página."));
+        const failure = await readApiError(res, "No se ha podido cargar la vista previa. Recarga la página.");
+        if (stale()) return;
+        setError(failure);
         setCount(null);
         setWarnings([]);
         setWarningCount(0);
@@ -93,12 +102,14 @@ export function ExportForm({ clients }: Props) {
         return;
       }
       const data = await res.json();
+      if (stale()) return;
       setCount(data.count ?? 0);
       setWarnings(data.warnings ?? []);
       setWarningCount(data.warningCount ?? 0);
       setAlreadyExported(data.alreadyExported ?? 0);
       setExcluded(data.excluded ?? 0);
     } catch {
+      if (stale()) return;
       // Todo a cero: si no, seguian los avisos de "N con total 0" del filtro
       // anterior.
       setCount(null);
@@ -107,13 +118,16 @@ export function ExportForm({ clients }: Props) {
       setAlreadyExported(0);
       setExcluded(0);
     } finally {
-      setCounting(false);
+      if (!stale()) setCounting(false);
     }
   }, [clientId, periodType, effectiveMonth, year, type, format]);
 
   useEffect(() => { fetchCount(); }, [fetchCount]);
 
   // ── download ────────────────────────────────────────────────────────────
+  // Mientras se descarga, los filtros quedan deshabilitados: la vista previa
+  // del final usa los del clic, y con otro cliente elegido pintaba el
+  // recuento y los avisos del anterior.
   const handleDownload = async () => {
     // Sin este freno, un doble clic creaba dos lotes con las mismas facturas
     // (asientos duplicados en A3) o sacaba el error de "nada que exportar".
@@ -193,6 +207,7 @@ export function ExportForm({ clients }: Props) {
             id="export-client"
             value={clientId}
             onChange={setClientId}
+            disabled={downloading}
             options={clients.map((c) => ({ value: c.id, label: `${c.name} — ${c.cif}` }))}
           />
         </div>
@@ -209,8 +224,9 @@ export function ExportForm({ clients }: Props) {
                 key={pt}
                 type="button"
                 onClick={() => setPeriodType(pt)}
+                disabled={downloading}
                 aria-pressed={periodType === pt}
-                className={`flex-1 rounded-lg border px-3 py-2 text-[12px] font-medium transition ${
+                className={`flex-1 rounded-lg border px-3 py-2 text-[12px] font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${
                   periodType === pt
                     ? "border-blue-500 bg-blue-50 text-blue-700"
                     : "border-slate-200 text-slate-500 hover:bg-slate-50"
@@ -227,6 +243,7 @@ export function ExportForm({ clients }: Props) {
                 aria-label="Mes"
                 value={String(month)}
                 onChange={(v) => setMonth(Number(v))}
+                disabled={downloading}
                 options={MONTH_OPTIONS}
               />
             ) : (
@@ -235,6 +252,7 @@ export function ExportForm({ clients }: Props) {
                 aria-label="Trimestre"
                 value={String(quarter)}
                 onChange={(v) => setQuarter(Number(v))}
+                disabled={downloading}
                 options={QUARTER_OPTIONS.map((q) => ({ value: String(q.value), label: q.label }))}
               />
             )}
@@ -243,6 +261,7 @@ export function ExportForm({ clients }: Props) {
               aria-label="Año"
               value={String(year)}
               onChange={(v) => setYear(Number(v))}
+              disabled={downloading}
               options={YEARS.map((y) => ({ value: String(y), label: String(y) }))}
             />
           </div>
@@ -259,8 +278,9 @@ export function ExportForm({ clients }: Props) {
                 key={t.v}
                 type="button"
                 onClick={() => setType(t.v)}
+                disabled={downloading}
                 aria-pressed={type === t.v}
-                className={`flex-1 rounded-lg border px-3 py-2 text-[12px] font-medium transition ${
+                className={`flex-1 rounded-lg border px-3 py-2 text-[12px] font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${
                   type === t.v
                     ? "border-blue-500 bg-blue-50 text-blue-700"
                     : "border-slate-200 text-slate-500 hover:bg-slate-50"
@@ -283,8 +303,9 @@ export function ExportForm({ clients }: Props) {
                 key={f.v}
                 type="button"
                 onClick={() => setFormat(f.v)}
+                disabled={downloading}
                 aria-pressed={format === f.v}
-                className={`flex w-full items-start gap-3 rounded-xl border px-4 py-3 text-left transition ${
+                className={`flex w-full items-start gap-3 rounded-xl border px-4 py-3 text-left transition disabled:cursor-not-allowed disabled:opacity-60 ${
                   format === f.v
                     ? "border-blue-500 bg-blue-50"
                     : "border-slate-100 hover:bg-slate-50"
