@@ -65,19 +65,21 @@ async function transitionStatus(
 }
 
 export async function processInvoice(invoiceId: string, triggeredByUserId: string) {
-  // Atomic status transition: only proceed if status is still UPLOADED
-  const result = await prisma.invoice.updateMany({
+  // Claim atomico: solo arranca si sigue en UPLOADED. El fencing token de
+  // esta ejecucion es el ocrAttempts que deja el propio UPDATE; leido despues
+  // con otra consulta podria ser ya el de un claim posterior.
+  const [claimed] = await prisma.invoice.updateManyAndReturn({
     where: { id: invoiceId, status: "UPLOADED" },
     data: { status: "ANALYZING", ocrAttempts: { increment: 1 } },
+    select: { ocrAttempts: true },
   });
-  if (result.count === 0) return;
+  if (!claimed) return;
+  const ocrToken = claimed.ocrAttempts;
 
   await transitionStatus(invoiceId, "UPLOADED", "ANALYZING", triggeredByUserId);
 
   const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
   if (!invoice) return;
-  // Fencing token de esta ejecucion: el ocrAttempts que dejo el claim.
-  const ocrToken = invoice.ocrAttempts;
 
   const ocrStartedAt = new Date();
 
@@ -166,7 +168,7 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     // Save extraction as separate record (datos brutos OCR + job tracking)
     const ocrFinishedAt = new Date();
     const ocrDurationMs = ocrFinishedAt.getTime() - ocrStartedAt.getTime();
-    const isReprocess = invoice.ocrAttempts > 1;
+    const isReprocess = ocrToken > 1;
 
     // Se guarda dentro de la transaccion vallada, mas abajo: si esta
     // ejecucion ya no es la duena, sus cajas y su confianza no pueden salir
