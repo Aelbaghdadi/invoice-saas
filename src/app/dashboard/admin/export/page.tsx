@@ -26,20 +26,29 @@ export default async function ExportPage({ searchParams }: Props) {
   const params = await searchParams;
   const requestedPage = parsePage(params.page);
 
+  // ExportBatch no tiene firma: la asesoria sale de las facturas del lote.
+  // Por clientId no vale, los lotes de "Todos" lo tienen a null. Sin firma no
+  // hay historial (la exportacion ya rechaza a un admin sin asesoria).
+  const firmId = session.user.advisoryFirmId;
+  const historyWhere = firmId
+    ? { items: { some: { invoice: { client: { advisoryFirmId: firmId } } } } }
+    : null;
+
   const [clients, historyTotal] = await Promise.all([
     prisma.client.findMany({
       where: { isUnclassifiedBucket: false },
       orderBy: { name: "asc" },
       select: { id: true, name: true, cif: true },
     }),
-    prisma.exportBatch.count(),
+    historyWhere ? prisma.exportBatch.count({ where: historyWhere }) : Promise.resolve(0),
   ]);
 
   // Antes se cortaba en las 20 ultimas sin decirlo: en campaña de trimestre
   // eso no llega ni a un dia de exportaciones.
   const historyWindow = pageWindow(requestedPage, historyTotal, PAGE_SIZE);
-  const exportHistory = historyTotal > 0
+  const exportHistory = historyWhere && historyTotal > 0
     ? await prisma.exportBatch.findMany({
+        where: historyWhere,
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         skip: historyWindow.skip,
         take: historyWindow.take,
@@ -50,9 +59,9 @@ export default async function ExportPage({ searchParams }: Props) {
   // y solo de esta asesoria (si no, un lote ajeno enseñaria el nombre de un
   // usuario de otra firma; sale "—").
   const userIds = [...new Set(exportHistory.map((batch) => batch.userId))];
-  const users = userIds.length > 0
+  const users = firmId && userIds.length > 0
     ? await prisma.user.findMany({
-        where: { id: { in: userIds }, advisoryFirmId: session.user.advisoryFirmId ?? undefined },
+        where: { id: { in: userIds }, advisoryFirmId: firmId },
         select: { id: true, name: true },
       })
     : [];

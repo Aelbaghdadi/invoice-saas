@@ -10,18 +10,25 @@ import Link from "next/link";
 import { InvoicesTable } from "./InvoicesTable";
 import { ReprocessAllErrorsButton } from "./ReprocessAllErrorsButton";
 import { parsePage, parseIntInRange, periodMonthFilter } from "@/lib/listing";
-import { invoicePageIds, inIdOrder, invoiceOrderBy, matchingInvoiceIds, withinIds } from "@/lib/invoiceListing";
+import {
+  invoicePageIds,
+  inIdOrder,
+  invoiceOrderBy,
+  matchingInvoiceIds,
+  ocrErrorsToReprocessWhere,
+  statusCountsWithin,
+} from "@/lib/invoiceListing";
 import type { InvoiceStatus, InvoiceType, Prisma } from "@prisma/client";
 
 const STATUS_BADGE: Record<string, { label: string }> = {
   UPLOADED:  { label: "Subidas" },
-  ANALYZING: { label: "En analisis" },
+  ANALYZING: { label: "En análisis" },
   ANALYZED:  { label: "Analizadas" },
   OCR_ERROR: { label: "Error OCR" },
   VALIDATED: { label: "Validadas" },
   REJECTED:  { label: "Rechazadas" },
   EXPORTED:        { label: "Exportadas" },
-  PENDING_REVIEW:  { label: "Pte. revisión" },
+  PENDING_REVIEW:  { label: "Por revisar" },
   NEEDS_ATTENTION: { label: "Con incidencias" },
 };
 
@@ -89,7 +96,7 @@ export default async function InvoicesPage({
 
   // Solo se cargan las facturas de la pagina que se ve. Antes venian todas
   // las de la asesoria y se paginaba en el navegador.
-  const { ids, window } = await invoicePageIds({ where: withinIds(listWhere, textIds), orderBy, page });
+  const { ids, window } = await invoicePageIds({ where: listWhere, textIds, orderBy, page });
   const invoices = ids.length === 0 ? [] : inIdOrder(
     await prisma.invoice.findMany({
       // Se repite el filtro de la asesoria aunque los ids ya salgan de el:
@@ -108,24 +115,28 @@ export default async function InvoicesPage({
   );
 
   // Contadores por estado con el MISMO baseWhere que la lista (cliente/periodo/tipo).
-  const [counts, yearRows] = await Promise.all([
-    prisma.invoice.groupBy({ by: ["status"], where: withinIds(baseWhere, textIds), _count: true }).catch(() => []),
+  const [countMap, yearRows, ocrErrorTotal] = await Promise.all([
+    statusCountsWithin(baseWhere, textIds).catch((): Partial<Record<InvoiceStatus, number>> => ({})),
     // Años con facturas, para el desplegable.
     prisma.invoice.groupBy({
       by: ["periodYear"],
       where: { client: { advisoryFirmId: firmId, isUnclassifiedBucket: false } },
       orderBy: { periodYear: "desc" },
     }).catch(() => []),
+    // El boton reprocesa todas las de la asesoria, sin mirar filtros ni
+    // texto: su numero no puede salir de la pestaña.
+    statusFilter === "OCR_ERROR"
+      ? prisma.invoice.count({ where: ocrErrorsToReprocessWhere(firmId) }).catch(() => 0)
+      : 0,
   ]);
 
-  const countMap = Object.fromEntries(counts.map(c => [c.status, c._count]));
-  const totalCount = counts.reduce((sum, c) => sum + (typeof c._count === "number" ? c._count : 0), 0);
+  const totalCount = Object.values(countMap).reduce((sum, n) => sum + (n ?? 0), 0);
 
   const tabs = [
     { label: "Todas", value: "", count: totalCount },
     { label: "Subidas", value: "UPLOADED", count: countMap.UPLOADED ?? 0 },
     { label: "En análisis", value: "ANALYZING", count: countMap.ANALYZING ?? 0 },
-    { label: "Pte. revisión", value: "PENDING_REVIEW", count: countMap.PENDING_REVIEW ?? 0 },
+    { label: "Por revisar", value: "PENDING_REVIEW", count: countMap.PENDING_REVIEW ?? 0 },
     { label: "Con incidencias", value: "NEEDS_ATTENTION", count: countMap.NEEDS_ATTENTION ?? 0 },
     { label: "Error OCR", value: "OCR_ERROR", count: countMap.OCR_ERROR ?? 0 },
     { label: "Validadas", value: "VALIDATED", count: countMap.VALIDATED ?? 0 },
@@ -230,7 +241,7 @@ export default async function InvoicesPage({
       />
 
       {statusFilter === "OCR_ERROR" && (
-        <ReprocessAllErrorsButton count={countMap.OCR_ERROR ?? 0} />
+        <ReprocessAllErrorsButton count={ocrErrorTotal} filtered={hayFiltros} />
       )}
 
       {invoices.length === 0 ? (

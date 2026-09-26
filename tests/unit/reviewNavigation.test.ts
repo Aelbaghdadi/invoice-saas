@@ -50,6 +50,26 @@ describe("nextPendingAfter — validar lleva a la siguiente pendiente", () => {
   it("si la actual no esta en la lista, empieza por el principio", () => {
     expect(nextPendingAfter(lote, new Set(["f2", "f5"]), "otra")).toBe("f2");
   });
+
+  it("posponer: la siguiente se calcula con el orden de ANTES de posponer", () => {
+    // f1 y f2 validadas; el gestor salto la f3 con ">" y pospone la f4.
+    const seis = ["f1", "f2", "f3", "f4", "f5", "f6"];
+    const pendientes = new Set(["f3", "f4", "f5", "f6"]);
+    expect(nextPendingAfter(seis, pendientes, "f4")).toBe("f5");
+    // Con el orden de despues (la pospuesta al final del lote) se daba la
+    // vuelta y volvia a la f3: por eso deferInvoice calcula antes de marcarla.
+    const trasPosponer = ["f1", "f2", "f3", "f5", "f6", "f4"];
+    expect(nextPendingAfter(trasPosponer, pendientes, "f4")).toBe("f3");
+  });
+
+  it("validar una pospuesta: la siguiente sale de donde estaba, no de su sitio original", () => {
+    // La f4 estaba pospuesta (al final del lote) y la pagina anuncia la f3.
+    // Guardar le quita la marca y la devuelve a su sitio: con ese orden iria
+    // a la f5, por eso validateInvoice calcula antes de guardar.
+    const pendientes = new Set(["f3", "f4", "f5"]);
+    expect(nextPendingAfter(["f1", "f2", "f3", "f5", "f6", "f4"], pendientes, "f4")).toBe("f3");
+    expect(nextPendingAfter(["f1", "f2", "f3", "f4", "f5", "f6"], pendientes, "f4")).toBe("f5");
+  });
 });
 
 describe("parseBackHref — Volver al listado de origen", () => {

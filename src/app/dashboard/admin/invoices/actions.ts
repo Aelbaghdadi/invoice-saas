@@ -6,6 +6,7 @@ import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { appendAuditLogs } from "@/lib/auditLog";
 import { processInvoice } from "@/lib/processInvoice";
+import { ocrErrorsToReprocessWhere } from "@/lib/invoiceListing";
 import type { InvoiceStatus } from "@prisma/client";
 
 // NOTE: bulkValidateInvoices se quito a proposito (2026-09-25). Validar de
@@ -37,11 +38,9 @@ export async function reprocessAllOcrErrors() {
   const firmId = session.user.advisoryFirmId ?? undefined;
   const userId = session.user.id;
 
+  // Mismo where con el que cuenta el boton del listado.
   const invoices = await prisma.invoice.findMany({
-    where: {
-      status: "OCR_ERROR",
-      client: { advisoryFirmId: firmId, isUnclassifiedBucket: false },
-    },
+    where: ocrErrorsToReprocessWhere(firmId),
     select: { id: true, status: true },
   });
 

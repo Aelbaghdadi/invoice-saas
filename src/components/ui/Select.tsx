@@ -34,6 +34,12 @@ type Props = {
 /** Por debajo de este hueco (px) la lista se abre hacia arriba si arriba
  *  cabe mas: como hace el nativo al final de la pantalla. */
 const ALTO_LISTA = 280;
+/** Tope de alto de las opciones (lo que era max-h-64) y minimo al que se
+ *  encoge en un hueco pequeno: unas 3 opciones, con scroll dentro. */
+const ALTO_MAX_OPCIONES = 256;
+const ALTO_MIN_OPCIONES = 108;
+/** Alto aproximado del buscador de la lista (p-2 + input + borde). */
+const ALTO_BUSCADOR = 52;
 /** Ancho maximo de la lista abierta (32rem). */
 const ANCHO_LISTA = 512;
 
@@ -66,6 +72,7 @@ export function Select({
   const [open, setOpen] = useState(false);
   const [haciaArriba, setHaciaArriba] = useState(false);
   const [alDerecha, setAlDerecha] = useState(false);
+  const [altoOpciones, setAltoOpciones] = useState(ALTO_MAX_OPCIONES);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(-1);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -97,15 +104,27 @@ export function Select({
 
   function abrir() {
     // Si no cabe por debajo (al final de un panel con scroll) y arriba hay
-    // mas sitio, se abre hacia arriba.
+    // mas sitio, se abre hacia arriba. Los huecos se miden contra el panel
+    // que recorta y no contra la ventana: la lista es absolute y el overflow
+    // del panel (el derecho de la revision) la cortaba, cosa que al nativo
+    // no le pasaba. Y se encoge al hueco elegido, que a veces no llega.
     const r = buttonRef.current?.getBoundingClientRect();
     if (r) {
-      const abajo = window.innerHeight - r.bottom;
-      setHaciaArriba(abajo < ALTO_LISTA && r.top > abajo);
+      const c = rectContenedor(rootRef.current);
+      const techo = Math.max(c?.top ?? 0, 0);
+      const suelo = Math.min(c?.bottom ?? window.innerHeight, window.innerHeight);
+      const abajo = suelo - r.bottom;
+      const arriba = r.top - techo;
+      const up = abajo < ALTO_LISTA && arriba > abajo;
+      setHaciaArriba(up);
+      // 6 de margen + 2 de borde + algo de aire, y el buscador si lo hay.
+      const hueco = (up ? arriba : abajo) - 16 - (conBuscador ? ALTO_BUSCADOR : 0);
+      setAltoOpciones(Math.max(ALTO_MIN_OPCIONES, Math.min(ALTO_MAX_OPCIONES, hueco)));
       // Cerca del borde derecho (la columna de la revision) la lista, que
       // crece hasta su texto mas largo, se alinea por la derecha del boton
-      // para no salirse de la pantalla.
-      setAlDerecha(r.left + ANCHO_LISTA > window.innerWidth - 16);
+      // para no salirse del panel.
+      const derecha = Math.min(c?.right ?? window.innerWidth, window.innerWidth) - 16;
+      setAlDerecha(r.left + ANCHO_LISTA > derecha);
     }
     setQuery("");
     const i = options.findIndex((o) => o.value === value);
@@ -291,7 +310,7 @@ export function Select({
               </div>
             </div>
           )}
-          <ul ref={listRef} id={listId} role="listbox" className="max-h-64 overflow-y-auto py-1">
+          <ul ref={listRef} id={listId} role="listbox" className="overflow-y-auto py-1" style={{ maxHeight: altoOpciones }}>
             {visibles.length === 0 && (
               <li className="px-4 py-2.5 text-[13px] text-slate-400">Sin resultados</li>
             )}
@@ -342,6 +361,18 @@ export function Select({
       )}
     </div>
   );
+}
+
+/** Rectangulo del primer ancestro que recorta (panel con scroll), o null si
+ *  solo recorta la ventana. Un ancestro fixed saca a la lista de los overflow
+ *  de mas arriba, asi que ahi se deja de buscar. */
+function rectContenedor(el: HTMLElement | null): DOMRect | null {
+  for (let p = el?.parentElement; p; p = p.parentElement) {
+    const estilo = getComputedStyle(p);
+    if (estilo.overflowY !== "visible") return p.getBoundingClientRect();
+    if (estilo.position === "fixed") return null;
+  }
+  return null;
 }
 
 /** Primera opcion habilitada desde `start` en la direccion `step`, o -1. */

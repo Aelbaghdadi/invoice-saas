@@ -11,7 +11,7 @@ import { ReuploadButton } from "./ReuploadButton";
 import { formatDateEs } from "@/lib/dates";
 import { periodLabel } from "@/lib/period";
 import { pageWindow, parsePage } from "@/lib/listing";
-import { CLIENT_STATUS_BADGE } from "../clientStatus";
+import { CLIENT_STATUS_BADGE } from "@/lib/invoiceStatuses";
 
 const BASE_PATH = "/dashboard/client/invoices";
 

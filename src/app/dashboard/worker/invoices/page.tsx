@@ -16,7 +16,7 @@ import { Pagination } from "@/components/ui/Pagination";
 import { InvoiceFilters } from "@/components/invoices/InvoiceFilters";
 import { parsePage, parseIntInRange, periodMonthFilter } from "@/lib/listing";
 import { reviewHref } from "@/lib/reviewNavigation";
-import { invoicePageIds, inIdOrder, matchingInvoiceIds, withinIds } from "@/lib/invoiceListing";
+import { countWithin, invoicePageIds, inIdOrder, matchingInvoiceIds } from "@/lib/invoiceListing";
 
 const BASE_PATH = "/dashboard/worker/invoices";
 
@@ -108,16 +108,17 @@ export default async function WorkerInvoicesPage({
   // Contadores por bucket (en paralelo). Asi el gestor ve de un vistazo
   // cuanto tiene en cada bandeja sin tener que cambiar de tab.
   const [countAttention, countClean, countDone, countAll] = await Promise.all([
-    prisma.invoice.count({ where: withinIds(whereForBucket("attention", baseWhere), textIds) }).catch(() => 0),
-    prisma.invoice.count({ where: withinIds(whereForBucket("clean", baseWhere), textIds) }).catch(() => 0),
-    prisma.invoice.count({ where: withinIds(whereForBucket("done", baseWhere), textIds) }).catch(() => 0),
-    prisma.invoice.count({ where: withinIds(baseWhere, textIds) }).catch(() => 0),
+    countWithin(whereForBucket("attention", baseWhere), textIds).catch(() => 0),
+    countWithin(whereForBucket("clean", baseWhere), textIds).catch(() => 0),
+    countWithin(whereForBucket("done", baseWhere), textIds).catch(() => 0),
+    countWithin(baseWhere, textIds).catch(() => 0),
   ]);
 
   // Solo la pagina que se ve. Antes venia la bandeja entera de golpe.
   const listWhere = whereForBucket(bucket, baseWhere);
   const { ids, window } = await invoicePageIds({
-    where: withinIds(listWhere, textIds),
+    where: listWhere,
+    textIds,
     orderBy: [{ createdAt: "desc" }, { id: "asc" }],
     page,
   });
@@ -260,9 +261,13 @@ export default async function WorkerInvoicesPage({
                       ? "Aún no hay facturas cerradas"
                       : "Sin facturas"
             }
+            // «Todas» solo se sugiere si no se esta ya en ella y alli si hay
+            // resultados: countAll ya viene filtrado por el texto.
             description={
               q
-                ? `Ninguna factura de esta bandeja coincide con «${q}». Prueba en «Todas».`
+                ? bucket !== "all" && countAll > 0
+                  ? `Ninguna factura de esta bandeja coincide con «${q}». Prueba en «Todas».`
+                  : `Ninguna factura coincide con «${q}» con estos filtros.`
                 : bucket === "attention"
                   ? "Buenas noticias: ninguna factura requiere acción manual ahora mismo."
                   : "No hay facturas con estos filtros."

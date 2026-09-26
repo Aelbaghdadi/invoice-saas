@@ -96,6 +96,33 @@ export const STATUS_BADGE_VARIANT: Record<InvoiceStatus, "blue" | "yellow" | "gr
   PENDING_ROUTING: "orange",
 };
 
+type StatusBadge = { label: string; variant: (typeof STATUS_BADGE_VARIANT)[InvoiceStatus] };
+
+const EN_PROCESO: StatusBadge = { label: "En proceso", variant: "yellow" };
+const VALIDADA: StatusBadge = { label: "Validada", variant: "green" };
+
+/**
+ * Estado de una factura tal como lo ve el cliente. Los estados internos del
+ * gestor ("Por revisar", "Con incidencias", "Error OCR") no los puede
+ * resolver el y le alarmaban: para el todo eso es "En proceso", igual que el
+ * contador de su panel. Solo el rechazo le pide algo (subir otra version).
+ * Aqui y no en el portal porque tambien lo usa la API de subida (el aviso de
+ * duplicado lleva el estado de la factura que ya estaba).
+ */
+export const CLIENT_STATUS_BADGE: Record<InvoiceStatus, StatusBadge> = {
+  UPLOADED:        EN_PROCESO,
+  ANALYZING:       EN_PROCESO,
+  ANALYZED:        EN_PROCESO, // legacy
+  PENDING_REVIEW:  EN_PROCESO,
+  NEEDS_ATTENTION: EN_PROCESO,
+  OCR_ERROR:       EN_PROCESO,
+  PENDING_ROUTING: EN_PROCESO,
+  VALIDATED:       VALIDADA,
+  EXPORTED:        VALIDADA, // legacy: validada y ya exportada
+  REJECTED:        { label: "Rechazada", variant: "red" },
+  SPLIT_SOURCE:    { label: "Dividida", variant: "purple" },
+};
+
 /**
  * Nombre de cada campo de la auditoria tal como lo ve el gestor. Habia tres
  * copias que no coincidian (pantalla de auditoria, su filtro y la actividad

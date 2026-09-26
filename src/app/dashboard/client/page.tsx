@@ -5,9 +5,8 @@ import { InvoiceStatus } from "@prisma/client";
 import { FileText, Clock, CheckCircle2, Upload, ArrowRight } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import Link from "next/link";
-import { PENDING_WORK } from "@/lib/invoiceStatuses";
+import { CLIENT_STATUS_BADGE, PENDING_WORK } from "@/lib/invoiceStatuses";
 import { periodLabel } from "@/lib/period";
-import { CLIENT_STATUS_BADGE } from "./clientStatus";
 
 export default async function ClientDashboard() {
   const session = await auth();

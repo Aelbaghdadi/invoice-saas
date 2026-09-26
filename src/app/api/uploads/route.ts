@@ -11,7 +11,7 @@ import { getOrCreateUnclassifiedClient } from "@/lib/unclassifiedClient";
 import { putObject, sanitizeFilenameForStorage, isStorageConfigured } from "@/lib/storage";
 import { formatDateEs } from "@/lib/dates";
 import { periodLabel } from "@/lib/period";
-import { STATUS_LABELS } from "@/lib/invoiceStatuses";
+import { CLIENT_STATUS_BADGE, STATUS_LABELS } from "@/lib/invoiceStatuses";
 import type { InvoiceType, PeriodType } from "@prisma/client";
 
 /**
@@ -142,12 +142,16 @@ export async function POST(req: Request) {
     if (existing) {
       // Los formularios de subida lo pintan tal cual tras "duplicado de". Solo
       // con el nombre del fichero, al subir el mismo PDF se repetia su propio
-      // nombre y no se sabia cuando se subio ni como esta.
+      // nombre y no se sabia cuando se subio ni como esta. El cliente ve el
+      // estado de su portal ("En proceso"), no el interno del gestor.
+      const statusLabel = session.user.role === "CLIENT"
+        ? CLIENT_STATUS_BADGE[existing.status].label
+        : STATUS_LABELS[existing.status];
       const of = [
         existing.invoiceNumber ? `factura ${existing.invoiceNumber}` : existing.filename,
         `subida el ${formatDateEs(existing.createdAt)}`,
         periodLabel(existing.periodType, existing.periodMonth, existing.periodYear),
-        STATUS_LABELS[existing.status],
+        statusLabel,
       ].join(" · ");
       return NextResponse.json({ duplicate: true, of });
     }

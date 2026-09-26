@@ -6,7 +6,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { ClipboardList, ArrowRight } from "lucide-react";
 import { AuditFilters } from "./AuditFilters";
 import { auditFieldLabel, formatAuditValue } from "@/lib/invoiceStatuses";
-import { formatDateTimeEs } from "@/lib/dates";
+import { formatDateTimeEs, madridDayBounds } from "@/lib/dates";
 import { Pagination } from "@/components/ui/Pagination";
 import { parsePage, pageWindow } from "@/lib/listing";
 import Link from "next/link";
@@ -58,10 +58,16 @@ export default async function AuditLogPage({ searchParams }: Props) {
   if (userId) where.userId = userId;
   if (field) where.field = field;
 
-  if (dateFrom || dateTo) {
+  // Dias de Madrid, los mismos con los que se pinta la columna Fecha: con
+  // dias UTC, un cambio de las 01:15 del 25 quedaba fuera de "Desde 25". Una
+  // fecha que no se entiende se ignora (antes daba Invalid Date y la consulta
+  // fallaba en silencio: "Sin registros").
+  const fromBounds = dateFrom ? madridDayBounds(dateFrom) : null;
+  const toBounds = dateTo ? madridDayBounds(dateTo) : null;
+  if (fromBounds || toBounds) {
     where.createdAt = {
-      ...(dateFrom ? { gte: new Date(dateFrom) } : {}),
-      ...(dateTo ? { lte: new Date(dateTo + "T23:59:59.999Z") } : {}),
+      ...(fromBounds ? { gte: fromBounds.start } : {}),
+      ...(toBounds ? { lt: toBounds.end } : {}),
     };
   }
 

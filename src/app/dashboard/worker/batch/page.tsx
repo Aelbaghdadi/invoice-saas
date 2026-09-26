@@ -322,6 +322,11 @@ export default async function WorkerBatchPage({
   clientGroups.sort((a, b) =>
     a.attentionSum !== b.attentionSum ? b.attentionSum - a.attentionSum : a.clientName.localeCompare(b.clientName),
   );
+  // Con un solo cliente (filtrado, o "Ir a cerrar" desde Inicio) la seccion
+  // sale siempre abierta, sin mirar lo guardado: un plegado de otra visita
+  // dejaba la unica fila cerrada. La key cambia para remontarla al pasar de
+  // una vista a otra (cambiar los search params no la remonta).
+  const singleClient = clientGroups.length === 1;
 
   return (
     <div>
@@ -374,15 +379,15 @@ export default async function WorkerBatchPage({
         <div className="space-y-3">
           {clientGroups.map((cg) => (
             <ClientAccordionSection
-              key={cg.clientId}
+              key={singleClient ? `solo-${cg.clientId}` : cg.clientId}
               name={cg.clientName}
               cif={cg.clientCif}
               loteCount={cg.lotes.length}
               invoiceCount={cg.invoiceSum}
               attentionCount={cg.attentionSum}
               allDone={cg.allDone}
-              defaultOpen={clientGroups.length === 1 || cg.attentionSum > 0}
-              storageKey={cg.clientId}
+              defaultOpen={singleClient || cg.attentionSum > 0}
+              storageKey={singleClient ? undefined : cg.clientId}
             >
           {cg.lotes.map((g) => {
             const done = g.validated + g.rejected + g.exported;

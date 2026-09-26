@@ -10,6 +10,7 @@ import { DONE_WORK, PENDING_WORK, PERIOD_BLOCKING_STATUSES } from "@/lib/invoice
 import { periodLabel } from "@/lib/period";
 import { QUEUE_ORDER } from "@/lib/reviewQueue";
 import { reviewHref } from "@/lib/reviewNavigation";
+import { startOfTodayInMadrid } from "@/lib/dates";
 
 /**
  * Mesa de trabajo del gestor.
@@ -37,32 +38,6 @@ type BatchRow = {
   firstAttentionId: string | null;
   firstCleanId: string | null;
 };
-
-function madridParts(d: Date): Record<string, string> {
-  return Object.fromEntries(
-    new Intl.DateTimeFormat("en-GB", {
-      timeZone: "Europe/Madrid",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      hourCycle: "h23",
-    })
-      .formatToParts(d)
-      .map((p) => [p.type, p.value]),
-  );
-}
-
-/** Las 00:00 de hoy en Madrid. Madrid va a UTC+1 o UTC+2, asi que su
- *  medianoche cae a las 22:00 o a las 23:00 UTC del dia anterior: se prueba
- *  la de verano y, si alli no son las 00, es la de invierno. Con el dia en
- *  UTC, de 00:00 a 02:00 se contaba el dia anterior. */
-function startOfTodayInMadrid(now = new Date()): Date {
-  const today = madridParts(now);
-  const utcMidnight = Date.UTC(Number(today.year), Number(today.month) - 1, Number(today.day));
-  const summer = new Date(utcMidnight - 2 * 3600_000);
-  return madridParts(summer).hour === "00" ? summer : new Date(utcMidnight - 3600_000);
-}
 
 export default async function WorkerDashboard() {
   const session = await auth();

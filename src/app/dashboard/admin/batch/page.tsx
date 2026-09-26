@@ -5,7 +5,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Badge } from "@/components/ui/Badge";
 import {
-  Layers, ArrowRight, AlertTriangle, PenLine, Loader2,
+  Layers, ArrowRight, PenLine, Loader2,
 } from "lucide-react";
 import Link from "next/link";
 import type { InvoiceType, PeriodType } from "@prisma/client";
@@ -22,9 +22,11 @@ import { BatchActions } from "@/app/dashboard/worker/batch/BatchActions";
 // que el conteo no quede cacheado entre cargas.
 export const dynamic = "force-dynamic";
 
-// Mismos buckets, pildoras y botones que la pantalla de lotes del gestor: el
-// mismo lote se describia distinto segun el rol, y "Revisar (n)" contaba
-// facturas aun en OCR (que no estan en la cola) y no las de Error OCR (que si).
+// Mismos buckets y pildoras que la pantalla de lotes del gestor: el mismo
+// lote se describia distinto segun el rol. El admin tiene un solo boton,
+// "Revisar (n)", que recorre todas las pendientes (incidencias y listas); su
+// numero es el de la cola: antes contaba facturas aun en OCR (que no estan
+// en ella) y no las de Error OCR (que si).
 type BatchGroup = {
   clientId: string;
   clientName: string;
@@ -46,8 +48,8 @@ type BatchGroup = {
   /** Lo que tocaria "Rechazar lote" (mismo criterio que la accion). */
   rejectable: number;
   rejectableValidated: number;
-  firstAttentionId: string | null;
-  firstCleanId: string | null;
+  /** Primera pendiente del lote en el orden de la cola (QUEUE_ORDER). */
+  firstPendingId: string | null;
 };
 
 export default async function BatchPage({
@@ -141,8 +143,7 @@ export default async function BatchPage({
         ocrError: 0,
         rejectable: 0,
         rejectableValidated: 0,
-        firstAttentionId: null,
-        firstCleanId: null,
+        firstPendingId: null,
       };
       groupMap.set(key, g);
     }
@@ -161,16 +162,12 @@ export default async function BatchPage({
     else if (inv.status === "NEEDS_ATTENTION" || inv.status === "OCR_ERROR") {
       g.attentionCount++;
       if (inv.status === "OCR_ERROR") g.ocrError++;
-      if (!g.firstAttentionId) g.firstAttentionId = inv.id;
+      if (!g.firstPendingId) g.firstPendingId = inv.id;
     }
     else if (inv.status === "PENDING_REVIEW") {
-      if (hasOpenIssue) {
-        g.attentionCount++;
-        if (!g.firstAttentionId) g.firstAttentionId = inv.id;
-      } else {
-        g.cleanCount++;
-        if (!g.firstCleanId) g.firstCleanId = inv.id;
-      }
+      if (hasOpenIssue) g.attentionCount++;
+      else g.cleanCount++;
+      if (!g.firstPendingId) g.firstPendingId = inv.id;
     }
     else {
       // UPLOADED / ANALYZING / ANALYZED
@@ -255,6 +252,11 @@ export default async function BatchPage({
   clientGroups.sort((a, b) =>
     a.attentionSum !== b.attentionSum ? b.attentionSum - a.attentionSum : a.clientName.localeCompare(b.clientName),
   );
+  // Con un solo cliente (p. ej. filtrando por cliente) la seccion
+  // sale siempre abierta, sin mirar lo guardado: un plegado de otra visita
+  // dejaba la unica fila cerrada. La key cambia para remontarla al pasar de
+  // una vista a otra (cambiar los search params no la remonta).
+  const singleClient = clientGroups.length === 1;
 
   return (
     <div>
@@ -305,15 +307,15 @@ export default async function BatchPage({
         <div className="space-y-3">
           {clientGroups.map((cg) => (
             <ClientAccordionSection
-              key={cg.clientId}
+              key={singleClient ? `solo-${cg.clientId}` : cg.clientId}
               name={cg.clientName}
               cif={cg.clientCif}
               loteCount={cg.lotes.length}
               invoiceCount={cg.invoiceSum}
               attentionCount={cg.attentionSum}
               allDone={cg.allDone}
-              defaultOpen={clientGroups.length === 1 || cg.attentionSum > 0}
-              storageKey={cg.clientId}
+              defaultOpen={singleClient || cg.attentionSum > 0}
+              storageKey={singleClient ? undefined : cg.clientId}
             >
           {cg.lotes.map((g) => {
             // REJECTED tambien cuenta como trabajo resuelto: el gestor ya
@@ -365,22 +367,16 @@ export default async function BatchPage({
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2 flex-shrink-0 justify-end">
-                    {g.firstAttentionId && (
+                    {g.firstPendingId && (
                       <Link
-                        href={reviewHref(g.firstAttentionId, { bucket: "attention", back: thisListHref })}
-                        className="flex items-center gap-1.5 rounded-lg bg-amber-500 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-amber-600 transition-colors"
-                      >
-                        <AlertTriangle className="h-3.5 w-3.5" />
-                        Resolver incidencias ({g.attentionCount})
-                      </Link>
-                    )}
-                    {g.firstCleanId && (
-                      <Link
-                        href={reviewHref(g.firstCleanId, { bucket: "clean", back: thisListHref })}
+                        // Sin bucket (= todas): la cola pasa por las que tienen
+                        // incidencias y por las listas, y el numero del boton
+                        // es el de facturas que va a recorrer.
+                        href={reviewHref(g.firstPendingId, { back: thisListHref })}
                         className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-blue-700 transition-colors"
                       >
                         <PenLine className="h-3.5 w-3.5" />
-                        Validar listas ({g.cleanCount})
+                        Revisar ({g.attentionCount + g.cleanCount})
                       </Link>
                     )}
                     <Link

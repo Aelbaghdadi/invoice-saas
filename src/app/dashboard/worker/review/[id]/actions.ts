@@ -35,6 +35,8 @@ import { foldSurchargeLines, completeReadSurcharges, surchargeAuditValue } from 
 import { exportFingerprint, type FingerprintInvoice } from "@/lib/exportFingerprint";
 import { appError, type AppError } from "@/lib/errorCodes";
 import { putObject, getObjectBytes, sanitizeFilenameForStorage, isStorageConfigured } from "@/lib/storage";
+import { NEEDS_REVIEW } from "@/lib/invoiceStatuses";
+import type { Invoice } from "@prisma/client";
 
 /** Resultado de las server actions de revision. El `error` puede ser:
  *  - AppError: cuando es un fallo "conocido" del dominio (tiene codigo)
@@ -51,6 +53,41 @@ async function assertInvoiceAccess(
 ): Promise<ReviewState> {
   if (await canAccessClient(session, clientId)) return null;
   return { error: "No tienes acceso a esta factura." };
+}
+
+/** Periodo en el que cuenta la factura: el contable si lo tiene, si no el del
+ *  lote. Mismo criterio que la pagina de revision y que parseAndSave. */
+function invoicePeriod(
+  invoice: Pick<Invoice, "periodMonth" | "periodYear" | "accountingPeriodMonth" | "accountingPeriodYear">,
+): { month: number; year: number } {
+  return {
+    month: invoice.accountingPeriodMonth ?? invoice.periodMonth,
+    year: invoice.accountingPeriodYear ?? invoice.periodYear,
+  };
+}
+
+/** Rechazar y dividir cambian la factura igual que guardar: con el periodo
+ *  cerrado no se tocan (mismo criterio que rejectBatch). La pagina ya oculta
+ *  los botones, pero puede estar abierta desde antes del cierre. */
+async function closedPeriodError(
+  clientId: string,
+  periods: { month: number; year: number }[],
+  action: string,
+): Promise<{ error: string } | null> {
+  const seen = new Set<string>();
+  for (const { month, year } of periods) {
+    const key = `${month}/${year}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const closure = await prisma.periodClosure.findUnique({
+      where: { clientId_month_year: { clientId, month, year } },
+      select: { reopenedAt: true },
+    });
+    if (closure && !closure.reopenedAt) {
+      return { error: `El periodo ${key} está cerrado: pide a un administrador que lo reabra en Cierres antes de ${action} la factura.` };
+    }
+  }
+  return null;
 }
 
 type FieldData = {
@@ -437,8 +474,13 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
   // Volver a validar una factura ya validada (se vuelve a ella con "<" o desde
   // el listado para corregirla) es guardar la correccion: el estado no cambia,
   // asi que ni historial VALIDATED -> VALIDATED ni entrada de estado en la
-  // auditoria. EXPORTED es el estado legacy de "validada y exportada".
-  const alreadyValidated = invoice.status === "VALIDATED" || invoice.status === "EXPORTED";
+  // auditoria.
+  const alreadyValidated = invoice.status === "VALIDATED";
+  // EXPORTED (legacy, "validada y exportada") se normaliza a VALIDATED al
+  // corregirla, tambien sin validar: /api/export solo recoge VALIDATED con
+  // exportBatchId null, y si se quedara EXPORTED una correccion que la saca
+  // del lote no volveria nunca al Excel.
+  const toValidated = (validate && !alreadyValidated) || invoice.status === "EXPORTED";
 
   // When saving without validating, transition to PENDING_REVIEW if coming from initial states
   // ANALYZED es legacy (pre-refactor); si aun existe en BD se acepta como draft.
@@ -513,27 +555,27 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
         // aparte y fallara, quedaria la factura corregida pero marcada como
         // exportada, y ya no habria forma de que volviera al Excel.
         ...(nuevoExportBatchId !== undefined ? { exportBatchId: nuevoExportBatchId } : {}),
-        ...(validate && !alreadyValidated
+        ...(toValidated
           ? { status: "VALIDATED" as const }
           : saveStatus ? { status: saveStatus as "PENDING_REVIEW" } : {}),
       },
     }),
   ]);
 
-  if (validate) {
-    if (!alreadyValidated) {
-      auditEntries.push({ field: "status", oldValue: invoice.status, newValue: "VALIDATED" });
-      // Record status transition
-      await prisma.invoiceStatusHistory.create({
-        data: {
-          invoiceId,
-          fromStatus: invoice.status,
-          toStatus: "VALIDATED",
-          changedBy: userId,
-        },
-      });
-    }
+  if (toValidated) {
+    auditEntries.push({ field: "status", oldValue: invoice.status, newValue: "VALIDATED" });
+    // Record status transition
+    await prisma.invoiceStatusHistory.create({
+      data: {
+        invoiceId,
+        fromStatus: invoice.status,
+        toStatus: "VALIDATED",
+        changedBy: userId,
+      },
+    });
+  }
 
+  if (validate) {
     // Aprender plan de cuentas + operationType para la "otra parte"
     // (la que NO es el cliente). En PURCHASE es el emisor (proveedor),
     // en SALE es el receptor (cliente final). Asi indexamos por el NIF
@@ -694,13 +736,22 @@ export async function validateInvoice(
     where: { id },
     select: { status: true, clientId: true, periodMonth: true, periodYear: true, type: true },
   }).catch(() => null);
+  const wasValidated = before != null && (before.status === "VALIDATED" || before.status === "EXPORTED");
+  // La siguiente se recalcula (otro gestor puede haber validado alguna desde
+  // que cargo la pagina), pero con el orden de ANTES de guardar: guardar quita
+  // deferredAt y una pospuesta vuelve a su sitio del lote, con lo que la
+  // siguiente ya no seria la que anunciaba la pagina. Guardar no cambia las
+  // demas, asi que el calculo previo sigue valiendo. Una ya validada no navega.
+  const nextId = wasValidated
+    ? null
+    : await resolveNextId(id, before ? filterFromInvoice(before, bucket) : null, fallbackNext);
   const err = await parseAndSave(id, session.user.id, extractFields(formData), true, expectedUpdatedAt ?? undefined);
   if (err) return err;
 
   // Correccion de una factura ya validada: se guarda y el gestor se queda en
   // ella (vino a corregirla, no a seguir el lote). Al cliente ya se le aviso
   // la primera vez.
-  if (before && (before.status === "VALIDATED" || before.status === "EXPORTED")) {
+  if (wasValidated) {
     revalidatePath("/dashboard/worker/invoices");
     revalidatePath("/dashboard/admin/invoices");
     revalidatePath("/dashboard/admin/export");
@@ -728,9 +779,6 @@ export async function validateInvoice(
     }
   });
 
-  // Recomputar el siguiente respetando el bucket actual (puede haber
-  // cambiado desde que cargo la pagina: otro gestor valido, etc).
-  const nextId = await resolveNextId(id, before ? filterFromInvoice(before, bucket) : null, fallbackNext);
   // Invalidar el cache de la siguiente factura: Next.js la habia
   // prefetcheado mientras la actual aun estaba PENDING, asi que el
   // contador X/N quedaria desfasado (p.ej. "2/8" en vez de "2/7").
@@ -769,9 +817,6 @@ function goToNext(nextId: string | null, bucket: QueueBucket, back: string | nul
   redirect(back ?? "/dashboard/worker/invoices");
 }
 
-/** Estados en los que una factura esta por revisar (lo unico que se pospone). */
-const POSPONIBLES: string[] = ["PENDING_REVIEW", "NEEDS_ATTENTION", "OCR_ERROR"];
-
 /**
  * "Posponer" una factura: la marca con `deferredAt = now()` (sin
  * cambiar status) y salta a la siguiente. La cola ordena las pospuestas
@@ -799,17 +844,21 @@ export async function deferInvoice(
   if (accessErr) return accessErr;
 
   // Posponer una ya validada la mandaria al final del lote y descolocaria las
-  // flechas, sin ningun sentido: ya no esta en la cola.
-  if (!POSPONIBLES.includes(invoice.status)) {
+  // flechas, sin ningun sentido: ya no esta en la cola. Lo mismo el
+  // formulario, que solo ofrece Posponer en estos estados.
+  if (!NEEDS_REVIEW.includes(invoice.status)) {
     return { error: "Solo se pueden posponer las facturas que están por revisar." };
   }
 
+  // Antes de marcarla: una vez pospuesta es la ultima del lote, y desde ahi
+  // la siguiente pendiente daba la vuelta y volvia a la primera del lote en
+  // vez de ir a la que sigue a esta.
+  const nextId = await resolveNextId(id, filterFromInvoice(invoice, bucket), fallbackNext);
   await prisma.invoice.update({
     where: { id },
     data: { deferredAt: new Date() },
   });
 
-  const nextId = await resolveNextId(id, filterFromInvoice(invoice, bucket), fallbackNext);
   // Posponer no marca la factura como "hecha" — el contador X/N no
   // cambia. Solo invalidamos las listas para que los lotes muestren el
   // nuevo orden.
@@ -928,6 +977,8 @@ export async function rejectInvoice(
   if (invoice.status === "REJECTED") {
     return { error: "Esta factura ya está rechazada." };
   }
+  const periodErr = await closedPeriodError(invoice.clientId, [invoicePeriod(invoice)], "rechazar");
+  if (periodErr) return periodErr;
 
   await prisma.invoice.update({
     where: { id },
@@ -989,6 +1040,15 @@ export async function rejectInvoice(
 
 // ── División multi-ticket ──────────────────────────────────────────────────
 
+/** Periodos que toca una division: el de la original y el del lote, que es
+ *  donde se crean las hijas (sin periodo contable). Con este cerrado quedarian
+ *  hijas pendientes que no se pueden validar hasta que lo reabran. */
+function splitPeriods(
+  invoice: Pick<Invoice, "periodMonth" | "periodYear" | "accountingPeriodMonth" | "accountingPeriodYear">,
+): { month: number; year: number }[] {
+  return [invoicePeriod(invoice), { month: invoice.periodMonth, year: invoice.periodYear }];
+}
+
 export type SplitTicket = {
   /** Nombre descriptivo del ticket (ej: "ticket1"). */
   name: string;
@@ -1029,6 +1089,9 @@ export async function splitInvoice(
   if (invoice.exportBatchItems.length > 0) {
     return { error: "Esta factura ya se exportó a A3 y no se puede dividir." };
   }
+  // Antes de subir nada: si no, quedarian recortes huerfanos en el almacenamiento.
+  const periodErr = await closedPeriodError(invoice.clientId, splitPeriods(invoice), "dividir");
+  if (periodErr) return periodErr;
 
   if (!isStorageConfigured()) return { error: "Almacenamiento no configurado" };
   const createdIds: string[] = [];
@@ -1173,6 +1236,9 @@ export async function splitPdfInvoice(
   if (invoice.exportBatchItems.length > 0) {
     return { error: "Esta factura ya se exportó a A3 y no se puede dividir." };
   }
+  // Antes de subir nada: si no, quedarian partes huerfanas en el almacenamiento.
+  const periodErr = await closedPeriodError(invoice.clientId, splitPeriods(invoice), "dividir");
+  if (periodErr) return periodErr;
 
   if (!isStorageConfigured()) return { error: "Almacenamiento no configurado" };
 

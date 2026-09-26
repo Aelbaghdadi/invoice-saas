@@ -1,6 +1,7 @@
-import type { Prisma } from "@prisma/client";
+import type { InvoiceStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { matchesSearch, normalizeSearch, pageWindow, type PageWindow } from "@/lib/listing";
+import { amountSearchVariants, countStatusesMatching, inMemoryIdFilter, pageOfMatching } from "@/lib/invoiceSearch";
 
 /**
  * Ids de las facturas que casan con el texto buscado, sin tildes; null si no
@@ -41,9 +42,7 @@ export async function matchingInvoiceIds(
     .filter((c) => {
       // El importe se busca como se teclea: "1134,6" o "1134.60".
       const total = c.totalAmount != null ? Number(c.totalAmount) : null;
-      const importes = total != null
-        ? [total.toFixed(2), total.toFixed(2).replace(".", ","), String(total), String(total).replace(".", ",")]
-        : [];
+      const importes = amountSearchVariants(total);
       return matchesSearch(
         [c.invoiceNumber, c.filename, c.issuerName, c.issuerCif, c.receiverName, c.receiverCif, c.client.name, c.client.cif, ...importes],
         q,
@@ -52,22 +51,61 @@ export async function matchingInvoiceIds(
     .map((c) => c.id);
 }
 
-/** Limita un where a los ids que casan con el texto (si hay texto). */
-export function withinIds(
+/** Limita un where a los ids que casan con el texto (si hay texto). Solo con
+ *  listas que caben en una consulta: ver inMemoryIdFilter. */
+function withinIds(
   where: Prisma.InvoiceWhereInput,
   ids: string[] | null,
 ): Prisma.InvoiceWhereInput {
   return ids ? { AND: [where, { id: { in: ids } }] } : where;
 }
 
-/** Ids de una pagina. Todo en BD: count + skip/take con orden estable. */
+// Con muchos ids de texto (una letra suelta casa casi toda la asesoria), las
+// funciones de abajo no mandan el `IN` gigante: traen los ids del where, que
+// sigue filtrando y ordenando la BD, y se quedan aqui con los que casan.
+
+/** Cuantas facturas del where casan con el texto (`ids` null: todas). */
+export async function countWithin(
+  where: Prisma.InvoiceWhereInput,
+  ids: string[] | null,
+): Promise<number> {
+  const inMemory = inMemoryIdFilter(ids);
+  if (!inMemory) return prisma.invoice.count({ where: withinIds(where, ids) });
+  const rows = await prisma.invoice.findMany({ where, select: { id: true } });
+  return rows.filter((r) => inMemory.has(r.id)).length;
+}
+
+/** Facturas del where que casan con el texto, contadas por estado. */
+export async function statusCountsWithin(
+  where: Prisma.InvoiceWhereInput,
+  ids: string[] | null,
+): Promise<Partial<Record<InvoiceStatus, number>>> {
+  const inMemory = inMemoryIdFilter(ids);
+  if (!inMemory) {
+    const groups = await prisma.invoice.groupBy({ by: ["status"], where: withinIds(where, ids), _count: true });
+    return Object.fromEntries(groups.map((g) => [g.status, g._count]));
+  }
+  const rows = await prisma.invoice.findMany({ where, select: { id: true, status: true } });
+  return countStatusesMatching(rows, inMemory);
+}
+
+/** Ids de una pagina: count + skip/take con orden estable, en BD. Con
+ *  demasiados ids de texto la BD ordena todo el where y aqui se corta. */
 export async function invoicePageIds(opts: {
   where: Prisma.InvoiceWhereInput;
+  /** Lo que devuelve matchingInvoiceIds: null si no hay texto. */
+  textIds: string[] | null;
   orderBy: Prisma.InvoiceOrderByWithRelationInput[];
   page: number;
   pageSize?: number;
 }): Promise<{ ids: string[]; window: PageWindow }> {
-  const { where, orderBy, page, pageSize } = opts;
+  const { textIds, orderBy, page, pageSize } = opts;
+  const inMemory = inMemoryIdFilter(textIds);
+  if (inMemory) {
+    const rows = await prisma.invoice.findMany({ where: opts.where, orderBy, select: { id: true } });
+    return pageOfMatching(rows.map((r) => r.id), inMemory, page, pageSize);
+  }
+  const where = withinIds(opts.where, textIds);
   const total = await prisma.invoice.count({ where });
   const window = pageWindow(page, total, pageSize);
   const rows = await prisma.invoice.findMany({
@@ -78,6 +116,13 @@ export async function invoicePageIds(opts: {
     select: { id: true },
   });
   return { ids: rows.map((r) => r.id), window };
+}
+
+/** Lo que reprocesa "Reprocesar todas" en Error OCR: todas las de la
+ *  asesoria, sin los filtros del listado. El boton cuenta con este mismo
+ *  where para que su numero sea lo que la accion reprocesa de verdad. */
+export function ocrErrorsToReprocessWhere(firmId: string | undefined): Prisma.InvoiceWhereInput {
+  return { status: "OCR_ERROR", client: { advisoryFirmId: firmId, isUnclassifiedBucket: false } };
 }
 
 /** Reordena las filas en el orden de los ids: un `id in [...]` no lo garantiza. */

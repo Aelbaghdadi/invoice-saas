@@ -5,7 +5,9 @@ import { useRouter } from "next/navigation";
 import { RefreshCw } from "lucide-react";
 import { reprocessAllOcrErrors } from "./actions";
 
-export function ReprocessAllErrorsButton({ count }: { count: number }) {
+/** `count` son todas las de la asesoria en Error OCR, que es lo que reprocesa
+ *  la accion. Con filtros activos se dice en el boton: no los respeta. */
+export function ReprocessAllErrorsButton({ count, filtered = false }: { count: number; filtered?: boolean }) {
   const [isPending, startTransition] = useTransition();
   const [toast, setToast] = useState<{ msg: string; type: "ok" | "err" } | null>(null);
   const router = useRouter();
@@ -30,7 +32,11 @@ export function ReprocessAllErrorsButton({ count }: { count: number }) {
         className="flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-[12px] font-semibold text-white transition-colors hover:bg-red-700 disabled:opacity-50"
       >
         <RefreshCw className={`h-3.5 w-3.5 ${isPending ? "animate-spin" : ""}`} />
-        {isPending ? "Reprocesando..." : `Reprocesar todas (${count})`}
+        {isPending
+          ? "Reprocesando..."
+          : filtered
+            ? `Reprocesar todas las de la asesoría (${count})`
+            : `Reprocesar todas (${count})`}
       </button>
       {toast && (
         <span className={`text-[12px] font-medium ${toast.type === "ok" ? "text-emerald-600" : "text-red-600"}`}>

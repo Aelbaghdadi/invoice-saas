@@ -76,8 +76,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: (id: string)
   const Icon = ICONS[toast.type];
   return (
     <div
-      className={`animate-fade-in-up flex items-center gap-3 rounded-xl border px-4 py-3 shadow-lg ${STYLES[toast.type]}`}
-      style={{ minWidth: 280, maxWidth: 420 }}
+      className={`animate-fade-in-up pointer-events-auto flex w-full max-w-[420px] items-center gap-3 rounded-xl border px-4 py-3 shadow-lg sm:w-auto sm:min-w-[280px] ${STYLES[toast.type]}`}
       onMouseEnter={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
       onFocus={() => setPaused(true)}
@@ -99,9 +98,14 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: (id: string)
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
 
+  // Un aviso identico al que ya se ve no se repite: pulsar Enter varias
+  // veces con el importe descuadrado apilaba el mismo error de 10 s.
   const addToast = useCallback((type: ToastType, message: string) => {
-    const id = crypto.randomUUID();
-    setToasts((prev) => [...prev, { id, type, message }]);
+    setToasts((prev) =>
+      prev.some((t) => t.type === type && t.message === message)
+        ? prev
+        : [...prev, { id: crypto.randomUUID(), type, message }],
+    );
   }, []);
 
   const removeToast = useCallback((id: string) => {
@@ -119,12 +123,15 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={value}>
       {children}
-      {/* Arriba a la derecha, bajo la barra superior (h-14): abajo tapaban
-          las barras de acción, como el botón Validar de la revisión. */}
+      {/* Centrados sobre la barra superior (h-14), cuyo centro no tiene nada
+          clicable: abajo tapaban las barras de acción (Validar) y arriba a la
+          derecha las flechas "<" ">" y "Siguiente pendiente" de la revisión.
+          El contenedor ocupa todo el ancho y no recoge clics; solo cada aviso.
+          En móvil, px-12 deja libres la hamburguesa y el avatar. */}
       <div
         role="status"
         aria-live="polite"
-        className="fixed right-4 top-16 z-[100] flex flex-col gap-2"
+        className="pointer-events-none fixed inset-x-0 top-1.5 z-[100] flex flex-col items-center gap-2 px-12 sm:px-4"
       >
         {toasts.map((t) => (
           <ToastItem key={t.id} toast={t} onDismiss={removeToast} />

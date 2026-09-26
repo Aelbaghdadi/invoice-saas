@@ -87,8 +87,11 @@ export default function ImageViewer({ url, alt = "Factura", activeBox, showOpenI
 
   const toolButton = "flex h-7 w-7 items-center justify-center rounded-lg text-white/60 transition hover:bg-white/10 hover:text-white disabled:opacity-30";
 
+  // min-w-0: dentro de un flex en fila (el overlay de "Por clasificar") la
+  // caja de la imagen, con ancho fijo en px, estiraba el visor mas alla del
+  // padre; se recortaba la foto y la barra de zoom y se perdia el scroll.
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-[#1e1e2e]">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-[#1e1e2e]">
       {/* Toolbar — mismo estilo que PdfViewer. */}
       <div className="flex flex-shrink-0 items-center justify-end border-b border-white/10 bg-[#16161f] px-4 py-2">
         <div className="flex items-center gap-1.5">

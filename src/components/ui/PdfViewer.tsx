@@ -223,8 +223,10 @@ export default function PdfViewer({
   const reset   = () => { setZoom(DEFAULT_ZOOM); setRotation(0); };
   const rotate  = () => setRotation((r) => (r + 90) % 360);
 
+  // min-w-0: igual que en ImageViewer, para que con zoom alto no desborde a
+  // un padre flex en fila.
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-[#1e1e2e]">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-[#1e1e2e]">
       {/* Toolbar */}
       <div className="flex flex-shrink-0 items-center justify-between border-b border-white/10 bg-[#16161f] px-4 py-2">
         <div className="flex items-center gap-2">

@@ -32,6 +32,7 @@ import { formatAmountEs, formatEur } from "@/lib/format";
 import type { AppError } from "@/lib/errorCodes";
 import { Select, type SelectOption } from "@/components/ui/Select";
 import { InvoiceStatusBadge } from "@/components/ui/InvoiceStatusBadge";
+import { NEEDS_REVIEW } from "@/lib/invoiceStatuses";
 import { invoiceBalanceDiffCents } from "@/lib/invoiceBalance";
 import { sanitizeAccountingAccountInput, padAccountingAccount } from "@/lib/accountingAccount";
 import {
@@ -331,10 +332,12 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   const isRejected  = invoice.status === "REJECTED";
   const isExported  = exportedAt != null;
   const isPending   = !isValidated && !isRejected;
-  // Una exportada ya esta en A3: ni se rechaza ni se divide (el servidor
-  // tambien lo impide).
-  const canReject = !isExported && !isRejected;
-  const canSplit  = !isExported && !isRejected;
+  // Una exportada ya esta en A3, y con el periodo cerrado no se cambia nada:
+  // ni se rechaza ni se divide (el servidor tambien lo impide).
+  const canReject = !isExported && !isRejected && !periodClosed;
+  const canSplit  = !isExported && !isRejected && !periodClosed;
+  // Solo las que estan por revisar; con el OCR en curso el servidor lo rechaza.
+  const canDefer  = NEEDS_REVIEW.includes(invoice.status);
 
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(true);
@@ -742,19 +745,31 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
 
   // Auto-foco en el primer campo dudoso al cargar la factura. Si todo es
   // de alta confianza, no robamos el foco (asi Enter valida directamente).
+  // Una sola vez por factura: Guardar refresca la pagina, `confidence` llega
+  // como objeto nuevo y el foco saltaba al primer dudoso con su texto
+  // seleccionado mientras el gestor seguia tecleando en otro campo.
+  const autoFocusedFor = useRef<string | null>(null);
   useEffect(() => {
-    if (!confidence) return;
+    if (!confidence || autoFocusedFor.current === invoice.id) return;
     const order = [
       "issuerName", "issuerCif", "receiverName", "receiverCif",
       "invoiceNumber", "invoiceDate", "taxBase", "vatRate", "vatAmount", "totalAmount",
     ];
     const firstDubious = order.find((f) => {
       const s = confidence[f];
-      return s == null || s < 0.92;
+      if (s != null && s >= 0.92) return false;
+      // El lado del cliente es un input oculto: enfocarlo no hace nada.
+      const el = document.getElementById(f);
+      return !(el instanceof HTMLInputElement && el.type === "hidden");
     });
-    if (!firstDubious) return;
-    // Pequeno delay para ganar al focus inicial del body.
+    if (!firstDubious) {
+      autoFocusedFor.current = invoice.id;
+      return;
+    }
+    // Pequeno delay para ganar al focus inicial del body. Se marca dentro del
+    // timer: en StrictMode el primero se cancela y el segundo tiene que enfocar.
     const timer = setTimeout(() => {
+      autoFocusedFor.current = invoice.id;
       const el = document.getElementById(firstDubious) as HTMLInputElement | null;
       el?.focus();
       el?.select?.();
@@ -1116,9 +1131,10 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
             <kbd className="rounded bg-slate-100 px-1 text-[10px] font-semibold">?</kbd>
             atajos
           </button>
-          {/* En una ya terminada (se llega con las flechas), el camino de
-              vuelta a lo que queda por hacer. */}
-          {!isPending && nextPendingId && (
+          {/* En una que no se puede posponer (ya terminada, o con el OCR en
+              curso; se llega con las flechas), el camino de vuelta a lo que
+              queda por hacer. */}
+          {!canDefer && nextPendingId && (
             <Link
               href={`/dashboard/worker/review/${nextPendingId}${queueSuffix}`}
               className="flex h-7 items-center gap-1 rounded-lg bg-blue-50 px-2.5 text-[12px] font-medium text-blue-700 hover:bg-blue-100"
@@ -1259,8 +1275,12 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
           className="flex w-[45%] flex-col overflow-y-auto bg-white"
           onFocus={(e) => {
             const id = (e.target as HTMLElement).id;
-            if (id) lastFocusedFieldRef.current = id;
-            if (id) setActiveField(id);
+            if (!id) return;
+            // Destino de copiar desde el PDF: solo los campos que se pueden
+            // rellenar asi. Los desplegables tambien llevan id, y al tocar uno
+            // el texto seleccionado en el PDF ya no llegaba a ningun campo.
+            if (Object.hasOwn(FIELD_LABELS, id)) lastFocusedFieldRef.current = id;
+            setActiveField(id);
           }}
           onBlur={(e) => {
             if (!e.currentTarget.contains(e.relatedTarget as Node)) {
@@ -1268,10 +1288,17 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
             }
           }}
           // La rueda sobre un importe enfocado lo cambiaba (21 -> 20,99) al
-          // desplazar el panel. Se suelta el foco y la rueda solo desplaza.
+          // desplazar el panel. Se suelta el foco para que la rueda solo
+          // desplace y se devuelve en el siguiente frame, cuando la accion por
+          // defecto ya ha pasado: con el foco en el body, un Enter por reflejo
+          // validaba la factura. En un microtask seria antes de esa accion.
           onWheel={(e) => {
-            const el = e.target as HTMLElement;
-            if (el instanceof HTMLInputElement && el.type === "number" && document.activeElement === el) el.blur();
+            const el = e.target;
+            if (!(el instanceof HTMLInputElement) || el.type !== "number" || document.activeElement !== el) return;
+            el.blur();
+            requestAnimationFrame(() => {
+              if (el.isConnected && document.activeElement === document.body) el.focus({ preventScroll: true });
+            });
           }}
         >
           <div className="flex-1 px-4 py-3 space-y-2.5">
@@ -2392,7 +2419,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                 <kbd className="ml-1 hidden rounded bg-red-50 px-1 text-[10px] font-semibold text-red-500 2xl:inline">R</kbd>
               </button>
             )}
-            {isPending && (
+            {canDefer && (
               <button
                 type="button"
                 onClick={handleDefer}
@@ -2467,6 +2494,10 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                 onKeyDown={(e) => {
                   if (e.key === "Escape" || e.key === "?") {
                     e.preventDefault();
+                    // Sin esto el evento llega a window despues del re-render:
+                    // el listener de useReviewShortcuts ya no esta bloqueado y
+                    // vuelve a abrir la ayuda.
+                    e.stopPropagation();
                     setShowHelp(false);
                   }
                 }}
