@@ -527,23 +527,15 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
 
   // Persistir factura + lineas en una transaccion. Borramos las lineas
   // previas y reinsertamos: la UI envia el array completo.
-  await prisma.$transaction([
-    prisma.invoiceVatLine.deleteMany({ where: { invoiceId } }),
-    ...(linesToSave.length > 0
-      ? [prisma.invoiceVatLine.createMany({
-          data: linesToSave.map((l, i) => ({
-            invoiceId,
-            position:  i,
-            taxBase:   l.taxBase,
-            vatRate:   l.vatRate,
-            vatAmount: l.vatAmount,
-            equivalenceSurchargeRate:   l.equivalenceSurchargeRate,
-            equivalenceSurchargeAmount: l.equivalenceSurchargeAmount,
-          })),
-        })]
-      : []),
-    prisma.invoice.update({
-      where: { id: invoiceId },
+  //
+  // La escritura de la factura va la primera y condicionada al updatedAt que
+  // se leyo: el bloqueo optimista de arriba solo mira la lectura, y una
+  // exportacion que confirma entre la lectura y esta escritura dejaba la
+  // correccion aplicada sobre una factura ya exportada con los datos viejos
+  // (F-049). El export pone updatedAt al reservar, asi que aqui no cuadra.
+  const saved = await prisma.$transaction(async (tx) => {
+    const updated = await tx.invoice.updateMany({
+      where: { id: invoiceId, updatedAt: invoice.updatedAt },
       data: {
         ...newData,
         isValid,
@@ -559,8 +551,29 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
           ? { status: "VALIDATED" as const }
           : saveStatus ? { status: saveStatus as "PENDING_REVIEW" } : {}),
       },
-    }),
-  ]);
+    });
+    // Ha cambiado desde la lectura: no se escribe nada mas.
+    if (updated.count === 0) return false;
+
+    await tx.invoiceVatLine.deleteMany({ where: { invoiceId } });
+    if (linesToSave.length > 0) {
+      await tx.invoiceVatLine.createMany({
+        data: linesToSave.map((l, i) => ({
+          invoiceId,
+          position:  i,
+          taxBase:   l.taxBase,
+          vatRate:   l.vatRate,
+          vatAmount: l.vatAmount,
+          equivalenceSurchargeRate:   l.equivalenceSurchargeRate,
+          equivalenceSurchargeAmount: l.equivalenceSurchargeAmount,
+        })),
+      });
+    }
+    return true;
+  });
+  if (!saved) {
+    return { error: appError("ERR-VALIDATE-003", `updatedAt=${invoice.updatedAt.getTime()} al escribir`) };
+  }
 
   if (toValidated) {
     auditEntries.push({ field: "status", oldValue: invoice.status, newValue: "VALIDATED" });
@@ -980,14 +993,19 @@ export async function rejectInvoice(
   const periodErr = await closedPeriodError(invoice.clientId, [invoicePeriod(invoice)], "rechazar");
   if (periodErr) return periodErr;
 
-  await prisma.invoice.update({
-    where: { id },
+  // Condicionado al updatedAt leido: si una exportacion la reservo mientras
+  // tanto, no se rechaza una factura que ya esta camino de A3 (F-049).
+  const rejected = await prisma.invoice.updateMany({
+    where: { id, updatedAt: invoice.updatedAt },
     data: {
       status: "REJECTED",
       rejectionReason: reason,
       ...(category ? { rejectionCategory: category as "ILLEGIBLE" | "INCOMPLETE" | "WRONG_PERIOD" | "DUPLICATE" | "OTHER" } : {}),
     },
   });
+  if (rejected.count === 0) {
+    return { error: appError("ERR-VALIDATE-003", `updatedAt=${invoice.updatedAt.getTime()} al rechazar`) };
+  }
 
   await prisma.invoiceStatusHistory.create({
     data: {

@@ -66,7 +66,7 @@ export const ERROR_MESSAGES: Record<AppErrorCode, string> = {
 
   "ERR-VALIDATE-001": "El CIF del emisor y del receptor no pueden coincidir.",
   "ERR-VALIDATE-002": "El periodo contable está cerrado. Pide a un administrador que lo reabra en Cierres para poder validar.",
-  "ERR-VALIDATE-003": "Otro gestor modificó esta factura. Recarga la página para ver los cambios.",
+  "ERR-VALIDATE-003": "La factura ha cambiado mientras la tenías abierta (otra persona la ha modificado o exportado). Recarga la página para ver los cambios.",
   "ERR-VALIDATE-004": "Hay líneas de IVA con valores no válidos (revisa porcentajes y signos).",
 
   "ERR-EXPORT-001": "No hay facturas validadas para exportar en el rango seleccionado.",
