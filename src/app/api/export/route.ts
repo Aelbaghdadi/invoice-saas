@@ -1,9 +1,10 @@
+import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { generateCsv, generateA3Excel, suggestFilename, validateForA3Export, type ExportFormat, type ExportConfig } from "@/lib/exportFormats";
 import { attachmentContentDisposition } from "@/lib/contentDisposition";
-import { appendAuditLogs } from "@/lib/auditLog";
+import { commitExportBatch, ExportConflictError } from "@/lib/exportBatch";
 import { appError } from "@/lib/errorCodes";
 import type { InvoiceType, InvoiceStatus, PeriodType } from "@prisma/client";
 
@@ -115,84 +116,6 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  // Create ExportBatch for traceability
-  const batch = await prisma.exportBatch.create({
-    data: {
-      format,
-      clientId: clientId ?? null,
-      periodType: periodTypeParam as PeriodType,
-      periodMonth: month ?? null,
-      periodYear: year ?? null,
-      invoiceType: typeParam,
-      invoiceCount: invoices.length,
-      userId: session.user.id,
-    },
-  });
-
-  // Create ExportBatchItem with snapshot for each invoice (no status change)
-  await prisma.exportBatchItem.createMany({
-    data: invoices.map((inv) => ({
-      exportBatchId: batch.id,
-      invoiceId: inv.id,
-      snapshot: JSON.stringify({
-        issuerName: inv.issuerName,
-        issuerCif: inv.issuerCif,
-        receiverName: inv.receiverName,
-        receiverCif: inv.receiverCif,
-        invoiceNumber: inv.invoiceNumber,
-        invoiceDate: inv.invoiceDate,
-        taxBase: inv.taxBase,
-        vatRate: inv.vatRate,
-        vatAmount: inv.vatAmount,
-        irpfRate: inv.irpfRate,
-        irpfAmount: inv.irpfAmount,
-        totalAmount: inv.totalAmount,
-        vatLines: inv.vatLines.map((l) => ({
-          position:  l.position,
-          taxBase:   l.taxBase,
-          vatRate:   l.vatRate,
-          vatAmount: l.vatAmount,
-          equivalenceSurchargeRate: l.equivalenceSurchargeRate,
-          equivalenceSurchargeAmount: l.equivalenceSurchargeAmount,
-        })),
-        supplierAccount: inv.supplierAccount,
-        expenseAccount: inv.expenseAccount,
-        operationType: inv.operationType,
-        intracomGoodsType: inv.intracomGoodsType,
-        retentionType: inv.retentionType,
-        retentionBase: inv.retentionBase,
-        issuerCountry: inv.issuerCountry,
-        receiverCountry: inv.receiverCountry,
-        isRectificative: inv.isRectificative,
-        rectifiedInvoiceSeries: inv.rectifiedInvoiceSeries,
-        rectifiedInvoiceNumber: inv.rectifiedInvoiceNumber,
-        rectificativeType: inv.rectificativeType,
-        art80Tres: inv.art80Tres,
-        type: inv.type,
-        clientName: inv.client.name,
-        clientCif: inv.client.cif,
-      }),
-    })),
-  });
-
-  // Link invoices to batch (but do NOT change status)
-  const invoiceIds = invoices.map((i) => i.id);
-  await prisma.invoice.updateMany({
-    where: { id: { in: invoiceIds } },
-    data: { exportBatchId: batch.id },
-  });
-
-  // Audit log for exported invoices (cadena de hash via appendAuditLogs)
-  await appendAuditLogs(
-    invoices.map((i) => ({
-      invoiceId: i.id,
-      userId: session.user.id,
-      field: "export",
-      oldValue: null,
-      newValue: `Exportada (batch: ${batch.id}, formato: ${format})`,
-    })),
-  );
-
   // Read client export config if exporting for a single client
   let exportConfig: ExportConfig | undefined;
   if (clientId) {
@@ -205,38 +128,64 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // Primero el fichero, en memoria. Hasta que exista no se escribe nada en
+  // la BD: un fallo aqui no deja ninguna factura marcada (F-001).
   const filename = suggestFilename(invoices, format, month ?? 0, year ?? 0);
-
+  let body: Uint8Array<ArrayBuffer>;
+  let contentType: string;
   try {
     if (format === "a3excel") {
-      const xlsxData = generateA3Excel(invoices, exportConfig);
-      return new NextResponse(new Uint8Array(xlsxData), {
-        status: 200,
-        headers: {
-          "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-          "Content-Disposition": attachmentContentDisposition(filename),
-        },
-      });
+      body = new Uint8Array(generateA3Excel(invoices, exportConfig));
+      contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    } else {
+      body = new TextEncoder().encode(generateCsv(invoices, format, exportConfig));
+      contentType = "text/csv; charset=utf-8";
     }
-
-    const csv = generateCsv(invoices, format, exportConfig);
-    return new NextResponse(csv, {
-      status: 200,
-      headers: {
-        "Content-Type":        "text/csv; charset=utf-8",
-        "Content-Disposition": attachmentContentDisposition(filename),
-      },
-    });
   } catch (err) {
-    // Cualquier fallo en la generacion del archivo (libreria xlsx,
-    // datos invalidos, etc) cae aqui. Devolvemos ERR-EXPORT-002 para
-    // que el frontend lo muestre con su codigo y el batch quede
-    // registrado igualmente (no rebobinamos la BD).
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[export] ERR-EXPORT-002 batch=${batch.id}:`, err);
+    console.error("[export] ERR-EXPORT-002 al generar:", err);
     return NextResponse.json(
-      { error: appError("ERR-EXPORT-002", `batch=${batch.id} format=${format}: ${msg}`) },
+      { error: appError("ERR-EXPORT-002", `format=${format}: ${msg}`) },
       { status: 500 },
     );
   }
+
+  const batchId = randomUUID();
+  try {
+    await commitExportBatch(
+      {
+        id: batchId,
+        format,
+        clientId: clientId ?? null,
+        periodType: periodTypeParam as PeriodType,
+        periodMonth: month ?? null,
+        periodYear: year ?? null,
+        invoiceType: typeParam,
+        userId: session.user.id,
+      },
+      invoices,
+    );
+  } catch (err) {
+    if (err instanceof ExportConflictError) {
+      console.warn(`[export] ERR-EXPORT-003 batch=${batchId}: ${err.message}`);
+      return NextResponse.json(
+        { error: appError("ERR-EXPORT-003", `batch=${batchId}: ${err.message}`) },
+        { status: 409 },
+      );
+    }
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[export] ERR-EXPORT-002 batch=${batchId}:`, err);
+    return NextResponse.json(
+      { error: appError("ERR-EXPORT-002", `batch=${batchId} format=${format}: ${msg}`) },
+      { status: 500 },
+    );
+  }
+
+  return new NextResponse(body, {
+    status: 200,
+    headers: {
+      "Content-Type": contentType,
+      "Content-Disposition": attachmentContentDisposition(filename),
+    },
+  });
 }

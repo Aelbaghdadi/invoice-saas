@@ -39,6 +39,7 @@ export type AppErrorCode =
   // ── Export ───────────────────────────────────────────────
   | "ERR-EXPORT-001"  // Sin facturas validadas en el rango
   | "ERR-EXPORT-002"  // Generacion Excel fallo
+  | "ERR-EXPORT-003"  // Otra exportacion o una correccion se cruzo con esta
   // ── Auth / Permisos ──────────────────────────────────────
   | "ERR-AUTH-001"    // No autenticado
   | "ERR-AUTH-002"    // Rol insuficiente
@@ -68,6 +69,7 @@ export const ERROR_MESSAGES: Record<AppErrorCode, string> = {
 
   "ERR-EXPORT-001": "No hay facturas validadas para exportar en el rango seleccionado.",
   "ERR-EXPORT-002": "No se pudo generar el Excel. Reintenta o contacta con soporte.",
+  "ERR-EXPORT-003": "Otra persona acaba de exportar o corregir parte de estas facturas. Vuelve a cargar la página para ver las que quedan pendientes.",
 
   "ERR-AUTH-001": "Tu sesión ha caducado. Vuelve a iniciar sesión.",
   "ERR-AUTH-002": "No tienes permisos para esta acción.",

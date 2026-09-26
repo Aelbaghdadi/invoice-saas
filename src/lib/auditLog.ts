@@ -15,6 +15,7 @@
  * SQL en migrations/20260507120000_audit_hash_chain/migration.sql.
  */
 import { createHash } from "node:crypto";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 
 /** Calcula el hash de un registro dado los campos. Mismo algoritmo
@@ -54,71 +55,156 @@ type AuditEntry = {
   newValue?: string | null;
 };
 
+/** Registro de AuditLog ya encadenado, listo para insertar. */
+export type AuditRecord = {
+  id: string;
+  invoiceId: string;
+  userId: string;
+  field: string;
+  oldValue: string | null;
+  newValue: string | null;
+  createdAt: Date;
+  prevId: string | null;
+  prevHash: string;
+  hash: string;
+};
+
+/** Eslabon existente, lo justo para saber donde acaba cada cadena. */
+export type AuditChainRow = {
+  id: string;
+  invoiceId: string;
+  prevId: string | null;
+  hash: string;
+  createdAt: Date;
+};
+
+export type AuditChainHead = { id: string; hash: string; createdAt: Date };
+
+// Postgres admite 65.535 parametros por consulta: 10 columnas x 1.000 filas
+// queda holgado.
+const AUDIT_INSERT_CHUNK = 1000;
+
 /**
  * Inserta uno o mas registros de auditoria respetando la cadena de hash
  * de cada factura. Atomic: si algo falla, ningun registro se guarda.
+ *
+ * Con `db` (el `tx` de un `prisma.$transaction`) escribe dentro de esa
+ * transaccion, para que la auditoria entre o se deshaga junto con el cambio
+ * que registra. Sin `db` abre su propia transaccion.
  *
  * Sustituye llamadas directas a `prisma.auditLog.create*()`. Si no se
  * usa este helper, el `hash` se queda como NULL y la BD lo rechaza
  * (porque NOT NULL).
  */
-export async function appendAuditLogs(entries: AuditEntry[]): Promise<void> {
+export async function appendAuditLogs(
+  entries: AuditEntry[],
+  db?: Prisma.TransactionClient,
+): Promise<void> {
   if (entries.length === 0) return;
-
-  // Agrupamos por factura porque cada factura tiene su propia cadena.
-  const byInvoice = new Map<string, AuditEntry[]>();
-  for (const e of entries) {
-    const arr = byInvoice.get(e.invoiceId) ?? [];
-    arr.push(e);
-    byInvoice.set(e.invoiceId, arr);
+  if (db) {
+    await writeAuditLogs(db, entries);
+    return;
   }
+  await prisma.$transaction((tx) => writeAuditLogs(tx, entries));
+}
 
-  await prisma.$transaction(async (tx) => {
-    for (const [invoiceId, group] of byInvoice) {
-      // Cabeza actual de la cadena para esta factura
-      const last = await tx.auditLog.findFirst({
-        where: { invoiceId },
-        orderBy: { createdAt: "desc" },
-        select: { id: true, hash: true },
-      });
-
-      let prevId: string | null = last?.id ?? null;
-      let prevHash: string = last?.hash ?? "GENESIS";
-
-      for (const entry of group) {
-        const id = createCuid();
-        const createdAt = new Date();
-        const hash = computeAuditHash({
-          id,
-          invoiceId,
-          userId: entry.userId,
-          field: entry.field,
-          oldValue: entry.oldValue ?? null,
-          newValue: entry.newValue ?? null,
-          createdAt,
-          prevHash,
-        });
-
-        await tx.auditLog.create({
-          data: {
-            id,
-            invoiceId,
-            userId: entry.userId,
-            field: entry.field,
-            oldValue: entry.oldValue ?? null,
-            newValue: entry.newValue ?? null,
-            createdAt,
-            prevId,
-            prevHash,
-            hash,
-          },
-        });
-
-        prevId = id;
-        prevHash = hash;
-      }
-    }
+/**
+ * Una consulta para las cabezas de todas las cadenas y un createMany por
+ * tanda. Antes eran un findFirst y un create por factura, en serie: con un
+ * export de miles de facturas no cabia en el timeout de la transaccion.
+ */
+async function writeAuditLogs(tx: Prisma.TransactionClient, entries: AuditEntry[]): Promise<void> {
+  const invoiceIds = [...new Set(entries.map((e) => e.invoiceId))];
+  const existing = await tx.auditLog.findMany({
+    where: { invoiceId: { in: invoiceIds } },
+    select: { id: true, invoiceId: true, prevId: true, hash: true, createdAt: true },
   });
+  const records = planAuditRecords(entries, auditChainHeads(existing), new Date(), createCuid);
+  for (let i = 0; i < records.length; i += AUDIT_INSERT_CHUNK) {
+    await tx.auditLog.createMany({ data: records.slice(i, i + AUDIT_INSERT_CHUNK) });
+  }
+}
+
+/**
+ * Ultimo eslabon de cada cadena: el que ningun otro registro de la misma
+ * factura tiene como `prevId`. Si hay varios (cadena ya bifurcada) gana el
+ * mas reciente, que es lo que hacia el findFirst por createdAt de antes; con
+ * el mismo createdAt, el que no tiene sucesor, en vez de uno al azar.
+ */
+export function auditChainHeads(rows: AuditChainRow[]): Map<string, AuditChainHead> {
+  const referenced = new Set<string>();
+  for (const r of rows) if (r.prevId) referenced.add(r.prevId);
+
+  const heads = new Map<string, AuditChainHead>();
+  for (const r of rows) {
+    if (referenced.has(r.id)) continue;
+    const current = heads.get(r.invoiceId);
+    const newer = !current
+      || r.createdAt.getTime() > current.createdAt.getTime()
+      || (r.createdAt.getTime() === current.createdAt.getTime() && r.id > current.id);
+    if (newer) heads.set(r.invoiceId, { id: r.id, hash: r.hash, createdAt: r.createdAt });
+  }
+  // Sin ningun registro libre (no deberia pasar: seria un ciclo) se cae al
+  // mas reciente, como antes.
+  for (const r of rows) {
+    if (heads.has(r.invoiceId)) continue;
+    const others = rows.filter((o) => o.invoiceId === r.invoiceId);
+    const latest = others.reduce((a, b) => (b.createdAt.getTime() > a.createdAt.getTime() ? b : a));
+    heads.set(r.invoiceId, { id: latest.id, hash: latest.hash, createdAt: latest.createdAt });
+  }
+  return heads;
+}
+
+/**
+ * Encadena las entradas nuevas detras de la cabeza de cada factura, en el
+ * orden en que llegan. Mismo `computeAuditHash` y mismos campos que siempre.
+ *
+ * El createdAt de cada eslabon queda al menos 1 ms por detras del anterior:
+ * la verificacion recorre la cadena por createdAt, y dos registros de la
+ * misma factura en el mismo milisegundo se leian en cualquier orden y
+ * salian como cadena rota sin que nadie la hubiera tocado.
+ */
+export function planAuditRecords(
+  entries: AuditEntry[],
+  heads: Map<string, AuditChainHead>,
+  now: Date,
+  newId: () => string,
+): AuditRecord[] {
+  const tails = new Map<string, { id: string | null; hash: string; createdAt: Date | null }>();
+  const records: AuditRecord[] = [];
+  for (const entry of entries) {
+    const head = heads.get(entry.invoiceId);
+    const prev = tails.get(entry.invoiceId)
+      ?? { id: head?.id ?? null, hash: head?.hash ?? "GENESIS", createdAt: head?.createdAt ?? null };
+    const createdAt = new Date(Math.max(now.getTime(), (prev.createdAt?.getTime() ?? -Infinity) + 1));
+    const id = newId();
+    const oldValue = entry.oldValue ?? null;
+    const newValue = entry.newValue ?? null;
+    const hash = computeAuditHash({
+      id,
+      invoiceId: entry.invoiceId,
+      userId: entry.userId,
+      field: entry.field,
+      oldValue,
+      newValue,
+      createdAt,
+      prevHash: prev.hash,
+    });
+    records.push({
+      id,
+      invoiceId: entry.invoiceId,
+      userId: entry.userId,
+      field: entry.field,
+      oldValue,
+      newValue,
+      createdAt,
+      prevId: prev.id,
+      prevHash: prev.hash,
+      hash,
+    });
+    tails.set(entry.invoiceId, { id, hash, createdAt });
+  }
+  return records;
 }
 
 /** Genera un cuid compatible con el del cliente Prisma. Usamos
