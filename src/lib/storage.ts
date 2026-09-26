@@ -92,14 +92,28 @@ export async function deleteObject(key: string): Promise<void> {
   await client.send(new DeleteObjectCommand({ Bucket: STORAGE_BUCKET, Key: key })).catch(() => null);
 }
 
-/** ¿Existe el objeto? (HeadObject) */
-export async function objectExists(key: string): Promise<boolean> {
+/**
+ * ¿Existe el objeto? (HeadObject)
+ *
+ * `timeoutMs` corta la espera de esta llamada sin tocar el cliente: el
+ * S3Client no tiene timeout (uno global corto romperia las subidas de 25 MB)
+ * y una pagina que espera a Garage colgado no llega a pintarse.
+ * Un 404 es false sin mas; cualquier otro fallo, incluido el timeout, tambien
+ * da false pero deja aviso en el log, para que "no existe" no tape una caida.
+ */
+export async function objectExists(key: string, options: { timeoutMs?: number } = {}): Promise<boolean> {
   const client = getClient();
   if (!client) return false;
   try {
-    await client.send(new HeadObjectCommand({ Bucket: STORAGE_BUCKET, Key: key }));
+    await client.send(
+      new HeadObjectCommand({ Bucket: STORAGE_BUCKET, Key: key }),
+      options.timeoutMs ? { abortSignal: AbortSignal.timeout(options.timeoutMs) } : {},
+    );
     return true;
-  } catch {
+  } catch (err) {
+    if (!isStorageNotFound(err)) {
+      console.warn(`[storage] HeadObject ${key} fallo:`, err instanceof Error ? `${err.name}: ${err.message}` : err);
+    }
     return false;
   }
 }

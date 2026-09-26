@@ -12,6 +12,8 @@ import { exportStorageKey } from "@/lib/exportBatch";
 import type { ExportFormat } from "@/lib/exportFormats";
 import { isStorageConfigured, objectExists } from "@/lib/storage";
 
+const HISTORY_FILE_CHECK_TIMEOUT_MS = 2000;
+
 const INVOICE_TYPE_LABELS: Record<string, string> = {
   ALL: "Todas",
   PURCHASE: "Recibidas",
@@ -73,13 +75,18 @@ export default async function ExportPage({ searchParams }: Props) {
   const clientMap = new Map(clients.map((c) => [c.id, c.name]));
 
   // "Volver a descargar": solo los lotes con copia guardada. Los anteriores a
-  // guardar el fichero no la tienen. Una comprobacion por fila de esta pagina.
+  // guardar el fichero no la tienen. Una comprobacion por fila de esta pagina,
+  // cada una con 2 s como mucho: con Garage colgado la pagina se pinta igual
+  // (las filas salen "No disponible") en vez de quedarse esperando.
   const storedFiles = new Set<string>();
   if (firmId && isStorageConfigured()) {
     const stored = await Promise.all(
       exportHistory.map(async (batch) =>
         batch.clientId
-          && (await objectExists(exportStorageKey(firmId, batch.clientId, batch.id, batch.format as ExportFormat)))
+          && (await objectExists(
+            exportStorageKey(firmId, batch.clientId, batch.id, batch.format as ExportFormat),
+            { timeoutMs: HISTORY_FILE_CHECK_TIMEOUT_MS },
+          ))
           ? batch.id
           : null,
       ),
