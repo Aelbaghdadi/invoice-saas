@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { canReadInvoice } from "@/lib/invoiceAccess";
 import { getObjectBytes } from "@/lib/storage";
+import { invoiceFileHeaders } from "@/lib/invoiceFileHeaders";
 
 export const dynamic = "force-dynamic";
 
@@ -33,11 +34,12 @@ export async function GET(
 
   try {
     const bytes = await getObjectBytes(invoice.storageKey);
+    // Solo PDF e imágenes van inline; el resto (XML incluido) se descarga.
+    // La CSP sandbox y nosniff de esta ruta están en next.config.ts.
     return new Response(new Uint8Array(bytes), {
       headers: {
-        "Content-Type": invoice.fileType || "application/octet-stream",
+        ...invoiceFileHeaders(invoice.fileType, id),
         "Content-Length": String(bytes.length),
-        "Content-Disposition": "inline",
         // Datos sensibles (RGPD): no cachear en proxies/CDN intermedios.
         "Cache-Control": "private, no-store",
       },

@@ -4,7 +4,7 @@ import { useState, useTransition, useEffect, useCallback, useMemo, useRef } from
 import { useToast } from "@/components/ui/Toast";
 import {
   CheckCircle2, AlertTriangle, Save, ChevronLeft, ChevronRight, ChevronDown,
-  Loader2, AlertCircle, ExternalLink, FileText, Image as ImageIcon,
+  Loader2, AlertCircle, Download, FileText, Image as ImageIcon,
   XCircle, RefreshCw, CheckCheck, Plus, Trash2,
   Globe, Scissors, Sparkles, Lock,
 } from "lucide-react";
@@ -1260,10 +1260,10 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
               {isXml ? <FileText className="h-12 w-12" /> : <ImageIcon className="h-12 w-12" />}
               <p className="text-[13px]">{isXml ? "Archivo XML — datos extraídos automáticamente" : "Vista previa no disponible"}</p>
               {previewUrl && (
-                <a href={previewUrl} target="_blank" rel="noreferrer"
+                <a href={previewUrl} download
                   className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-blue-700">
-                  <ExternalLink className="h-3.5 w-3.5" />
-                  Abrir archivo
+                  <Download className="h-3.5 w-3.5" />
+                  Descargar archivo
                 </a>
               )}
             </div>

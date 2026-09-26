@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Loader2, FileText, Image as ImageIcon, ExternalLink } from "lucide-react";
+import { Loader2, FileText, Image as ImageIcon, Download } from "lucide-react";
 import PdfViewer from "@/components/ui/PdfViewerDynamic";
 import ImageViewer from "@/components/ui/ImageViewer";
 
@@ -37,12 +37,11 @@ export function AdminInvoiceViewer({ invoiceId, fileType, filename }: Props) {
         {url && (
           <a
             href={url}
-            target="_blank"
-            rel="noreferrer"
+            download
             className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-blue-700"
           >
-            <ExternalLink className="h-3.5 w-3.5" />
-            Abrir archivo
+            <Download className="h-3.5 w-3.5" />
+            Descargar archivo
           </a>
         )}
       </div>

@@ -19,6 +19,12 @@ const csp = [
   "upgrade-insecure-requests",
 ].join("; ");
 
+// Los originales de las facturas los sube un tercero y se sirven desde este
+// origen. Con sandbox el documento no ejecuta scripts ni comparte origen con
+// la app aunque el navegador llegue a pintarlo (F-002). Chrome sigue
+// mostrando los PDF con esta politica.
+const rawFileCsp = "sandbox; default-src 'none'; frame-ancestors 'none'";
+
 const nextConfig: NextConfig = {
   experimental: {
     serverActions: {
@@ -51,7 +57,19 @@ const nextConfig: NextConfig = {
         value: "max-age=63072000; includeSubDomains; preload",
       });
     }
-    return [{ source: "/(.*)", headers: base }];
+    return [
+      { source: "/(.*)", headers: base },
+      // Va despues de la general para sustituir su CSP: con la misma clave
+      // gana la ultima entrada. Tiene que estar aqui y no en el route handler,
+      // porque Next ignora las cabeceras del handler que ya trae esta config.
+      {
+        source: "/api/invoices/:id/raw",
+        headers: [
+          { key: "Content-Security-Policy", value: rawFileCsp },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+        ],
+      },
+    ];
   },
 };
 
