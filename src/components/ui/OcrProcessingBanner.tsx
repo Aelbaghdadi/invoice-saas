@@ -57,9 +57,12 @@ export function OcrProcessingBanner({ startedAt, avgDurationMs = 10000, invoiceI
   const overTime = elapsedMs > avgDurationMs * 2;
   const pct = overTime ? 95 : Math.min(95, Math.round((elapsedMs / avgDurationMs) * 100));
 
-  // Parado (un redeploy o un OOM cortaron el OCR): no se va a terminar solo,
-  // y la revision no deja cambiar nada mientras tanto. Se ofrece relanzarlo.
+  // Pasado el corte se ofrece lanzarlo a mano. En ANALYZING es que se ha
+  // parado (un redeploy o un OOM cortaron el OCR) y no va a terminar solo; en
+  // UPLOADED puede estar esperando turno (reproceso masivo, hijas de una
+  // division), asi que el texto es neutro.
   if (isOcrStalled(status, updatedAt, now)) {
+    const stopped = status === "ANALYZING";
     const reprocess = () => {
       setReprocessError(null);
       startReprocess(async () => {
@@ -80,9 +83,13 @@ export function OcrProcessingBanner({ startedAt, avgDurationMs = 10000, invoiceI
         <div className="flex items-center gap-3">
           <AlertTriangle className="h-5 w-5 flex-shrink-0 text-amber-600" />
           <div className="min-w-0 flex-1">
-            <p className="text-[13px] font-medium text-amber-900">El análisis se ha parado</p>
+            <p className="text-[13px] font-medium text-amber-900">
+              {stopped ? "El análisis se ha parado" : "El análisis aún no ha empezado"}
+            </p>
             <p className="mt-0.5 text-[11px] text-amber-800/80">
-              Lleva más de {STUCK_ANALYZING_MS / 60_000} minutos sin avanzar y no va a terminar solo. Relánzalo para poder revisar la factura.
+              {stopped
+                ? `Lleva más de ${STUCK_ANALYZING_MS / 60_000} minutos sin avanzar y no va a terminar solo. Relánzalo para poder revisar la factura.`
+                : "Puede que esté esperando turno detrás de otras facturas. Si tienes prisa, lánzalo ahora."}
             </p>
             {reprocessError && <p className="mt-1 text-[11px] text-red-700">{reprocessError}</p>}
           </div>
