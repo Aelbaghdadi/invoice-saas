@@ -970,8 +970,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
 
   const attemptValidate = (reopen = false) => {
     if (isPendingValidate) return;
-    if (lockReason) {
-      error(lockReason);
+    if (lockReason || validateBlockReason) {
+      error((lockReason ?? validateBlockReason)!);
       return;
     }
     // Una rechazada solo se valida con "Reabrir y validar" (F-015): ni Enter
@@ -2524,10 +2524,10 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                 <button
                   type="button"
                   onClick={() => (isRejected ? attemptReopen() : attemptValidate())}
-                  disabled={isPendingValidate || periodClosed || lockReason != null}
+                  disabled={isPendingValidate || periodClosed || lockReason != null || validateBlockReason != null}
                   title={
-                    lockReason
-                      ? lockReason
+                    lockReason || validateBlockReason
+                      ? (lockReason ?? validateBlockReason)!
                       : periodClosed
                       ? "Periodo cerrado"
                       : isRejected

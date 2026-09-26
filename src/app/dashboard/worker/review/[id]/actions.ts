@@ -206,11 +206,17 @@ async function conditionalWriteError(
   detail: string,
 ): Promise<{ error: string | AppError }> {
   const now = await prisma.invoice
-    .findUnique({ where: { id: invoiceId }, select: { status: true, replacedBy: { select: { id: true } } } })
+    .findUnique({
+      where: { id: invoiceId },
+      select: { status: true, replacedBy: { select: { id: true } }, client: { select: { isUnclassifiedBucket: true } } },
+    })
     .catch(() => null);
   const reason = now
     ? reviewActionBlockReason(now.status, action, options)
-      ?? reviewTargetBlockReason(action, { replacedById: now.replacedBy?.id ?? null }, options)
+      ?? reviewTargetBlockReason(action, {
+        replacedById: now.replacedBy?.id ?? null,
+        isUnclassifiedBucket: now.client.isUnclassifiedBucket,
+      }, options)
     : null;
   return { error: reason ?? appError("ERR-VALIDATE-003", detail) };
 }
@@ -253,7 +259,10 @@ async function parseAndSave(
   // En analisis, dividida, por clasificar o rechazada (sin reabrir) no se
   // guarda ni se valida. Se repite en el propio updateMany de abajo.
   const blocked = reviewActionBlockReason(invoice.status, action, options)
-    ?? reviewTargetBlockReason(action, { replacedById: invoice.replacedBy?.id ?? null }, options);
+    ?? reviewTargetBlockReason(action, {
+      replacedById: invoice.replacedBy?.id ?? null,
+      isUnclassifiedBucket: invoice.client.isUnclassifiedBucket,
+    }, options);
   if (blocked) return { error: blocked };
 
   // Check if the period is closed (use accounting period when set, fallback to upload period)

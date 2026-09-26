@@ -269,7 +269,7 @@ export default async function ReviewPage({
         periodClosed={periodClosed}
         validateBlockReason={reviewTargetBlockReason(
           "validate",
-          { replacedById: invoice.replacedBy?.id ?? null },
+          { replacedById: invoice.replacedBy?.id ?? null, isUnclassifiedBucket: invoice.client.isUnclassifiedBucket },
           { reopen: invoice.status === "REJECTED" },
         )}
         position={position}

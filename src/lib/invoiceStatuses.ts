@@ -393,25 +393,39 @@ export function isReviewReadOnly(status: InvoiceStatus): boolean {
 export type ReviewTarget = {
   /** Id de la version corregida que subio el cliente, si la hay. */
   replacedById: string | null;
+  /** Esta en el cliente tecnico del buzon «Sin clasificar». */
+  isUnclassifiedBucket: boolean;
 };
+
+export const UNCLASSIFIED_VALIDATE_ERROR = "Esta factura está en «Sin clasificar» y no tiene cliente: no se puede validar.";
 
 export const REPLACED_REOPEN_ERROR = "El cliente ya subió una versión corregida de esta factura: valida esa en su lugar.";
 
 /**
  * Motivo por el que no se puede hacer la accion aunque el estado lo permita,
- * o null. Una rechazada que el cliente ya sustituyo (su version corregida
- * lleva replacesId = esta) no se reabre: irian las dos a A3.
+ * o null.
+ *  - Una del buzon «Sin clasificar» (p. ej. una descartada al clasificar que
+ *    se reabre) no se valida: quedaria VALIDATED en el cliente tecnico, que
+ *    no sale en ningun listado ni en el export.
+ *  - Una rechazada que el cliente ya sustituyo (su version corregida lleva
+ *    replacesId = esta) no se reabre: irian las dos a A3.
  */
 export function reviewTargetBlockReason(
   action: ReviewAction,
   target: ReviewTarget,
   options: { reopen?: boolean } = {},
 ): string | null {
-  if (action === "validate" && options.reopen && target.replacedById) return REPLACED_REOPEN_ERROR;
+  if (action !== "validate") return null;
+  if (target.isUnclassifiedBucket) return UNCLASSIFIED_VALIDATE_ERROR;
+  if (options.reopen && target.replacedById) return REPLACED_REOPEN_ERROR;
   return null;
 }
 
 /** La misma condicion, para el where del updateMany. */
 export function reviewTargetWhere(action: ReviewAction, options: { reopen?: boolean } = {}) {
-  return action === "validate" && options.reopen ? { replacedBy: { is: null } } : {};
+  if (action !== "validate") return {};
+  return {
+    client: { isUnclassifiedBucket: false },
+    ...(options.reopen ? { replacedBy: { is: null } } : {}),
+  };
 }

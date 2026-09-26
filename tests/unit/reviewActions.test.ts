@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { InvoiceStatus } from "@prisma/client";
 import {
   REPLACED_REOPEN_ERROR,
+  UNCLASSIFIED_VALIDATE_ERROR,
   REVIEW_LOCKED_STATUSES,
   isReviewReadOnly,
   STATUS_LABELS,
@@ -104,14 +105,33 @@ describe("reviewLockReason e isReviewReadOnly (pantalla de revisión)", () => {
 
 describe("reviewTargetBlockReason y reviewTargetWhere (rechazada ya sustituida)", () => {
   it("no se reabre una rechazada que el cliente ya sustituyó", () => {
-    expect(reviewTargetBlockReason("validate", { replacedById: "B" }, { reopen: true })).toBe(REPLACED_REOPEN_ERROR);
-    expect(reviewTargetWhere("validate", { reopen: true })).toEqual({ replacedBy: { is: null } });
+    expect(reviewTargetBlockReason("validate", { replacedById: "B", isUnclassifiedBucket: false }, { reopen: true })).toBe(REPLACED_REOPEN_ERROR);
+    expect(reviewTargetWhere("validate", { reopen: true })).toEqual({
+      client: { isUnclassifiedBucket: false },
+      replacedBy: { is: null },
+    });
   });
 
   it("sin sustituta, o sin reabrir, no cambia nada", () => {
-    expect(reviewTargetBlockReason("validate", { replacedById: null }, { reopen: true })).toBeNull();
-    expect(reviewTargetBlockReason("save", { replacedById: "B" })).toBeNull();
-    expect(reviewTargetWhere("validate")).toEqual({});
+    expect(reviewTargetBlockReason("validate", { replacedById: null, isUnclassifiedBucket: false }, { reopen: true })).toBeNull();
+    expect(reviewTargetBlockReason("save", { replacedById: "B", isUnclassifiedBucket: false })).toBeNull();
+    expect(reviewTargetWhere("validate")).toEqual({ client: { isUnclassifiedBucket: false } });
     expect(reviewTargetWhere("save", { reopen: true })).toEqual({});
+  });
+});
+
+describe("buzón «Sin clasificar» (punto 6)", () => {
+  const bucket = { replacedById: null, isUnclassifiedBucket: true };
+
+  it("no se valida, ni reabriendo ni sin reabrir", () => {
+    expect(reviewTargetBlockReason("validate", bucket, { reopen: true })).toBe(UNCLASSIFIED_VALIDATE_ERROR);
+    expect(reviewTargetBlockReason("validate", bucket)).toBe(UNCLASSIFIED_VALIDATE_ERROR);
+  });
+
+  it("guardar, rechazar y dividir no cambian", () => {
+    for (const action of ["save", "reject", "split"] as const) {
+      expect(reviewTargetBlockReason(action, bucket)).toBeNull();
+      expect(reviewTargetWhere(action)).toEqual({});
+    }
   });
 });
