@@ -1514,9 +1514,12 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
               />
             )}
 
-            {/* Solo lectura: un fieldset deshabilitado desactiva todos los
-                campos y botones de dentro sin tocarlos uno a uno. */}
-            <fieldset disabled={readOnly} className="m-0 min-w-0 space-y-2.5 border-0 p-0">
+            {/* Bloqueada (analizandose, dividida o por clasificar): un
+                fieldset deshabilitado desactiva todos los campos y botones de
+                dentro sin tocarlos uno a uno. Analizandose tambien: lo que se
+                tecleara se perderia en silencio al remontarse el formulario
+                cuando termina el OCR. */}
+            <fieldset disabled={lockReason != null} className="m-0 min-w-0 space-y-2.5 border-0 p-0">
             {/* ── Cabecera 2 columnas: parte editable + datos factura ──────
                 El lado bloqueado (datos del cliente: nombre + CIF) ya
                 vive arriba en el strip de sesion — quitamos su bloque
