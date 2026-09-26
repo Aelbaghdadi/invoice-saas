@@ -1191,7 +1191,7 @@ async function uploadSplitPieces(pieces: SplitPiece[]): Promise<string | null> {
  * se deshace todo y se borran los ficheros ya subidos.
  */
 async function reserveAndCreateSplit(
-  invoice: Pick<Invoice, "id" | "status" | "clientId" | "type" | "periodMonth" | "periodYear" | "currency">,
+  invoice: Pick<Invoice, "id" | "status" | "updatedAt" | "clientId" | "type" | "periodMonth" | "periodYear" | "currency">,
   userId: string,
   pieces: SplitPiece[],
 ): Promise<{ childIds: string[] } | { error: string }> {
@@ -1202,6 +1202,10 @@ async function reserveAndCreateSplit(
       const reserved = await tx.invoice.updateMany({
         where: {
           id: invoice.id,
+          // Lo leido: si se valido o se cambio mientras se subian las partes,
+          // el historial y la auditoria (inmutable) apuntarian un estado de
+          // origen falso y las hijas heredarian type y currency viejos.
+          updatedAt: invoice.updatedAt,
           status: { in: reviewAllowedFrom("split") },
           exportBatchId: null,
           exportBatchItems: { none: {} },
