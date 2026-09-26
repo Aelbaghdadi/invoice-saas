@@ -2,6 +2,7 @@
 
 import { after } from "next/server";
 import { createHash } from "crypto";
+import { splitStorageKey } from "@/lib/splitStorageKey";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
@@ -1365,7 +1366,7 @@ export async function splitInvoice(
     pieces.push({
       label: ticket.name,
       filename: `${ticket.name}.${ext}`,
-      storageKey: `${invoice.clientId}/${invoice.periodYear}-${String(invoice.periodMonth).padStart(2, "0")}/${Date.now()}-${pieces.length}-split-${safeName}`,
+      storageKey: splitStorageKey(invoice, safeName),
       fileType: mime,
       body: buffer,
     });
@@ -1498,7 +1499,7 @@ export async function splitPdfInvoice(
     pieces.push({
       label: part.name,
       filename: `${part.name}.pdf`,
-      storageKey: `${invoice.clientId}/${invoice.periodYear}-${String(invoice.periodMonth).padStart(2, "0")}/${Date.now()}-${pieces.length}-split-${safeName}`,
+      storageKey: splitStorageKey(invoice, safeName),
       fileType: "application/pdf",
       body: Buffer.from(await newDoc.save()),
     });
