@@ -1008,6 +1008,12 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       error("Faltan cuentas contables: rellénalas antes de validar.");
       return false;
     }
+    // La misma regla que el servidor: sin esto «Reabrir y validar» pedia la
+    // confirmacion para acabar en este mismo error.
+    if (isIntracom && !goodsTypeShown) {
+      error("Marca si la entrega intracomunitaria es de bienes o de servicios antes de validar.");
+      return false;
+    }
     return true;
   };
 
