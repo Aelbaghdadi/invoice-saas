@@ -4,7 +4,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { generateCsv, generateA3Excel, partitionA3Exportable, suggestFilename, validateForA3Export, type ExportFormat, type ExportConfig } from "@/lib/exportFormats";
 import { attachmentContentDisposition } from "@/lib/contentDisposition";
-import { countExportExclusions } from "@/lib/exportExclusions";
+import { countExportExclusions, withSplitCounts } from "@/lib/exportExclusions";
 import { commitExportBatch, committedBatchState, ExportConflictError, exportStorageKey } from "@/lib/exportBatch";
 import { deleteObject, isStorageConfigured, putObject } from "@/lib/storage";
 import { appError } from "@/lib/errorCodes";
@@ -31,6 +31,23 @@ async function requireAdmin(): Promise<AdminContext | NextResponse> {
 }
 
 /**
+ * De estas candidatas, las que son originales de una division (tienen hijas):
+ * no van al Excel, van sus hijas. Consulta acotada a sus ids, no un _count
+ * que agrupa la tabla entera en cada vista previa. Mientras no haya indice
+ * en splitFromId (migracion pendiente) Postgres la resuelve recorriendo la
+ * tabla, pero sin agrupar ni unir nada.
+ */
+async function splitParentIds(invoices: { id: string }[]): Promise<Set<string>> {
+  if (invoices.length === 0) return new Set();
+  const children = await prisma.invoice.findMany({
+    where: { splitFromId: { in: invoices.map((i) => i.id) } },
+    select: { splitFromId: true },
+    distinct: ["splitFromId"],
+  });
+  return new Set(children.map((c) => c.splitFromId).filter((id): id is string => id != null));
+}
+
+/**
  * Vista previa: recuento y avisos. Solo lectura; la descarga es por POST
  * (F-071): un GET con efectos se dispara con un enlace o una precarga.
  *
@@ -51,16 +68,15 @@ export async function GET(req: NextRequest) {
   if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 });
   const where = exportInvoiceWhere(parsed.request, admin.firmId);
 
-  const previewInvoices = await prisma.invoice.findMany({
+  const previewRows = await prisma.invoice.findMany({
     where,
     include: {
       client: true,
       vatLines: { orderBy: { position: "asc" } },
-      // Una original con hijas no va al Excel (van las hijas).
-      _count: { select: { splitInvoices: true } },
     },
     orderBy: [{ periodYear: "asc" }, { periodMonth: "asc" }, { invoiceDate: "asc" }],
   });
+  const previewInvoices = withSplitCounts(previewRows, await splitParentIds(previewRows));
   const allWarnings = validateForA3Export(previewInvoices);
   // Cuantas se quedan fuera por haber salido ya en un Excel anterior. Sin
   // este numero, un trimestre ya exportado sale como "0 facturas" y parece
@@ -117,13 +133,11 @@ export async function POST(req: NextRequest) {
 
   // Download mode — incluimos vatLines para que el exportador pueda emitir
   // una fila por tipo de IVA en facturas con desglose multiple.
-  const candidates = await prisma.invoice.findMany({
+  const candidateRows = await prisma.invoice.findMany({
     where,
     include: {
       client: true,
       vatLines: { orderBy: { position: "asc" } },
-      // Una original con hijas no va al Excel (van las hijas).
-      _count: { select: { splitInvoices: true } },
     },
     orderBy: [
       { periodYear:  "asc" },
@@ -132,6 +146,7 @@ export async function POST(req: NextRequest) {
     ],
   });
 
+  const candidates = withSplitCounts(candidateRows, await splitParentIds(candidateRows));
   if (!candidates.length) {
     return NextResponse.json(
       { error: appError("ERR-EXPORT-001", `filters: client=${clientId} ${month}/${year} type=${request.type}`) },

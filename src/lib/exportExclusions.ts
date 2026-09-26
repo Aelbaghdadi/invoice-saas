@@ -24,6 +24,20 @@ export function exportExclusionReason(inv: {
   return null;
 }
 
+/**
+ * Pone a cada factura el _count.splitInvoices que espera
+ * exportExclusionReason a partir de las ids que tienen hijas. El export las
+ * saca con una segunda consulta acotada a las candidatas: el _count de Prisma
+ * agregaba la tabla Invoice entera (LEFT JOIN de un GROUP BY sin filtro) en
+ * cada vista previa.
+ */
+export function withSplitCounts<T extends { id: string }>(
+  invoices: T[],
+  splitParentIds: ReadonlySet<string>,
+): (T & { _count: { splitInvoices: number } })[] {
+  return invoices.map((inv) => ({ ...inv, _count: { splitInvoices: splitParentIds.has(inv.id) ? 1 : 0 } }));
+}
+
 export function countExportExclusions(reasons: ExportExclusionReason[]): ExportExclusionCounts {
   const counts: ExportExclusionCounts = { total_cero: 0, dividida: 0 };
   for (const r of reasons) counts[r] += 1;

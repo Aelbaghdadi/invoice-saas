@@ -4,6 +4,7 @@ import {
   describeExportExclusions,
   exportExclusionReason,
   parseExportExclusionCounts,
+  withSplitCounts,
 } from "@/lib/exportExclusions";
 
 describe("exportExclusionReason", () => {
@@ -47,4 +48,14 @@ describe("parseExportExclusionCounts", () => {
       expect(parseExportExclusionCounts(raw)).toEqual({});
     },
   );
+});
+
+describe("withSplitCounts", () => {
+  it("marca como divididas solo las que tienen hijas, sin tocar lo demás", () => {
+    const rows = [{ id: "a", totalAmount: 121 }, { id: "b", totalAmount: 121 }];
+    const marked = withSplitCounts(rows, new Set(["b"]));
+    expect(marked.map((r) => r._count.splitInvoices)).toEqual([0, 1]);
+    expect(marked.map(exportExclusionReason)).toEqual([null, "dividida"]);
+    expect(marked[0]).toMatchObject(rows[0]);
+  });
 });
