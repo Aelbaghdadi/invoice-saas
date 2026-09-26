@@ -35,7 +35,7 @@ import { foldSurchargeLines, completeReadSurcharges, surchargeAuditValue } from 
 import { exportFingerprint, type FingerprintInvoice } from "@/lib/exportFingerprint";
 import { appError, type AppError } from "@/lib/errorCodes";
 import { putObject, getObjectBytes, sanitizeFilenameForStorage, isStorageConfigured } from "@/lib/storage";
-import { NEEDS_REVIEW } from "@/lib/invoiceStatuses";
+import { NEEDS_REVIEW, reviewActionBlockReason, reviewAllowedFrom, type ReviewAction } from "@/lib/invoiceStatuses";
 import { Prisma, type Invoice } from "@prisma/client";
 import { EXPORT_TRANSACTION_OPTIONS } from "@/lib/exportBatch";
 
@@ -187,7 +187,34 @@ function parseVatLines(raw: string): ParsedVatLine[] {
   return completeReadSurcharges(foldSurchargeLines(lines).lines);
 }
 
-async function parseAndSave(invoiceId: string, userId: string, data: FieldData, validate: boolean, expectedUpdatedAt?: string) {
+/**
+ * La escritura condicionada no ha tocado nada (count 0). Si la factura esta
+ * ahora en un estado en el que la accion no vale, se dice por que; si no, es
+ * que la cambio otra persona (ERR-VALIDATE-003).
+ */
+async function conditionalWriteError(
+  invoiceId: string,
+  action: ReviewAction,
+  options: { reopen?: boolean },
+  detail: string,
+): Promise<{ error: string | AppError }> {
+  const now = await prisma.invoice
+    .findUnique({ where: { id: invoiceId }, select: { status: true } })
+    .catch(() => null);
+  const reason = now ? reviewActionBlockReason(now.status, action, options) : null;
+  return { error: reason ?? appError("ERR-VALIDATE-003", detail) };
+}
+
+async function parseAndSave(
+  invoiceId: string,
+  userId: string,
+  data: FieldData,
+  validate: boolean,
+  expectedUpdatedAt?: string,
+  // "Reabrir y validar": la unica forma de validar una REJECTED (F-015).
+  options: { reopen?: boolean } = {},
+) {
+  const action: ReviewAction = validate ? "validate" : "save";
   const session = await auth();
   if (!session?.user) return { error: "No autorizado" };
 
@@ -211,6 +238,11 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
   // Workers can only modify invoices of assigned clients
   const accessErr = await assertInvoiceAccess(session, invoice.clientId);
   if (accessErr) return accessErr;
+
+  // En analisis, dividida, por clasificar o rechazada (sin reabrir) no se
+  // guarda ni se valida. Se repite en el propio updateMany de abajo.
+  const blocked = reviewActionBlockReason(invoice.status, action, options);
+  if (blocked) return { error: blocked };
 
   // Check if the period is closed (use accounting period when set, fallback to upload period)
   const parseInt2 = (v: string) => { const n = parseInt(v, 10); return isNaN(n) ? null : n; };
@@ -435,6 +467,10 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
 
   // Build audit log entries for changed fields
   const auditEntries: { field: string; oldValue: string | null; newValue: string | null }[] = [];
+  // Reabrir borra el motivo del rechazo: la factura deja de estar rechazada.
+  if (options.reopen && invoice.rejectionReason) {
+    auditEntries.push({ field: "rejectionReason", oldValue: invoice.rejectionReason, newValue: null });
+  }
   const trackedFields = [
     "type",
     "issuerName","issuerCif","receiverName","receiverCif",
@@ -543,9 +579,10 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
   try {
     saved = await prisma.$transaction(async (tx) => {
       const updated = await tx.invoice.updateMany({
-        where: { id: invoiceId, updatedAt: invoice.updatedAt },
+        where: { id: invoiceId, updatedAt: invoice.updatedAt, status: { in: reviewAllowedFrom(action, options) } },
         data: {
           ...newData,
+          ...(options.reopen ? { rejectionReason: null, rejectionCategory: null } : {}),
           isValid,
           // Si la factura estaba pospuesta y el gestor la edita/valida,
           // la sacamos de la "cola de pospuestas" para que vuelva al
@@ -587,7 +624,7 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     return { error: appError("ERR-SYS-001", `guardar ${invoiceId}: ${err instanceof Error ? err.message : String(err)}`) };
   }
   if (!saved) {
-    return { error: appError("ERR-VALIDATE-003", `updatedAt=${invoice.updatedAt.getTime()} al escribir`) };
+    return conditionalWriteError(invoiceId, action, options, `updatedAt=${invoice.updatedAt.getTime()} al escribir`);
   }
 
   if (toValidated) {
@@ -757,6 +794,8 @@ export async function validateInvoice(
   const bucket = parseBucket(formData.get("bucket"));
   const back = parseBackHref(formData.get("back"));
   const expectedUpdatedAt = formData.get("updatedAt") as string | null;
+  // Solo el boton "Reabrir y validar" lo manda; Enter nunca.
+  const reopen = formData.get("reopen") === "1";
   // Lote y estado de ANTES de guardar. Si al validar se cambia el tipo
   // (recibida -> emitida), la factura pasa al otro lote, y la siguiente tiene
   // que salir del lote en el que estaba trabajando el gestor.
@@ -773,7 +812,7 @@ export async function validateInvoice(
   const nextId = wasValidated
     ? null
     : await resolveNextId(id, before ? filterFromInvoice(before, bucket) : null, fallbackNext);
-  const err = await parseAndSave(id, session.user.id, extractFields(formData), true, expectedUpdatedAt ?? undefined);
+  const err = await parseAndSave(id, session.user.id, extractFields(formData), true, expectedUpdatedAt ?? undefined, { reopen });
   if (err) return err;
 
   // Correccion de una factura ya validada: se guarda y el gestor se queda en
@@ -1002,16 +1041,17 @@ export async function rejectInvoice(
   if (invoice.exportBatchItems.length > 0) {
     return { error: "Esta factura ya se exportó a A3 y no se puede rechazar. Si hay que corregirla, corrígela y vuelve a exportarla." };
   }
-  if (invoice.status === "REJECTED") {
-    return { error: "Esta factura ya está rechazada." };
-  }
+  // Ya rechazada, en analisis, dividida o por clasificar: no se rechaza. Se
+  // repite en el propio updateMany de abajo.
+  const blocked = reviewActionBlockReason(invoice.status, "reject");
+  if (blocked) return { error: blocked };
   const periodErr = await closedPeriodError(invoice.clientId, [invoicePeriod(invoice)], "rechazar");
   if (periodErr) return periodErr;
 
   // Condicionado al updatedAt leido: si una exportacion la reservo mientras
   // tanto, no se rechaza una factura que ya esta camino de A3 (F-049).
   const rejected = await prisma.invoice.updateMany({
-    where: { id, updatedAt: invoice.updatedAt },
+    where: { id, updatedAt: invoice.updatedAt, status: { in: reviewAllowedFrom("reject") } },
     data: {
       status: "REJECTED",
       rejectionReason: reason,
@@ -1019,7 +1059,7 @@ export async function rejectInvoice(
     },
   });
   if (rejected.count === 0) {
-    return { error: appError("ERR-VALIDATE-003", `updatedAt=${invoice.updatedAt.getTime()} al rechazar`) };
+    return conditionalWriteError(id, "reject", {}, `updatedAt=${invoice.updatedAt.getTime()} al rechazar`);
   }
 
   await prisma.invoiceStatusHistory.create({
@@ -1122,6 +1162,9 @@ export async function splitInvoice(
   if (invoice.exportBatchItems.length > 0) {
     return { error: "Esta factura ya se exportó a A3 y no se puede dividir." };
   }
+  // En analisis, ya dividida, por clasificar o rechazada: no se divide.
+  const blocked = reviewActionBlockReason(invoice.status, "split");
+  if (blocked) return { error: blocked };
   // Antes de subir nada: si no, quedarian recortes huerfanos en el almacenamiento.
   const periodErr = await closedPeriodError(invoice.clientId, splitPeriods(invoice), "dividir");
   if (periodErr) return periodErr;
@@ -1269,6 +1312,9 @@ export async function splitPdfInvoice(
   if (invoice.exportBatchItems.length > 0) {
     return { error: "Esta factura ya se exportó a A3 y no se puede dividir." };
   }
+  // En analisis, ya dividida, por clasificar o rechazada: no se divide.
+  const blocked = reviewActionBlockReason(invoice.status, "split");
+  if (blocked) return { error: blocked };
   // Antes de subir nada: si no, quedarian partes huerfanas en el almacenamiento.
   const periodErr = await closedPeriodError(invoice.clientId, splitPeriods(invoice), "dividir");
   if (periodErr) return periodErr;

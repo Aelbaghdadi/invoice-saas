@@ -33,6 +33,7 @@ import type { AppError } from "@/lib/errorCodes";
 import { Select, type SelectOption } from "@/components/ui/Select";
 import { InvoiceStatusBadge } from "@/components/ui/InvoiceStatusBadge";
 import { NEEDS_REVIEW } from "@/lib/invoiceStatuses";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { invoiceBalanceDiffCents } from "@/lib/invoiceBalance";
 import { sanitizeAccountingAccountInput, padAccountingAccount } from "@/lib/accountingAccount";
 import {
@@ -321,6 +322,7 @@ function fmtDate(d: Date | null | undefined) {
 
 export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false, initialVatLines, prevId, nextId, nextPendingId = null, position, batchTotal, doneCount = 0, pendingInBucket = 0, periodClosed = false, backHref, back = null, extraction, issues, suggestedAccount, accountMatchedByName, accountNameMismatch = false, thirdPartyGoodsType = null, canRememberGoodsType = false, boundingBoxes, queueSuffix = "", bucket = "all", sessionContext, avgOcrDurationMs, genericAccounts }: Props) {
   const { success, error } = useToast();
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const isImage = invoice.fileType.startsWith("image/");
   const isPdf   = invoice.fileType === "application/pdf";
   const isXml   = invoice.fileType.includes("xml");
@@ -891,13 +893,20 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     });
   };
 
+  // "Reabrir y validar" en curso: viaja con la validacion (tambien si antes
+  // sale la pregunta de bienes/servicios). Enter nunca lo pone.
+  const reopenRef = useRef(false);
+
   const runValidate = (goodsTypeScope: GoodsTypeScope) => {
     setGoodsQuestion(null);
+    const reopen = reopenRef.current;
+    reopenRef.current = false;
     startValidate(async () => {
       const res = await validateInvoice(null, buildFormData({
         nextId: nextPendingId ?? "",
         goodsTypeScope,
         goodsTypeAssignedSeen: assignedGoodsType ?? "",
+        ...(reopen ? { reopen: "1" } : {}),
       }));
       setValidateState(res);
       if (res?.error) {
@@ -946,8 +955,14 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     });
   };
 
-  const attemptValidate = () => {
+  const attemptValidate = (reopen = false) => {
     if (isPendingValidate) return;
+    // Una rechazada solo se valida con "Reabrir y validar" (F-015): ni Enter
+    // ni el atajo la reabren sin querer.
+    if (isRejected && !reopen) {
+      error("La factura está rechazada: para validarla pulsa «Reabrir y validar».");
+      return;
+    }
     if (periodClosed) {
       error("El periodo contable de esta factura está cerrado: hay que reabrirlo en Cierres para poder cambiarla.");
       return;
@@ -966,7 +981,18 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       triggerShake("accounts");
       return;
     }
+    reopenRef.current = reopen;
     handleValidate();
+  };
+
+  const attemptReopen = async () => {
+    const ok = await confirm({
+      title: "¿Reabrir y validar esta factura?",
+      message: "Dejará de estar rechazada, se borrará el motivo del rechazo y se validará con los datos que ves.",
+      confirmLabel: "Reabrir y validar",
+      tone: "primary",
+    });
+    if (ok) attemptValidate(true);
   };
 
   const handleReject = () => {
@@ -1340,7 +1366,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                   {invoice.rejectionReason && (
                     <p className="mt-0.5">Motivo: {invoice.rejectionReason}</p>
                   )}
-                  <p className="mt-0.5 text-red-700/80">Si la validas, deja de estar rechazada.</p>
+                  <p className="mt-0.5 text-red-700/80">Para validarla, pulsa «Reabrir y validar»: dejará de estar rechazada y se borrará el motivo.</p>
                 </div>
               </div>
             )}
@@ -2442,11 +2468,13 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
               return (
                 <button
                   type="button"
-                  onClick={attemptValidate}
+                  onClick={() => (isRejected ? attemptReopen() : attemptValidate())}
                   disabled={isPendingValidate || periodClosed}
                   title={
                     periodClosed
                       ? "Periodo cerrado"
+                      : isRejected
+                        ? "Quitar el rechazo y validar la factura (pide confirmación)"
                       : cifConflict
                         ? "Corrige el CIF antes de validar (coincide con el del cliente)"
                         : mathOk === false
@@ -2469,8 +2497,10 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                     ? <Loader2 className="h-4 w-4 animate-spin" />
                     : isValidated ? <Save className="h-4 w-4" /> : <CheckCircle2 className="h-4 w-4" />
                   }
-                  {cifConflict ? "CIF igual al del cliente" : isValidated ? "Guardar corrección" : "Validar factura"}
-                  <kbd className="ml-1 hidden rounded bg-white/20 px-1 text-[10px] font-semibold text-white 2xl:inline">Enter</kbd>
+                  {cifConflict ? "CIF igual al del cliente" : isValidated ? "Guardar corrección" : isRejected ? "Reabrir y validar" : "Validar factura"}
+                  {!isRejected && (
+                    <kbd className="ml-1 hidden rounded bg-white/20 px-1 text-[10px] font-semibold text-white 2xl:inline">Enter</kbd>
+                  )}
                   {!isValidated && nextPendingId && <ChevronRight className="h-4 w-4" />}
                 </button>
               );
@@ -2681,6 +2711,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
           )}
         </div>
       </div>
+
+      {confirmDialog}
 
       {showSplitModal && previewUrl && (
         <SplitInvoiceModal

@@ -254,3 +254,81 @@ export const MAX_OCR_RETRIES = 3;
 export function stuckAnalyzingWhere(cutoff: Date) {
   return { status: "ANALYZING" as const, updatedAt: { lt: cutoff }, ocrAttempts: { lt: MAX_OCR_RETRIES } };
 }
+
+// ── Estados de origen de las acciones de la revision (F-015, F-008) ──────────
+
+/** Acciones del gestor sobre una factura en la pantalla de revision. */
+export type ReviewAction = "save" | "validate" | "reject" | "split";
+
+// Sale de STATUS_LABELS (Record<InvoiceStatus, …>): un estado nuevo en el
+// enum no compila hasta tener etiqueta, y entonces entra aqui solo.
+const ALL_STATUSES = Object.keys(STATUS_LABELS) as InvoiceStatus[];
+
+/**
+ * Estados en los que no se guarda, valida, rechaza ni divide:
+ *  - UPLOADED / ANALYZING: el OCR en curso pisaria el cambio al terminar, o el
+ *    cambio pisaria lo que el OCR aun no ha escrito.
+ *  - SPLIT_SOURCE: la original de una division; lo que vale son sus hijas.
+ *    Validarla contabilizaria dos veces.
+ *  - PENDING_ROUTING: aun sin cliente real; se clasifica en su pantalla.
+ */
+export const REVIEW_LOCKED_STATUSES: InvoiceStatus[] = [
+  "UPLOADED", "ANALYZING", "SPLIT_SOURCE", "PENDING_ROUTING",
+];
+
+/**
+ * Estados desde los que el servidor acepta la accion. Va en el propio
+ * updateMany (status: { in }), no solo en una lectura previa: entre leer y
+ * escribir la factura puede haber pasado a otro estado.
+ *
+ * Una REJECTED solo se valida con `reopen` ("Reabrir y validar", explicito),
+ * y entonces solo desde REJECTED.
+ */
+export function reviewAllowedFrom(action: ReviewAction, options: { reopen?: boolean } = {}): InvoiceStatus[] {
+  const open = ALL_STATUSES.filter((s) => !REVIEW_LOCKED_STATUSES.includes(s));
+  switch (action) {
+    case "save":
+      return open;
+    case "validate":
+      return options.reopen ? ["REJECTED"] : open.filter((s) => s !== "REJECTED");
+    case "reject":
+    case "split":
+      // EXPORTED es legacy: ya esta en la contabilidad del cliente.
+      return open.filter((s) => s !== "REJECTED" && s !== "EXPORTED");
+  }
+}
+
+const ACTION_VERB: Record<ReviewAction, string> = {
+  save: "guardar",
+  validate: "validar",
+  reject: "rechazar",
+  split: "dividir",
+};
+
+/** Por que no se puede hacer la accion en ese estado, o null si se puede. */
+export function reviewActionBlockReason(
+  status: InvoiceStatus,
+  action: ReviewAction,
+  options: { reopen?: boolean } = {},
+): string | null {
+  if (reviewAllowedFrom(action, options).includes(status)) return null;
+  switch (status) {
+    case "UPLOADED":
+    case "ANALYZING":
+      return "La factura se está analizando: espera a que termine el análisis para cambiarla.";
+    case "SPLIT_SOURCE":
+      return "Esta factura se dividió en otras y es solo de consulta: trabaja con las facturas que salieron de ella.";
+    case "PENDING_ROUTING":
+      return "Esta factura está por clasificar: asígnale su cliente en «Por clasificar» antes de revisarla.";
+    case "REJECTED":
+      if (action === "validate") return "La factura está rechazada: para validarla usa «Reabrir y validar».";
+      if (action === "reject") return "Esta factura ya está rechazada.";
+      return `La factura está rechazada: no se puede ${ACTION_VERB[action]}.`;
+    case "EXPORTED":
+      return `Esta factura ya se exportó a A3 y no se puede ${ACTION_VERB[action]}.`;
+    default:
+      return options.reopen && action === "validate"
+        ? "La factura ya no está rechazada. Recarga la página para ver cómo está ahora."
+        : `No se puede ${ACTION_VERB[action]} esta factura en su estado actual. Recarga la página.`;
+  }
+}
