@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { generateCsv, generateA3Excel, suggestFilename, validateForA3Export, type ExportFormat, type ExportConfig } from "@/lib/exportFormats";
+import { generateCsv, generateA3Excel, partitionA3Exportable, suggestFilename, validateForA3Export, type ExportFormat, type ExportConfig } from "@/lib/exportFormats";
 import { attachmentContentDisposition } from "@/lib/contentDisposition";
 import { commitExportBatch, ExportConflictError } from "@/lib/exportBatch";
 import { appError } from "@/lib/errorCodes";
@@ -84,8 +84,12 @@ export async function GET(req: NextRequest) {
     const alreadyExported = await prisma.invoice.count({
       where: { ...where, exportBatchId: { not: null } },
     });
+    // Las que el Excel deja fuera (total 0) no cuentan como exportables:
+    // no se van a marcar.
+    const { exportable, excluded } = partitionA3Exportable(previewInvoices);
     return NextResponse.json({
-      count: previewInvoices.length,
+      count: exportable.length,
+      excluded: excluded.length,
       alreadyExported,
       warningCount: allWarnings.length,
       // Se recorta la lista: con un lote grande no tiene sentido volcar
@@ -96,7 +100,7 @@ export async function GET(req: NextRequest) {
 
   // Download mode — incluimos vatLines para que el exportador pueda emitir
   // una fila por tipo de IVA en facturas con desglose multiple.
-  const invoices = await prisma.invoice.findMany({
+  const candidates = await prisma.invoice.findMany({
     where,
     include: {
       client: true,
@@ -109,10 +113,20 @@ export async function GET(req: NextRequest) {
     ],
   });
 
-  if (!invoices.length) {
+  if (!candidates.length) {
     return NextResponse.json(
       { error: appError("ERR-EXPORT-001", `filters: client=${clientId} ${month}/${year} type=${typeParam}`) },
       { status: 404 },
+    );
+  }
+
+  // Solo lo que va en el fichero se marca y entra en el lote. Las excluidas
+  // siguen pendientes, y el aviso de la vista previa ya lo dice (F-009).
+  const { exportable: invoices, excluded } = partitionA3Exportable(candidates);
+  if (!invoices.length) {
+    return NextResponse.json(
+      { error: appError("ERR-EXPORT-004", `excluidas=${excluded.length} (${excluded[0].reason})`) },
+      { status: 422 },
     );
   }
 
@@ -186,6 +200,8 @@ export async function GET(req: NextRequest) {
     headers: {
       "Content-Type": contentType,
       "Content-Disposition": attachmentContentDisposition(filename),
+      // Cuantas se quedaron fuera del fichero sin marcar, para el aviso.
+      "X-Export-Excluded": String(excluded.length),
     },
   });
 }

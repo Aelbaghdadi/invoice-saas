@@ -365,12 +365,11 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
       warnings.push(`Importes en ${inv.currency}: A3 solo admite euros. Conviértelos y márcala en euros en la revisión`);
     }
 
-    // Total = 0: A3 rechaza asientos de valor cero. Lo marcamos como
-    // warning serio para que el gestor o lo corrija o lo excluya del
-    // export. En `generateA3Excel` se filtra fuera automáticamente.
+    // Se queda fuera del fichero (ver a3ExclusionReason): no se marca como
+    // exportada y sigue pendiente hasta que se corrija.
     const totalNum = Number(inv.totalAmount ?? 0);
-    if (Math.abs(totalNum) < 0.005) {
-      warnings.push("Total = 0 (excluida del export — A3 no acepta importes cero)");
+    if (a3ExclusionReason(inv)) {
+      warnings.push("Total = 0: no entra en el Excel ni se marca como exportada (A3 no acepta importes cero). Corrígela en la revisión");
     }
 
     // Un "tipo de IVA" que en realidad es el del recargo (5,2 / 1,4 / 0,5)
@@ -453,6 +452,35 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
   return results;
 }
 
+/**
+ * Por que una factura se queda fuera del Excel de A3, o null si entra.
+ *
+ * Total = 0: A3 rechaza asientos de importe cero (puede pasar cuando una
+ * rectificativa anula exactamente a la original y se exportan juntas).
+ */
+export function a3ExclusionReason(inv: Pick<InvoiceWithClient, "totalAmount">): string | null {
+  if (Math.abs(Number(inv.totalAmount ?? 0)) < 0.005) return "total 0";
+  return null;
+}
+
+/**
+ * Separa lo que entra en el Excel de lo que no. La usan el generador y la
+ * ruta de exportacion: solo lo que va en el fichero se marca como exportado
+ * y entra en el lote (F-009).
+ */
+export function partitionA3Exportable<T extends Pick<InvoiceWithClient, "totalAmount">>(
+  invoices: T[],
+): { exportable: T[]; excluded: { invoice: T; reason: string }[] } {
+  const exportable: T[] = [];
+  const excluded: { invoice: T; reason: string }[] = [];
+  for (const invoice of invoices) {
+    const reason = a3ExclusionReason(invoice);
+    if (reason) excluded.push({ invoice, reason });
+    else exportable.push(invoice);
+  }
+  return { exportable, excluded };
+}
+
 /** Generate A3 Excel workbook as Buffer */
 export function generateA3Excel(
   invoices: InvoiceWithClient[],
@@ -460,14 +488,9 @@ export function generateA3Excel(
 ): Buffer {
   const wb = XLSX.utils.book_new();
 
-  // Filtrar facturas con total = 0: A3 rechaza asientos de importe cero
-  // (puede pasar cuando una rectificativa anula exactamente a la original
-  // y se intentan exportar juntas). El gestor recibe el warning previo
-  // en validateForA3Export para que sepa lo que ha pasado.
-  const exportable = invoices.filter((i) => {
-    const total = Number(i.totalAmount ?? 0);
-    return Math.abs(total) >= 0.005;
-  });
+  // Las excluidas (ver a3ExclusionReason) no salen en el fichero; el gestor
+  // las ve antes en los avisos de validateForA3Export.
+  const { exportable } = partitionA3Exportable(invoices);
 
   const purchases = exportable.filter((i) => i.type === "PURCHASE");
   const sales = exportable.filter((i) => i.type === "SALE");

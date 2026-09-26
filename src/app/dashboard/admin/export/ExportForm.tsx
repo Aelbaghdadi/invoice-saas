@@ -49,9 +49,12 @@ export function ExportForm({ clients }: Props) {
   // Facturas del periodo que ya salieron en un Excel anterior: no se vuelven
   // a incluir, pero hay que decirlo o el recuento no se entiende.
   const [alreadyExported, setAlreadyExported] = useState(0);
+  // Las que el Excel deja fuera (total 0): no se marcan y siguen pendientes.
+  const [excluded, setExcluded] = useState(0);
   const [counting, setCounting] = useState(false);
   const [downloading, setDownloading] = useState(false);
-  const [success,  setSuccess]  = useState(false);
+  // Tras descargar: cuantas se quedaron fuera del fichero (null = sin exito).
+  const [success,  setSuccess]  = useState<{ excluded: number } | null>(null);
   const [error,    setError]    = useState<AppError | string | null>(null);
 
   // ── fetch preview count ─────────────────────────────────────────────────
@@ -63,7 +66,7 @@ export function ExportForm({ clients }: Props) {
     if (!clientId) return;
     setCounting(true);
     if (!keepMessages) {
-      setSuccess(false);
+      setSuccess(null);
       setError(null);
     }
     try {
@@ -80,6 +83,7 @@ export function ExportForm({ clients }: Props) {
       setWarnings(data.warnings ?? []);
       setWarningCount(data.warningCount ?? 0);
       setAlreadyExported(data.alreadyExported ?? 0);
+      setExcluded(data.excluded ?? 0);
     } catch {
       setCount(null);
       setWarnings([]);
@@ -105,7 +109,7 @@ export function ExportForm({ clients }: Props) {
     // El gestor se quedaba sin fichero y sin poder volver a sacar esas
     // facturas, porque ya constaban exportadas.
     setError(null);
-    setSuccess(false);
+    setSuccess(null);
     setDownloading(true);
     try {
       const res = await fetch(`/api/export?${sp}`);
@@ -129,11 +133,10 @@ export function ExportForm({ clients }: Props) {
       a.download = filenameFromContentDisposition(res.headers.get("Content-Disposition"), "export.xlsx");
       a.click();
       URL.revokeObjectURL(url);
-      setSuccess(true);
+      setSuccess({ excluded: Number(res.headers.get("X-Export-Excluded")) || 0 });
       // Las descargadas ya constan exportadas: se refresca el recuento ya,
       // no a los 2,5 s, o el boton seguia ofreciendo las mismas facturas.
       fetchCount(true);
-      setTimeout(() => setSuccess(false), 2500);
     } catch {
       setError("Error de conexión al generar el Excel. Comprueba si se ha descargado antes de repetirlo.");
       fetchCount(true);
@@ -312,9 +315,20 @@ export function ExportForm({ clients }: Props) {
 
             {count === 0 && !counting && (
               <p className="mt-2 text-center text-[12px] text-amber-600">
-                {alreadyExported > 0
-                  ? `Todas las facturas de este periodo (${alreadyExported}) ya se exportaron antes. Solo vuelven a salir si las corriges en la revisión.`
-                  : "No hay facturas exportables con estos filtros."}
+                {excluded > 0
+                  ? excluded === 1
+                    ? "La única factura pendiente tiene total 0 y no puede ir al Excel. Corrígela en la revisión."
+                    : `Las ${excluded} facturas pendientes tienen total 0 y no pueden ir al Excel. Corrígelas en la revisión.`
+                  : alreadyExported > 0
+                    ? `Todas las facturas de este periodo (${alreadyExported}) ya se exportaron antes. Solo vuelven a salir si las corriges en la revisión.`
+                    : "No hay facturas exportables con estos filtros."}
+              </p>
+            )}
+            {count !== 0 && excluded > 0 && !counting && (
+              <p className="mt-2 text-center text-[12px] text-amber-600">
+                {excluded === 1
+                  ? "1 factura con total 0 se queda fuera del Excel y no se marca como exportada."
+                  : `${excluded} facturas con total 0 se quedan fuera del Excel y no se marcan como exportadas.`}
               </p>
             )}
             {count !== 0 && alreadyExported > 0 && !counting && (
@@ -364,7 +378,14 @@ export function ExportForm({ clients }: Props) {
           {success && (
             <div className="flex items-center gap-2 rounded-xl bg-green-50 px-4 py-3 text-[13px] text-green-700">
               <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
-              Exportación completada. Las facturas han sido marcadas como Exportadas.
+              <span>
+                Exportación completada. Las facturas del Excel han quedado marcadas como exportadas.
+                {success.excluded > 0 && (
+                  success.excluded === 1
+                    ? " 1 factura con total 0 se ha quedado fuera y sigue pendiente."
+                    : ` ${success.excluded} facturas con total 0 se han quedado fuera y siguen pendientes.`
+                )}
+              </span>
             </div>
           )}
           {error && <ErrorBox error={error} variant="banner" />}
