@@ -118,7 +118,10 @@ export function ExportForm({ clients }: Props) {
         body: JSON.stringify({ clientId, periodType, month: effectiveMonth, year, type, format }),
       });
       if (!res.ok) {
-        let failure: AppError | string = "No se ha podido generar el Excel. Vuelve a intentarlo.";
+        // Sin un error de la API (p. ej. un corte del proxy) no se sabe si el
+        // lote llego a registrarse: se manda al historial, no a repetir.
+        let failure: AppError | string =
+          "No se ha podido completar la exportación. Antes de repetirla, mira el historial: si aparece, descárgala desde allí.";
         try {
           const data = await res.json();
           // La API devuelve {code, message, details}: con String() salia "[object Object]".
@@ -148,8 +151,9 @@ export function ExportForm({ clients }: Props) {
       // El lote nuevo aparece en el historial, con su "Volver a descargar".
       router.refresh();
     } catch {
-      setError("Error de conexión al generar el Excel. Comprueba si se ha descargado antes de repetirlo.");
+      setError("Error de conexión durante la exportación. Antes de repetirla, mira el historial: si aparece, descárgala desde allí con «Volver a descargar».");
       fetchCount(true);
+      router.refresh();
     } finally {
       setDownloading(false);
     }
