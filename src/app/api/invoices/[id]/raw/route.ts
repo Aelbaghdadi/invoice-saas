@@ -24,7 +24,7 @@ export async function GET(
   const { id } = await params;
   const invoice = await prisma.invoice.findUnique({
     where: { id },
-    select: { storageKey: true, fileType: true, clientId: true, routingCandidateIds: true },
+    select: { storageKey: true, fileType: true, filename: true, clientId: true, routingCandidateIds: true },
   });
   if (!invoice) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
@@ -38,7 +38,7 @@ export async function GET(
     // La CSP sandbox y nosniff de esta ruta están en next.config.ts.
     return new Response(new Uint8Array(bytes), {
       headers: {
-        ...invoiceFileHeaders(invoice.fileType, id),
+        ...invoiceFileHeaders(invoice.fileType, id, invoice.filename),
         "Content-Length": String(bytes.length),
         // Datos sensibles (RGPD): no cachear en proxies/CDN intermedios.
         "Cache-Control": "private, no-store",

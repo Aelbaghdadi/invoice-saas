@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { invoiceFileHeaders } from "@/lib/invoiceFileHeaders";
+import { filenameFromContentDisposition } from "@/lib/contentDisposition";
 import nextConfig from "../../next.config";
 
 describe("invoiceFileHeaders", () => {
@@ -20,11 +21,35 @@ describe("invoiceFileHeaders", () => {
     });
   });
 
-  it("descarga el XML como binario, nunca inline", () => {
-    expect(invoiceFileHeaders("application/xml", "inv1")).toEqual({
+  it("descarga el XML como binario con el nombre con el que se subió", () => {
+    expect(invoiceFileHeaders("application/xml", "inv1", "factura_proveedor.xml")).toEqual({
       "Content-Type": "application/octet-stream",
-      "Content-Disposition": 'attachment; filename="factura_inv1.xml"',
+      "Content-Disposition":
+        "attachment; filename=\"factura_proveedor.xml\"; filename*=UTF-8''factura_proveedor.xml",
     });
+  });
+
+  it("conserva un nombre con tildes o comillas en filename* y lo deja ASCII en filename", () => {
+    const header = invoiceFileHeaders("application/xml", "inv1", 'Factura "Añil" 3–2026.xml')[
+      "Content-Disposition"
+    ];
+    expect(header).toBe(
+      "attachment; filename=\"Factura_Anil_3_2026.xml\"; " +
+        "filename*=UTF-8''Factura%20%22A%C3%B1il%22%203%E2%80%932026.xml",
+    );
+    expect(filenameFromContentDisposition(header, "x")).toBe('Factura "Añil" 3–2026.xml');
+  });
+
+  it.each([undefined, null, "", "   "])("sin nombre (%j) usa factura_<id>.xml", (filename) => {
+    expect(invoiceFileHeaders("application/xml", "inv1", filename)["Content-Disposition"]).toBe(
+      "attachment; filename=\"factura_inv1.xml\"; filename*=UTF-8''factura_inv1.xml",
+    );
+  });
+
+  it("los tipos inline no llevan nombre aunque lo haya", () => {
+    expect(invoiceFileHeaders("application/pdf", "inv1", "factura.pdf")["Content-Disposition"]).toBe(
+      "inline",
+    );
   });
 
   it.each([
@@ -43,7 +68,7 @@ describe("invoiceFileHeaders", () => {
   it("descarga cuando no hay tipo guardado", () => {
     expect(invoiceFileHeaders(null, "inv1")).toEqual({
       "Content-Type": "application/octet-stream",
-      "Content-Disposition": 'attachment; filename="factura_inv1"',
+      "Content-Disposition": "attachment; filename=\"factura_inv1\"; filename*=UTF-8''factura_inv1",
     });
   });
 });
