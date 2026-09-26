@@ -1,6 +1,7 @@
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
+import { adminUploadClientsWhere } from "@/lib/uploadClients";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { WorkerUploadForm } from "./WorkerUploadForm";
 
@@ -10,15 +11,18 @@ export default async function WorkerUploadPage() {
     redirect("/login");
   }
 
-  // Get assigned clients (workers see assigned, admins see all). Excluimos el
-  // cliente técnico "Sin clasificar" (buzón de auto-ruteo) de los selectores.
+  // Gestor: sus clientes asignados. Admin: los de su asesoría, sin el cliente
+  // técnico "Sin clasificar" (buzón de auto-ruteo).
   let clients;
   if (session.user.role === "ADMIN") {
-    clients = await prisma.client.findMany({
-      where: { isUnclassifiedBucket: false },
-      orderBy: { name: "asc" },
-      select: { id: true, name: true, cif: true },
-    });
+    const where = adminUploadClientsWhere(session.user.advisoryFirmId);
+    clients = where
+      ? await prisma.client.findMany({
+          where,
+          orderBy: { name: "asc" },
+          select: { id: true, name: true, cif: true },
+        })
+      : [];
   } else {
     const assignments = await prisma.workerClientAssignment.findMany({
       where: { workerId: session.user.id },
