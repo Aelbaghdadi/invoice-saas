@@ -10,6 +10,7 @@ beforeAll(async () => {
   server = http.createServer((req, res) => {
     if (req.url?.includes("existe")) { res.writeHead(200, { "Content-Length": "0" }); res.end(); return; }
     if (req.url?.includes("falta")) { res.writeHead(404); res.end(); return; }
+    if (req.url?.includes("prohibido")) { res.writeHead(403); res.end(); return; }
     if (req.url?.includes("contenido")) { res.writeHead(200, { "Content-Length": "5" }); res.end("hola!"); return; }
     // Cabeceras y parte del cuerpo, y luego nada.
     if (req.url?.includes("cuerpo-colgado")) { res.writeHead(200, { "Content-Length": "100" }); res.write("0123456789"); return; }
@@ -54,6 +55,14 @@ describe("objectExists", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     expect(await storage.objectExists("exports/f/c/falta.xlsx")).toBe(false);
     expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("un 403 (credenciales) da false y el aviso dice el código HTTP", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(await storage.objectExists("exports/f/c/prohibido.xlsx")).toBe(false);
+    expect(warn).toHaveBeenCalledOnce();
+    expect(String(warn.mock.calls[0][0])).toContain("(HTTP 403)");
     warn.mockRestore();
   });
 

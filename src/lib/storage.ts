@@ -122,7 +122,12 @@ export async function objectExists(key: string, options: { timeoutMs?: number } 
     return true;
   } catch (err) {
     if (!isStorageNotFound(err)) {
-      console.warn(`[storage] HeadObject ${key} fallo:`, err instanceof Error ? `${err.name}: ${err.message}` : err);
+      // Un HEAD no trae cuerpo: sin el codigo HTTP, un 403 de credenciales y
+      // un 503 salen los dos como "Unknown: UnknownError".
+      const status = (err as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
+      const name = err instanceof Error ? err.name : "Error";
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[storage] HeadObject ${key} fallo: ${name}${status ? ` (HTTP ${status})` : ""}: ${message}`);
     }
     return false;
   }
