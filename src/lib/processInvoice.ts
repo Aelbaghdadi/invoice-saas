@@ -12,6 +12,11 @@ import {
 } from "@/lib/ocrLlm";
 import { detectIssues } from "@/lib/issueDetector";
 import { appendAuditLogs } from "@/lib/auditLog";
+import { ocrFenceWhere } from "@/lib/invoiceStatuses";
+
+// La escritura final son unas pocas consultas; 15 s por si espera un bloqueo
+// de fila (los 5 s por defecto dejaban el resultado en OCR_ERROR).
+const OCR_WRITE_TRANSACTION_OPTIONS = { timeout: 15_000, maxWait: 5_000 } as const;
 import {
   parseTaxId,
   isPersonaFisica,
@@ -70,6 +75,8 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
 
   const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
   if (!invoice) return;
+  // Fencing token de esta ejecucion: el ocrAttempts que dejo el claim.
+  const ocrToken = invoice.ocrAttempts;
 
   const ocrStartedAt = new Date();
 
@@ -295,7 +302,9 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     // Detect issues (duplicates, low confidence, math mismatch, IVA no-cero
     // en intracomunitarias, etc.). En las "Por clasificar" no tiene sentido
     // (aún no hay cliente real).
-    const issues = isUnclassified ? [] : await detectIssues(invoiceId, extracted, invoice, operationTypeHint);
+    const issues = isUnclassified
+      ? []
+      : await detectIssues(invoiceId, extracted, invoice, operationTypeHint, { persist: false });
     const targetStatus: InvoiceStatus = isUnclassified
       ? "PENDING_ROUTING"
       : issues.length > 0 ? "NEEDS_ATTENTION" : "PENDING_REVIEW";
@@ -568,24 +577,15 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     }
 
     // Copy OCR data to Invoice (datos finales — gestor los editará)
-    await prisma.$transaction([
-      // Reemplazar lineas previas (idempotente: si reproceso, borra y mete).
-      prisma.invoiceVatLine.deleteMany({ where: { invoiceId } }),
-      ...(signed.lines.length > 0
-        ? [prisma.invoiceVatLine.createMany({
-            data: signed.lines.map((l, i) => ({
-              invoiceId,
-              position:  i,
-              taxBase:   l.taxBase,
-              vatRate:   l.vatRate,
-              vatAmount: l.vatAmount,
-              equivalenceSurchargeRate:   lineSurcharges[i].rate,
-              equivalenceSurchargeAmount: lineSurcharges[i].amount,
-            })),
-          })]
-        : []),
-      prisma.invoice.update({
-        where: { id: invoiceId },
+    //
+    // Todo en una transaccion que empieza por la escritura condicionada a que
+    // la factura siga en ANALYZING con el ocrAttempts de este claim (F-008).
+    // Si mientras analizaba la rechazaron, dividieron o validaron, o el cron
+    // la relanzo, no se toca nada: ni lineas, ni incidencias, ni historial,
+    // ni auditoria.
+    const written = await prisma.$transaction(async (tx) => {
+      const fenced = await tx.invoice.updateMany({
+        where: ocrFenceWhere(invoiceId, ocrToken),
         data: {
           status: targetStatus,
           // Tipo detectado (si se subió como "No lo sé" y el OCR lo resolvió);
@@ -627,18 +627,49 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
           isValid: finalIsValid,
           lastOcrError:  null,
         },
-      }),
-    ]);
+      });
+      if (fenced.count === 0) return false;
 
-    await transitionStatus(invoiceId, "ANALYZING", targetStatus, triggeredByUserId);
-
-    await appendAuditLogs([{
-      invoiceId,
-      userId: triggeredByUserId,
-      field: "status",
-      oldValue: "UPLOADED",
-      newValue: targetStatus,
-    }]);
+      // Reemplazar lineas previas (idempotente: si reproceso, borra y mete).
+      await tx.invoiceVatLine.deleteMany({ where: { invoiceId } });
+      if (signed.lines.length > 0) {
+        await tx.invoiceVatLine.createMany({
+          data: signed.lines.map((l, i) => ({
+            invoiceId,
+            position:  i,
+            taxBase:   l.taxBase,
+            vatRate:   l.vatRate,
+            vatAmount: l.vatAmount,
+            equivalenceSurchargeRate:   lineSurcharges[i].rate,
+            equivalenceSurchargeAmount: lineSurcharges[i].amount,
+          })),
+        });
+      }
+      if (issues.length > 0) {
+        await tx.invoiceIssue.createMany({
+          data: issues.map((issue) => ({
+            invoiceId,
+            type: issue.type,
+            description: issue.description,
+            field: issue.field ?? null,
+          })),
+        });
+      }
+      await tx.invoiceStatusHistory.create({
+        data: { invoiceId, fromStatus: "ANALYZING", toStatus: targetStatus, changedBy: triggeredByUserId },
+      });
+      await appendAuditLogs([{
+        invoiceId,
+        userId: triggeredByUserId,
+        field: "status",
+        oldValue: "UPLOADED",
+        newValue: targetStatus,
+      }], tx);
+      return true;
+    }, OCR_WRITE_TRANSACTION_OPTIONS);
+    if (!written) {
+      console.warn(`[processInvoice] ${invoiceId}: la factura cambio mientras se analizaba (ocrAttempts=${ocrToken}); no se escribe el resultado`);
+    }
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
     // Clasificar el error en un codigo del catalogo. Lo persistimos como
@@ -648,12 +679,23 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     // Mensaje LIMPIO para el gestor (nada de stacks de Prisma en la UI). El
     // detalle técnico completo se queda en el log para depuración.
     const userMsg = `[${code}] ${userMessageForOcrError(code)}`;
-    await prisma.invoice.update({
-      where: { id: invoiceId },
-      data: { status: "OCR_ERROR", lastOcrError: userMsg },
-    });
-    await transitionStatus(invoiceId, "ANALYZING", "OCR_ERROR", triggeredByUserId, userMsg);
     console.error(`[processInvoice] ${code}:`, err);
+    // Mismo fencing que el final: un error de una ejecucion que ya no es la
+    // duena no puede pasar a OCR_ERROR una factura rechazada o validada.
+    try {
+      await prisma.$transaction(async (tx) => {
+        const fenced = await tx.invoice.updateMany({
+          where: ocrFenceWhere(invoiceId, ocrToken),
+          data: { status: "OCR_ERROR", lastOcrError: userMsg },
+        });
+        if (fenced.count === 0) return;
+        await tx.invoiceStatusHistory.create({
+          data: { invoiceId, fromStatus: "ANALYZING", toStatus: "OCR_ERROR", changedBy: triggeredByUserId, reason: userMsg },
+        });
+      });
+    } catch (writeErr) {
+      console.error(`[processInvoice] ${invoiceId}: no se pudo guardar el OCR_ERROR:`, writeErr);
+    }
   }
 }
 

@@ -14,6 +14,7 @@ import { invoiceBalanceDiffCents } from "@/lib/invoiceBalance";
 import { formatEur } from "@/lib/format";
 import { findNumberingGaps } from "@/lib/invoiceNumbering";
 import { isStandardVatRate, isSurchargeRate } from "@/lib/equivalenceSurcharge";
+import { exportExclusionReason, type ExportExclusionReason } from "@/lib/exportExclusions";
 
 export type ExportFormat = "sage50" | "contasol" | "a3con" | "a3excel";
 
@@ -25,6 +26,8 @@ export type ExportConfig = {
 
 export type InvoiceWithClient = Invoice & {
   client: Client;
+  /** Cuantas hijas tiene si se dividio: la original no va al Excel. */
+  _count?: { splitInvoices?: number };
   /** Desglose por tipo de IVA. Cuando esta presente y tiene >0 elementos,
    *  los exportadores emiten una fila por linea (a3 asesor "repetir fila
    *  cambiando %IVA y cuota"). Cuando esta vacio se cae a los campos
@@ -382,8 +385,11 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
     // Se queda fuera del fichero (ver a3ExclusionReason): no se marca como
     // exportada y sigue pendiente hasta que se corrija.
     const totalNum = Number(inv.totalAmount ?? 0);
-    if (a3ExclusionReason(inv)) {
+    const exclusion = a3ExclusionReason(inv);
+    if (exclusion === "total_cero") {
       warnings.push("Total = 0: no entra en el Excel ni se marca como exportada (A3 no acepta importes cero). Corrígela en la revisión");
+    } else if (exclusion === "dividida") {
+      warnings.push("Se dividió en otras facturas: no entra en el Excel ni se marca como exportada (van sus hijas)");
     }
 
     // Un "tipo de IVA" que en realidad es el del recargo (5,2 / 1,4 / 0,5)
@@ -472,9 +478,8 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
  * Total = 0: A3 rechaza asientos de importe cero (puede pasar cuando una
  * rectificativa anula exactamente a la original y se exportan juntas).
  */
-export function a3ExclusionReason(inv: Pick<InvoiceWithClient, "totalAmount">): string | null {
-  if (Math.abs(Number(inv.totalAmount ?? 0)) < 0.005) return "total 0";
-  return null;
+export function a3ExclusionReason(inv: Pick<InvoiceWithClient, "totalAmount" | "_count">): ExportExclusionReason | null {
+  return exportExclusionReason(inv);
 }
 
 /**
@@ -482,11 +487,11 @@ export function a3ExclusionReason(inv: Pick<InvoiceWithClient, "totalAmount">): 
  * ruta de exportacion: solo lo que va en el fichero se marca como exportado
  * y entra en el lote (F-009).
  */
-export function partitionA3Exportable<T extends Pick<InvoiceWithClient, "totalAmount">>(
+export function partitionA3Exportable<T extends Pick<InvoiceWithClient, "totalAmount" | "_count">>(
   invoices: T[],
-): { exportable: T[]; excluded: { invoice: T; reason: string }[] } {
+): { exportable: T[]; excluded: { invoice: T; reason: ExportExclusionReason }[] } {
   const exportable: T[] = [];
-  const excluded: { invoice: T; reason: string }[] = [];
+  const excluded: { invoice: T; reason: ExportExclusionReason }[] = [];
   for (const invoice of invoices) {
     const reason = a3ExclusionReason(invoice);
     if (reason) excluded.push({ invoice, reason });
