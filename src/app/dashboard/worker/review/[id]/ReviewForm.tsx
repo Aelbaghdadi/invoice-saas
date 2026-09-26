@@ -1123,7 +1123,9 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     onNext: () => { if (nextId) router.push(`/dashboard/worker/review/${nextId}${queueSuffix}`); },
     onPrev: () => { if (prevId) router.push(`/dashboard/worker/review/${prevId}${queueSuffix}`); },
     onToggleHelp: () => setShowHelp((s) => !s),
-    isBlocked: () => showRejectModal || showHelp || showSplitModal || showSplitPdfModal || goodsQuestion !== null,
+    // Con «¿Reabrir y validar?» abierto, Ctrl+S guardaba por detras y
+    // Alt+flechas cambiaba de factura.
+    isBlocked: () => showRejectModal || showHelp || showSplitModal || showSplitPdfModal || goodsQuestion !== null || confirmDialog != null,
   });
 
   // Etiqueta del bucket activo en la sesion. Ayuda al gestor a saber
