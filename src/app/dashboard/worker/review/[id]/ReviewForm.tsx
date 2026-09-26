@@ -1537,12 +1537,16 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                 dentro sin tocarlos uno a uno. Analizandose tambien: lo que se
                 tecleara se perderia en silencio al remontarse el formulario
                 cuando termina el OCR. */}
-            {/* Los botones de dentro (tipos de IVA, añadir linea, cuenta
-                generica...) sin hover ni clic cuando estan deshabilitados:
-                si no, parecia que se podian pulsar. */}
+            {/* Con el fieldset deshabilitado, los botones de dentro (tipos de
+                IVA, añadir linea, cuenta generica...) sin hover ni clic: si
+                no, parecia que se podian pulsar. Solo entonces: con la regla
+                sobre cualquier boton deshabilitado, la papelera de la unica
+                linea de IVA pasaba de 0,3 a 0,6 y parecia activa. Los
+                desplegables (Select) quedan fuera: traen su propio estilo y
+                asi conservan el tooltip con la etiqueta completa. */}
             <fieldset
               disabled={lockReason != null}
-              className="m-0 min-w-0 space-y-2.5 border-0 p-0 [&_button:disabled]:pointer-events-none [&_button:disabled]:opacity-60"
+              className="m-0 min-w-0 space-y-2.5 border-0 p-0 [&:disabled_button:not([role=combobox])]:pointer-events-none [&:disabled_button:not([role=combobox])]:opacity-60"
             >
             {/* ── Cabecera 2 columnas: parte editable + datos factura ──────
                 El lado bloqueado (datos del cliente: nombre + CIF) ya
