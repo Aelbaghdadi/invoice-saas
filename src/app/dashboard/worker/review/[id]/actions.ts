@@ -34,7 +34,7 @@ import { applyRectificativeSign } from "@/lib/rectificative";
 import { foldSurchargeLines, completeReadSurcharges, surchargeAuditValue } from "@/lib/equivalenceSurcharge";
 import { exportFingerprint, type FingerprintInvoice } from "@/lib/exportFingerprint";
 import { appError, type AppError } from "@/lib/errorCodes";
-import { putObject, getObjectBytes, sanitizeFilenameForStorage, isStorageConfigured } from "@/lib/storage";
+import { putObject, getObjectBytes, deleteObject, sanitizeFilenameForStorage, isStorageConfigured } from "@/lib/storage";
 import { NEEDS_REVIEW, reviewActionBlockReason, reviewAllowedFrom, type ReviewAction } from "@/lib/invoiceStatuses";
 import { Prisma, type Invoice } from "@prisma/client";
 import { EXPORT_TRANSACTION_OPTIONS } from "@/lib/exportBatch";
@@ -1122,6 +1122,128 @@ function splitPeriods(
   return [invoicePeriod(invoice), { month: invoice.periodMonth, year: invoice.periodYear }];
 }
 
+/** Un trozo de una division, ya en memoria y listo para subir. */
+type SplitPiece = {
+  label: string;
+  filename: string;
+  storageKey: string;
+  fileType: string;
+  body: Buffer;
+};
+
+/** Sube los trozos de una division. Si uno falla, borra los ya subidos. */
+async function uploadSplitPieces(pieces: SplitPiece[]): Promise<string | null> {
+  const uploaded: string[] = [];
+  for (const piece of pieces) {
+    try {
+      await putObject(piece.storageKey, piece.body, piece.fileType);
+      uploaded.push(piece.storageKey);
+    } catch (e) {
+      await Promise.all(uploaded.map((key) => deleteObject(key)));
+      return `Error subiendo "${piece.label}": ${e instanceof Error ? e.message : "fallo"}`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Reserva la original y crea sus hijas, en una sola transaccion (F-056).
+ *
+ * La reserva va la primera: updateMany condicionado a un estado desde el que
+ * se puede dividir y a que no este en ningun Excel. Si otra persona la ha
+ * dividido, rechazado o exportado mientras tanto, count es 0 y no se crea
+ * ninguna hija (antes se creaban y se marcaba la original despues, sin
+ * condicion: dos divisiones a la vez duplicaban las hijas). Si algo falla,
+ * se deshace todo y se borran los ficheros ya subidos.
+ */
+async function reserveAndCreateSplit(
+  invoice: Pick<Invoice, "id" | "status" | "clientId" | "type" | "periodMonth" | "periodYear" | "currency">,
+  userId: string,
+  pieces: SplitPiece[],
+): Promise<{ childIds: string[] } | { error: string }> {
+  const discardFiles = () => Promise.all(pieces.map((p) => deleteObject(p.storageKey)));
+  let childIds: string[] | null;
+  try {
+    childIds = await prisma.$transaction(async (tx) => {
+      const reserved = await tx.invoice.updateMany({
+        where: {
+          id: invoice.id,
+          status: { in: reviewAllowedFrom("split") },
+          exportBatchId: null,
+          exportBatchItems: { none: {} },
+        },
+        data: { status: "SPLIT_SOURCE" },
+      });
+      if (reserved.count === 0) return null;
+
+      const ids: string[] = [];
+      for (const piece of pieces) {
+        const fileHash = createHash("sha256").update(piece.body).digest("hex");
+        const document = await tx.document.create({
+          data: {
+            filename: piece.filename,
+            storageKey: piece.storageKey,
+            fileType: piece.fileType,
+            fileHash,
+            sizeBytes: piece.body.length,
+            uploadedBy: userId,
+            clientId: invoice.clientId,
+          },
+        });
+        const child = await tx.invoice.create({
+          data: {
+            filename: piece.filename,
+            storageKey: piece.storageKey,
+            fileType: piece.fileType,
+            fileHash,
+            type: invoice.type,
+            periodMonth: invoice.periodMonth,
+            periodYear: invoice.periodYear,
+            clientId: invoice.clientId,
+            documentId: document.id,
+            splitFromId: invoice.id,
+            // La hija hereda la moneda: si su recorte no la muestra, el OCR no
+            // la veria y el aviso de "no es euro" desapareceria en silencio.
+            currency: invoice.currency,
+          },
+        });
+        ids.push(child.id);
+      }
+
+      await tx.invoiceStatusHistory.create({
+        data: { invoiceId: invoice.id, fromStatus: invoice.status, toStatus: "SPLIT_SOURCE", changedBy: userId },
+      });
+      await appendAuditLogs([{
+        invoiceId: invoice.id,
+        userId,
+        field: "status",
+        oldValue: invoice.status,
+        newValue: "SPLIT_SOURCE",
+      }], tx);
+      return ids;
+    }, { timeout: 30_000, maxWait: 5_000 });
+  } catch (e) {
+    await discardFiles();
+    console.error(`[split] ${invoice.id}: no se pudo dividir:`, e);
+    return { error: "No se ha podido dividir la factura. No se ha cambiado nada: vuelve a intentarlo." };
+  }
+
+  if (!childIds) {
+    await discardFiles();
+    const now = await prisma.invoice
+      .findUnique({ where: { id: invoice.id }, select: { status: true, exportBatchId: true, exportBatchItems: { take: 1, select: { id: true } } } })
+      .catch(() => null);
+    if (now && (now.exportBatchId || now.exportBatchItems.length > 0)) {
+      return { error: "Esta factura ya se exportó a A3 y no se puede dividir." };
+    }
+    return {
+      error: (now && reviewActionBlockReason(now.status, "split"))
+        ?? "La factura ha cambiado mientras la dividías. Recarga la página.",
+    };
+  }
+  return { childIds };
+}
+
 export type SplitTicket = {
   /** Nombre descriptivo del ticket (ej: "ticket1"). */
   name: string;
@@ -1170,8 +1292,9 @@ export async function splitInvoice(
   if (periodErr) return periodErr;
 
   if (!isStorageConfigured()) return { error: "Almacenamiento no configurado" };
-  const createdIds: string[] = [];
 
+  // Todos los recortes, validados y en memoria antes de subir nada.
+  const pieces: SplitPiece[] = [];
   for (const ticket of tickets) {
     // Extraer el buffer del data URL (data:[mime];base64,[data])
     const match = ticket.dataUrl.match(/^data:([^;]+);base64,(.+)$/);
@@ -1181,70 +1304,20 @@ export async function splitInvoice(
 
     const ext = mime === "image/png" ? "png" : "jpg";
     const safeName = sanitizeFilenameForStorage(`${ticket.name}.${ext}`);
-    const storageKey = `${invoice.clientId}/${invoice.periodYear}-${String(invoice.periodMonth).padStart(2, "0")}/${Date.now()}-split-${safeName}`;
-    const fileHash = createHash("sha256").update(buffer).digest("hex");
-
-    try {
-      await putObject(storageKey, buffer, mime);
-    } catch (e) {
-      return { error: `Error subiendo "${ticket.name}": ${e instanceof Error ? e.message : "fallo"}` };
-    }
-
-    const filename = `${ticket.name}.${ext}`;
-    const document = await prisma.document.create({
-      data: {
-        filename,
-        storageKey,
-        fileType: mime,
-        fileHash,
-        sizeBytes: buffer.length,
-        uploadedBy: session.user.id,
-        clientId: invoice.clientId,
-      },
+    pieces.push({
+      label: ticket.name,
+      filename: `${ticket.name}.${ext}`,
+      storageKey: `${invoice.clientId}/${invoice.periodYear}-${String(invoice.periodMonth).padStart(2, "0")}/${Date.now()}-${pieces.length}-split-${safeName}`,
+      fileType: mime,
+      body: buffer,
     });
-
-    const child = await prisma.invoice.create({
-      data: {
-        filename,
-        storageKey,
-        fileType: mime,
-        fileHash,
-        type: invoice.type,
-        periodMonth: invoice.periodMonth,
-        periodYear: invoice.periodYear,
-        clientId: invoice.clientId,
-        documentId: document.id,
-        splitFromId: invoiceId,
-        // La hija hereda la moneda: si su recorte no la muestra, el OCR no
-        // la veria y el aviso de "no es euro" desapareceria en silencio.
-        currency: invoice.currency,
-      },
-    });
-    createdIds.push(child.id);
   }
 
-  // Marcar la original como dividida
-  await prisma.invoice.update({
-    where: { id: invoiceId },
-    data: { status: "SPLIT_SOURCE" },
-  });
-
-  await prisma.invoiceStatusHistory.create({
-    data: {
-      invoiceId,
-      fromStatus: invoice.status,
-      toStatus: "SPLIT_SOURCE",
-      changedBy: session.user.id,
-    },
-  });
-
-  await appendAuditLogs([{
-    invoiceId,
-    userId: session.user.id,
-    field: "status",
-    oldValue: invoice.status,
-    newValue: "SPLIT_SOURCE",
-  }]);
+  const uploadErr = await uploadSplitPieces(pieces);
+  if (uploadErr) return { error: uploadErr };
+  const split = await reserveAndCreateSplit(invoice, session.user.id, pieces);
+  if ("error" in split) return split;
+  const createdIds = split.childIds;
 
   // OCR en segundo plano para las sub-facturas
   const userId = session.user.id;
@@ -1341,8 +1414,8 @@ export async function splitPdfInvoice(
     }
   }
 
-  const createdIds: string[] = [];
-
+  // Todas las partes, generadas en memoria antes de subir nada.
+  const pieces: SplitPiece[] = [];
   for (const part of parts) {
     const newDoc = await PDFDocument.create();
     // copyPages devuelve las páginas en el mismo orden que el array de índices
@@ -1353,73 +1426,21 @@ export async function splitPdfInvoice(
     const copiedPages = await newDoc.copyPages(srcDoc, pageIndices);
     for (const p of copiedPages) newDoc.addPage(p);
 
-    const pdfBytes = Buffer.from(await newDoc.save());
-    const fileHash = createHash("sha256").update(pdfBytes).digest("hex");
-
     const safeName = sanitizeFilenameForStorage(`${part.name}.pdf`);
-    const storageKey = `${invoice.clientId}/${invoice.periodYear}-${String(invoice.periodMonth).padStart(2, "0")}/${Date.now()}-split-${safeName}`;
-
-    try {
-      await putObject(storageKey, pdfBytes, "application/pdf");
-    } catch (e) {
-      return { error: `Error subiendo "${part.name}": ${e instanceof Error ? e.message : "fallo"}` };
-    }
-
-    const filename = `${part.name}.pdf`;
-    const document = await prisma.document.create({
-      data: {
-        filename,
-        storageKey,
-        fileType: "application/pdf",
-        fileHash,
-        sizeBytes: pdfBytes.length,
-        uploadedBy: session.user.id,
-        clientId: invoice.clientId,
-      },
+    pieces.push({
+      label: part.name,
+      filename: `${part.name}.pdf`,
+      storageKey: `${invoice.clientId}/${invoice.periodYear}-${String(invoice.periodMonth).padStart(2, "0")}/${Date.now()}-${pieces.length}-split-${safeName}`,
+      fileType: "application/pdf",
+      body: Buffer.from(await newDoc.save()),
     });
-
-    const child = await prisma.invoice.create({
-      data: {
-        filename,
-        storageKey,
-        fileType: "application/pdf",
-        fileHash,
-        type: invoice.type,
-        periodMonth: invoice.periodMonth,
-        periodYear: invoice.periodYear,
-        clientId: invoice.clientId,
-        documentId: document.id,
-        splitFromId: invoiceId,
-        // La hija hereda la moneda: si su recorte no la muestra, el OCR no
-        // la veria y el aviso de "no es euro" desapareceria en silencio.
-        currency: invoice.currency,
-      },
-    });
-    createdIds.push(child.id);
   }
 
-  // Marcar la original como dividida
-  await prisma.invoice.update({
-    where: { id: invoiceId },
-    data: { status: "SPLIT_SOURCE" },
-  });
-
-  await prisma.invoiceStatusHistory.create({
-    data: {
-      invoiceId,
-      fromStatus: invoice.status,
-      toStatus: "SPLIT_SOURCE",
-      changedBy: session.user.id,
-    },
-  });
-
-  await appendAuditLogs([{
-    invoiceId,
-    userId: session.user.id,
-    field: "status",
-    oldValue: invoice.status,
-    newValue: "SPLIT_SOURCE",
-  }]);
+  const uploadErr = await uploadSplitPieces(pieces);
+  if (uploadErr) return { error: uploadErr };
+  const split = await reserveAndCreateSplit(invoice, session.user.id, pieces);
+  if ("error" in split) return split;
+  const createdIds = split.childIds;
 
   // OCR en segundo plano para las sub-facturas
   const userId = session.user.id;
