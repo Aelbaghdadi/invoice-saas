@@ -1485,13 +1485,17 @@ export async function splitPdfInvoice(
   const { PDFDocument } = await import("pdf-lib");
   const unreadablePdf = { error: "No se ha podido leer el PDF para dividirlo (¿está protegido o dañado?)." };
   let srcDoc: Awaited<ReturnType<typeof PDFDocument.load>>;
+  let totalPages: number;
   try {
     srcDoc = await PDFDocument.load(originalBytes);
+    // pdf-lib carga sin error un PDF sin /Pages (o con /Pages roto) y es el
+    // recuento lo que lanza.
+    totalPages = srcDoc.getPageCount();
   } catch (e) {
     console.warn(`[split] ${invoice.id}: no se pudo leer el PDF:`, e);
     return unreadablePdf;
   }
-  const totalPages = srcDoc.getPageCount();
+  if (totalPages === 0) return unreadablePdf;
 
   for (const part of parts) {
     if (!part.name.trim()) return { error: "Todas las partes deben tener un nombre." };
