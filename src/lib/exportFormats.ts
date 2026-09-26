@@ -473,10 +473,12 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
 }
 
 /**
- * Por que una factura se queda fuera del Excel de A3, o null si entra.
- *
- * Total = 0: A3 rechaza asientos de importe cero (puede pasar cuando una
- * rectificativa anula exactamente a la original y se exportan juntas).
+ * Por que una factura se queda fuera del Excel de A3, o null si entra (la
+ * regla esta en exportExclusionReason):
+ *  - total_cero: A3 rechaza asientos de importe cero (puede pasar cuando una
+ *    rectificativa anula exactamente a la original y se exportan juntas).
+ *  - dividida: es la original de una division; van las facturas que
+ *    salieron de ella, o contaria dos veces.
  */
 export function a3ExclusionReason(inv: Pick<InvoiceWithClient, "totalAmount" | "_count">): ExportExclusionReason | null {
   return exportExclusionReason(inv);

@@ -84,8 +84,8 @@ export async function GET(req: NextRequest) {
   const alreadyExported = await prisma.invoice.count({
     where: { ...where, exportBatchId: { not: null } },
   });
-  // Las que el Excel deja fuera (total 0) no cuentan como exportables:
-  // no se van a marcar.
+  // Las que el Excel deja fuera (total 0 u original de una division) no
+  // cuentan como exportables: no se van a marcar.
   const { exportable, excluded } = partitionA3Exportable(previewInvoices);
   return NextResponse.json({
     count: exportable.length,
