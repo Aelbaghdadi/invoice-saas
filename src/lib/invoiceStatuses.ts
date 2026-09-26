@@ -174,6 +174,17 @@ export function auditFieldLabel(field: string): string {
   return AUDIT_FIELD_LABELS[field] ?? field;
 }
 
+/**
+ * El mismo nombre para ir dentro de una frase («cambió motivo del rechazo en
+ * …»): inicial en minuscula, salvo en siglas («CIF emisor» sigue igual).
+ */
+export function auditFieldLabelInline(field: string): string {
+  const label = auditFieldLabel(field);
+  const [first, second] = label;
+  if (!first || (second && second !== second.toLowerCase())) return label;
+  return first.toLowerCase() + label.slice(1);
+}
+
 /** Tipo de operación (emitida/recibida) para la UI. */
 export const OPERATION_LABELS: Record<string, string> = {
   PURCHASE: "Recibida",

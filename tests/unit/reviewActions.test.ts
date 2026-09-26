@@ -6,6 +6,7 @@ import {
   UNCLASSIFIED_VALIDATE_ERROR,
   REVIEW_LOCKED_STATUSES,
   auditFieldLabel,
+  auditFieldLabelInline,
   formatAuditValue,
   isReviewReadOnly,
   STATUS_LABELS,
@@ -163,5 +164,17 @@ describe("no se divide una original que ya tiene hijas (punto 10)", () => {
 
   it("la misma condición en el where de la reserva", () => {
     expect(reviewTargetWhere("split")).toEqual({ splitInvoices: { none: {} } });
+  });
+});
+
+describe("auditFieldLabelInline (Actividad reciente del panel)", () => {
+  it("minúscula inicial dentro de la frase, sin tocar las siglas", () => {
+    expect(auditFieldLabelInline("rejectionReason")).toBe("motivo del rechazo");
+    expect(auditFieldLabelInline("rejectionCategory")).toBe("categoría del rechazo");
+    expect(auditFieldLabelInline("status")).toBe("estado");
+    expect(auditFieldLabelInline("issuerCif")).toBe("CIF emisor");
+    expect(auditFieldLabelInline("invoiceNumber")).toBe("nº factura");
+    expect(auditFieldLabelInline("vatRate")).toBe("% IVA");
+    expect(auditFieldLabelInline("campoRaro")).toBe("campoRaro");
   });
 });

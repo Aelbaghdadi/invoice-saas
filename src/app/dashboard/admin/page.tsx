@@ -12,7 +12,7 @@ import {
   Edit3,
 } from "lucide-react";
 import Link from "next/link";
-import { PENDING_WORK, completionPercent, formatAuditValue } from "@/lib/invoiceStatuses";
+import { PENDING_WORK, auditFieldLabelInline, completionPercent, formatAuditValue } from "@/lib/invoiceStatuses";
 import { formatDateEs } from "@/lib/dates";
 import { periodLabel } from "@/lib/period";
 import { InvoiceStatusBadge } from "@/components/ui/InvoiceStatusBadge";
@@ -132,14 +132,6 @@ export default async function AdminDashboard() {
   const ACTIVITY_ICON: Record<string, { Icon: typeof FileUp; color: string; bg: string }> = {
     status:        { Icon: ShieldCheck, color: "text-accent-700", bg: "bg-accent-50" },
     default:       { Icon: Edit3,       color: "text-slate-500",  bg: "bg-slate-50"  },
-  };
-
-  const FIELD_LABELS: Record<string, string> = {
-    status: "estado", issuerName: "emisor", issuerCif: "CIF emisor",
-    receiverName: "receptor", receiverCif: "CIF receptor",
-    invoiceNumber: "nº factura", invoiceDate: "fecha",
-    taxBase: "base imponible", vatRate: "% IVA", vatAmount: "cuota IVA",
-    irpfRate: "% IRPF", irpfAmount: "cuota IRPF", totalAmount: "total",
   };
 
   // ── Clients with pending invoices (for "progress" section) ────────────
@@ -317,7 +309,7 @@ export default async function AdminDashboard() {
                         <p className="min-w-0 truncate text-[13px] text-slate-800">
                           <span className="font-semibold">{log.user.name}</span>
                           {" "}cambió{" "}
-                          <span className="font-semibold text-slate-600">{FIELD_LABELS[log.field] ?? log.field}</span>
+                          <span className="font-semibold text-slate-600">{auditFieldLabelInline(log.field)}</span>
                           {" "}en{" "}
                           <span className="font-medium" title={log.invoice.filename}>
                             {log.invoice.invoiceNumber ?? log.invoice.filename}
