@@ -7,97 +7,96 @@ import { attachmentContentDisposition } from "@/lib/contentDisposition";
 import { commitExportBatch, ExportConflictError, exportStorageKey } from "@/lib/exportBatch";
 import { deleteObject, isStorageConfigured, putObject } from "@/lib/storage";
 import { appError } from "@/lib/errorCodes";
-import type { InvoiceType, InvoiceStatus, PeriodType } from "@prisma/client";
+import { exportInvoiceWhere, parseExportRequest } from "@/lib/exportRequest";
 
-export async function GET(req: NextRequest) {
+type AdminContext = { userId: string; firmId: string };
+
+async function requireAdmin(): Promise<AdminContext | NextResponse> {
   const session = await auth();
   if (!session?.user || session.user.role !== "ADMIN") {
     return new NextResponse("Unauthorized", { status: 401 });
   }
-
-  const sp         = req.nextUrl.searchParams;
-  const clientId   = sp.get("clientId") || undefined;
-  const month      = parseInt(sp.get("month") ?? "0", 10) || undefined;
-  const year       = parseInt(sp.get("year")  ?? "0", 10) || undefined;
-  const periodTypeParam = sp.get("periodType") ?? "MONTHLY";
-  const VALID_FORMATS = ["a3excel"];
-  const VALID_TYPES = ["ALL", "PURCHASE", "SALE"];
-  const VALID_PERIOD_TYPES = ["MONTHLY", "QUARTERLY"];
-  const formatRaw = sp.get("format") ?? "a3excel";
-  const typeParam = sp.get("type") ?? "ALL";
-  if (!VALID_FORMATS.includes(formatRaw)) {
-    return new NextResponse("Formato no válido", { status: 400 });
-  }
-  if (!VALID_TYPES.includes(typeParam)) {
-    return new NextResponse("Tipo no válido", { status: 400 });
-  }
-  if (!VALID_PERIOD_TYPES.includes(periodTypeParam)) {
-    return new NextResponse("Tipo de periodo no válido", { status: 400 });
-  }
-  const format = formatRaw as ExportFormat;
-  const preview  = sp.get("preview") === "1";
-
   const firmId = session.user.advisoryFirmId;
   if (!firmId) {
     return new NextResponse("Forbidden: missing advisory firm", { status: 403 });
   }
+  return { userId: session.user.id, firmId };
+}
 
-  // Para trimestral: filtramos por rango de meses (mes inicial a mes inicial+2).
-  const monthFilter =
-    month && periodTypeParam === "QUARTERLY"
-      ? { gte: month, lte: month + 2 }
-      : month
-        ? month
-        : undefined;
+/**
+ * Vista previa: recuento y avisos. Solo lectura; la descarga es por POST
+ * (F-071): un GET con efectos se dispara con un enlace o una precarga.
+ *
+ * validateForA3Export existia pero no la llamaba nadie: se calculaban los
+ * avisos (NIF vacio, descuadres, total cero, tipo de operacion incompatible
+ * con el sentido) y se tiraban. Es el unico punto donde un error fiscal se
+ * puede ver ANTES de que el fichero entre en la contabilidad del cliente.
+ */
+export async function GET(req: NextRequest) {
+  const admin = await requireAdmin();
+  if (admin instanceof NextResponse) return admin;
 
-  // Export only VALIDATED invoices scoped to the admin's firm.
-  // exportBatchId: null — exportar no cambia el estado (sigue VALIDATED),
-  // asi que sin este filtro cada exportacion del mismo periodo repetia las
-  // facturas ya exportadas en un lote anterior.
-  const where = {
-    status: "VALIDATED" as InvoiceStatus,
-    exportBatchId: null,
-    client: { advisoryFirmId: firmId },
-    ...(clientId ? { clientId } : {}),
-    ...(monthFilter !== undefined
-      ? { periodMonth: monthFilter }
-      : {}),
-    ...(year ? { periodYear: year } : {}),
-    ...(typeParam !== "ALL" ? { type: typeParam as InvoiceType } : {}),
-  };
-
-  // Preview mode: recuento + avisos de validacion.
-  //
-  // validateForA3Export existia pero no la llamaba nadie: se calculaban los
-  // avisos (NIF vacio, descuadres, total cero, tipo de operacion incompatible
-  // con el sentido) y se tiraban. Es el unico punto donde un error fiscal se
-  // puede ver ANTES de que el fichero entre en la contabilidad del cliente.
-  if (preview) {
-    const previewInvoices = await prisma.invoice.findMany({
-      where,
-      include: { client: true, vatLines: { orderBy: { position: "asc" } } },
-      orderBy: [{ periodYear: "asc" }, { periodMonth: "asc" }, { invoiceDate: "asc" }],
-    });
-    const allWarnings = validateForA3Export(previewInvoices);
-    // Cuantas se quedan fuera por haber salido ya en un Excel anterior. Sin
-    // este numero, un trimestre ya exportado sale como "0 facturas" y parece
-    // que el programa no las encuentra.
-    const alreadyExported = await prisma.invoice.count({
-      where: { ...where, exportBatchId: { not: null } },
-    });
-    // Las que el Excel deja fuera (total 0) no cuentan como exportables:
-    // no se van a marcar.
-    const { exportable, excluded } = partitionA3Exportable(previewInvoices);
-    return NextResponse.json({
-      count: exportable.length,
-      excluded: excluded.length,
-      alreadyExported,
-      warningCount: allWarnings.length,
-      // Se recorta la lista: con un lote grande no tiene sentido volcar
-      // cientos de avisos al navegador, el gestor arranca por los primeros.
-      warnings: allWarnings.slice(0, 20),
-    });
+  const sp = req.nextUrl.searchParams;
+  if (sp.get("preview") !== "1") {
+    return NextResponse.json({ error: "La descarga se hace por POST." }, { status: 405, headers: { Allow: "POST" } });
   }
+  const parsed = parseExportRequest(Object.fromEntries(sp));
+  if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 });
+  const where = exportInvoiceWhere(parsed.request, admin.firmId);
+
+  const previewInvoices = await prisma.invoice.findMany({
+    where,
+    include: { client: true, vatLines: { orderBy: { position: "asc" } } },
+    orderBy: [{ periodYear: "asc" }, { periodMonth: "asc" }, { invoiceDate: "asc" }],
+  });
+  const allWarnings = validateForA3Export(previewInvoices);
+  // Cuantas se quedan fuera por haber salido ya en un Excel anterior. Sin
+  // este numero, un trimestre ya exportado sale como "0 facturas" y parece
+  // que el programa no las encuentra.
+  const alreadyExported = await prisma.invoice.count({
+    where: { ...where, exportBatchId: { not: null } },
+  });
+  // Las que el Excel deja fuera (total 0) no cuentan como exportables:
+  // no se van a marcar.
+  const { exportable, excluded } = partitionA3Exportable(previewInvoices);
+  return NextResponse.json({
+    count: exportable.length,
+    excluded: excluded.length,
+    alreadyExported,
+    warningCount: allWarnings.length,
+    // Se recorta la lista: con un lote grande no tiene sentido volcar
+    // cientos de avisos al navegador, el gestor arranca por los primeros.
+    warnings: allWarnings.slice(0, 20),
+  });
+}
+
+/** Descarga: genera el Excel, lo guarda y marca las facturas como exportadas. */
+export async function POST(req: NextRequest) {
+  const admin = await requireAdmin();
+  if (admin instanceof NextResponse) return admin;
+  const { userId, firmId } = admin;
+
+  // JSON y mismo origen: un formulario de otra web no puede mandar JSON sin
+  // preflight, y Sec-Fetch-Site lo dice el navegador, no la pagina.
+  if (!(req.headers.get("content-type") ?? "").includes("application/json")) {
+    return NextResponse.json({ error: "Se esperaba JSON." }, { status: 415 });
+  }
+  const fetchSite = req.headers.get("sec-fetch-site");
+  if (fetchSite && fetchSite !== "same-origin") {
+    return NextResponse.json({ error: "Origen no permitido." }, { status: 403 });
+  }
+  let input: unknown;
+  try {
+    input = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Se esperaba JSON." }, { status: 400 });
+  }
+  const parsed = parseExportRequest(typeof input === "object" && input !== null ? input as Record<string, unknown> : {});
+  if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 });
+  const { request } = parsed;
+  const { clientId, month, year, periodType } = request;
+  const format: ExportFormat = request.format;
+  const where = exportInvoiceWhere(request, firmId);
 
   // Download mode — incluimos vatLines para que el exportador pueda emitir
   // una fila por tipo de IVA en facturas con desglose multiple.
@@ -116,7 +115,7 @@ export async function GET(req: NextRequest) {
 
   if (!candidates.length) {
     return NextResponse.json(
-      { error: appError("ERR-EXPORT-001", `filters: client=${clientId} ${month}/${year} type=${typeParam}`) },
+      { error: appError("ERR-EXPORT-001", `filters: client=${clientId} ${month}/${year} type=${request.type}`) },
       { status: 404 },
     );
   }
@@ -131,21 +130,17 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  // Read client export config if exporting for a single client
-  let exportConfig: ExportConfig | undefined;
-  if (clientId) {
-    const client = await prisma.client.findUnique({
-      where: { id: clientId },
-      select: { exportConfig: true },
-    });
-    if (client?.exportConfig && typeof client.exportConfig === "object") {
-      exportConfig = client.exportConfig as ExportConfig;
-    }
-  }
+  const client = await prisma.client.findUnique({
+    where: { id: clientId },
+    select: { exportConfig: true },
+  });
+  const exportConfig = client?.exportConfig && typeof client.exportConfig === "object"
+    ? client.exportConfig as ExportConfig
+    : undefined;
 
   // Primero el fichero, en memoria. Hasta que exista no se escribe nada en
   // la BD: un fallo aqui no deja ninguna factura marcada (F-001).
-  const filename = suggestFilename(invoices, format, month ?? 0, year ?? 0);
+  const filename = suggestFilename(invoices, format, month, year);
   let body: Uint8Array<ArrayBuffer>;
   let contentType: string;
   try {
@@ -189,12 +184,12 @@ export async function GET(req: NextRequest) {
       {
         id: batchId,
         format,
-        clientId: clientId ?? null,
-        periodType: periodTypeParam as PeriodType,
-        periodMonth: month ?? null,
-        periodYear: year ?? null,
-        invoiceType: typeParam,
-        userId: session.user.id,
+        clientId,
+        periodType,
+        periodMonth: month,
+        periodYear: year,
+        invoiceType: request.type,
+        userId,
       },
       invoices,
     );

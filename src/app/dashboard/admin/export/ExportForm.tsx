@@ -102,9 +102,6 @@ export function ExportForm({ clients }: Props) {
     // Sin este freno, un doble clic creaba dos lotes con las mismas facturas
     // (asientos duplicados en A3) o sacaba el error de "nada que exportar".
     if (!count || downloading) return;
-    const sp = new URLSearchParams({
-      clientId, periodType, month: String(effectiveMonth), year: String(year), type, format,
-    });
     // Se descarga con fetch y NO con un <a href>: al exportar, el servidor
     // marca las facturas como exportadas, y con el enlace a secas un fallo
     // (500, sesion caducada, 404 por filtros) se anunciaba igual como exito.
@@ -114,7 +111,12 @@ export function ExportForm({ clients }: Props) {
     setSuccess(null);
     setDownloading(true);
     try {
-      const res = await fetch(`/api/export?${sp}`);
+      // POST: la descarga marca facturas, y un GET lo dispara cualquier enlace.
+      const res = await fetch("/api/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientId, periodType, month: effectiveMonth, year, type, format }),
+      });
       if (!res.ok) {
         let failure: AppError | string = "No se ha podido generar el Excel. Vuelve a intentarlo.";
         try {
@@ -133,8 +135,12 @@ export function ExportForm({ clients }: Props) {
       a.href = url;
       // Nombre del fichero que propone el servidor (Content-Disposition).
       a.download = filenameFromContentDisposition(res.headers.get("Content-Disposition"), "export.xlsx");
+      // En el DOM y revocando con retraso: fuera del DOM o revocado justo
+      // despues del click, Firefox y Safari pueden no descargar nada (F-127).
+      document.body.appendChild(a);
       a.click();
-      URL.revokeObjectURL(url);
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
       setSuccess({ excluded: Number(res.headers.get("X-Export-Excluded")) || 0 });
       // Las descargadas ya constan exportadas: se refresca el recuento ya,
       // no a los 2,5 s, o el boton seguia ofreciendo las mismas facturas.
