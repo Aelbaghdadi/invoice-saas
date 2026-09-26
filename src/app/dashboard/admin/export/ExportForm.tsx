@@ -13,6 +13,7 @@ import { ErrorBox } from "@/components/ui/ErrorBox";
 import type { AppError } from "@/lib/errorCodes";
 import { quarterStartMonth, periodLabel, MONTH_OPTIONS, QUARTER_OPTIONS } from "@/lib/period";
 import { filenameFromContentDisposition } from "@/lib/contentDisposition";
+import { describeExportExclusions, parseExportExclusionCounts, type ExportExclusionCounts } from "@/lib/exportExclusions";
 
 type ClientOption = { id: string; name: string; cif: string };
 
@@ -51,13 +52,15 @@ export function ExportForm({ clients }: Props) {
   // Facturas del periodo que ya salieron en un Excel anterior: no se vuelven
   // a incluir, pero hay que decirlo o el recuento no se entiende.
   const [alreadyExported, setAlreadyExported] = useState(0);
-  // Las que el Excel deja fuera (total 0): no se marcan y siguen pendientes.
+  // Las que el Excel deja fuera (total 0, divididas en otras): no se marcan
+  // y siguen pendientes. El desglose es para el aviso.
   const [excluded, setExcluded] = useState(0);
+  const [excludedDetail, setExcludedDetail] = useState<string | null>(null);
   const [counting, setCounting] = useState(false);
   const [downloading, setDownloading] = useState(false);
   // Tras descargar: cuantas se quedaron fuera del fichero y el lote, si se
   // guardo su copia (null = sin exito).
-  const [success,  setSuccess]  = useState<{ excluded: number; batchId: string | null } | null>(null);
+  const [success,  setSuccess]  = useState<{ excluded: number; detail: string | null; batchId: string | null } | null>(null);
   const [error,    setError]    = useState<AppError | string | null>(null);
 
   // ── fetch preview count ─────────────────────────────────────────────────
@@ -99,6 +102,7 @@ export function ExportForm({ clients }: Props) {
         setWarningCount(0);
         setAlreadyExported(0);
         setExcluded(0);
+        setExcludedDetail(null);
         return;
       }
       const data = await res.json();
@@ -108,6 +112,7 @@ export function ExportForm({ clients }: Props) {
       setWarningCount(data.warningCount ?? 0);
       setAlreadyExported(data.alreadyExported ?? 0);
       setExcluded(data.excluded ?? 0);
+      setExcludedDetail(describeExportExclusions((data.excludedByReason ?? {}) as Partial<ExportExclusionCounts>));
     } catch {
       if (stale()) return;
       // Todo a cero: si no, seguian los avisos de "N con total 0" del filtro
@@ -117,6 +122,7 @@ export function ExportForm({ clients }: Props) {
       setWarningCount(0);
       setAlreadyExported(0);
       setExcluded(0);
+      setExcludedDetail(null);
     } finally {
       if (!stale()) setCounting(false);
     }
@@ -174,6 +180,7 @@ export function ExportForm({ clients }: Props) {
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
       setSuccess({
         excluded: Number(res.headers.get("X-Export-Excluded")) || 0,
+        detail: describeExportExclusions(parseExportExclusionCounts(res.headers.get("X-Export-Excluded-Detail"))),
         batchId: res.headers.get("X-Export-Batch-Id"),
       });
       // Las descargadas ya constan exportadas: se refresca el recuento ya,
@@ -369,8 +376,8 @@ export function ExportForm({ clients }: Props) {
               <p className="mt-2 text-center text-[12px] text-amber-600">
                 {excluded > 0
                   ? excluded === 1
-                    ? "La única factura pendiente tiene total 0 y no puede ir al Excel. Corrígela en la revisión."
-                    : `Las ${excluded} facturas pendientes tienen total 0 y no pueden ir al Excel. Corrígelas en la revisión.`
+                    ? `La única factura pendiente no puede ir al Excel${detailSuffix(excludedDetail)}. Mira el aviso de abajo.`
+                    : `Ninguna de las ${excluded} facturas pendientes puede ir al Excel${detailSuffix(excludedDetail)}. Mira los avisos de abajo.`
                   : alreadyExported > 0
                     ? `Todas las facturas de este periodo (${alreadyExported}) ya se exportaron antes. Solo vuelven a salir si las corriges en la revisión.`
                     : "No hay facturas exportables con estos filtros."}
@@ -379,8 +386,8 @@ export function ExportForm({ clients }: Props) {
             {count !== 0 && excluded > 0 && !counting && (
               <p className="mt-2 text-center text-[12px] text-amber-600">
                 {excluded === 1
-                  ? "1 factura con total 0 se queda fuera del Excel y no se marca como exportada."
-                  : `${excluded} facturas con total 0 se quedan fuera del Excel y no se marcan como exportadas.`}
+                  ? `1 factura se queda fuera del Excel y no se marca como exportada${detailSuffix(excludedDetail)}.`
+                  : `${excluded} facturas se quedan fuera del Excel y no se marcan como exportadas${detailSuffix(excludedDetail)}.`}
               </p>
             )}
             {count !== 0 && alreadyExported > 0 && !counting && (
@@ -434,8 +441,8 @@ export function ExportForm({ clients }: Props) {
                 Exportación completada. Las facturas del Excel han quedado marcadas como exportadas.
                 {success.excluded > 0 && (
                   success.excluded === 1
-                    ? " 1 factura con total 0 se ha quedado fuera y sigue pendiente."
-                    : ` ${success.excluded} facturas con total 0 se han quedado fuera y siguen pendientes.`
+                    ? ` 1 factura se ha quedado fuera y sigue pendiente${detailSuffix(success.detail)}.`
+                    : ` ${success.excluded} facturas se han quedado fuera y siguen pendientes${detailSuffix(success.detail)}.`
                 )}
                 {/* Enlace propio: router.refresh() no siempre llega a pintar el
                     historial (Next 16 aborta a veces el refresco entre los
@@ -501,6 +508,11 @@ async function readApiError(res: Response, fallback: string): Promise<AppError |
     if (data?.error?.message) return data.error as AppError;
   } catch { /* la respuesta no era JSON */ }
   return fallback;
+}
+
+// " (2 con total 0 y 1 dividida en otras facturas)", o nada sin desglose.
+function detailSuffix(detail: string | null) {
+  return detail ? ` (${detail})` : "";
 }
 
 function Row({ label, value }: { label: string; value: string }) {

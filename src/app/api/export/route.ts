@@ -4,6 +4,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { generateCsv, generateA3Excel, partitionA3Exportable, suggestFilename, validateForA3Export, type ExportFormat, type ExportConfig } from "@/lib/exportFormats";
 import { attachmentContentDisposition } from "@/lib/contentDisposition";
+import { countExportExclusions } from "@/lib/exportExclusions";
 import { commitExportBatch, committedBatchState, ExportConflictError, exportStorageKey } from "@/lib/exportBatch";
 import { deleteObject, isStorageConfigured, putObject } from "@/lib/storage";
 import { appError } from "@/lib/errorCodes";
@@ -52,7 +53,12 @@ export async function GET(req: NextRequest) {
 
   const previewInvoices = await prisma.invoice.findMany({
     where,
-    include: { client: true, vatLines: { orderBy: { position: "asc" } } },
+    include: {
+      client: true,
+      vatLines: { orderBy: { position: "asc" } },
+      // Una original con hijas no va al Excel (van las hijas).
+      _count: { select: { splitInvoices: true } },
+    },
     orderBy: [{ periodYear: "asc" }, { periodMonth: "asc" }, { invoiceDate: "asc" }],
   });
   const allWarnings = validateForA3Export(previewInvoices);
@@ -68,6 +74,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     count: exportable.length,
     excluded: excluded.length,
+    excludedByReason: countExportExclusions(excluded.map((e) => e.reason)),
     alreadyExported,
     warningCount: allWarnings.length,
     // Se recorta la lista: con un lote grande no tiene sentido volcar
@@ -115,6 +122,8 @@ export async function POST(req: NextRequest) {
     include: {
       client: true,
       vatLines: { orderBy: { position: "asc" } },
+      // Una original con hijas no va al Excel (van las hijas).
+      _count: { select: { splitInvoices: true } },
     },
     orderBy: [
       { periodYear:  "asc" },
@@ -250,6 +259,8 @@ export async function POST(req: NextRequest) {
         "Content-Disposition": attachmentContentDisposition(filename),
         // Cuantas se quedaron fuera del fichero sin marcar, para el aviso.
         "X-Export-Excluded": String(excluded.length),
+        // Desglose por motivo ({"total_cero":n,"dividida":m}), para el aviso.
+        "X-Export-Excluded-Detail": JSON.stringify(countExportExclusions(excluded.map((e) => e.reason))),
         // Solo con copia guardada: la pantalla enlaza "Volver a descargar"
         // sin depender de que el historial se refresque.
         ...(storageKey ? { "X-Export-Batch-Id": batchId } : {}),
