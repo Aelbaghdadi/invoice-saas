@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { getObjectBytes, isStorageConfigured } from "@/lib/storage";
-import type { InvoiceStatus } from "@prisma/client";
+import type { InvoiceStatus, Prisma } from "@prisma/client";
 import {
   extractInvoiceFromPdf,
   extractInvoiceFromImage,
@@ -168,31 +168,32 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     const ocrDurationMs = ocrFinishedAt.getTime() - ocrStartedAt.getTime();
     const isReprocess = invoice.ocrAttempts > 1;
 
-    await prisma.invoiceExtraction.create({
-      data: {
-        invoiceId,
-        source,
-        rawResponse,
-        confidence: extracted.confidence ?? undefined,
-        ocrStartedAt,
-        ocrFinishedAt,
-        ocrDurationMs,
-        isReprocess,
-        issuerName:    extracted.issuerName,
-        issuerCif:     extracted.issuerCif,
-        receiverName:  extracted.receiverName,
-        receiverCif:   extracted.receiverCif,
-        invoiceNumber: extracted.invoiceNumber,
-        invoiceDate:   safeParseDate(extracted.invoiceDate),
-        taxBase:       extracted.taxBase,
-        vatRate:       extracted.vatRate,
-        vatAmount:     extracted.vatAmount,
-        irpfRate:      extracted.irpfRate,
-        irpfAmount:    extracted.irpfAmount,
-        totalAmount:   extracted.totalAmount,
-        isValid,
-      },
-    });
+    // Se guarda dentro de la transaccion vallada, mas abajo: si esta
+    // ejecucion ya no es la duena, sus cajas y su confianza no pueden salir
+    // en la revision junto a los datos de la ejecucion buena.
+    const extractionData = {
+      invoiceId,
+      source,
+      rawResponse,
+      confidence: extracted.confidence ?? undefined,
+      ocrStartedAt,
+      ocrFinishedAt,
+      ocrDurationMs,
+      isReprocess,
+      issuerName:    extracted.issuerName,
+      issuerCif:     extracted.issuerCif,
+      receiverName:  extracted.receiverName,
+      receiverCif:   extracted.receiverCif,
+      invoiceNumber: extracted.invoiceNumber,
+      invoiceDate:   safeParseDate(extracted.invoiceDate),
+      taxBase:       extracted.taxBase,
+      vatRate:       extracted.vatRate,
+      vatAmount:     extracted.vatAmount,
+      irpfRate:      extracted.irpfRate,
+      irpfAmount:    extracted.irpfAmount,
+      totalAmount:   extracted.totalAmount,
+      isValid,
+    } satisfies Prisma.InvoiceExtractionUncheckedCreateInput;
 
     // ── Auto-ruteo multicliente ──────────────────────────────────────────────
     // Si la factura se subió en modo "clasificar" (trae candidatos), decidimos
@@ -630,6 +631,8 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
         },
       });
       if (fenced.count === 0) return false;
+
+      await tx.invoiceExtraction.create({ data: extractionData });
 
       // Reemplazar lineas previas (idempotente: si reproceso, borra y mete).
       await tx.invoiceVatLine.deleteMany({ where: { invoiceId } });
