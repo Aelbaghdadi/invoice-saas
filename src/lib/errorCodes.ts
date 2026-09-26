@@ -76,7 +76,7 @@ export const ERROR_MESSAGES: Record<AppErrorCode, string> = {
   "ERR-EXPORT-003": "Otra persona acaba de exportar o corregir parte de estas facturas. Vuelve a cargar la página para ver las que quedan pendientes.",
   "ERR-EXPORT-004": "Ninguna de estas facturas puede ir al Excel: todas tienen total 0 y A3 no acepta importes cero. Corrígelas en la revisión.",
   "ERR-EXPORT-005": "El fichero de esta exportación no está guardado. Solo se guardan las exportaciones hechas desde esta versión.",
-  "ERR-EXPORT-006": "No se ha podido confirmar si la exportación se ha registrado. Antes de repetirla, mira el historial: si aparece, descárgala desde allí con «Volver a descargar».",
+  "ERR-EXPORT-006": "No se ha podido confirmar si la exportación se ha registrado. Antes de repetirla, recarga la página y mira el historial: si aparece, descárgala desde allí con «Volver a descargar».",
   "ERR-EXPORT-007": "No se encuentra esta exportación.",
 
   "ERR-AUTH-001": "Tu sesión ha caducado. Vuelve a iniciar sesión.",

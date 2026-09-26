@@ -55,8 +55,9 @@ export function ExportForm({ clients }: Props) {
   const [excluded, setExcluded] = useState(0);
   const [counting, setCounting] = useState(false);
   const [downloading, setDownloading] = useState(false);
-  // Tras descargar: cuantas se quedaron fuera del fichero (null = sin exito).
-  const [success,  setSuccess]  = useState<{ excluded: number } | null>(null);
+  // Tras descargar: cuantas se quedaron fuera del fichero y el lote, si se
+  // guardo su copia (null = sin exito).
+  const [success,  setSuccess]  = useState<{ excluded: number; batchId: string | null } | null>(null);
   const [error,    setError]    = useState<AppError | string | null>(null);
 
   // ── fetch preview count ─────────────────────────────────────────────────
@@ -137,7 +138,7 @@ export function ExportForm({ clients }: Props) {
         // lote llego a registrarse: se manda al historial, no a repetir.
         setError(await readApiError(
           res,
-          "No se ha podido completar la exportación. Antes de repetirla, mira el historial: si aparece, descárgala desde allí.",
+          "No se ha podido completar la exportación. Antes de repetirla, recarga la página y mira el historial: si aparece, descárgala desde allí.",
         ));
         fetchCount(true);
         // Un 502/504 del proxy puede llegar despues de que el lote se
@@ -157,14 +158,17 @@ export function ExportForm({ clients }: Props) {
       a.click();
       a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      setSuccess({ excluded: Number(res.headers.get("X-Export-Excluded")) || 0 });
+      setSuccess({
+        excluded: Number(res.headers.get("X-Export-Excluded")) || 0,
+        batchId: res.headers.get("X-Export-Batch-Id"),
+      });
       // Las descargadas ya constan exportadas: se refresca el recuento ya,
       // no a los 2,5 s, o el boton seguia ofreciendo las mismas facturas.
       fetchCount(true);
       // El lote nuevo aparece en el historial, con su "Volver a descargar".
       router.refresh();
     } catch {
-      setError("Error de conexión durante la exportación. Antes de repetirla, mira el historial: si aparece, descárgala desde allí con «Volver a descargar».");
+      setError("Error de conexión durante la exportación. Antes de repetirla, recarga la página y mira el historial: si aparece, descárgala desde allí con «Volver a descargar».");
       fetchCount(true);
       router.refresh();
     } finally {
@@ -411,6 +415,21 @@ export function ExportForm({ clients }: Props) {
                   success.excluded === 1
                     ? " 1 factura con total 0 se ha quedado fuera y sigue pendiente."
                     : ` ${success.excluded} facturas con total 0 se han quedado fuera y siguen pendientes.`
+                )}
+                {/* Enlace propio: router.refresh() no siempre llega a pintar el
+                    historial (Next 16 aborta a veces el refresco entre los
+                    prefetch), y este fichero tiene que poder bajarse otra vez. */}
+                {success.batchId && (
+                  <>
+                    {" "}
+                    <a
+                      href={`/api/export/batches/${success.batchId}/file`}
+                      download
+                      className="font-medium underline underline-offset-2 hover:text-green-800"
+                    >
+                      Volver a descargar
+                    </a>
+                  </>
                 )}
               </span>
             </div>

@@ -250,6 +250,9 @@ export async function POST(req: NextRequest) {
         "Content-Disposition": attachmentContentDisposition(filename),
         // Cuantas se quedaron fuera del fichero sin marcar, para el aviso.
         "X-Export-Excluded": String(excluded.length),
+        // Solo con copia guardada: la pantalla enlaza "Volver a descargar"
+        // sin depender de que el historial se refresque.
+        ...(storageKey ? { "X-Export-Batch-Id": batchId } : {}),
       },
     });
   }
