@@ -121,6 +121,24 @@ export function firmExportBatchWhere(batchId: string, firmId: string): Prisma.Ex
   return { id: batchId, items: { some: { invoice: { client: { advisoryFirmId: firmId } } } } };
 }
 
+/**
+ * Tras un error de commitExportBatch que no es un conflicto, ¿quedo el lote
+ * confirmado? Un corte de conexion justo despues del COMMIT (un Redeploy en
+ * ese momento) da error aqui aunque Postgres lo haya confirmado.
+ *  - "committed": el lote existe; las facturas constan exportadas.
+ *  - "absent": no existe; no se marco nada.
+ *  - "unknown": no se ha podido comprobar.
+ */
+export async function committedBatchState(
+  findBatch: () => Promise<unknown>,
+): Promise<"committed" | "absent" | "unknown"> {
+  try {
+    return (await findBatch()) ? "committed" : "absent";
+  } catch {
+    return "unknown";
+  }
+}
+
 export type ExportBatchData = {
   id: string;
   format: string;

@@ -4,7 +4,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { generateCsv, generateA3Excel, partitionA3Exportable, suggestFilename, validateForA3Export, type ExportFormat, type ExportConfig } from "@/lib/exportFormats";
 import { attachmentContentDisposition } from "@/lib/contentDisposition";
-import { commitExportBatch, ExportConflictError, exportStorageKey } from "@/lib/exportBatch";
+import { commitExportBatch, committedBatchState, ExportConflictError, exportStorageKey } from "@/lib/exportBatch";
 import { deleteObject, isStorageConfigured, putObject } from "@/lib/storage";
 import { appError } from "@/lib/errorCodes";
 import { exportInvoiceWhere, parseExportRequest } from "@/lib/exportRequest";
@@ -194,9 +194,10 @@ export async function POST(req: NextRequest) {
       invoices,
     );
   } catch (err) {
-    // Sin lote no hay nada que volver a descargar: fuera la copia.
-    if (storageKey) await deleteObject(storageKey);
     if (err instanceof ExportConflictError) {
+      // Se lanzo dentro de la transaccion: se deshizo seguro. Sin lote no hay
+      // nada que volver a descargar, fuera la copia.
+      if (storageKey) await deleteObject(storageKey);
       console.warn(`[export] ERR-EXPORT-003 batch=${batchId}: ${err.message}`);
       return NextResponse.json(
         { error: appError("ERR-EXPORT-003", `batch=${batchId}: ${err.message}`) },
@@ -204,6 +205,24 @@ export async function POST(req: NextRequest) {
       );
     }
     const msg = err instanceof Error ? err.message : String(err);
+    // Puede que el COMMIT se confirmara y solo se perdiera la respuesta: la
+    // copia no se borra hasta saber que el lote no existe. Un huerfano es
+    // mejor que perder la unica copia de un lote registrado.
+    const state = await committedBatchState(() =>
+      prisma.exportBatch.findUnique({ where: { id: batchId }, select: { id: true } }),
+    );
+    if (state === "committed") {
+      console.error(`[export] batch=${batchId} confirmado pese al error, se entrega el fichero:`, err);
+      return fileResponse();
+    }
+    if (state === "unknown") {
+      console.error(`[export] ERR-EXPORT-006 batch=${batchId}: no se sabe si se confirmo:`, err);
+      return NextResponse.json(
+        { error: appError("ERR-EXPORT-006", `batch=${batchId} format=${format}: ${msg}`) },
+        { status: 500 },
+      );
+    }
+    if (storageKey) await deleteObject(storageKey);
     console.error(`[export] ERR-EXPORT-002 batch=${batchId}:`, err);
     return NextResponse.json(
       { error: appError("ERR-EXPORT-002", `batch=${batchId} format=${format}: ${msg}`) },
@@ -211,13 +230,17 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  return new NextResponse(body, {
-    status: 200,
-    headers: {
-      "Content-Type": contentType,
-      "Content-Disposition": attachmentContentDisposition(filename),
-      // Cuantas se quedaron fuera del fichero sin marcar, para el aviso.
-      "X-Export-Excluded": String(excluded.length),
-    },
-  });
+  return fileResponse();
+
+  function fileResponse() {
+    return new NextResponse(body, {
+      status: 200,
+      headers: {
+        "Content-Type": contentType,
+        "Content-Disposition": attachmentContentDisposition(filename),
+        // Cuantas se quedaron fuera del fichero sin marcar, para el aviso.
+        "X-Export-Excluded": String(excluded.length),
+      },
+    });
+  }
 }

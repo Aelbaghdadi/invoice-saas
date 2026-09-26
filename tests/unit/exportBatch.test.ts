@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   buildExportSnapshot,
+  committedBatchState,
   exportStorageKey,
   exportStoragePrefix,
   firmExportBatchWhere,
@@ -120,5 +121,19 @@ describe("firmExportBatchWhere", () => {
       id: "batch1",
       items: { some: { invoice: { client: { advisoryFirmId: "firm1" } } } },
     });
+  });
+});
+
+describe("committedBatchState", () => {
+  it("el lote existe: se confirmó aunque la respuesta diera error", async () => {
+    expect(await committedBatchState(async () => ({ id: "b" }))).toBe("committed");
+  });
+
+  it("el lote no existe: no se marcó nada", async () => {
+    expect(await committedBatchState(async () => null)).toBe("absent");
+  });
+
+  it("si la comprobación falla no se sabe (y no se borra la copia)", async () => {
+    expect(await committedBatchState(async () => { throw new Error("conexión cortada"); })).toBe("unknown");
   });
 });
