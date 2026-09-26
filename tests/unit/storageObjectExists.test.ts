@@ -10,6 +10,9 @@ beforeAll(async () => {
   server = http.createServer((req, res) => {
     if (req.url?.includes("existe")) { res.writeHead(200, { "Content-Length": "0" }); res.end(); return; }
     if (req.url?.includes("falta")) { res.writeHead(404); res.end(); return; }
+    if (req.url?.includes("contenido")) { res.writeHead(200, { "Content-Length": "5" }); res.end("hola!"); return; }
+    // Cabeceras y parte del cuerpo, y luego nada.
+    if (req.url?.includes("cuerpo-colgado")) { res.writeHead(200, { "Content-Length": "100" }); res.write("0123456789"); return; }
     // "colgado": no responde nunca.
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -25,6 +28,21 @@ afterAll(() => {
   server.closeAllConnections();
   server.close();
   vi.unstubAllEnvs();
+});
+
+describe("getObjectBytes", () => {
+  it("devuelve el contenido", async () => {
+    expect((await storage.getObjectBytes("exports/f/c/contenido.xlsx", { timeoutMs: 1000 })).toString()).toBe("hola!");
+  });
+
+  it.each(["colgado", "cuerpo-colgado"])("con el almacenamiento %s corta a tiempo con un error que no es 'no existe'", async (key) => {
+    const t0 = Date.now();
+    const err = await storage.getObjectBytes(`exports/f/c/${key}.xlsx`, { timeoutMs: 300 }).catch((e) => e);
+    expect(Date.now() - t0).toBeLessThan(3000);
+    expect(err).toBeInstanceOf(Error);
+    // /file lo manda a la rama de console.error + 500 ERR-SYS-001.
+    expect(storage.isStorageNotFound(err)).toBe(false);
+  });
 });
 
 describe("objectExists", () => {

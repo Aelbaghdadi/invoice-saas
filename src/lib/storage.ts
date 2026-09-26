@@ -63,11 +63,18 @@ export async function putObject(
   );
 }
 
-/** Descarga un objeto completo como Buffer. */
-export async function getObjectBytes(key: string): Promise<Buffer> {
+/**
+ * Descarga un objeto completo como Buffer. `timeoutMs` corta esta llamada (la
+ * respuesta y la lectura del cuerpo) sin tocar el cliente, igual que en
+ * objectExists: con Garage colgado cada peticion dejaba un socket ocupado.
+ */
+export async function getObjectBytes(key: string, options: { timeoutMs?: number } = {}): Promise<Buffer> {
   const client = getClient();
   if (!client) throw new Error("Almacenamiento (S3) no configurado");
-  const res = await client.send(new GetObjectCommand({ Bucket: STORAGE_BUCKET, Key: key }));
+  const res = await client.send(
+    new GetObjectCommand({ Bucket: STORAGE_BUCKET, Key: key }),
+    options.timeoutMs ? { abortSignal: AbortSignal.timeout(options.timeoutMs) } : {},
+  );
   if (!res.Body) throw new Error(`Objeto sin contenido: ${key}`);
   const bytes = await res.Body.transformToByteArray();
   return Buffer.from(bytes);

@@ -9,6 +9,10 @@ import { getObjectBytes, isStorageConfigured, isStorageNotFound } from "@/lib/st
 
 export const dynamic = "force-dynamic";
 
+// Un Excel de miles de filas se lee en mucho menos; con Garage colgado, la
+// peticion no se queda abierta para siempre.
+const FILE_READ_TIMEOUT_MS = 30_000;
+
 const CONTENT_TYPES: Record<string, string> = {
   xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   csv: "text/csv; charset=utf-8",
@@ -66,7 +70,7 @@ export async function GET(
   // un "solo se guardan las de esta version" que no es verdad.
   let bytes: Buffer;
   try {
-    bytes = await getObjectBytes(key);
+    bytes = await getObjectBytes(key, { timeoutMs: FILE_READ_TIMEOUT_MS });
   } catch (err) {
     if (isStorageNotFound(err)) {
       return NextResponse.json({ error: appError("ERR-EXPORT-005", `batch=${batch.id}`) }, { status: 404 });
