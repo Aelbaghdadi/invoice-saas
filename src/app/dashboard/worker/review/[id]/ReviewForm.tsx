@@ -1109,7 +1109,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     });
   };
 
-  const inputClass = "w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[13px] text-slate-800 outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-100";
+  const inputClass = "w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[13px] text-slate-800 outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500";
 
   // Props de estilo + tabIndex en funcion de la confianza OCR de cada campo.
   // Campos "seguros" (score alto) reciben tabIndex={-1} y color apagado:
@@ -1533,7 +1533,13 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                 dentro sin tocarlos uno a uno. Analizandose tambien: lo que se
                 tecleara se perderia en silencio al remontarse el formulario
                 cuando termina el OCR. */}
-            <fieldset disabled={lockReason != null} className="m-0 min-w-0 space-y-2.5 border-0 p-0">
+            {/* Los botones de dentro (tipos de IVA, añadir linea, cuenta
+                generica...) sin hover ni clic cuando estan deshabilitados:
+                si no, parecia que se podian pulsar. */}
+            <fieldset
+              disabled={lockReason != null}
+              className="m-0 min-w-0 space-y-2.5 border-0 p-0 [&_button:disabled]:pointer-events-none [&_button:disabled]:opacity-60"
+            >
             {/* ── Cabecera 2 columnas: parte editable + datos factura ──────
                 El lado bloqueado (datos del cliente: nombre + CIF) ya
                 vive arriba en el strip de sesion — quitamos su bloque

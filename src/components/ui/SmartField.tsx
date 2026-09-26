@@ -26,7 +26,9 @@ export function fieldPropsFromConfidence(score: number | null | undefined): {
   level: ConfidenceLevel;
 } {
   const level = levelOf(score);
-  const base = "w-full rounded-lg border bg-white px-3 py-1.5 text-[13px] outline-none focus:ring-2";
+  // disabled: en solo lectura (o mientras se analiza) los campos no pueden
+  // parecer editables.
+  const base = "w-full rounded-lg border bg-white px-3 py-1.5 text-[13px] outline-none focus:ring-2 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500";
   switch (level) {
     case "high":
       return {
