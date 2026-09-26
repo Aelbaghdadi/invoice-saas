@@ -97,7 +97,8 @@ export function exportPostHeadersError(headers: {
     return headers.secFetchSite === "same-origin" ? null : { status: 403, error: "Origen no permitido." };
   }
   if (headers.origin) {
-    const requestHost = (headers.forwardedHost ?? headers.host ?? "").split(",")[0].trim().toLowerCase();
+    // `||` y no `??`: un X-Forwarded-Host vacio cae a Host, como hace Next.
+    const requestHost = (headers.forwardedHost || headers.host || "").split(",")[0].trim().toLowerCase();
     let originHost = "";
     try {
       originHost = new URL(headers.origin).host.toLowerCase();

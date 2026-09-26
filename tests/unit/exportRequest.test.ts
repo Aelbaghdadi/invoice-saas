@@ -104,6 +104,8 @@ describe("exportPostHeadersError", () => {
     expect(exportPostHeadersError({ ...noFetchSite, forwardedHost: "app.faktury.es, 10.0.1.5" })).toBeNull();
     expect(exportPostHeadersError({ ...noFetchSite, forwardedHost: "otra.web" })?.status).toBe(403);
     expect(exportPostHeadersError({ ...noFetchSite, forwardedHost: null })?.status).toBe(403);
+    // Un X-Forwarded-Host vacio no cierra: se usa Host.
+    expect(exportPostHeadersError({ ...base, secFetchSite: null, forwardedHost: "" })).toBeNull();
     expect(exportPostHeadersError({ ...base, secFetchSite: null, origin: "null" })?.status).toBe(403);
   });
 
