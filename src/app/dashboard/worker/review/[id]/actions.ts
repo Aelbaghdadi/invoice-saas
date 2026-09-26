@@ -1192,7 +1192,10 @@ async function uploadSplitPieces(pieces: SplitPiece[]): Promise<string | null> {
  * se deshace todo y se borran los ficheros ya subidos.
  */
 async function reserveAndCreateSplit(
-  invoice: Pick<Invoice, "id" | "status" | "updatedAt" | "clientId" | "type" | "periodMonth" | "periodYear" | "currency">,
+  invoice: Pick<
+    Invoice,
+    "id" | "status" | "updatedAt" | "clientId" | "type" | "typeUnconfirmed" | "periodType" | "periodMonth" | "periodYear" | "currency"
+  >,
   userId: string,
   pieces: SplitPiece[],
 ): Promise<{ childIds: string[] } | { error: string }> {
@@ -1237,6 +1240,11 @@ async function reserveAndCreateSplit(
             fileType: piece.fileType,
             fileHash,
             type: invoice.type,
+            // Si el tipo de la original estaba sin confirmar ("No lo sé"), el
+            // de las hijas tambien; y una trimestral sigue siendo trimestral:
+            // en MONTHLY salian en otro lote.
+            typeUnconfirmed: invoice.typeUnconfirmed,
+            periodType: invoice.periodType,
             periodMonth: invoice.periodMonth,
             periodYear: invoice.periodYear,
             clientId: invoice.clientId,
