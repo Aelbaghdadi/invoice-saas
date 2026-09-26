@@ -211,6 +211,10 @@ type Props = {
   batchTotal: number;
   /** Facturas del lote ya terminadas (validadas, rechazadas, exportadas). */
   doneCount?: number;
+  /** Por que no se puede validar aunque el estado lo permita (p. ej. una
+   *  rechazada que el cliente ya sustituyo), o null. Lo calcula la pagina con
+   *  la misma regla que el servidor. */
+  validateBlockReason?: string | null;
   /** Pendientes que quedan en la cola actual (esta incluida si lo esta). */
   pendingInBucket?: number;
   /** El periodo contable de la factura esta cerrado: no se puede guardar. */
@@ -320,7 +324,7 @@ function fmtDate(d: Date | null | undefined) {
   return new Date(d).toISOString().slice(0, 10);
 }
 
-export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false, initialVatLines, prevId, nextId, nextPendingId = null, position, batchTotal, doneCount = 0, pendingInBucket = 0, periodClosed = false, backHref, back = null, extraction, issues, suggestedAccount, accountMatchedByName, accountNameMismatch = false, thirdPartyGoodsType = null, canRememberGoodsType = false, boundingBoxes, queueSuffix = "", bucket = "all", sessionContext, avgOcrDurationMs, genericAccounts }: Props) {
+export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false, initialVatLines, prevId, nextId, nextPendingId = null, position, batchTotal, doneCount = 0, pendingInBucket = 0, periodClosed = false, validateBlockReason = null, backHref, back = null, extraction, issues, suggestedAccount, accountMatchedByName, accountNameMismatch = false, thirdPartyGoodsType = null, canRememberGoodsType = false, boundingBoxes, queueSuffix = "", bucket = "all", sessionContext, avgOcrDurationMs, genericAccounts }: Props) {
   const { success, error } = useToast();
   const { confirm, dialog: confirmDialog } = useConfirm();
   const isImage = invoice.fileType.startsWith("image/");
@@ -999,6 +1003,10 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   };
 
   const attemptReopen = async () => {
+    if (validateBlockReason) {
+      error(validateBlockReason);
+      return;
+    }
     const ok = await confirm({
       title: "¿Reabrir y validar esta factura?",
       message: "Dejará de estar rechazada, se borrará el motivo del rechazo y se validará con los datos que ves.",
@@ -1398,7 +1406,9 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                   {invoice.rejectionReason && (
                     <p className="mt-0.5">Motivo: {invoice.rejectionReason}</p>
                   )}
-                  <p className="mt-0.5 text-red-700/80">Para validarla, pulsa «Reabrir y validar»: dejará de estar rechazada y se borrará el motivo.</p>
+                  <p className="mt-0.5 text-red-700/80">
+                    {validateBlockReason ?? "Para validarla, pulsa «Reabrir y validar»: dejará de estar rechazada y se borrará el motivo."}
+                  </p>
                 </div>
               </div>
             )}
@@ -2504,6 +2514,9 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
               </button>
             )}
             {(() => {
+              // Rechazada que el cliente ya sustituyo: no se ofrece reabrirla
+              // (el motivo sale en el aviso de rechazo).
+              if (isRejected && validateBlockReason) return null;
               // No se deshabilita por el importe o el CIF: asi el clic (y
               // Enter) explica que falla en vez de no hacer nada.
               const blocked = cifConflict || mathOk === false || accountsIncomplete;

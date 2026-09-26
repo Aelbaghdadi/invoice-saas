@@ -386,3 +386,32 @@ export function reviewLockReason(status: InvoiceStatus): string | null {
 export function isReviewReadOnly(status: InvoiceStatus): boolean {
   return status === "SPLIT_SOURCE" || status === "PENDING_ROUTING";
 }
+
+// ── Condiciones de la factura, no solo de su estado ─────────────────────────
+
+/** Lo que hay que saber de la factura, ademas del estado, para validarla. */
+export type ReviewTarget = {
+  /** Id de la version corregida que subio el cliente, si la hay. */
+  replacedById: string | null;
+};
+
+export const REPLACED_REOPEN_ERROR = "El cliente ya subió una versión corregida de esta factura: valida esa en su lugar.";
+
+/**
+ * Motivo por el que no se puede hacer la accion aunque el estado lo permita,
+ * o null. Una rechazada que el cliente ya sustituyo (su version corregida
+ * lleva replacesId = esta) no se reabre: irian las dos a A3.
+ */
+export function reviewTargetBlockReason(
+  action: ReviewAction,
+  target: ReviewTarget,
+  options: { reopen?: boolean } = {},
+): string | null {
+  if (action === "validate" && options.reopen && target.replacedById) return REPLACED_REOPEN_ERROR;
+  return null;
+}
+
+/** La misma condicion, para el where del updateMany. */
+export function reviewTargetWhere(action: ReviewAction, options: { reopen?: boolean } = {}) {
+  return action === "validate" && options.reopen ? { replacedBy: { is: null } } : {};
+}

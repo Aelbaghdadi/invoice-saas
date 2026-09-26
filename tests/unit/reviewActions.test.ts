@@ -1,12 +1,15 @@
 import { describe, it, expect } from "vitest";
 import type { InvoiceStatus } from "@prisma/client";
 import {
+  REPLACED_REOPEN_ERROR,
   REVIEW_LOCKED_STATUSES,
   isReviewReadOnly,
   STATUS_LABELS,
   reviewActionBlockReason,
   reviewAllowedFrom,
   reviewLockReason,
+  reviewTargetBlockReason,
+  reviewTargetWhere,
   type ReviewAction,
 } from "@/lib/invoiceStatuses";
 
@@ -96,5 +99,19 @@ describe("reviewLockReason e isReviewReadOnly (pantalla de revisión)", () => {
     expect(isReviewReadOnly("ANALYZING")).toBe(false);
     expect(isReviewReadOnly("UPLOADED")).toBe(false);
     expect(isReviewReadOnly("PENDING_REVIEW")).toBe(false);
+  });
+});
+
+describe("reviewTargetBlockReason y reviewTargetWhere (rechazada ya sustituida)", () => {
+  it("no se reabre una rechazada que el cliente ya sustituyó", () => {
+    expect(reviewTargetBlockReason("validate", { replacedById: "B" }, { reopen: true })).toBe(REPLACED_REOPEN_ERROR);
+    expect(reviewTargetWhere("validate", { reopen: true })).toEqual({ replacedBy: { is: null } });
+  });
+
+  it("sin sustituta, o sin reabrir, no cambia nada", () => {
+    expect(reviewTargetBlockReason("validate", { replacedById: null }, { reopen: true })).toBeNull();
+    expect(reviewTargetBlockReason("save", { replacedById: "B" })).toBeNull();
+    expect(reviewTargetWhere("validate")).toEqual({});
+    expect(reviewTargetWhere("save", { reopen: true })).toEqual({});
   });
 });

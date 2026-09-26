@@ -14,6 +14,7 @@ import {
 import { extractBoundingBoxes } from "@/lib/boundingBoxes";
 import { extractGeminiBoundingBoxes } from "@/lib/ocrLlm";
 import { accountEntryKey, entryNameMatches } from "@/lib/supplierMatching";
+import { reviewTargetBlockReason } from "@/lib/invoiceStatuses";
 
 // La cola se calcula en cada render — el conteo cambia segun otro
 // gestor valide/rechace facturas. Forzamos dinamico para que el "X de N"
@@ -47,6 +48,8 @@ export default async function ReviewPage({
       // el historial y no exportBatch, porque al corregirla el puntero se
       // pone a null y el aviso desaparecia justo cuando mas falta hace.
       exportBatchItems: { orderBy: { createdAt: "desc" }, take: 1, select: { createdAt: true } },
+      // Una rechazada que el cliente ya sustituyo no se reabre.
+      replacedBy: { select: { id: true } },
     },
   });
   if (!invoice) notFound();
@@ -264,6 +267,11 @@ export default async function ReviewPage({
         doneCount={queue.doneCount}
         pendingInBucket={queue.pendingInBucket}
         periodClosed={periodClosed}
+        validateBlockReason={reviewTargetBlockReason(
+          "validate",
+          { replacedById: invoice.replacedBy?.id ?? null },
+          { reopen: invoice.status === "REJECTED" },
+        )}
         position={position}
         batchTotal={total}
         backHref={backHref}

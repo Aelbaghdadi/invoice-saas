@@ -35,7 +35,14 @@ import { foldSurchargeLines, completeReadSurcharges, surchargeAuditValue } from 
 import { exportFingerprint, type FingerprintInvoice } from "@/lib/exportFingerprint";
 import { appError, type AppError } from "@/lib/errorCodes";
 import { putObject, getObjectBytes, deleteObject, sanitizeFilenameForStorage, isStorageConfigured } from "@/lib/storage";
-import { NEEDS_REVIEW, reviewActionBlockReason, reviewAllowedFrom, type ReviewAction } from "@/lib/invoiceStatuses";
+import {
+  NEEDS_REVIEW,
+  reviewActionBlockReason,
+  reviewAllowedFrom,
+  reviewTargetBlockReason,
+  reviewTargetWhere,
+  type ReviewAction,
+} from "@/lib/invoiceStatuses";
 import { Prisma, type Invoice } from "@prisma/client";
 import { EXPORT_TRANSACTION_OPTIONS } from "@/lib/exportBatch";
 
@@ -199,9 +206,12 @@ async function conditionalWriteError(
   detail: string,
 ): Promise<{ error: string | AppError }> {
   const now = await prisma.invoice
-    .findUnique({ where: { id: invoiceId }, select: { status: true } })
+    .findUnique({ where: { id: invoiceId }, select: { status: true, replacedBy: { select: { id: true } } } })
     .catch(() => null);
-  const reason = now ? reviewActionBlockReason(now.status, action, options) : null;
+  const reason = now
+    ? reviewActionBlockReason(now.status, action, options)
+      ?? reviewTargetBlockReason(action, { replacedById: now.replacedBy?.id ?? null }, options)
+    : null;
   return { error: reason ?? appError("ERR-VALIDATE-003", detail) };
 }
 
@@ -231,6 +241,7 @@ async function parseAndSave(
         take: 1,
         select: { exportBatchId: true, snapshot: true },
       },
+      replacedBy: { select: { id: true } },
     },
   });
   if (!invoice) return { error: "Factura no encontrada" };
@@ -241,7 +252,8 @@ async function parseAndSave(
 
   // En analisis, dividida, por clasificar o rechazada (sin reabrir) no se
   // guarda ni se valida. Se repite en el propio updateMany de abajo.
-  const blocked = reviewActionBlockReason(invoice.status, action, options);
+  const blocked = reviewActionBlockReason(invoice.status, action, options)
+    ?? reviewTargetBlockReason(action, { replacedById: invoice.replacedBy?.id ?? null }, options);
   if (blocked) return { error: blocked };
 
   // Check if the period is closed (use accounting period when set, fallback to upload period)
@@ -579,7 +591,12 @@ async function parseAndSave(
   try {
     saved = await prisma.$transaction(async (tx) => {
       const updated = await tx.invoice.updateMany({
-        where: { id: invoiceId, updatedAt: invoice.updatedAt, status: { in: reviewAllowedFrom(action, options) } },
+        where: {
+          id: invoiceId,
+          updatedAt: invoice.updatedAt,
+          status: { in: reviewAllowedFrom(action, options) },
+          ...reviewTargetWhere(action, options),
+        },
         data: {
           ...newData,
           ...(options.reopen ? { rejectionReason: null, rejectionCategory: null } : {}),
