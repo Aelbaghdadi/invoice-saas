@@ -1461,10 +1461,14 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                   <p className="mt-0.5">
                     A3 solo admite euros. Convierte la base, las cuotas y el total a euros y después marca la factura en euros.
                   </p>
+                  {/* Fuera del fieldset: se deshabilita a mano. En solo lectura
+                      no guardaria nada. */}
                   <button
                     type="button"
                     onClick={() => setMarkedEuro(true)}
-                    className="mt-2 rounded-lg border border-amber-300 bg-white px-2.5 py-1 text-[12px] font-medium text-amber-800 hover:bg-amber-100"
+                    disabled={lockReason != null}
+                    title={lockReason ?? undefined}
+                    className="mt-2 rounded-lg border border-amber-300 bg-white px-2.5 py-1 text-[12px] font-medium text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-white"
                   >
                     Ya están en euros
                   </button>
