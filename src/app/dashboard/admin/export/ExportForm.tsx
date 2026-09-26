@@ -98,9 +98,13 @@ export function ExportForm({ clients }: Props) {
       setAlreadyExported(data.alreadyExported ?? 0);
       setExcluded(data.excluded ?? 0);
     } catch {
+      // Todo a cero: si no, seguian los avisos de "N con total 0" del filtro
+      // anterior.
       setCount(null);
       setWarnings([]);
       setWarningCount(0);
+      setAlreadyExported(0);
+      setExcluded(0);
     } finally {
       setCounting(false);
     }
@@ -136,6 +140,9 @@ export function ExportForm({ clients }: Props) {
           "No se ha podido completar la exportación. Antes de repetirla, mira el historial: si aparece, descárgala desde allí.",
         ));
         fetchCount(true);
+        // Un 502/504 del proxy puede llegar despues de que el lote se
+        // registrara: el mensaje manda al historial, y tiene que estar al dia.
+        router.refresh();
         return;
       }
       const blob = await res.blob();
