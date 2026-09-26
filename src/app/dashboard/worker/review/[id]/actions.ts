@@ -1479,9 +1479,18 @@ export async function splitPdfInvoice(
     return { error: `No se pudo descargar el PDF: ${e instanceof Error ? e.message : "sin datos"}` };
   }
 
-  // Cargar con pdf-lib y validar rangos
+  // Cargar con pdf-lib y validar rangos. Un PDF cifrado o dañado hace
+  // lanzar a load, copyPages o save: se devuelve { error } antes de subir
+  // nada, en vez de lanzar a la UI.
   const { PDFDocument } = await import("pdf-lib");
-  const srcDoc = await PDFDocument.load(originalBytes);
+  const unreadablePdf = { error: "No se ha podido leer el PDF para dividirlo (¿está protegido o dañado?)." };
+  let srcDoc: Awaited<ReturnType<typeof PDFDocument.load>>;
+  try {
+    srcDoc = await PDFDocument.load(originalBytes);
+  } catch (e) {
+    console.warn(`[split] ${invoice.id}: no se pudo leer el PDF:`, e);
+    return unreadablePdf;
+  }
   const totalPages = srcDoc.getPageCount();
 
   for (const part of parts) {
@@ -1493,24 +1502,29 @@ export async function splitPdfInvoice(
 
   // Todas las partes, generadas en memoria antes de subir nada.
   const pieces: SplitPiece[] = [];
-  for (const part of parts) {
-    const newDoc = await PDFDocument.create();
-    // copyPages devuelve las páginas en el mismo orden que el array de índices
-    const pageIndices = Array.from(
-      { length: part.endPage - part.startPage + 1 },
-      (_, i) => part.startPage - 1 + i,
-    );
-    const copiedPages = await newDoc.copyPages(srcDoc, pageIndices);
-    for (const p of copiedPages) newDoc.addPage(p);
+  try {
+    for (const part of parts) {
+      const newDoc = await PDFDocument.create();
+      // copyPages devuelve las páginas en el mismo orden que el array de índices
+      const pageIndices = Array.from(
+        { length: part.endPage - part.startPage + 1 },
+        (_, i) => part.startPage - 1 + i,
+      );
+      const copiedPages = await newDoc.copyPages(srcDoc, pageIndices);
+      for (const p of copiedPages) newDoc.addPage(p);
 
-    const safeName = sanitizeFilenameForStorage(`${part.name}.pdf`);
-    pieces.push({
-      label: part.name,
-      filename: `${part.name}.pdf`,
-      storageKey: splitStorageKey(invoice, safeName),
-      fileType: "application/pdf",
-      body: Buffer.from(await newDoc.save()),
-    });
+      const safeName = sanitizeFilenameForStorage(`${part.name}.pdf`);
+      pieces.push({
+        label: part.name,
+        filename: `${part.name}.pdf`,
+        storageKey: splitStorageKey(invoice, safeName),
+        fileType: "application/pdf",
+        body: Buffer.from(await newDoc.save()),
+      });
+    }
+  } catch (e) {
+    console.warn(`[split] ${invoice.id}: no se pudieron generar las partes del PDF:`, e);
+    return unreadablePdf;
   }
 
   const uploadErr = await uploadSplitPieces(pieces);
