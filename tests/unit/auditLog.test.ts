@@ -15,10 +15,14 @@ describe("planAuditRecords", () => {
       [
         { invoiceId: "inv1", userId: "u1", field: "export", newValue: "Exportada (batch: b1, formato: a3excel)" },
         { invoiceId: "inv1", userId: "u1", field: "status", oldValue: "VALIDATED", newValue: "X" },
+        // Sin oldValue ni newValue (vaciar un campo): se guardan como null y
+        // entran en el hash como "". Si alguien cambiara ese "" por "null",
+        // todos los registros historicos con NULL dejarian de verificar.
+        { invoiceId: "inv1", userId: "u1", field: "f" },
       ],
       new Map(),
       T0,
-      ids("cA", "cB"),
+      ids("cA", "cB", "cC"),
     );
     expect(records[0]).toMatchObject({
       id: "cA",
@@ -35,6 +39,16 @@ describe("planAuditRecords", () => {
       createdAt: new Date("2026-09-26T10:00:00.001Z"),
       hash: "d842078ddf7f5e8b124afd5999a2bb087fdb304838063c9026cf1b5173aa21ec",
     });
+    expect(records[2]).toMatchObject({
+      id: "cC",
+      prevId: "cB",
+      prevHash: records[1].hash,
+      createdAt: new Date("2026-09-26T10:00:00.002Z"),
+      hash: "7001344aab5baf9499aaff251e5936b5ed46ba6f81fcf80c94d3d9bb069a275f",
+    });
+    // null, no "": la BD guarda NULL y la verificacion lo lee asi.
+    expect(records[2].oldValue).toBeNull();
+    expect(records[2].newValue).toBeNull();
   });
 
   it("encadena detrás de la cabeza existente de cada factura", () => {
