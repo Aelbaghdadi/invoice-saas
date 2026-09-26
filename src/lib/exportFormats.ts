@@ -389,7 +389,7 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
     if (exclusion === "total_cero") {
       warnings.push("Total = 0: no entra en el Excel ni se marca como exportada (A3 no acepta importes cero). Corrígela en la revisión");
     } else if (exclusion === "dividida") {
-      warnings.push("Se dividió en otras facturas: no entra en el Excel ni se marca como exportada (van sus hijas)");
+      warnings.push("Es la original de una división: se exportan las facturas que salieron de ella, no esta");
     }
 
     // Un "tipo de IVA" que en realidad es el del recargo (5,2 / 1,4 / 0,5)

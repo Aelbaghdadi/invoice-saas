@@ -76,6 +76,6 @@ describe("aviso de factura excluida", () => {
 
   it("la original dividida lo dice con su motivo", () => {
     const [warning] = validateForA3Export([mkInvoice("d", 121, 2)]);
-    expect(warning.warnings.join(" ")).toContain("Se dividió en otras facturas");
+    expect(warning.warnings.join(" ")).toContain("Es la original de una división: se exportan las facturas que salieron de ella, no esta");
   });
 });
