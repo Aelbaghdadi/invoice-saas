@@ -978,15 +978,15 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   // Comprobaciones locales antes de validar (o de preguntar si se reabre):
   // avisan de lo que falla y resaltan el campo. true si se puede seguir.
   const validateChecksPass = (reopen: boolean): boolean => {
-    const blocked = reviewActionBlockReason(invoice.status, "validate", { reopen }) ?? validateBlockReason;
+    // En una rechazada, primero lo que impide reabrirla (ya sustituida, del
+    // buzon): si no, Enter decia «usa Reabrir y validar» en una pantalla que
+    // ya no ofrece ese boton. Despues, el estado: una rechazada solo se valida
+    // con «Reabrir y validar» (F-015), ni Enter ni el atajo la reabren.
+    const blocked = (isRejected ? validateBlockReason : null)
+      ?? reviewActionBlockReason(invoice.status, "validate", { reopen })
+      ?? validateBlockReason;
     if (blocked) {
       error(blocked);
-      return false;
-    }
-    // Una rechazada solo se valida con "Reabrir y validar" (F-015): ni Enter
-    // ni el atajo la reabren sin querer.
-    if (isRejected && !reopen) {
-      error("La factura está rechazada: para validarla pulsa «Reabrir y validar».");
       return false;
     }
     if (periodClosed) {
