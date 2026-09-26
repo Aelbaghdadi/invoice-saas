@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { processInvoice } from "@/lib/processInvoice";
+import { resolveCronOcrActor } from "@/lib/cronActor";
 import {
   MAX_OCR_RETRIES,
   OCR_RETRIES_EXHAUSTED_ERROR,
@@ -85,12 +86,22 @@ export async function GET(req: Request) {
   // processInvoice solo arranca las que siguen en UPLOADED (claim atomico):
   // las que no se resetearon se saltan solas.
   const toRetry = [...uploadedStuck, ...analyzingStuck];
+  let skippedNoActor = 0;
   for (const invoice of toRetry) {
-    await processInvoice(invoice.id, "system");
+    // Un usuario real: con "system" la auditoria (FK a User) tumbaba la
+    // transaccion del final del OCR y se perdia el resultado entero.
+    const actorId = await resolveCronOcrActor(invoice.id);
+    if (!actorId) {
+      skippedNoActor += 1;
+      console.warn(`[cron/retry-stuck] ${invoice.id}: sin usuario al que atribuir el OCR (ni quien la subio ni un ADMIN de la asesoria); no se relanza`);
+      continue;
+    }
+    await processInvoice(invoice.id, actorId);
   }
 
   return NextResponse.json({
-    retried: toRetry.length,
+    retried: toRetry.length - skippedNoActor,
+    skippedNoActor,
     uploaded: uploadedStuck.length,
     resetFromAnalyzing: reset.count,
     exhausted: exhaustedCount,

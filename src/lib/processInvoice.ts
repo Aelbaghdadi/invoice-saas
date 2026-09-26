@@ -35,6 +35,7 @@ import { routeByCif, clientSideCif, routeByText, detectInvoiceType } from "@/lib
 import { lookupProviderClient } from "@/lib/providerRouting";
 import { accountEntryKey, entryNameMatches } from "@/lib/supplierMatching";
 import { proposeIntracomGoodsType } from "@/lib/intracomGoods";
+import { classifyOcrError, userMessageForOcrError } from "@/lib/ocrErrors";
 
 /**
  * Convierte el string de fecha del OCR a Date. Si el OCR devuelve algo
@@ -671,11 +672,10 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       console.warn(`[processInvoice] ${invoiceId}: la factura cambio mientras se analizaba (ocrAttempts=${ocrToken}); no se escribe el resultado`);
     }
   } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : String(err);
     // Clasificar el error en un codigo del catalogo. Lo persistimos como
     // prefijo "[ERR-OCR-XXX] mensaje tecnico" para que la UI pueda
     // separarlos y mostrar el chip de codigo.
-    const code = classifyOcrError(errorMsg);
+    const code = classifyOcrError(err);
     // Mensaje LIMPIO para el gestor (nada de stacks de Prisma en la UI). El
     // detalle técnico completo se queda en el log para depuración.
     const userMsg = `[${code}] ${userMessageForOcrError(code)}`;
@@ -699,17 +699,6 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
   }
 }
 
-/** Clasifica un error de OCR en un codigo del catalogo. Heuristica simple:
- *  no necesita ser perfecta, solo ayudar al soporte a triagear sin tener
- *  que abrir logs. */
-function classifyOcrError(msg: string): "ERR-OCR-001" | "ERR-OCR-002" | "ERR-OCR-003" | "ERR-OCR-004" {
-  const lower = msg.toLowerCase();
-  if (lower.includes("timeout") || lower.includes("timed out")) return "ERR-OCR-003";
-  if (lower.includes("download") || lower.includes("storage") || lower.includes("404")) return "ERR-OCR-004";
-  if (lower.includes("invalid") || lower.includes("corrupt") || lower.includes("malformed")) return "ERR-OCR-002";
-  return "ERR-OCR-001";
-}
-
 /** ¿El fallo de OCR es transitorio (merece reintento) o determinista? Los
  *  deterministas (archivo inválido/corrupto) no se reintentan: fallarían igual.
  *  Solo reintentamos patrones claramente transitorios (timeout, rate limit,
@@ -720,13 +709,3 @@ function isTransientOcrError(msg: string): boolean {
   return /timeout|timed out|rate limit|too many requests|429|econnreset|etimedout|enotfound|fetch failed|network|socket hang up|503|502|500|unavailable|overloaded/.test(m);
 }
 
-/** Mensaje en español, apto para el gestor, según el código de error. El stack
- *  técnico nunca se muestra en la UI (va al log). */
-function userMessageForOcrError(code: "ERR-OCR-001" | "ERR-OCR-002" | "ERR-OCR-003" | "ERR-OCR-004"): string {
-  switch (code) {
-    case "ERR-OCR-003": return "El análisis tardó demasiado. Vuelve a procesarla.";
-    case "ERR-OCR-004": return "No se pudo descargar el archivo. Vuelve a procesarla.";
-    case "ERR-OCR-002": return "No se pudieron leer los datos del documento (ilegible o con formato no válido). Revísala manualmente.";
-    default:            return "No se pudo procesar la factura. Vuelve a intentarlo o revísala manualmente.";
-  }
-}
