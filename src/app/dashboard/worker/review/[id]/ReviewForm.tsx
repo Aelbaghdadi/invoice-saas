@@ -962,45 +962,53 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     });
   };
 
-  const attemptValidate = (reopen = false) => {
-    if (isPendingValidate) return;
+  // Comprobaciones locales antes de validar (o de preguntar si se reabre):
+  // avisan de lo que falla y resaltan el campo. true si se puede seguir.
+  const validateChecksPass = (reopen: boolean): boolean => {
     if (lockReason || validateBlockReason) {
       error((lockReason ?? validateBlockReason)!);
-      return;
+      return false;
     }
     // Una rechazada solo se valida con "Reabrir y validar" (F-015): ni Enter
     // ni el atajo la reabren sin querer.
     if (isRejected && !reopen) {
       error("La factura está rechazada: para validarla pulsa «Reabrir y validar».");
-      return;
+      return false;
     }
     if (periodClosed) {
       error("El periodo contable de esta factura está cerrado: hay que reabrirlo en Cierres para poder cambiarla.");
-      return;
+      return false;
     }
     if (cifConflict) {
       triggerShake("cif");
       error("El CIF coincide con el del cliente: corrígelo antes de validar.");
-      return;
+      return false;
     }
     if (mathOk === false) {
       triggerShake("math");
       error(`El importe no cuadra: hay ${formatEur(Math.abs(balanceDiffCents) / 100)} de diferencia.`);
-      return;
+      return false;
     }
     if (accountsIncomplete) {
       triggerShake("accounts");
-      return;
+      error("Faltan cuentas contables: rellénalas antes de validar.");
+      return false;
     }
+    return true;
+  };
+
+  const attemptValidate = (reopen = false) => {
+    if (isPendingValidate) return;
+    if (!validateChecksPass(reopen)) return;
     reopenRef.current = reopen;
     handleValidate();
   };
 
+  // Primero lo que falla en pantalla (CIF, cuadre, cuentas) y solo si pasa se
+  // pide la confirmacion: si no, se confirmaba para acabar en un aviso.
   const attemptReopen = async () => {
-    if (validateBlockReason) {
-      error(validateBlockReason);
-      return;
-    }
+    if (isPendingValidate) return;
+    if (!validateChecksPass(true)) return;
     const ok = await confirm({
       title: "¿Reabrir y validar esta factura?",
       message: "Dejará de estar rechazada, se borrará el motivo del rechazo y se validará con los datos que ves.",
