@@ -4,6 +4,7 @@ import {
   generateCsv,
   generateA3Excel,
   suggestFilename,
+  exportFilename,
   validateForA3Export,
   type InvoiceWithClient,
 } from "@/lib/exportFormats";
@@ -604,5 +605,17 @@ describe("validateForA3Export — huecos en la numeración (solo emitidas)", () 
     expect(hit?.warnings).toEqual(
       expect.arrayContaining(["Sin cuenta cliente", expect.stringContaining("Salto de numeración")]),
     );
+  });
+});
+
+describe("exportFilename", () => {
+  it("da el mismo nombre que suggestFilename con el cliente del lote", () => {
+    expect(exportFilename("ACME SL", "a3excel", 4, 2026)).toBe(
+      suggestFilename([mkInvoice()], "a3excel", 4, 2026),
+    );
+  });
+
+  it("sin cliente usa 'cliente'", () => {
+    expect(exportFilename(null, "a3excel", 1, 2026)).toBe("facturas_cliente_2026-01_a3excel.xlsx");
   });
 });

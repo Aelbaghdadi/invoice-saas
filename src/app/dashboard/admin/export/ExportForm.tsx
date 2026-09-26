@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   Download, FileDown, CheckCircle2,
   Loader2, AlertTriangle,
@@ -33,6 +34,7 @@ const YEARS      = Array.from({ length: 5 }, (_, i) => THIS_YEAR - i);
 
 
 export function ExportForm({ clients }: Props) {
+  const router = useRouter();
   const [clientId,   setClientId]   = useState(clients[0]?.id ?? "");
   const [periodType, setPeriodType] = useState<"MONTHLY" | "QUARTERLY">("MONTHLY");
   const [month,      setMonth]      = useState(now.getMonth() + 1);
@@ -137,6 +139,8 @@ export function ExportForm({ clients }: Props) {
       // Las descargadas ya constan exportadas: se refresca el recuento ya,
       // no a los 2,5 s, o el boton seguia ofreciendo las mismas facturas.
       fetchCount(true);
+      // El lote nuevo aparece en el historial, con su "Volver a descargar".
+      router.refresh();
     } catch {
       setError("Error de conexión al generar el Excel. Comprueba si se ha descargado antes de repetirlo.");
       fetchCount(true);

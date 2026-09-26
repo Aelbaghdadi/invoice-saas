@@ -8,6 +8,9 @@ import { Pagination } from "@/components/ui/Pagination";
 import { formatDateTimeEs } from "@/lib/dates";
 import { periodLabel } from "@/lib/period";
 import { PAGE_SIZE, pageWindow, parsePage } from "@/lib/listing";
+import { exportStorageKey } from "@/lib/exportBatch";
+import type { ExportFormat } from "@/lib/exportFormats";
+import { isStorageConfigured, objectExists } from "@/lib/storage";
 
 const INVOICE_TYPE_LABELS: Record<string, string> = {
   ALL: "Todas",
@@ -69,6 +72,18 @@ export default async function ExportPage({ searchParams }: Props) {
 
   const clientMap = new Map(clients.map((c) => [c.id, c.name]));
 
+  // "Volver a descargar": solo los lotes con copia guardada. Los anteriores a
+  // guardar el fichero no la tienen. Una comprobacion por fila de esta pagina.
+  const storedFiles = new Set<string>();
+  if (firmId && isStorageConfigured()) {
+    const stored = await Promise.all(
+      exportHistory.map(async (batch) =>
+        (await objectExists(exportStorageKey(firmId, batch.id, batch.format as ExportFormat))) ? batch.id : null,
+      ),
+    );
+    for (const id of stored) if (id) storedFiles.add(id);
+  }
+
   const header = (
     <PageHeader
       title="Exportar facturas"
@@ -112,6 +127,7 @@ export default async function ExportPage({ searchParams }: Props) {
                   <th className="px-5 py-3">Tipo</th>
                   <th className="px-5 py-3 text-right">Facturas</th>
                   <th className="px-5 py-3">Usuario</th>
+                  <th className="px-5 py-3">Fichero</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
@@ -131,6 +147,20 @@ export default async function ExportPage({ searchParams }: Props) {
                     </td>
                     <td className="px-5 py-3 text-right tabular-nums">{batch.invoiceCount}</td>
                     <td className="px-5 py-3">{userMap.get(batch.userId) ?? "—"}</td>
+                    <td className="whitespace-nowrap px-5 py-3">
+                      {storedFiles.has(batch.id) ? (
+                        <a
+                          href={`/api/export/batches/${batch.id}/file`}
+                          download
+                          className="inline-flex items-center gap-1.5 font-medium text-blue-600 hover:text-blue-700"
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                          Volver a descargar
+                        </a>
+                      ) : (
+                        <span className="text-slate-400">No disponible</span>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

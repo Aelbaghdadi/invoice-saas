@@ -2,7 +2,7 @@ import { Prisma, type InvoiceVatLine } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { appendAuditLogs } from "@/lib/auditLog";
 import { exportFingerprint, type FingerprintInvoice } from "@/lib/exportFingerprint";
-import type { InvoiceWithClient } from "@/lib/exportFormats";
+import { exportExtension, type ExportFormat, type InvoiceWithClient } from "@/lib/exportFormats";
 
 /**
  * Registro de una exportacion a A3: lote, items con snapshot, puntero
@@ -91,6 +91,23 @@ export function invoicesChangedSince(
       return !now || exportFingerprint(now) !== exportFingerprint(inv);
     })
     .map((inv) => inv.id);
+}
+
+/**
+ * Donde se guarda el fichero de un lote. Sale del lote, sin columna nueva:
+ * los lotes antiguos no tienen objeto y salen como "No disponible".
+ */
+export function exportStorageKey(firmId: string, batchId: string, format: ExportFormat): string {
+  return `exports/${firmId}/${batchId}.${exportExtension(format)}`;
+}
+
+/**
+ * Un lote de esta asesoria. ExportBatch no tiene asesoria: sale de sus
+ * facturas (items -> factura -> cliente -> advisoryFirmId), igual que en el
+ * historial de Exportar.
+ */
+export function firmExportBatchWhere(batchId: string, firmId: string): Prisma.ExportBatchWhereInput {
+  return { id: batchId, items: { some: { invoice: { client: { advisoryFirmId: firmId } } } } };
 }
 
 export type ExportBatchData = {

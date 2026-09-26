@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { buildExportSnapshot, invoicesChangedSince, type ExportInvoice } from "@/lib/exportBatch";
+import {
+  buildExportSnapshot,
+  exportStorageKey,
+  firmExportBatchWhere,
+  invoicesChangedSince,
+  type ExportInvoice,
+} from "@/lib/exportBatch";
 
 function mkInvoice(overrides: Partial<ExportInvoice> = {}): ExportInvoice {
   return {
@@ -87,5 +93,24 @@ describe("invoicesChangedSince", () => {
 
   it("una factura que ya no aparece cuenta como cambiada", () => {
     expect(invoicesChangedSince([mkInvoice()], [])).toEqual(["inv1"]);
+  });
+});
+
+describe("exportStorageKey", () => {
+  it("guarda el xlsx bajo exports/<asesoría>/<lote>", () => {
+    expect(exportStorageKey("firm1", "batch1", "a3excel")).toBe("exports/firm1/batch1.xlsx");
+  });
+
+  it("dos asesorías no comparten carpeta", () => {
+    expect(exportStorageKey("firm1", "b", "a3excel")).not.toBe(exportStorageKey("firm2", "b", "a3excel"));
+  });
+});
+
+describe("firmExportBatchWhere", () => {
+  it("exige que el lote tenga facturas de clientes de la asesoría", () => {
+    expect(firmExportBatchWhere("batch1", "firm1")).toEqual({
+      id: "batch1",
+      items: { some: { invoice: { client: { advisoryFirmId: "firm1" } } } },
+    });
   });
 });

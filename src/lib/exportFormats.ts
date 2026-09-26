@@ -183,10 +183,24 @@ export function suggestFilename(
   month: number,
   year: number,
 ): string {
-  const clientName = invoices[0]?.client.name.replace(/\s+/g, "_") ?? "cliente";
+  return exportFilename(invoices[0]?.client.name ?? null, format, month, year);
+}
+
+/** Nombre del fichero de un export a partir del cliente y el periodo. Lo usa
+ *  tambien "Volver a descargar", que ya no tiene las facturas a mano. */
+export function exportFilename(
+  clientName: string | null,
+  format: ExportFormat,
+  month: number,
+  year: number,
+): string {
+  const name = clientName?.replace(/\s+/g, "_") ?? "cliente";
   const mm = String(month).padStart(2, "0");
-  const ext = format === "a3excel" ? "xlsx" : "csv";
-  return `facturas_${clientName}_${year}-${mm}_${format}.${ext}`;
+  return `facturas_${name}_${year}-${mm}_${format}.${exportExtension(format)}`;
+}
+
+export function exportExtension(format: ExportFormat): "xlsx" | "csv" {
+  return format === "a3excel" ? "xlsx" : "csv";
 }
 
 // ─── A3 Excel export (.xlsx) ────────────────────────────────────────────────

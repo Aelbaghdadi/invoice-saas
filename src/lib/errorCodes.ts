@@ -41,6 +41,7 @@ export type AppErrorCode =
   | "ERR-EXPORT-002"  // Generacion Excel fallo
   | "ERR-EXPORT-003"  // Otra exportacion o una correccion se cruzo con esta
   | "ERR-EXPORT-004"  // Todas las del rango se quedan fuera del Excel (total 0)
+  | "ERR-EXPORT-005"  // El lote no tiene fichero guardado para volver a descargar
   // ── Auth / Permisos ──────────────────────────────────────
   | "ERR-AUTH-001"    // No autenticado
   | "ERR-AUTH-002"    // Rol insuficiente
@@ -72,6 +73,7 @@ export const ERROR_MESSAGES: Record<AppErrorCode, string> = {
   "ERR-EXPORT-002": "No se pudo generar el Excel. Reintenta o contacta con soporte.",
   "ERR-EXPORT-003": "Otra persona acaba de exportar o corregir parte de estas facturas. Vuelve a cargar la página para ver las que quedan pendientes.",
   "ERR-EXPORT-004": "Ninguna de estas facturas puede ir al Excel: todas tienen total 0 y A3 no acepta importes cero. Corrígelas en la revisión.",
+  "ERR-EXPORT-005": "El fichero de esta exportación no está guardado. Solo se guardan las exportaciones hechas desde esta versión.",
 
   "ERR-AUTH-001": "Tu sesión ha caducado. Vuelve a iniciar sesión.",
   "ERR-AUTH-002": "No tienes permisos para esta acción.",

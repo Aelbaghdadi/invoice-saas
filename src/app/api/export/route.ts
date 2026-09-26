@@ -4,7 +4,8 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { generateCsv, generateA3Excel, partitionA3Exportable, suggestFilename, validateForA3Export, type ExportFormat, type ExportConfig } from "@/lib/exportFormats";
 import { attachmentContentDisposition } from "@/lib/contentDisposition";
-import { commitExportBatch, ExportConflictError } from "@/lib/exportBatch";
+import { commitExportBatch, ExportConflictError, exportStorageKey } from "@/lib/exportBatch";
+import { deleteObject, isStorageConfigured, putObject } from "@/lib/storage";
 import { appError } from "@/lib/errorCodes";
 import type { InvoiceType, InvoiceStatus, PeriodType } from "@prisma/client";
 
@@ -164,7 +165,25 @@ export async function GET(req: NextRequest) {
     );
   }
 
+  // La copia se guarda ANTES de marcar nada: cuando las facturas constan
+  // exportadas, el fichero ya se puede volver a descargar desde el
+  // historial aunque esta respuesta no llegue (pestaña cerrada, red).
+  // Sin almacenamiento configurado (desarrollo) se exporta sin copia.
   const batchId = randomUUID();
+  const storageKey = isStorageConfigured() ? exportStorageKey(firmId, batchId, format) : null;
+  if (storageKey) {
+    try {
+      await putObject(storageKey, body, contentType);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[export] ERR-EXPORT-002 al guardar la copia batch=${batchId}:`, err);
+      return NextResponse.json(
+        { error: appError("ERR-EXPORT-002", `batch=${batchId} copia: ${msg}`) },
+        { status: 500 },
+      );
+    }
+  }
+
   try {
     await commitExportBatch(
       {
@@ -180,6 +199,8 @@ export async function GET(req: NextRequest) {
       invoices,
     );
   } catch (err) {
+    // Sin lote no hay nada que volver a descargar: fuera la copia.
+    if (storageKey) await deleteObject(storageKey);
     if (err instanceof ExportConflictError) {
       console.warn(`[export] ERR-EXPORT-003 batch=${batchId}: ${err.message}`);
       return NextResponse.json(
