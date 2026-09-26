@@ -11,6 +11,7 @@ import { Select } from "@/components/ui/Select";
 import { ErrorBox } from "@/components/ui/ErrorBox";
 import type { AppError } from "@/lib/errorCodes";
 import { quarterStartMonth, periodLabel, MONTH_OPTIONS, QUARTER_OPTIONS } from "@/lib/period";
+import { filenameFromContentDisposition } from "@/lib/contentDisposition";
 
 type ClientOption = { id: string; name: string; cif: string };
 
@@ -121,13 +122,11 @@ export function ExportForm({ clients }: Props) {
         return;
       }
       const blob = await res.blob();
-      // Nombre del fichero que propone el servidor (Content-Disposition).
-      const disposition = res.headers.get("Content-Disposition") ?? "";
-      const match = disposition.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = match ? decodeURIComponent(match[1]) : "export.xlsx";
+      // Nombre del fichero que propone el servidor (Content-Disposition).
+      a.download = filenameFromContentDisposition(res.headers.get("Content-Disposition"), "export.xlsx");
       a.click();
       URL.revokeObjectURL(url);
       setSuccess(true);

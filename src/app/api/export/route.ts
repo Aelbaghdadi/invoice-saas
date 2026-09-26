@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { generateCsv, generateA3Excel, suggestFilename, validateForA3Export, type ExportFormat, type ExportConfig } from "@/lib/exportFormats";
+import { attachmentContentDisposition } from "@/lib/contentDisposition";
 import { appendAuditLogs } from "@/lib/auditLog";
 import { appError } from "@/lib/errorCodes";
 import type { InvoiceType, InvoiceStatus, PeriodType } from "@prisma/client";
@@ -213,7 +214,7 @@ export async function GET(req: NextRequest) {
         status: 200,
         headers: {
           "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-          "Content-Disposition": `attachment; filename="${filename}"`,
+          "Content-Disposition": attachmentContentDisposition(filename),
         },
       });
     }
@@ -223,7 +224,7 @@ export async function GET(req: NextRequest) {
       status: 200,
       headers: {
         "Content-Type":        "text/csv; charset=utf-8",
-        "Content-Disposition": `attachment; filename="${filename}"`,
+        "Content-Disposition": attachmentContentDisposition(filename),
       },
     });
   } catch (err) {
