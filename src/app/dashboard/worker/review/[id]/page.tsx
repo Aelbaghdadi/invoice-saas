@@ -50,6 +50,8 @@ export default async function ReviewPage({
       exportBatchItems: { orderBy: { createdAt: "desc" }, take: 1, select: { createdAt: true } },
       // Una rechazada que el cliente ya sustituyo no se reabre.
       replacedBy: { select: { id: true } },
+      // Una original que ya tiene hijas no se vuelve a dividir.
+      _count: { select: { splitInvoices: true } },
     },
   });
   if (!invoice) notFound();
@@ -267,6 +269,11 @@ export default async function ReviewPage({
         doneCount={queue.doneCount}
         pendingInBucket={queue.pendingInBucket}
         periodClosed={periodClosed}
+        splitBlockReason={reviewTargetBlockReason("split", {
+          replacedById: null,
+          isUnclassifiedBucket: invoice.client.isUnclassifiedBucket,
+          splitChildren: invoice._count.splitInvoices,
+        })}
         validateBlockReason={reviewTargetBlockReason(
           "validate",
           { replacedById: invoice.replacedBy?.id ?? null, isUnclassifiedBucket: invoice.client.isUnclassifiedBucket },

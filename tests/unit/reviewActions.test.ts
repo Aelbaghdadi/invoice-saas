@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import type { InvoiceStatus } from "@prisma/client";
 import {
+  ALREADY_SPLIT_ERROR,
   REPLACED_REOPEN_ERROR,
   UNCLASSIFIED_VALIDATE_ERROR,
   REVIEW_LOCKED_STATUSES,
@@ -133,8 +134,9 @@ describe("buzón «Sin clasificar» (punto 6)", () => {
   it("guardar, rechazar y dividir no cambian", () => {
     for (const action of ["save", "reject", "split"] as const) {
       expect(reviewTargetBlockReason(action, bucket)).toBeNull();
-      expect(reviewTargetWhere(action)).toEqual({});
     }
+    expect(reviewTargetWhere("save")).toEqual({});
+    expect(reviewTargetWhere("reject")).toEqual({});
   });
 });
 
@@ -147,5 +149,19 @@ describe("auditoría de la reapertura (punto 8)", () => {
   it("la categoría borrada se ve en español", () => {
     expect(formatAuditValue("ILLEGIBLE")).toBe("Ilegible");
     expect(formatAuditValue("WRONG_PERIOD")).toBe("Periodo incorrecto");
+  });
+});
+
+describe("no se divide una original que ya tiene hijas (punto 10)", () => {
+  const base = { replacedById: null, isUnclassifiedBucket: false };
+
+  it("con hijas da el motivo; sin hijas, nada", () => {
+    expect(reviewTargetBlockReason("split", { ...base, splitChildren: 2 })).toBe(ALREADY_SPLIT_ERROR);
+    expect(reviewTargetBlockReason("split", { ...base, splitChildren: 0 })).toBeNull();
+    expect(reviewTargetBlockReason("split", base)).toBeNull();
+  });
+
+  it("la misma condición en el where de la reserva", () => {
+    expect(reviewTargetWhere("split")).toEqual({ splitInvoices: { none: {} } });
   });
 });

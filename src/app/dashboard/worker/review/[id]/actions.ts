@@ -1209,6 +1209,7 @@ async function reserveAndCreateSplit(
           status: { in: reviewAllowedFrom("split") },
           exportBatchId: null,
           exportBatchItems: { none: {} },
+          ...reviewTargetWhere("split"),
         },
         data: { status: "SPLIT_SOURCE" },
       });
@@ -1269,13 +1270,22 @@ async function reserveAndCreateSplit(
   if (!childIds) {
     await discardFiles();
     const now = await prisma.invoice
-      .findUnique({ where: { id: invoice.id }, select: { status: true, exportBatchId: true, exportBatchItems: { take: 1, select: { id: true } } } })
+      .findUnique({
+        where: { id: invoice.id },
+        select: {
+          status: true,
+          exportBatchId: true,
+          exportBatchItems: { take: 1, select: { id: true } },
+          _count: { select: { splitInvoices: true } },
+        },
+      })
       .catch(() => null);
     if (now && (now.exportBatchId || now.exportBatchItems.length > 0)) {
       return { error: "Esta factura ya se exportó a A3 y no se puede dividir." };
     }
     return {
-      error: (now && reviewActionBlockReason(now.status, "split"))
+      error: (now && (reviewActionBlockReason(now.status, "split")
+        ?? reviewTargetBlockReason("split", { replacedById: null, isUnclassifiedBucket: false, splitChildren: now._count.splitInvoices })))
         ?? "La factura ha cambiado mientras la dividías. Recarga la página.",
     };
   }
@@ -1310,7 +1320,11 @@ export async function splitInvoice(
 
   const invoice = await prisma.invoice.findUnique({
     where: { id: invoiceId },
-    include: { client: true, exportBatchItems: { take: 1, select: { id: true } } },
+    include: {
+      client: true,
+      exportBatchItems: { take: 1, select: { id: true } },
+      _count: { select: { splitInvoices: true } },
+    },
   });
   if (!invoice) return { error: "Factura no encontrada" };
 
@@ -1322,8 +1336,14 @@ export async function splitInvoice(
   if (invoice.exportBatchItems.length > 0) {
     return { error: "Esta factura ya se exportó a A3 y no se puede dividir." };
   }
-  // En analisis, ya dividida, por clasificar o rechazada: no se divide.
-  const blocked = reviewActionBlockReason(invoice.status, "split");
+  // En analisis, ya dividida (por estado o porque ya tiene hijas), por
+  // clasificar o rechazada: no se divide.
+  const blocked = reviewActionBlockReason(invoice.status, "split")
+    ?? reviewTargetBlockReason("split", {
+      replacedById: null,
+      isUnclassifiedBucket: invoice.client.isUnclassifiedBucket,
+      splitChildren: invoice._count.splitInvoices,
+    });
   if (blocked) return { error: blocked };
   // Antes de subir nada: si no, quedarian recortes huerfanos en el almacenamiento.
   const periodErr = await closedPeriodError(invoice.clientId, splitPeriods(invoice), "dividir");
@@ -1411,7 +1431,11 @@ export async function splitPdfInvoice(
 
   const invoice = await prisma.invoice.findUnique({
     where: { id: invoiceId },
-    include: { client: true, exportBatchItems: { take: 1, select: { id: true } } },
+    include: {
+      client: true,
+      exportBatchItems: { take: 1, select: { id: true } },
+      _count: { select: { splitInvoices: true } },
+    },
   });
   if (!invoice) return { error: "Factura no encontrada" };
 
@@ -1423,8 +1447,14 @@ export async function splitPdfInvoice(
   if (invoice.exportBatchItems.length > 0) {
     return { error: "Esta factura ya se exportó a A3 y no se puede dividir." };
   }
-  // En analisis, ya dividida, por clasificar o rechazada: no se divide.
-  const blocked = reviewActionBlockReason(invoice.status, "split");
+  // En analisis, ya dividida (por estado o porque ya tiene hijas), por
+  // clasificar o rechazada: no se divide.
+  const blocked = reviewActionBlockReason(invoice.status, "split")
+    ?? reviewTargetBlockReason("split", {
+      replacedById: null,
+      isUnclassifiedBucket: invoice.client.isUnclassifiedBucket,
+      splitChildren: invoice._count.splitInvoices,
+    });
   if (blocked) return { error: blocked };
   // Antes de subir nada: si no, quedarian partes huerfanas en el almacenamiento.
   const periodErr = await closedPeriodError(invoice.clientId, splitPeriods(invoice), "dividir");

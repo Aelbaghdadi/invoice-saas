@@ -206,6 +206,9 @@ type Props = {
    *  rechazada que el cliente ya sustituyo), o null. Lo calcula la pagina con
    *  la misma regla que el servidor. */
   validateBlockReason?: string | null;
+  /** Por que no se ofrece Dividir aunque el estado lo permita (ya tiene
+   *  hijas), o null. */
+  splitBlockReason?: string | null;
   /** Pendientes que quedan en la cola actual (esta incluida si lo esta). */
   pendingInBucket?: number;
   /** El periodo contable de la factura esta cerrado: no se puede guardar. */
@@ -315,7 +318,7 @@ function fmtDate(d: Date | null | undefined) {
   return new Date(d).toISOString().slice(0, 10);
 }
 
-export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false, initialVatLines, prevId, nextId, nextPendingId = null, position, batchTotal, doneCount = 0, pendingInBucket = 0, periodClosed = false, validateBlockReason = null, backHref, back = null, extraction, issues, suggestedAccount, accountMatchedByName, accountNameMismatch = false, thirdPartyGoodsType = null, canRememberGoodsType = false, boundingBoxes, queueSuffix = "", bucket = "all", sessionContext, avgOcrDurationMs, genericAccounts }: Props) {
+export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false, initialVatLines, prevId, nextId, nextPendingId = null, position, batchTotal, doneCount = 0, pendingInBucket = 0, periodClosed = false, validateBlockReason = null, splitBlockReason = null, backHref, back = null, extraction, issues, suggestedAccount, accountMatchedByName, accountNameMismatch = false, thirdPartyGoodsType = null, canRememberGoodsType = false, boundingBoxes, queueSuffix = "", bucket = "all", sessionContext, avgOcrDurationMs, genericAccounts }: Props) {
   const { success, error } = useToast();
   const { confirm, dialog: confirmDialog } = useConfirm();
   const isImage = invoice.fileType.startsWith("image/");
@@ -332,7 +335,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   // Una exportada ya esta en A3, y con el periodo cerrado no se cambia nada:
   // ni se rechaza ni se divide (el servidor tambien lo impide).
   const canReject = !isExported && !isRejected && !periodClosed;
-  const canSplit  = !isExported && !isRejected && !periodClosed;
+  const canSplit  = !isExported && !isRejected && !periodClosed && !splitBlockReason;
   // Analizandose, dividida o por clasificar: el servidor rechaza guardar,
   // validar, rechazar y dividir (F-015). Los botones salen deshabilitados con
   // el motivo, y la dividida y la por clasificar quedan en solo lectura.

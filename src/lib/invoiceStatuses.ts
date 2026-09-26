@@ -409,7 +409,11 @@ export type ReviewTarget = {
   replacedById: string | null;
   /** Esta en el cliente tecnico del buzon «Sin clasificar». */
   isUnclassifiedBucket: boolean;
+  /** Facturas que salieron de esta al dividirla (solo cuenta para dividir). */
+  splitChildren?: number;
 };
+
+export const ALREADY_SPLIT_ERROR = "Esta factura ya se dividió: trabaja con las facturas que salieron de ella.";
 
 export const UNCLASSIFIED_VALIDATE_ERROR = "Esta factura está en «Sin clasificar» y no tiene cliente: no se puede validar.";
 
@@ -429,6 +433,9 @@ export function reviewTargetBlockReason(
   target: ReviewTarget,
   options: { reopen?: boolean } = {},
 ): string | null {
+  // Una original con hijas (VALIDATED de antes de la reserva) no se vuelve a
+  // dividir: saldrian C3 y C4 ademas de C1 y C2, y doble computo.
+  if (action === "split") return (target.splitChildren ?? 0) > 0 ? ALREADY_SPLIT_ERROR : null;
   if (action !== "validate") return null;
   if (target.isUnclassifiedBucket) return UNCLASSIFIED_VALIDATE_ERROR;
   if (options.reopen && target.replacedById) return REPLACED_REOPEN_ERROR;
@@ -437,6 +444,7 @@ export function reviewTargetBlockReason(
 
 /** La misma condicion, para el where del updateMany. */
 export function reviewTargetWhere(action: ReviewAction, options: { reopen?: boolean } = {}) {
+  if (action === "split") return { splitInvoices: { none: {} } };
   if (action !== "validate") return {};
   return {
     client: { isUnclassifiedBucket: false },
