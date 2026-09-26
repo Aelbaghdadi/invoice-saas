@@ -11,14 +11,20 @@ import { exportInvoiceWhere, parseExportRequest } from "@/lib/exportRequest";
 
 type AdminContext = { userId: string; firmId: string };
 
+// JSON con AppError, no texto plano: la pantalla tiene que poder decir "tu
+// sesion ha caducado" en vez de un error generico que hace pensar que quiza
+// se exporto (con un 401 es seguro que no).
 async function requireAdmin(): Promise<AdminContext | NextResponse> {
   const session = await auth();
-  if (!session?.user || session.user.role !== "ADMIN") {
-    return new NextResponse("Unauthorized", { status: 401 });
+  if (!session?.user) {
+    return NextResponse.json({ error: appError("ERR-AUTH-001") }, { status: 401 });
+  }
+  if (session.user.role !== "ADMIN") {
+    return NextResponse.json({ error: appError("ERR-AUTH-002", `rol ${session.user.role}`) }, { status: 403 });
   }
   const firmId = session.user.advisoryFirmId;
   if (!firmId) {
-    return new NextResponse("Forbidden: missing advisory firm", { status: 403 });
+    return NextResponse.json({ error: appError("ERR-AUTH-002", "admin sin asesoría") }, { status: 403 });
   }
   return { userId: session.user.id, firmId };
 }

@@ -80,6 +80,17 @@ export function ExportForm({ clients }: Props) {
         type, format, preview: "1",
       });
       const res  = await fetch(`/api/export?${sp}`);
+      if (!res.ok) {
+        // Sin esto un 401 dejaba count a 0 y salia "No hay facturas
+        // exportables", que es falso: el recuento no se sabe.
+        setError(await readApiError(res, "No se ha podido cargar la vista previa. Recarga la página."));
+        setCount(null);
+        setWarnings([]);
+        setWarningCount(0);
+        setAlreadyExported(0);
+        setExcluded(0);
+        return;
+      }
       const data = await res.json();
       setCount(data.count ?? 0);
       setWarnings(data.warnings ?? []);
@@ -120,15 +131,10 @@ export function ExportForm({ clients }: Props) {
       if (!res.ok) {
         // Sin un error de la API (p. ej. un corte del proxy) no se sabe si el
         // lote llego a registrarse: se manda al historial, no a repetir.
-        let failure: AppError | string =
-          "No se ha podido completar la exportación. Antes de repetirla, mira el historial: si aparece, descárgala desde allí.";
-        try {
-          const data = await res.json();
-          // La API devuelve {code, message, details}: con String() salia "[object Object]".
-          if (typeof data?.error === "string") failure = data.error;
-          else if (data?.error?.message) failure = data.error as AppError;
-        } catch { /* la respuesta no era JSON: se queda el mensaje generico */ }
-        setError(failure);
+        setError(await readApiError(
+          res,
+          "No se ha podido completar la exportación. Antes de repetirla, mira el historial: si aparece, descárgala desde allí.",
+        ));
         fetchCount(true);
         return;
       }
@@ -436,6 +442,18 @@ export function ExportForm({ clients }: Props) {
       </div>
     </div>
   );
+}
+
+/** El error que manda la API ({ error: AppError | string }) o `fallback` si
+ *  la respuesta no es suya (p. ej. una pagina de error del proxy). */
+async function readApiError(res: Response, fallback: string): Promise<AppError | string> {
+  try {
+    const data = await res.json();
+    // La API devuelve {code, message, details}: con String() salia "[object Object]".
+    if (typeof data?.error === "string") return data.error;
+    if (data?.error?.message) return data.error as AppError;
+  } catch { /* la respuesta no era JSON */ }
+  return fallback;
 }
 
 function Row({ label, value }: { label: string; value: string }) {
