@@ -32,7 +32,13 @@ import { formatAmountEs, formatEur } from "@/lib/format";
 import type { AppError } from "@/lib/errorCodes";
 import { Select, type SelectOption } from "@/components/ui/Select";
 import { InvoiceStatusBadge } from "@/components/ui/InvoiceStatusBadge";
-import { NEEDS_REVIEW, REJECT_CATEGORY_LABEL, isReviewReadOnly, reviewLockReason } from "@/lib/invoiceStatuses";
+import {
+  NEEDS_REVIEW,
+  REJECT_CATEGORY_LABEL,
+  isReviewReadOnly,
+  reviewActionBlockReason,
+  reviewLockReason,
+} from "@/lib/invoiceStatuses";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { invoiceBalanceDiffCents } from "@/lib/invoiceBalance";
 import { sanitizeAccountingAccountInput, padAccountingAccount } from "@/lib/accountingAccount";
@@ -341,6 +347,13 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   // el motivo, y la dividida y la por clasificar quedan en solo lectura.
   const lockReason = reviewLockReason(invoice.status);
   const readOnly   = isReviewReadOnly(invoice.status);
+  // Cada boton y cada atajo con el motivo de SU accion, el mismo que da el
+  // servidor: una EXPORTED sin lote (datos antiguos) se guarda, pero no se
+  // rechaza ni se divide.
+  const saveBlock     = reviewActionBlockReason(invoice.status, "save");
+  const rejectBlock   = reviewActionBlockReason(invoice.status, "reject");
+  const splitBlock    = reviewActionBlockReason(invoice.status, "split");
+  const validateBlock = reviewActionBlockReason(invoice.status, "validate", { reopen: isRejected });
   // Solo las que estan por revisar; con el OCR en curso el servidor lo rechaza.
   const canDefer  = NEEDS_REVIEW.includes(invoice.status);
 
@@ -885,8 +898,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   }, [type, vatLines, totalAmount, markedEuro, invoiceDateVal, accountingMonth, accountingYear, supplierAccountVal, expenseAccountVal, operationType, goodsTypeShown, shownSource, retentionType, retentionBase, retentionRate, retentionAmount, isRectificative, rectifiedInvoiceSeries, rectifiedInvoiceNumber, rectificativeType, art80Tres, invoice.id, invoice.updatedAt, bucket, back]);
 
   const handleSave = () => {
-    if (lockReason) {
-      error(lockReason);
+    if (saveBlock) {
+      error(saveBlock);
       return;
     }
     startSave(async () => {
@@ -965,8 +978,9 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   // Comprobaciones locales antes de validar (o de preguntar si se reabre):
   // avisan de lo que falla y resaltan el campo. true si se puede seguir.
   const validateChecksPass = (reopen: boolean): boolean => {
-    if (lockReason || validateBlockReason) {
-      error((lockReason ?? validateBlockReason)!);
+    const blocked = reviewActionBlockReason(invoice.status, "validate", { reopen }) ?? validateBlockReason;
+    if (blocked) {
+      error(blocked);
       return false;
     }
     // Una rechazada solo se valida con "Reabrir y validar" (F-015): ni Enter
@@ -1108,20 +1122,20 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     onValidate: () => { attemptValidate(); },
     // En una validada, Ctrl+S guarda la correccion (sin pasar por borrador).
     onSave: () => {
-      if (lockReason) error(lockReason);
+      if (saveBlock) error(saveBlock);
       else if (isValidated) attemptValidate();
       else if (periodClosed) attemptValidate();
       else if (!isPendingSave) handleSave();
     },
     onReject: () => {
       if (!canReject) return;
-      if (lockReason) error(lockReason);
+      if (rejectBlock) error(rejectBlock);
       else setShowRejectModal(true);
     },
     onMarkDuplicate: () => {
       if (!canReject) return;
-      if (lockReason) {
-        error(lockReason);
+      if (rejectBlock) {
+        error(rejectBlock);
         return;
       }
       setRejectCategory("DUPLICATE");
@@ -2455,8 +2469,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
               <button
                 type="button"
                 onClick={handleSave}
-                disabled={isPendingSave || periodClosed || lockReason != null}
-                title={lockReason ?? (periodClosed ? "Periodo cerrado" : "Guardar sin validar (Ctrl+S)")}
+                disabled={isPendingSave || periodClosed || saveBlock != null}
+                title={saveBlock ?? (periodClosed ? "Periodo cerrado" : "Guardar sin validar (Ctrl+S)")}
                 aria-label="Guardar sin validar"
                 className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-200 px-3 py-2 text-[13px] font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-50 2xl:px-3.5"
               >
@@ -2469,8 +2483,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
               <button
                 type="button"
                 onClick={() => setShowSplitModal(true)}
-                disabled={lockReason != null}
-                title={lockReason ?? "Dividir esta foto en varios tickets"}
+                disabled={splitBlock != null}
+                title={splitBlock ?? "Dividir esta foto en varios tickets"}
                 aria-label="Dividir esta foto en varios tickets"
                 className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-blue-200 px-3 py-2 text-[13px] font-medium text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent 2xl:px-3.5"
               >
@@ -2482,8 +2496,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
               <button
                 type="button"
                 onClick={() => setShowSplitPdfModal(true)}
-                disabled={lockReason != null}
-                title={lockReason ?? "Dividir este PDF en varias facturas por páginas"}
+                disabled={splitBlock != null}
+                title={splitBlock ?? "Dividir este PDF en varias facturas por páginas"}
                 aria-label="Dividir este PDF en varias facturas por páginas"
                 className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-blue-200 px-3 py-2 text-[13px] font-medium text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent 2xl:px-3.5"
               >
@@ -2495,8 +2509,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
               <button
                 type="button"
                 onClick={() => setShowRejectModal(true)}
-                disabled={lockReason != null}
-                title={lockReason ?? "Rechazar (R)"}
+                disabled={rejectBlock != null}
+                title={rejectBlock ?? "Rechazar (R)"}
                 className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-red-200 px-3 py-2 text-[13px] font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent 2xl:px-3.5"
               >
                 <XCircle className="h-3.5 w-3.5" />
@@ -2531,10 +2545,10 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                 <button
                   type="button"
                   onClick={() => (isRejected ? attemptReopen() : attemptValidate())}
-                  disabled={isPendingValidate || periodClosed || lockReason != null || validateBlockReason != null}
+                  disabled={isPendingValidate || periodClosed || validateBlock != null || validateBlockReason != null}
                   title={
-                    lockReason || validateBlockReason
-                      ? (lockReason ?? validateBlockReason)!
+                    validateBlock || validateBlockReason
+                      ? (validateBlock ?? validateBlockReason)!
                       : periodClosed
                       ? "Periodo cerrado"
                       : isRejected
