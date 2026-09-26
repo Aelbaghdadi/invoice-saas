@@ -78,7 +78,10 @@ export default async function ExportPage({ searchParams }: Props) {
   if (firmId && isStorageConfigured()) {
     const stored = await Promise.all(
       exportHistory.map(async (batch) =>
-        (await objectExists(exportStorageKey(firmId, batch.id, batch.format as ExportFormat))) ? batch.id : null,
+        batch.clientId
+          && (await objectExists(exportStorageKey(firmId, batch.clientId, batch.id, batch.format as ExportFormat)))
+          ? batch.id
+          : null,
       ),
     );
     for (const id of stored) if (id) storedFiles.add(id);

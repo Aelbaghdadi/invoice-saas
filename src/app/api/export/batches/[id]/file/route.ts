@@ -40,8 +40,9 @@ export async function GET(
   if (!batch) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   const format = batch.format as ExportFormat;
-  const key = exportStorageKey(firmId, batch.id, format);
-  if (!isStorageConfigured() || !(await objectExists(key))) {
+  // Los lotes sin cliente son anteriores a guardar la copia: no la tienen.
+  const key = batch.clientId ? exportStorageKey(firmId, batch.clientId, batch.id, format) : null;
+  if (!key || !isStorageConfigured() || !(await objectExists(key))) {
     return NextResponse.json({ error: appError("ERR-EXPORT-005", `batch=${batch.id}`) }, { status: 404 });
   }
 

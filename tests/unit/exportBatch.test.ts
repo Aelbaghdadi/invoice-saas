@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildExportSnapshot,
   exportStorageKey,
+  exportStoragePrefix,
   firmExportBatchWhere,
   invoicesChangedSince,
   type ExportInvoice,
@@ -97,12 +98,19 @@ describe("invoicesChangedSince", () => {
 });
 
 describe("exportStorageKey", () => {
-  it("guarda el xlsx bajo exports/<asesoría>/<lote>", () => {
-    expect(exportStorageKey("firm1", "batch1", "a3excel")).toBe("exports/firm1/batch1.xlsx");
+  it("guarda el xlsx bajo exports/<asesoría>/<cliente>/<lote>", () => {
+    expect(exportStorageKey("firm1", "client1", "batch1", "a3excel")).toBe("exports/firm1/client1/batch1.xlsx");
   });
 
   it("dos asesorías no comparten carpeta", () => {
-    expect(exportStorageKey("firm1", "b", "a3excel")).not.toBe(exportStorageKey("firm2", "b", "a3excel"));
+    expect(exportStorageKey("firm1", "c", "b", "a3excel")).not.toBe(exportStorageKey("firm2", "c", "b", "a3excel"));
+  });
+
+  it("todo lo de una asesoría y lo de un cliente cuelga de un prefijo que se puede borrar", () => {
+    const key = exportStorageKey("firm1", "client1", "batch1", "a3excel");
+    expect(key.startsWith(exportStoragePrefix("firm1"))).toBe(true);
+    expect(key.startsWith(`${exportStoragePrefix("firm1")}client1/`)).toBe(true);
+    expect(exportStoragePrefix("firm1")).toBe("exports/firm1/");
   });
 });
 

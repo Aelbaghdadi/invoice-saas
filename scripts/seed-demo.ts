@@ -138,19 +138,25 @@ async function main() {
   if (!s3) {
     console.warn("⚠️  Vars S3/Garage faltan — los PDFs no se subiran (storageKey sera placeholder).");
   } else {
-    // Borrar PDFs previos del bucket para los clientIds que vamos a borrar
+    // Borrar PDFs previos del bucket para los clientIds que vamos a borrar, y
+    // las copias de los Excel exportados de la asesoria (exports/<firmId>/,
+    // ver exportStoragePrefix en src/lib/exportBatch.ts): sus lotes ya no existen.
     try {
-      for (const cid of clientIds) {
-        const list = await s3.send(new ListObjectsV2Command({ Bucket: S3_BUCKET, Prefix: `${cid}/` }));
-        const objs = (list.Contents ?? [])
-          .map((o) => o.Key)
-          .filter((k): k is string => Boolean(k))
-          .map((Key) => ({ Key }));
-        if (objs.length) {
-          await s3.send(new DeleteObjectsCommand({ Bucket: S3_BUCKET, Delete: { Objects: objs } }));
-        }
+      for (const prefix of [...clientIds.map((cid) => `${cid}/`), `exports/${firmId}/`]) {
+        let token: string | undefined;
+        do {
+          const list = await s3.send(new ListObjectsV2Command({ Bucket: S3_BUCKET, Prefix: prefix, ContinuationToken: token }));
+          const objs = (list.Contents ?? [])
+            .map((o) => o.Key)
+            .filter((k): k is string => Boolean(k))
+            .map((Key) => ({ Key }));
+          if (objs.length) {
+            await s3.send(new DeleteObjectsCommand({ Bucket: S3_BUCKET, Delete: { Objects: objs } }));
+          }
+          token = list.IsTruncated ? list.NextContinuationToken : undefined;
+        } while (token);
       }
-      console.log("✓ PDFs previos eliminados de Storage");
+      console.log("✓ PDFs y copias de exportaciones previos eliminados de Storage");
     } catch (e) {
       console.warn(`⚠️  No se pudieron limpiar PDFs de Storage: ${(e as Error).message}`);
     }

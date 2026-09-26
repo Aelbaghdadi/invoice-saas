@@ -93,12 +93,23 @@ export function invoicesChangedSince(
     .map((inv) => inv.id);
 }
 
+/** Carpeta de las copias de una asesoria: la baja o el reset la borran entera. */
+export function exportStoragePrefix(firmId: string): string {
+  return `exports/${firmId}/`;
+}
+
 /**
  * Donde se guarda el fichero de un lote. Sale del lote, sin columna nueva:
- * los lotes antiguos no tienen objeto y salen como "No disponible".
+ * los lotes antiguos no tienen objeto y salen como "No disponible". Una
+ * carpeta por cliente, para poder borrar lo de un cliente por prefijo.
  */
-export function exportStorageKey(firmId: string, batchId: string, format: ExportFormat): string {
-  return `exports/${firmId}/${batchId}.${exportExtension(format)}`;
+export function exportStorageKey(
+  firmId: string,
+  clientId: string,
+  batchId: string,
+  format: ExportFormat,
+): string {
+  return `${exportStoragePrefix(firmId)}${clientId}/${batchId}.${exportExtension(format)}`;
 }
 
 /**

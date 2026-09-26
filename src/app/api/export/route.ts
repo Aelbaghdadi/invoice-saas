@@ -165,7 +165,7 @@ export async function POST(req: NextRequest) {
   // historial aunque esta respuesta no llegue (pestaña cerrada, red).
   // Sin almacenamiento configurado (desarrollo) se exporta sin copia.
   const batchId = randomUUID();
-  const storageKey = isStorageConfigured() ? exportStorageKey(firmId, batchId, format) : null;
+  const storageKey = isStorageConfigured() ? exportStorageKey(firmId, clientId, batchId, format) : null;
   if (storageKey) {
     try {
       await putObject(storageKey, body, contentType);

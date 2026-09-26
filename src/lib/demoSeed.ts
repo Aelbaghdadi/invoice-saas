@@ -14,6 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import bcrypt from "bcryptjs";
 import { putObject, deletePrefix, isStorageConfigured } from "@/lib/storage";
+import { exportStoragePrefix } from "@/lib/exportBatch";
 import { prisma } from "@/lib/prisma";
 import {
   SEED_INVOICE_DEFS,
@@ -119,11 +120,13 @@ export async function reseedDemo(
 
   // ── 3. Limpiar storage de los clientIds antiguos ─────────────────────
   const storageReady = isStorageConfigured();
-  if (storageReady && clientIds.length > 0) {
+  if (storageReady) {
     try {
       for (const cid of clientIds) {
         await deletePrefix(`${cid}/`);
       }
+      // Copias de los Excel exportados: sus lotes ya no existen.
+      await deletePrefix(exportStoragePrefix(firmId));
     } catch {
       // Si falla la limpieza de storage no abortamos: los archivos
       // huerfanos no rompen nada y tampoco hay forma de recuperarlos.
