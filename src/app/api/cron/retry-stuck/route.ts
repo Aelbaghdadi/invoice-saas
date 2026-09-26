@@ -59,10 +59,10 @@ export async function GET(req: Request) {
   // historial solo si el UPDATE condicionado la ha cambiado de verdad.
   const exhausted = await prisma.invoice.findMany({
     where: exhaustedAnalyzingWhere(fiveMinutesAgo),
-    select: { id: true },
+    select: { id: true, ocrAttempts: true },
   });
   let exhaustedCount = 0;
-  for (const { id } of exhausted) {
+  for (const { id, ocrAttempts } of exhausted) {
     const moved = await prisma.$transaction(async (tx) => {
       const updated = await tx.invoice.updateMany({
         where: { id, ...exhaustedAnalyzingWhere(fiveMinutesAgo) },
@@ -75,7 +75,11 @@ export async function GET(req: Request) {
           fromStatus: "ANALYZING",
           toStatus: "OCR_ERROR",
           changedBy: "system",
-          reason: `${OCR_RETRIES_EXHAUSTED_ERROR} (${MAX_OCR_RETRIES} intentos)`,
+          // ocrAttempts cuenta todos los analisis de la factura, tambien los
+          // Reprocesar manuales: la cifra real, no el maximo del cron. Si
+          // cambiara, seria por un claim nuevo, que tambien mueve updatedAt y
+          // el updateMany de arriba no la habria tocado.
+          reason: `${OCR_RETRIES_EXHAUSTED_ERROR} (${ocrAttempts} análisis; ya no se reintenta sola: pulsa Reprocesar)`,
         },
       });
       return true;
