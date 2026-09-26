@@ -596,6 +596,10 @@ async function parseAndSave(
   // puede tardar hasta el timeout del export: con los 5 s por defecto de Prisma
   // la transaccion caducaba (P2028), la accion lanzaba y el gestor perdia lo
   // tecleado. Esta accion no lanza nunca: todo sale como { error }.
+  if (toValidated) {
+    auditEntries.push({ field: "status", oldValue: invoice.status, newValue: "VALIDATED" });
+  }
+
   let saved: boolean;
   try {
     saved = await prisma.$transaction(async (tx) => {
@@ -640,6 +644,32 @@ async function parseAndSave(
           })),
         });
       }
+
+      // Historial y auditoria en la misma transaccion que los datos: si se
+      // escribieran despues y fallaran, quedaria la factura reabierta (motivo
+      // borrado) o validada sin rastro en la auditoria, que es inmutable.
+      if (toValidated) {
+        await tx.invoiceStatusHistory.create({
+          data: {
+            invoiceId,
+            fromStatus: invoice.status,
+            toStatus: "VALIDATED",
+            changedBy: userId,
+          },
+        });
+      }
+      if (auditEntries.length > 0) {
+        await appendAuditLogs(
+          auditEntries.map((e) => ({
+            invoiceId,
+            userId,
+            field: e.field,
+            oldValue: e.oldValue,
+            newValue: e.newValue,
+          })),
+          tx,
+        );
+      }
       return true;
     }, { timeout: EXPORT_TRANSACTION_OPTIONS.timeout + 5_000, maxWait: 5_000 });
   } catch (err) {
@@ -651,19 +681,6 @@ async function parseAndSave(
   }
   if (!saved) {
     return conditionalWriteError(invoiceId, action, options, `updatedAt=${invoice.updatedAt.getTime()} al escribir`);
-  }
-
-  if (toValidated) {
-    auditEntries.push({ field: "status", oldValue: invoice.status, newValue: "VALIDATED" });
-    // Record status transition
-    await prisma.invoiceStatusHistory.create({
-      data: {
-        invoiceId,
-        fromStatus: invoice.status,
-        toStatus: "VALIDATED",
-        changedBy: userId,
-      },
-    });
   }
 
   if (validate) {
@@ -772,18 +789,6 @@ async function parseAndSave(
         },
       });
     }
-  }
-
-  if (auditEntries.length > 0) {
-    await appendAuditLogs(
-      auditEntries.map((e) => ({
-        invoiceId,
-        userId,
-        field: e.field,
-        oldValue: e.oldValue,
-        newValue: e.newValue,
-      })),
-    );
   }
 
   return null; // no error
