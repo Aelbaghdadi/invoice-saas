@@ -36,7 +36,8 @@ import { exportFingerprint, type FingerprintInvoice } from "@/lib/exportFingerpr
 import { appError, type AppError } from "@/lib/errorCodes";
 import { putObject, getObjectBytes, sanitizeFilenameForStorage, isStorageConfigured } from "@/lib/storage";
 import { NEEDS_REVIEW } from "@/lib/invoiceStatuses";
-import type { Invoice } from "@prisma/client";
+import { Prisma, type Invoice } from "@prisma/client";
+import { EXPORT_TRANSACTION_OPTIONS } from "@/lib/exportBatch";
 
 /** Resultado de las server actions de revision. El `error` puede ser:
  *  - AppError: cuando es un fallo "conocido" del dominio (tiene codigo)
@@ -533,44 +534,58 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
   // exportacion que confirma entre la lectura y esta escritura dejaba la
   // correccion aplicada sobre una factura ya exportada con los datos viejos
   // (F-049). El export pone updatedAt al reservar, asi que aqui no cuadra.
-  const saved = await prisma.$transaction(async (tx) => {
-    const updated = await tx.invoice.updateMany({
-      where: { id: invoiceId, updatedAt: invoice.updatedAt },
-      data: {
-        ...newData,
-        isValid,
-        // Si la factura estaba pospuesta y el gestor la edita/valida,
-        // la sacamos de la "cola de pospuestas" para que vuelva al
-        // orden normal.
-        deferredAt: null,
-        // Va en la misma escritura que los datos corregidos: si se hiciera
-        // aparte y fallara, quedaria la factura corregida pero marcada como
-        // exportada, y ya no habria forma de que volviera al Excel.
-        ...(nuevoExportBatchId !== undefined ? { exportBatchId: nuevoExportBatchId } : {}),
-        ...(toValidated
-          ? { status: "VALIDATED" as const }
-          : saveStatus ? { status: saveStatus as "PENDING_REVIEW" } : {}),
-      },
-    });
-    // Ha cambiado desde la lectura: no se escribe nada mas.
-    if (updated.count === 0) return false;
-
-    await tx.invoiceVatLine.deleteMany({ where: { invoiceId } });
-    if (linesToSave.length > 0) {
-      await tx.invoiceVatLine.createMany({
-        data: linesToSave.map((l, i) => ({
-          invoiceId,
-          position:  i,
-          taxBase:   l.taxBase,
-          vatRate:   l.vatRate,
-          vatAmount: l.vatAmount,
-          equivalenceSurchargeRate:   l.equivalenceSurchargeRate,
-          equivalenceSurchargeAmount: l.equivalenceSurchargeAmount,
-        })),
+  //
+  // Si el export tiene la fila reservada, esta escritura espera a su COMMIT, que
+  // puede tardar hasta el timeout del export: con los 5 s por defecto de Prisma
+  // la transaccion caducaba (P2028), la accion lanzaba y el gestor perdia lo
+  // tecleado. Esta accion no lanza nunca: todo sale como { error }.
+  let saved: boolean;
+  try {
+    saved = await prisma.$transaction(async (tx) => {
+      const updated = await tx.invoice.updateMany({
+        where: { id: invoiceId, updatedAt: invoice.updatedAt },
+        data: {
+          ...newData,
+          isValid,
+          // Si la factura estaba pospuesta y el gestor la edita/valida,
+          // la sacamos de la "cola de pospuestas" para que vuelva al
+          // orden normal.
+          deferredAt: null,
+          // Va en la misma escritura que los datos corregidos: si se hiciera
+          // aparte y fallara, quedaria la factura corregida pero marcada como
+          // exportada, y ya no habria forma de que volviera al Excel.
+          ...(nuevoExportBatchId !== undefined ? { exportBatchId: nuevoExportBatchId } : {}),
+          ...(toValidated
+            ? { status: "VALIDATED" as const }
+            : saveStatus ? { status: saveStatus as "PENDING_REVIEW" } : {}),
+        },
       });
+      // Ha cambiado desde la lectura: no se escribe nada mas.
+      if (updated.count === 0) return false;
+
+      await tx.invoiceVatLine.deleteMany({ where: { invoiceId } });
+      if (linesToSave.length > 0) {
+        await tx.invoiceVatLine.createMany({
+          data: linesToSave.map((l, i) => ({
+            invoiceId,
+            position:  i,
+            taxBase:   l.taxBase,
+            vatRate:   l.vatRate,
+            vatAmount: l.vatAmount,
+            equivalenceSurchargeRate:   l.equivalenceSurchargeRate,
+            equivalenceSurchargeAmount: l.equivalenceSurchargeAmount,
+          })),
+        });
+      }
+      return true;
+    }, { timeout: EXPORT_TRANSACTION_OPTIONS.timeout + 5_000, maxWait: 5_000 });
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2028") {
+      return { error: appError("ERR-VALIDATE-003", `P2028 al escribir: ${err.message}`) };
     }
-    return true;
-  });
+    console.error(`[review] no se pudo guardar la factura ${invoiceId}:`, err);
+    return { error: appError("ERR-SYS-001", `guardar ${invoiceId}: ${err instanceof Error ? err.message : String(err)}`) };
+  }
   if (!saved) {
     return { error: appError("ERR-VALIDATE-003", `updatedAt=${invoice.updatedAt.getTime()} al escribir`) };
   }
