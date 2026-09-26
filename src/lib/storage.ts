@@ -73,6 +73,18 @@ export async function getObjectBytes(key: string): Promise<Buffer> {
   return Buffer.from(bytes);
 }
 
+/**
+ * ¿El error del SDK dice que el objeto no existe? Garage y el SDK lo dan de
+ * varias formas: NoSuchKey en un GET, NotFound (sin cuerpo) en un HEAD, o
+ * solo el 404 en los metadatos. Cualquier otra cosa es un fallo de verdad.
+ */
+export function isStorageNotFound(err: unknown): boolean {
+  const e = err as { name?: unknown; Code?: unknown; $metadata?: { httpStatusCode?: unknown } } | null;
+  if (!e || typeof e !== "object") return false;
+  return e.name === "NoSuchKey" || e.name === "NotFound" || e.Code === "NoSuchKey"
+    || e.$metadata?.httpStatusCode === 404;
+}
+
 /** Borra un objeto (no falla si no existe). */
 export async function deleteObject(key: string): Promise<void> {
   const client = getClient();

@@ -5,7 +5,7 @@ import { appError } from "@/lib/errorCodes";
 import { attachmentContentDisposition } from "@/lib/contentDisposition";
 import { exportStorageKey, firmExportBatchWhere } from "@/lib/exportBatch";
 import { exportExtension, exportFilename, type ExportFormat } from "@/lib/exportFormats";
-import { getObjectBytes, isStorageConfigured, objectExists } from "@/lib/storage";
+import { getObjectBytes, isStorageConfigured, isStorageNotFound } from "@/lib/storage";
 
 export const dynamic = "force-dynamic";
 
@@ -22,9 +22,14 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  // Sesion caducada (8 h) y rol distinto no son lo mismo: con la sesion
+  // caducada lo que toca es volver a entrar, no "no tienes permisos".
   const session = await auth();
-  if (!session?.user || session.user.role !== "ADMIN") {
-    return NextResponse.json({ error: appError("ERR-AUTH-002") }, { status: 403 });
+  if (!session?.user) {
+    return NextResponse.json({ error: appError("ERR-AUTH-001") }, { status: 401 });
+  }
+  if (session.user.role !== "ADMIN") {
+    return NextResponse.json({ error: appError("ERR-AUTH-002", `rol ${session.user.role}`) }, { status: 403 });
   }
   const firmId = session.user.advisoryFirmId;
   if (!firmId) {
@@ -37,12 +42,14 @@ export async function GET(
     where: firmExportBatchWhere(id, firmId),
     select: { id: true, format: true, clientId: true, periodMonth: true, periodYear: true },
   });
-  if (!batch) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  if (!batch) {
+    return NextResponse.json({ error: appError("ERR-EXPORT-007", `batch=${id}`) }, { status: 404 });
+  }
 
   const format = batch.format as ExportFormat;
   // Los lotes sin cliente son anteriores a guardar la copia: no la tienen.
   const key = batch.clientId ? exportStorageKey(firmId, batch.clientId, batch.id, format) : null;
-  if (!key || !isStorageConfigured() || !(await objectExists(key))) {
+  if (!key || !isStorageConfigured()) {
     return NextResponse.json({ error: appError("ERR-EXPORT-005", `batch=${batch.id}`) }, { status: 404 });
   }
 
@@ -54,10 +61,16 @@ export async function GET(
     : null;
   const filename = exportFilename(client?.name ?? null, format, batch.periodMonth ?? 0, batch.periodYear ?? 0);
 
+  // GET directo, sin HeadObject antes: un 404 del almacenamiento es "no hay
+  // copia"; cualquier otro fallo (Garage caido) es un error y se registra, no
+  // un "solo se guardan las de esta version" que no es verdad.
   let bytes: Buffer;
   try {
     bytes = await getObjectBytes(key);
   } catch (err) {
+    if (isStorageNotFound(err)) {
+      return NextResponse.json({ error: appError("ERR-EXPORT-005", `batch=${batch.id}`) }, { status: 404 });
+    }
     console.error(`[export] no se pudo leer la copia batch=${batch.id}:`, err);
     return NextResponse.json({ error: appError("ERR-SYS-001", `batch=${batch.id}`) }, { status: 500 });
   }
