@@ -492,6 +492,9 @@ async function parseAndSave(
   if (options.reopen && invoice.rejectionReason) {
     auditEntries.push({ field: "rejectionReason", oldValue: invoice.rejectionReason, newValue: null });
   }
+  if (options.reopen && invoice.rejectionCategory) {
+    auditEntries.push({ field: "rejectionCategory", oldValue: invoice.rejectionCategory, newValue: null });
+  }
   const trackedFields = [
     "type",
     "issuerName","issuerCif","receiverName","receiverCif",

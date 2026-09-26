@@ -154,6 +154,19 @@ export const AUDIT_FIELD_LABELS: Record<string, string> = {
   export: "Exportación",
   reexport: "Por reexportar",
   duplicate_warning: "Posible duplicado",
+  // Los borra «Reabrir y validar».
+  rejectionReason: "Motivo del rechazo",
+  rejectionCategory: "Categoría del rechazo",
+};
+
+/** Categorias de rechazo: el desplegable del rechazo, el aviso de una factura
+ *  ya rechazada y la auditoria dicen lo mismo. */
+export const REJECT_CATEGORY_LABEL: Record<string, string> = {
+  ILLEGIBLE: "Ilegible",
+  INCOMPLETE: "Incompleta",
+  WRONG_PERIOD: "Periodo incorrecto",
+  DUPLICATE: "Duplicada",
+  OTHER: "Otro",
 };
 
 /** Nombre legible de un campo de la auditoria (el propio nombre si no se conoce). */
@@ -192,6 +205,7 @@ export function formatAuditValue(value: string | null | undefined): string {
     ?? OPERATION_LABELS[value]
     ?? OPERATION_TYPE_LABEL[value as keyof typeof OPERATION_TYPE_LABEL]
     ?? INTRACOM_GOODS_TYPE_LABEL[value as keyof typeof INTRACOM_GOODS_TYPE_LABEL]
+    ?? REJECT_CATEGORY_LABEL[value]
     ?? value
   );
 }

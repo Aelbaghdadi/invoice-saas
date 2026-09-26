@@ -4,6 +4,8 @@ import {
   REPLACED_REOPEN_ERROR,
   UNCLASSIFIED_VALIDATE_ERROR,
   REVIEW_LOCKED_STATUSES,
+  auditFieldLabel,
+  formatAuditValue,
   isReviewReadOnly,
   STATUS_LABELS,
   reviewActionBlockReason,
@@ -133,5 +135,17 @@ describe("buzón «Sin clasificar» (punto 6)", () => {
       expect(reviewTargetBlockReason(action, bucket)).toBeNull();
       expect(reviewTargetWhere(action)).toEqual({});
     }
+  });
+});
+
+describe("auditoría de la reapertura (punto 8)", () => {
+  it("los campos borrados salen con nombre legible", () => {
+    expect(auditFieldLabel("rejectionReason")).toBe("Motivo del rechazo");
+    expect(auditFieldLabel("rejectionCategory")).toBe("Categoría del rechazo");
+  });
+
+  it("la categoría borrada se ve en español", () => {
+    expect(formatAuditValue("ILLEGIBLE")).toBe("Ilegible");
+    expect(formatAuditValue("WRONG_PERIOD")).toBe("Periodo incorrecto");
   });
 });

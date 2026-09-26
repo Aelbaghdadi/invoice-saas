@@ -32,7 +32,7 @@ import { formatAmountEs, formatEur } from "@/lib/format";
 import type { AppError } from "@/lib/errorCodes";
 import { Select, type SelectOption } from "@/components/ui/Select";
 import { InvoiceStatusBadge } from "@/components/ui/InvoiceStatusBadge";
-import { NEEDS_REVIEW, isReviewReadOnly, reviewLockReason } from "@/lib/invoiceStatuses";
+import { NEEDS_REVIEW, REJECT_CATEGORY_LABEL, isReviewReadOnly, reviewLockReason } from "@/lib/invoiceStatuses";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { invoiceBalanceDiffCents } from "@/lib/invoiceBalance";
 import { sanitizeAccountingAccountInput, padAccountingAccount } from "@/lib/accountingAccount";
@@ -67,15 +67,6 @@ const RECTIFICATIVE_TYPE_OPTIONS: SelectOption[] = [
   { value: "BY_SUBSTITUTION", label: "2 · Por sustitución (anula y reemplaza)" },
 ];
 
-/** Categorias de rechazo: el desplegable del rechazo y el aviso de una
- *  factura ya rechazada dicen lo mismo. */
-const REJECT_CATEGORY_LABEL: Record<string, string> = {
-  ILLEGIBLE: "Ilegible",
-  INCOMPLETE: "Incompleta",
-  WRONG_PERIOD: "Periodo incorrecto",
-  DUPLICATE: "Duplicada",
-  OTHER: "Otro",
-};
 const REJECT_CATEGORY_OPTIONS: SelectOption[] = [
   { value: "", label: "Categoría (opcional)" },
   ...Object.entries(REJECT_CATEGORY_LABEL).map(([value, label]) => ({ value, label })),
