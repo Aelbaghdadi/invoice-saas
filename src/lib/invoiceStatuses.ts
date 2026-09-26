@@ -332,3 +332,21 @@ export function reviewActionBlockReason(
         : `No se puede ${ACTION_VERB[action]} esta factura en su estado actual. Recarga la página.`;
   }
 }
+
+/**
+ * Motivo por el que la pantalla de revision no deja guardar, validar,
+ * rechazar ni dividir la factura, o null si esta abierta. Es el mismo texto
+ * que devuelve el servidor, para el title de los botones.
+ */
+export function reviewLockReason(status: InvoiceStatus): string | null {
+  return REVIEW_LOCKED_STATUSES.includes(status) ? reviewActionBlockReason(status, "save") : null;
+}
+
+/**
+ * Solo de consulta: la original de una division (se trabaja con sus hijas) y
+ * la que esta por clasificar (primero se le asigna cliente). Las que se estan
+ * analizando no: en cuanto termina el OCR se pueden revisar.
+ */
+export function isReviewReadOnly(status: InvoiceStatus): boolean {
+  return status === "SPLIT_SOURCE" || status === "PENDING_ROUTING";
+}

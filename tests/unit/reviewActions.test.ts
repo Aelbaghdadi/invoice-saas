@@ -2,9 +2,11 @@ import { describe, it, expect } from "vitest";
 import type { InvoiceStatus } from "@prisma/client";
 import {
   REVIEW_LOCKED_STATUSES,
+  isReviewReadOnly,
   STATUS_LABELS,
   reviewActionBlockReason,
   reviewAllowedFrom,
+  reviewLockReason,
   type ReviewAction,
 } from "@/lib/invoiceStatuses";
 
@@ -71,5 +73,28 @@ describe("reviewActionBlockReason", () => {
 
   it("reabrir una que ya no está rechazada pide recargar", () => {
     expect(reviewActionBlockReason("VALIDATED", "validate", { reopen: true })).toMatch(/ya no está rechazada/);
+  });
+});
+
+describe("reviewLockReason e isReviewReadOnly (pantalla de revisión)", () => {
+  it("bloquea con el mismo motivo que da el servidor", () => {
+    for (const status of REVIEW_LOCKED_STATUSES) {
+      expect(reviewLockReason(status)).toBe(reviewActionBlockReason(status, "save"));
+      expect(reviewLockReason(status)).toBeTruthy();
+    }
+  });
+
+  it("no bloquea las abiertas (rechazada y exportada tienen sus propios botones)", () => {
+    for (const status of ["PENDING_REVIEW", "NEEDS_ATTENTION", "OCR_ERROR", "VALIDATED", "REJECTED", "EXPORTED"] as const) {
+      expect(reviewLockReason(status)).toBeNull();
+    }
+  });
+
+  it("solo de consulta: la dividida y la por clasificar, no la que se está analizando", () => {
+    expect(isReviewReadOnly("SPLIT_SOURCE")).toBe(true);
+    expect(isReviewReadOnly("PENDING_ROUTING")).toBe(true);
+    expect(isReviewReadOnly("ANALYZING")).toBe(false);
+    expect(isReviewReadOnly("UPLOADED")).toBe(false);
+    expect(isReviewReadOnly("PENDING_REVIEW")).toBe(false);
   });
 });
