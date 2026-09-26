@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { Prisma } from "@prisma/client";
 import {
   buildExportSnapshot,
   committedBatchState,
@@ -6,6 +7,7 @@ import {
   exportStoragePrefix,
   firmExportBatchWhere,
   invoicesChangedSince,
+  isTransactionConflictError,
   type ExportInvoice,
 } from "@/lib/exportBatch";
 
@@ -135,5 +137,36 @@ describe("committedBatchState", () => {
 
   it("si la comprobación falla no se sabe (y no se borra la copia)", async () => {
     expect(await committedBatchState(async () => { throw new Error("conexión cortada"); })).toBe("unknown");
+  });
+});
+
+describe("isTransactionConflictError", () => {
+  // Forma real de un deadlock con adapter-pg 7.5, copiada de uno provocado
+  // contra Postgres 16: DriverAdapterError sin code y el SQLSTATE en cause.
+  function driverAdapterError(originalCode: string) {
+    const err = new Error("deadlock detected") as Error & { cause: unknown };
+    err.name = "DriverAdapterError";
+    err.cause = { originalCode, originalMessage: "deadlock detected", kind: "postgres", code: originalCode };
+    return err;
+  }
+
+  it("un deadlock (40P01) es un conflicto", () => {
+    expect(isTransactionConflictError(driverAdapterError("40P01"))).toBe(true);
+  });
+
+  it("un fallo de serialización (40001) es un conflicto", () => {
+    expect(isTransactionConflictError(driverAdapterError("40001"))).toBe(true);
+  });
+
+  it("P2034 de Prisma es un conflicto", () => {
+    const err = new Prisma.PrismaClientKnownRequestError("write conflict", { code: "P2034", clientVersion: "7.5.0" });
+    expect(isTransactionConflictError(err)).toBe(true);
+  });
+
+  it("otros errores no lo son", () => {
+    expect(isTransactionConflictError(driverAdapterError("23503"))).toBe(false);
+    expect(isTransactionConflictError(new Error("conexión cortada"))).toBe(false);
+    expect(isTransactionConflictError(null)).toBe(false);
+    expect(isTransactionConflictError("40P01")).toBe(false);
   });
 });

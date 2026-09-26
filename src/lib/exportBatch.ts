@@ -209,11 +209,29 @@ export async function commitExportBatch(
       );
     }, EXPORT_TRANSACTION_OPTIONS);
   } catch (err) {
-    // P2034: Postgres ha abortado una de dos transacciones que se bloqueaban
-    // (deadlock o conflicto de escritura). Es la misma carrera de F-049.
-    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2034") {
-      throw new ExportConflictError(invoiceIds, `P2034: ${err.message}`);
+    // Postgres ha abortado esta transaccion por cruzarse con otra: es la
+    // misma carrera de F-049, no un fallo del export.
+    if (isTransactionConflictError(err)) {
+      throw new ExportConflictError(invoiceIds, `conflicto de transaccion: ${err instanceof Error ? err.message : String(err)}`);
     }
     throw err;
   }
+}
+
+// 40P01 deadlock; 40001 fallo de serializacion.
+const CONFLICT_SQLSTATES = new Set(["40P01", "40001"]);
+
+/**
+ * ¿Postgres ha abortado la transaccion por cruzarse con otra?
+ *
+ * La transaccion va en READ COMMITTED, asi que lo habitual entre dos exports
+ * es un deadlock 40P01 (bloquean las mismas facturas en distinto orden), no
+ * un 40001. Con adapter-pg el 40P01 no se traduce: llega como
+ * DriverAdapterError con `code` undefined y el SQLSTATE en
+ * `cause.originalCode`. El 40001 si se traduce a P2034.
+ */
+export function isTransactionConflictError(err: unknown): boolean {
+  if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2034") return true;
+  const cause = (err as { cause?: { originalCode?: unknown } } | null)?.cause;
+  return typeof cause?.originalCode === "string" && CONFLICT_SQLSTATES.has(cause.originalCode);
 }
