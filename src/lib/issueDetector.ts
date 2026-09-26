@@ -52,6 +52,9 @@ export async function detectIssues(
   extraction: ExtractedInvoice,
   invoice: Invoice,
   operationTypeHint?: OperationTypeName,
+  // Con false solo las devuelve: el OCR las guarda el mismo en su escritura
+  // final, que no se hace si la factura ha cambiado mientras analizaba.
+  options: { persist?: boolean } = {},
 ): Promise<IssueData[]> {
   const issues: IssueData[] = [];
 
@@ -197,7 +200,7 @@ export async function detectIssues(
   }
 
   // Create all issues in database
-  if (issues.length > 0) {
+  if (issues.length > 0 && options.persist !== false) {
     await prisma.invoiceIssue.createMany({
       data: issues.map((issue) => ({
         invoiceId,

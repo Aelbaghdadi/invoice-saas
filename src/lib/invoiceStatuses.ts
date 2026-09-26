@@ -231,3 +231,26 @@ export function isBatchRejectable(invoice: {
   const seExporto = (invoice.exportBatchItems?.length ?? 0) > 0;
   return !seExporto && !BATCH_REJECT_EXCLUDED_STATUSES.includes(invoice.status);
 }
+
+/**
+ * Condicion con la que el OCR escribe su resultado (F-008): la factura sigue
+ * en ANALYZING y con el mismo `ocrAttempts` que dejo su claim. `ocrAttempts`
+ * hace de fencing token: si mientras analizaba alguien la rechazo, la dividio
+ * o la valido, o el cron la relanzo (otro claim, otro numero), esta ejecucion
+ * ya no es la duena y no pisa nada.
+ */
+export function ocrFenceWhere(invoiceId: string, ocrAttempts: number) {
+  return { id: invoiceId, status: "ANALYZING" as const, ocrAttempts };
+}
+
+/** Maximo de intentos de OCR que relanza el cron de rescate. */
+export const MAX_OCR_RETRIES = 3;
+
+/**
+ * Facturas atascadas en ANALYZING: sin tocar desde `cutoff`. El cron la usa
+ * al leer y otra vez en el propio updateMany que las devuelve a UPLOADED, para
+ * no resetear una que el OCR ha terminado entre la lectura y la escritura.
+ */
+export function stuckAnalyzingWhere(cutoff: Date) {
+  return { status: "ANALYZING" as const, updatedAt: { lt: cutoff }, ocrAttempts: { lt: MAX_OCR_RETRIES } };
+}
