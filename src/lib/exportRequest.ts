@@ -31,10 +31,15 @@ const FIELD_LABELS: Record<string, string> = {
 const QUARTER_START_MONTHS = [1, 4, 7, 10];
 
 export function parseExportRequest(
-  input: Record<string, unknown>,
+  input: unknown,
 ): { ok: true; request: ExportRequest } | { ok: false; error: string } {
   const parsed = exportRequestSchema.safeParse(input);
   if (!parsed.success) {
+    // Un issue sin campo es la peticion entera (un array, un numero...): con
+    // String(undefined) salia "Falta o no es válido: undefined.".
+    if (parsed.error.issues.some((i) => i.path.length === 0)) {
+      return { ok: false, error: "La petición no es válida." };
+    }
     const fields = [...new Set(parsed.error.issues.map((i) => FIELD_LABELS[String(i.path[0])] ?? String(i.path[0])))];
     return { ok: false, error: `Falta o no es válido: ${fields.join(", ")}.` };
   }

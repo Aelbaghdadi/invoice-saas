@@ -99,7 +99,9 @@ export async function POST(req: NextRequest) {
   } catch {
     return NextResponse.json({ error: "Se esperaba JSON." }, { status: 400 });
   }
-  const parsed = parseExportRequest(typeof input === "object" && input !== null ? input as Record<string, unknown> : {});
+  // Un array tambien es "object": se trata como un cuerpo sin campos.
+  const isPlainObject = typeof input === "object" && input !== null && !Array.isArray(input);
+  const parsed = parseExportRequest(isPlainObject ? input : {});
   if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 });
   const { request } = parsed;
   const { clientId, month, year, periodType } = request;

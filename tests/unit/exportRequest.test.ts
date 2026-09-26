@@ -34,6 +34,10 @@ describe("parseExportRequest", () => {
     expect(result).toEqual({ ok: false, error: `Falta o no es válido: ${field}.` });
   });
 
+  it.each([[[]], [[valid]], [42], ["texto"], [null]])("una petición que no es un objeto (%j) no dice 'undefined'", (input) => {
+    expect(parseExportRequest(input)).toEqual({ ok: false, error: "La petición no es válida." });
+  });
+
   it("el trimestre se pide por su primer mes", () => {
     expect(parseExportRequest({ ...valid, periodType: "QUARTERLY", month: 7 }).ok).toBe(true);
     expect(parseExportRequest({ ...valid, periodType: "QUARTERLY", month: 5 })).toEqual({
