@@ -22,8 +22,20 @@ export function isDatabaseError(err: unknown): boolean {
 
 /** Heuristica simple: no necesita ser perfecta, solo ayudar al soporte a
  *  triagear sin tener que abrir logs. */
+/**
+ * Errores de Prisma que vienen de los datos que ha leido el OCR, no de la
+ * base de datos: un valor demasiado largo (P2000), uno que no casa con el
+ * tipo (P2007, P2023) o un numero que desborda la columna (P2020: un vatRate
+ * de 1000 o un importe de 10^10). Reprocesar lee lo mismo (temperatura 0),
+ * asi que son "documento ilegible", no "avisa a soporte".
+ */
+const OCR_DATA_PRISMA_CODES = new Set(["P2000", "P2007", "P2020", "P2023"]);
+
 export function classifyOcrError(err: unknown): OcrErrorCode {
-  if (isDatabaseError(err)) return "ERR-SYS-001";
+  if (isDatabaseError(err)) {
+    const code = (err as { code?: unknown }).code;
+    return typeof code === "string" && OCR_DATA_PRISMA_CODES.has(code) ? "ERR-OCR-002" : "ERR-SYS-001";
+  }
   const lower = (err instanceof Error ? err.message : String(err)).toLowerCase();
   if (lower.includes("timeout") || lower.includes("timed out")) return "ERR-OCR-003";
   if (lower.includes("download") || lower.includes("storage") || lower.includes("404")) return "ERR-OCR-004";

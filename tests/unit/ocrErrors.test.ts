@@ -17,6 +17,14 @@ describe("classifyOcrError", () => {
     expect(classifyOcrError(Object.assign(new Error("x"), { name: "PrismaClientUnknownRequestError" }))).toBe("ERR-SYS-001");
   });
 
+  it.each(["P2000", "P2007", "P2020", "P2023"])(
+    "un %s (dato del OCR que no cabe o no casa) es del documento, no del sistema",
+    (code) => {
+      const err = Object.assign(new PrismaClientKnownRequestError("Value out of range for the type"), { code });
+      expect(classifyOcrError(err)).toBe("ERR-OCR-002");
+    },
+  );
+
   it("mantiene la clasificación de los fallos del OCR", () => {
     expect(classifyOcrError(new Error("Request timed out"))).toBe("ERR-OCR-003");
     expect(classifyOcrError(new Error("storage download failed: 404"))).toBe("ERR-OCR-004");
