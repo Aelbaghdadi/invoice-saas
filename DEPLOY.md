@@ -80,11 +80,15 @@ Hay dos endpoints que en Vercel disparaba Vercel Cron y aquí hay que disparar
 con una **Scheduled Task** de Coolify (o cron externo) con la cabecera
 `Authorization: Bearer <CRON_SECRET>`:
 
-- `POST /api/cron/retry-stuck` — reintenta facturas atascadas (p. ej. cada 15 min).
-- `POST /api/cron/closure-reminders` — recordatorios de cierre (p. ej. diario).
+- `GET /api/cron/retry-stuck` — reintenta facturas atascadas y pasa a «Error OCR» las que ya agotaron los reintentos (p. ej. cada 15 min).
+- `GET /api/cron/closure-reminders` — recordatorios de cierre (p. ej. diario).
+
+Los dos solo aceptan GET: un POST da 405.
 
 Si no configuras los crons, la app funciona; solo no se ejecutan esas tareas
-periódicas.
+periódicas. Una factura con el análisis parado (un redeploy a mitad del OCR)
+no se relanza sola: en la revisión sale «El análisis se ha parado» con un
+botón «Reprocesar».
 
 ## 6. Almacenamiento (Garage)
 

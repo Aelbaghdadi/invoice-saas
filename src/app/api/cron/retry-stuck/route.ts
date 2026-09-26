@@ -1,7 +1,13 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { processInvoice } from "@/lib/processInvoice";
-import { MAX_OCR_RETRIES, stuckAnalyzingWhere } from "@/lib/invoiceStatuses";
+import {
+  MAX_OCR_RETRIES,
+  OCR_RETRIES_EXHAUSTED_ERROR,
+  exhaustedAnalyzingWhere,
+  stuckAnalyzingCutoff,
+  stuckAnalyzingWhere,
+} from "@/lib/invoiceStatuses";
 import { timingSafeEqual } from "crypto";
 
 function verifyCronSecret(header: string | null): boolean {
@@ -17,7 +23,7 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+  const fiveMinutesAgo = stuckAnalyzingCutoff();
 
   // UPLOADED facturas que nunca arrancaron
   const uploadedStuck = await prisma.invoice.findMany({
@@ -46,6 +52,36 @@ export async function GET(req: Request) {
       })
     : { count: 0 };
 
+  // Paradas que ya agotaron los reintentos: sin esto se quedaban en ANALYZING
+  // para siempre y la revision no dejaba hacer nada con ellas. En OCR_ERROR
+  // sale su Reprocesar y se pueden rellenar a mano. Una a una para dejar su
+  // historial solo si el UPDATE condicionado la ha cambiado de verdad.
+  const exhausted = await prisma.invoice.findMany({
+    where: exhaustedAnalyzingWhere(fiveMinutesAgo),
+    select: { id: true },
+  });
+  let exhaustedCount = 0;
+  for (const { id } of exhausted) {
+    const moved = await prisma.$transaction(async (tx) => {
+      const updated = await tx.invoice.updateMany({
+        where: { id, ...exhaustedAnalyzingWhere(fiveMinutesAgo) },
+        data: { status: "OCR_ERROR", lastOcrError: OCR_RETRIES_EXHAUSTED_ERROR },
+      });
+      if (updated.count === 0) return false;
+      await tx.invoiceStatusHistory.create({
+        data: {
+          invoiceId: id,
+          fromStatus: "ANALYZING",
+          toStatus: "OCR_ERROR",
+          changedBy: "system",
+          reason: `${OCR_RETRIES_EXHAUSTED_ERROR} (${MAX_OCR_RETRIES} intentos)`,
+        },
+      });
+      return true;
+    });
+    if (moved) exhaustedCount += 1;
+  }
+
   // processInvoice solo arranca las que siguen en UPLOADED (claim atomico):
   // las que no se resetearon se saltan solas.
   const toRetry = [...uploadedStuck, ...analyzingStuck];
@@ -57,5 +93,6 @@ export async function GET(req: Request) {
     retried: toRetry.length,
     uploaded: uploadedStuck.length,
     resetFromAnalyzing: reset.count,
+    exhausted: exhaustedCount,
   });
 }

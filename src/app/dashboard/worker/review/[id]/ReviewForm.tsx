@@ -1451,6 +1451,9 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
               <OcrProcessingBanner
                 startedAt={invoice.createdAt}
                 avgDurationMs={avgOcrDurationMs ?? undefined}
+                invoiceId={invoice.id}
+                status={invoice.status}
+                updatedAt={invoice.updatedAt}
               />
             )}
 

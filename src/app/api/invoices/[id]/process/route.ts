@@ -5,7 +5,7 @@ import { canAccessClient } from "@/lib/accessibleClients";
 import { processInvoice } from "@/lib/processInvoice";
 import { appendAuditLogs } from "@/lib/auditLog";
 import { ERROR_MESSAGES } from "@/lib/errorCodes";
-import { STATUS_LABELS } from "@/lib/invoiceStatuses";
+import { STATUS_LABELS, manualStuckAnalyzingWhere, stuckAnalyzingCutoff } from "@/lib/invoiceStatuses";
 import type { InvoiceStatus } from "@prisma/client";
 
 /** Allowed statuses for (re)processing */
@@ -41,12 +41,46 @@ export async function POST(
     return NextResponse.json({ error: NOT_FOUND }, { status: 404 });
   }
 
+  // Parada en ANALYZING (un redeploy o un OOM mataron el OCR): se devuelve a
+  // UPLOADED con el mismo corte que el cron y sin limite de intentos. Si el
+  // OCR colgado despierta, ya no escribe: el claim nuevo sube ocrAttempts.
+  if (invoice.status === "ANALYZING") {
+    const stalled = await prisma.invoice.updateMany({
+      where: manualStuckAnalyzingWhere(id, stuckAnalyzingCutoff()),
+      data: { status: "UPLOADED", lastOcrError: null },
+    });
+    if (stalled.count === 0) {
+      return NextResponse.json(
+        { error: "La factura ya se está analizando. Espera unos segundos y recarga la página." },
+        { status: 400 },
+      );
+    }
+    await appendAuditLogs([{
+      invoiceId: id,
+      userId,
+      field: "status",
+      oldValue: "ANALYZING",
+      newValue: "UPLOADED (reprocess)",
+    }]);
+    await prisma.invoiceStatusHistory.create({
+      data: {
+        invoiceId: id,
+        fromStatus: "ANALYZING",
+        toStatus: "UPLOADED",
+        changedBy: userId,
+        reason: "Reprocesado manualmente (el análisis se había parado)",
+      },
+    });
+    await processInvoice(id, userId);
+    const updated = await prisma.invoice.findUnique({ where: { id } });
+    return NextResponse.json({ success: true, invoice: updated });
+  }
+
   if (!PROCESSABLE_STATUSES.includes(invoice.status as typeof PROCESSABLE_STATUSES[number])) {
-    // ANALYZING es lo normal al pulsar Reprocesar dos veces seguidas.
-    const error = invoice.status === "ANALYZING"
-      ? "La factura ya se está analizando. Espera unos segundos y recarga la página."
-      : `No se puede reprocesar: la factura está «${STATUS_LABELS[invoice.status]}».`;
-    return NextResponse.json({ error }, { status: 400 });
+    return NextResponse.json(
+      { error: `No se puede reprocesar: la factura está «${STATUS_LABELS[invoice.status]}».` },
+      { status: 400 },
+    );
   }
 
   const isReprocess = invoice.status !== "UPLOADED";

@@ -247,6 +247,24 @@ export function ocrFenceWhere(invoiceId: string, ocrAttempts: number) {
 export const MAX_OCR_RETRIES = 3;
 
 /**
+ * Cuanto tiene que llevar una factura en ANALYZING sin tocarse para darla por
+ * parada (un redeploy o un OOM mataron el after() a mitad del OCR). Lo usan
+ * el cron, el reproceso manual y el banner de la revision: los tres tienen
+ * que coincidir o el banner ofreceria un Reprocesar que /process rechaza.
+ */
+export const STUCK_ANALYZING_MS = 5 * 60 * 1000;
+
+export function stuckAnalyzingCutoff(now: number = Date.now()): Date {
+  return new Date(now - STUCK_ANALYZING_MS);
+}
+
+/** Para la pantalla: el analisis lleva parado mas del corte. */
+export function isOcrStalled(status: InvoiceStatus, updatedAt: Date | string, now: number = Date.now()): boolean {
+  if (status !== "UPLOADED" && status !== "ANALYZING") return false;
+  return new Date(updatedAt).getTime() < stuckAnalyzingCutoff(now).getTime();
+}
+
+/**
  * Facturas atascadas en ANALYZING: sin tocar desde `cutoff`. El cron la usa
  * al leer y otra vez en el propio updateMany que las devuelve a UPLOADED, para
  * no resetear una que el OCR ha terminado entre la lectura y la escritura.
@@ -254,6 +272,24 @@ export const MAX_OCR_RETRIES = 3;
 export function stuckAnalyzingWhere(cutoff: Date) {
   return { status: "ANALYZING" as const, updatedAt: { lt: cutoff }, ocrAttempts: { lt: MAX_OCR_RETRIES } };
 }
+
+/**
+ * Paradas en ANALYZING que ya agotaron los reintentos: el cron las pasa a
+ * OCR_ERROR para que la revision se desbloquee y salga su Reprocesar.
+ */
+export function exhaustedAnalyzingWhere(cutoff: Date) {
+  return { status: "ANALYZING" as const, updatedAt: { lt: cutoff }, ocrAttempts: { gte: MAX_OCR_RETRIES } };
+}
+
+/**
+ * Reproceso manual de una parada en ANALYZING, sin limite de intentos: la
+ * ejecucion colgada, si despierta, queda vallada por ocrAttempts.
+ */
+export function manualStuckAnalyzingWhere(invoiceId: string, cutoff: Date) {
+  return { id: invoiceId, status: "ANALYZING" as const, updatedAt: { lt: cutoff } };
+}
+
+export const OCR_RETRIES_EXHAUSTED_ERROR = "Se agotaron los reintentos del análisis";
 
 // ── Estados de origen de las acciones de la revision (F-015, F-008) ──────────
 
