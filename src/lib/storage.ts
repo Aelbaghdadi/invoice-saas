@@ -84,10 +84,13 @@ export async function getObjectBytes(key: string, options: { timeoutMs?: number 
  * ¿El error del SDK dice que el objeto no existe? Garage y el SDK lo dan de
  * varias formas: NoSuchKey en un GET, NotFound (sin cuerpo) en un HEAD, o
  * solo el 404 en los metadatos. Cualquier otra cosa es un fallo de verdad.
+ * NoSuchBucket tambien es un 404, pero es configuracion (bucket borrado o
+ * S3_BUCKET mal puesto), no "este objeto no esta".
  */
 export function isStorageNotFound(err: unknown): boolean {
   const e = err as { name?: unknown; Code?: unknown; $metadata?: { httpStatusCode?: unknown } } | null;
   if (!e || typeof e !== "object") return false;
+  if (e.name === "NoSuchBucket" || e.Code === "NoSuchBucket") return false;
   return e.name === "NoSuchKey" || e.name === "NotFound" || e.Code === "NoSuchKey"
     || e.$metadata?.httpStatusCode === 404;
 }
