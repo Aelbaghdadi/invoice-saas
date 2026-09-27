@@ -105,8 +105,17 @@ export async function appendAuditLogs(
     await writeAuditLogs(db, entries);
     return;
   }
-  await prisma.$transaction((tx) => writeAuditLogs(tx, entries));
+  await prisma.$transaction((tx) => writeAuditLogs(tx, entries), AUDIT_TRANSACTION_OPTIONS);
 }
+
+/**
+ * Transaccion propia de appendAuditLogs. Con el timeout por defecto de Prisma
+ * (5 s), unos miles de entradas con la BD cargada no caben: la llamada lanza
+ * despues de que el llamador ya ha escrito su cambio fuera de transaccion
+ * (p. ej. el reproceso masivo de «Error OCR», que ya ha pasado las facturas a
+ * UPLOADED y se queda sin programar el OCR).
+ */
+const AUDIT_TRANSACTION_OPTIONS = { timeout: 30_000, maxWait: 5_000 } as const;
 
 /**
  * Una consulta para las cabezas de todas las cadenas y un createMany por

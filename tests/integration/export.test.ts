@@ -32,8 +32,9 @@ async function seedValidated(n: number, opts: { zeroTotals?: number } = {}) {
   }));
   for (let i = 0; i < rows.length; i += 1000) await prisma.invoice.createMany({ data: rows.slice(i, i + 1000) });
   const invoices = await prisma.invoice.findMany({ where: { clientId: w.client.id, periodMonth: 4 }, select: { id: true } });
-  // Cadena de auditoria previa: tres eslabones por factura.
-  await appendAuditLogs(invoices.flatMap((inv) => [
+  // Cadena de auditoria previa: tres eslabones por factura. En tandas, para
+  // que la siembra no dependa del timeout de la transaccion de appendAuditLogs.
+  for (let i = 0; i < invoices.length; i += 500) await appendAuditLogs(invoices.slice(i, i + 500).flatMap((inv) => [
     { invoiceId: inv.id, userId: w.worker.id, field: "status", oldValue: "PENDING_REVIEW", newValue: "VALIDATED" },
     { invoiceId: inv.id, userId: w.worker.id, field: "invoiceNumber", oldValue: null, newValue: "x" },
     { invoiceId: inv.id, userId: w.worker.id, field: "totalAmount", oldValue: null, newValue: "121" },
