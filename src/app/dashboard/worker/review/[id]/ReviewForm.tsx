@@ -1883,7 +1883,9 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                     Operación intracomunitaria con IVA declarado: estas operaciones suelen ir con IVA 0%. Revisa el desglose antes de exportar.
                     <button
                       type="button"
-                      onClick={() => setVatLines((prev) => prev.map((l) => ({ ...l, vatRate: "0", vatAmount: "0" })))}
+                      // Solo las filas con base: a la fila vacia le dejaba % y cuota
+                      // y la convertia en una linea incompleta (F-014).
+                      onClick={() => setVatLines((prev) => prev.map((l) => (l.taxBase.trim() ? { ...l, vatRate: "0", vatAmount: "0" } : l)))}
                       className="ml-1 rounded-md border border-amber-300 bg-amber-50 px-2 py-0.5 font-semibold text-amber-700 hover:bg-amber-100"
                     >
                       Poner IVA a 0%
