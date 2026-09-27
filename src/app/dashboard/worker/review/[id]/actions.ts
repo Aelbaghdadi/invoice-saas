@@ -32,6 +32,7 @@ import {
 } from "@/lib/intracomGoods";
 import { normalizeCurrency } from "@/lib/currency";
 import { isInvoiceBalanced } from "@/lib/invoiceBalance";
+import { parseVatLineInputs } from "@/lib/vatLineInput";
 import { applyRectificativeSign } from "@/lib/rectificative";
 import { foldSurchargeLines, completeReadSurcharges, surchargeAuditValue } from "@/lib/equivalenceSurcharge";
 import { exportFingerprint, type FingerprintInvoice } from "@/lib/exportFingerprint";
@@ -159,41 +160,16 @@ type ParsedVatLine = {
   equivalenceSurchargeAmount: number | null;
 };
 
-/** Parsea el JSON de lineas, descarta las vacias y normaliza a numeros.
- *  Devuelve [] si el JSON es invalido o no hay nada util. */
-function parseVatLines(raw: string): ParsedVatLine[] {
-  if (!raw) return [];
-  let arr: unknown;
-  try { arr = JSON.parse(raw); } catch { return []; }
-  if (!Array.isArray(arr)) return [];
-  const lines: ParsedVatLine[] = [];
-  for (const item of arr) {
-    if (!item || typeof item !== "object") continue;
-    const o = item as Record<string, unknown>;
-    const tb = typeof o.taxBase === "string" ? o.taxBase.trim() : "";
-    const vr = typeof o.vatRate === "string" ? o.vatRate.trim() : "";
-    const va = typeof o.vatAmount === "string" ? o.vatAmount.trim() : "";
-    // Linea vacia: la ignoramos silenciosamente para que el form pueda
-    // tener una fila placeholder sin guardarla.
-    if (!tb && !vr && !va) continue;
-    const taxBase = parseFloat(tb.replace(",", "."));
-    const vatRate = parseFloat(vr.replace(",", "."));
-    const vatAmount = parseFloat(va.replace(",", "."));
-    if (isNaN(taxBase) || isNaN(vatRate) || isNaN(vatAmount)) continue;
-    const sr = typeof o.equivalenceSurchargeRate === "string" ? o.equivalenceSurchargeRate.trim() : "";
-    const sa = typeof o.equivalenceSurchargeAmount === "string" ? o.equivalenceSurchargeAmount.trim() : "";
-    const srNum = sr ? parseFloat(sr.replace(",", ".")) : NaN;
-    const saNum = sa ? parseFloat(sa.replace(",", ".")) : NaN;
-    lines.push({
-      taxBase, vatRate, vatAmount,
-      equivalenceSurchargeRate:   isNaN(srNum) ? null : srNum,
-      equivalenceSurchargeAmount: isNaN(saNum) ? null : saNum,
-    });
-  }
+/** Lineas del formulario a numeros. Una linea a medio rellenar es un error
+ *  (F-014): antes se descartaba en silencio y la factura se guardaba con una
+ *  linea de menos. */
+function parseVatLines(raw: string): { lines: ParsedVatLine[] } | { error: string } {
+  const parsed = parseVatLineInputs(raw);
+  if ("error" in parsed) return parsed;
   // La IA devuelve a veces el recargo como si fuera otra linea de IVA (tipo
   // 5,2 / 1,4 / 0,5) y el formulario la reenvia tal cual. Se pliega sobre su
   // linea antes de guardar: en A3 seria un IVA que no existe.
-  return completeReadSurcharges(foldSurchargeLines(lines).lines);
+  return { lines: completeReadSurcharges(foldSurchargeLines(parsed.lines).lines) };
 }
 
 /**
@@ -302,7 +278,9 @@ async function parseAndSave(
     return isNaN(d.getTime()) ? null : d;
   };
 
-  const vatLines = parseVatLines(data.vatLines);
+  const parsedLines = parseVatLines(data.vatLines);
+  if ("error" in parsedLines) return { error: parsedLines.error };
+  const vatLines = parsedLines.lines;
   const isRectificativeFlag = data.isRectificative === "1";
 
   // Validacion de cada linea de IVA antes de calcular nada. Permitimos

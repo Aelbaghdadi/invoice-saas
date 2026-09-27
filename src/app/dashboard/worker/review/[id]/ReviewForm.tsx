@@ -41,6 +41,7 @@ import {
 } from "@/lib/invoiceStatuses";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { invoiceBalanceDiffCents, isInvoiceBalanced } from "@/lib/invoiceBalance";
+import { vatLinesProblem } from "@/lib/vatLineInput";
 import { sanitizeAccountingAccountInput, padAccountingAccount } from "@/lib/accountingAccount";
 import {
   isIntracomOperation,
@@ -741,7 +742,10 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     total: totalNum,
   };
   const balanceDiffCents = invoiceBalanceDiffCents(balanceInput);
-  const mathOk = hasValues ? isInvoiceBalanced(balanceInput) : null;
+  // Una linea a medio rellenar no cuadra nunca: el servidor no la guarda
+  // (F-014), asi que el semaforo tampoco puede salir en verde con ella.
+  const vatLineIssue = vatLinesProblem(vatLines);
+  const mathOk = vatLineIssue ? false : hasValues ? isInvoiceBalanced(balanceInput) : null;
   // Lo que suman las lineas, para ensenarlo junto al total cuando no cuadra.
   const calculado = vatTotals.sumBase + vatTotals.sumAmount + vatTotals.sumSurcharge - retentionAmount;
 
@@ -903,6 +907,11 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       error(saveBlock);
       return;
     }
+    if (vatLineIssue) {
+      triggerShake("math");
+      error(`No se han guardado los cambios: ${vatLineIssue}`);
+      return;
+    }
     startSave(async () => {
       const res = await saveInvoiceFields(null, buildFormData());
       setSaveState(res);
@@ -997,6 +1006,11 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     if (cifConflict) {
       triggerShake("cif");
       error("El CIF coincide con el del cliente: corrígelo antes de validar.");
+      return false;
+    }
+    if (vatLineIssue) {
+      triggerShake("math");
+      error(vatLineIssue);
       return false;
     }
     if (mathOk === false) {
@@ -2338,7 +2352,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
             {/* Semaforo de cuadre matematico. Se muestra aqui, justo encima de
                 las cuentas contables, para que se vea sin desplazarse hasta
                 arriba en pantallas pequenas (a peticion de una gestora). */}
-            {hasValues && (
+            {(hasValues || vatLineIssue) && (
               <div className={`flex items-center gap-2.5 rounded-xl px-4 py-3 ${
                 mathOk ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"
               } ${shake === "math" ? "animate-shake" : ""}`}>
@@ -2350,7 +2364,9 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                   {/* El recargo cuenta en el calculo desde que va por linea:
                       sin el, el mensaje de error ensenaba una diferencia que
                       no cuadraba con la que hacia ponerse rojo al semaforo. */}
-                  {mathOk
+                  {vatLineIssue
+                    ? vatLineIssue
+                    : mathOk
                     ? `Validación matemática correcta — Σ Bases + Σ Cuotas${vatTotals.sumSurcharge !== 0 ? " + Σ Recargo" : ""}${retentionAmount > 0 ? " − Retención" : ""} = Total`
                     : `No cuadra: las líneas suman ${formatEur(calculado)} y el total es ${formatEur(totalNum)} (diferencia: ${formatEur(Math.abs(balanceDiffCents) / 100)})`
                   }
@@ -2576,6 +2592,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                         ? "Quitar el rechazo y validar la factura (pide confirmación)"
                       : cifConflict
                         ? "Corrige el CIF antes de validar (coincide con el del cliente)"
+                        : vatLineIssue
+                          ? vatLineIssue
                         : mathOk === false
                           ? "El importe no cuadra: corrígelo antes de validar"
                           : accountsIncomplete
