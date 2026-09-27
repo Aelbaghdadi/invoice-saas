@@ -187,61 +187,75 @@ export async function classifyInvoice(invoiceId: string, clientId: string): Prom
   // Todo en una transaccion que empieza por reclamar la factura: si dos
   // gestores la clasifican a la vez, solo la primera escribe incidencias,
   // historial y auditoria (antes salian duplicados).
-  const claimed = await prisma.$transaction(async (tx) => {
-    const claim = await tx.invoice.updateMany({
-      where: { id: invoiceId, status: "PENDING_ROUTING" },
-      data: {
-        clientId,
-        ...clientSide,
-        type: effectiveType,
-        typeUnconfirmed: typeStillUnconfirmed,
-        operationType: proposal.operationType,
-        intracomGoodsType: proposal.goodsType,
-        intracomGoodsSource: proposal.source,
-        isValid,
-        status: targetStatus,
-        routingCandidateIds: [],
-        routingReason: null,
-      },
-    });
-    if (claim.count !== 1) return false;
-
-    const issues = [
-      ...(duplicateDescription ? [{ type: "POSSIBLE_DUPLICATE" as const, description: duplicateDescription }] : []),
-      ...mathProblems,
-    ];
-    if (issues.length > 0) {
-      await tx.invoiceIssue.createMany({ data: issues.map((issue) => ({ invoiceId, ...issue })) });
-    }
-    for (const p of surchargeProposals) {
-      await tx.invoiceVatLine.update({
-        where: { id: lines[p.index].id },
-        data: { equivalenceSurchargeRate: p.rate, equivalenceSurchargeAmount: p.amount },
+  let claimed: boolean;
+  try {
+    claimed = await prisma.$transaction(async (tx) => {
+      const claim = await tx.invoice.updateMany({
+        where: { id: invoiceId, status: "PENDING_ROUTING" },
+        data: {
+          clientId,
+          ...clientSide,
+          type: effectiveType,
+          typeUnconfirmed: typeStillUnconfirmed,
+          operationType: proposal.operationType,
+          intracomGoodsType: proposal.goodsType,
+          intracomGoodsSource: proposal.source,
+          isValid,
+          status: targetStatus,
+          routingCandidateIds: [],
+          routingReason: null,
+        },
       });
-    }
-    await tx.invoiceStatusHistory.create({
-      data: {
+      if (claim.count !== 1) return false;
+
+      const issues = [
+        ...(duplicateDescription ? [{ type: "POSSIBLE_DUPLICATE" as const, description: duplicateDescription }] : []),
+        ...mathProblems,
+      ];
+      if (issues.length > 0) {
+        await tx.invoiceIssue.createMany({ data: issues.map((issue) => ({ invoiceId, ...issue })) });
+      }
+      for (const p of surchargeProposals) {
+        await tx.invoiceVatLine.update({
+          where: { id: lines[p.index].id },
+          data: { equivalenceSurchargeRate: p.rate, equivalenceSurchargeAmount: p.amount },
+        });
+      }
+      await tx.invoiceStatusHistory.create({
+        data: {
+          invoiceId,
+          fromStatus: "PENDING_ROUTING",
+          toStatus: targetStatus,
+          changedBy: session.user.id,
+          reason: `Clasificada manualmente a ${client.name}`,
+        },
+      });
+      await appendAuditLogs([{
         invoiceId,
-        fromStatus: "PENDING_ROUTING",
-        toStatus: targetStatus,
-        changedBy: session.user.id,
-        reason: `Clasificada manualmente a ${client.name}`,
-      },
-    });
-    await appendAuditLogs([{
-      invoiceId,
-      userId: session.user.id,
-      field: "status",
-      oldValue: "PENDING_ROUTING",
-      newValue: targetStatus,
-    }], tx);
-    return true;
-  });
+        userId: session.user.id,
+        field: "status",
+        oldValue: "PENDING_ROUTING",
+        newValue: targetStatus,
+      }], tx);
+      return true;
+    }, { timeout: 15_000, maxWait: 5_000 });
+  } catch (err) {
+    // Una server action no lanza a la UI (AGENTS.md): el gestor ve un error
+    // y puede reintentar, y la transaccion no ha dejado nada a medias.
+    console.error("classifyInvoice", invoiceId, err);
+    return { error: "No se pudo clasificar la factura. Inténtalo de nuevo." };
+  }
   if (!claimed) return { error: "La factura no está pendiente de clasificar" };
 
   // Aprender: este proveedor (otra parte) va a esta empresa, para auto-rutear
   // las siguientes facturas suyas. No-op si no se leyó el CIF del proveedor.
-  await learnProviderRule(client.advisoryFirmId, otherCif, clientId);
+  // La clasificacion ya esta guardada: si aprender falla, no se deshace ni
+  // se le dice al gestor que no se pudo.
+  try {
+    await learnProviderRule(client.advisoryFirmId, otherCif, clientId);
+  } catch (err) {
+    console.error("learnProviderRule", invoiceId, err);
+  }
 
   revalidatePath("/dashboard/worker/clasificar");
   revalidatePath("/dashboard/worker/invoices");
