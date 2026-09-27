@@ -726,8 +726,8 @@ describe("OCR y rectificativas (F-012): no se cambian signos por el texto", () =
     return prisma.invoice.findUniqueOrThrow({ where: { id: inv }, include: { issues: true, vatLines: true } });
   }
 
-  it("«no es rectificativa» en el texto: los importes quedan en positivo y sale la incidencia", async () => {
-    const after = await ocr("FACTURA Nº R-1. Esta factura no es rectificativa.", 200, 42, 242);
+  it("«FACTURA RECTIFICATIVA» en el texto: los importes quedan en positivo y sale la incidencia", async () => {
+    const after = await ocr("FACTURA RECTIFICATIVA Nº R-1. Rectifica a la factura F-1.", 200, 42, 242);
     expect([Number(after.taxBase), Number(after.vatAmount), Number(after.totalAmount)]).toEqual([200, 42, 242]);
     expect(after.vatLines.map((l) => Number(l.taxBase))).toEqual([200]);
     expect(after.isRectificative).toBe(false);
@@ -739,6 +739,11 @@ describe("OCR y rectificativas (F-012): no se cambian signos por el texto", () =
     const after = await ocr("ABONO", -200, -42, -242);
     expect([Number(after.taxBase), Number(after.totalAmount)]).toEqual([-200, -242]);
     expect(after.issues.map((i) => i.description)).toEqual([expect.stringMatching(/^La factura trae importes negativos/)]);
+  });
+
+  it("«no es rectificativa» en el texto: sin incidencias", async () => {
+    const after = await ocr("FACTURA Nº R-1. Esta factura no es rectificativa.", 200, 42, 242);
+    expect(after.issues.map((i) => i.description)).toEqual([]);
   });
 
   it("una factura normal: sin incidencias", async () => {

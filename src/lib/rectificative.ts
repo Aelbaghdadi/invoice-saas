@@ -29,7 +29,14 @@ export function textMentionsRectificative(rawText: string | null | undefined): b
   const norm = rawText
     .toLowerCase()
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "");
+    .replace(/[̀-ͯ]/g, "")
+    // pdfjs deja dobles espacios: «Factura  de  abono» no casaba.
+    .replace(/\s+/g, " ")
+    // Las negaciones son justo lo contrario, y con el texto de los PDF ya
+    // activo (F-013) salen: «no es rectificativa», «Rectificativa: No»,
+    // «Tipo de factura: Ordinaria · Rectificativa: No».
+    .replace(/\bno (?:es )?(?:una )?(?:factura )?(?:rectificativ\w*|nota de credito|factura de abono)/g, " ")
+    .replace(/(?:rectificativ\w*|nota de credito|factura de abono) ?[:=] ?(?:no|false)\b/g, " ");
   return RECTIFICATIVE_RE.test(norm);
 }
 

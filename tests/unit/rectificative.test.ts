@@ -114,7 +114,8 @@ describe("rectificativeSignHint (F-012: el OCR no cambia signos)", () => {
   });
 
   it("con la mención en el texto y todo en positivo: «Parece rectificativa: revisa el signo»", () => {
-    expect(rectificativeSignHint(amounts(100, 21, 121), "Esta factura no es rectificativa")).toMatch(/^Parece rectificativa: revisa el signo\./);
+    expect(rectificativeSignHint(amounts(100, 21, 121), "FACTURA RECTIFICATIVA Nº R-1")).toMatch(/^Parece rectificativa: revisa el signo\./);
+    expect(rectificativeSignHint(amounts(100, 21, 121), "Esta factura no es rectificativa")).toBeNull();
   });
 
   it("con importes negativos: marcar la casilla o corregir el signo", () => {
@@ -123,5 +124,29 @@ describe("rectificativeSignHint (F-012: el OCR no cambia signos)", () => {
 
   it("una factura normal: nada", () => {
     expect(rectificativeSignHint(amounts(100, 21, 121), "Forma de pago: abono en cuenta")).toBeNull();
+  });
+});
+
+describe("textMentionsRectificative: negaciones y espacios (revisión 1 del PR #9)", () => {
+  it("las negaciones no cuentan", () => {
+    for (const text of [
+      "Esta factura no es rectificativa",
+      "Rectificativa: No",
+      "Tipo de factura: Ordinaria · Rectificativa: No",
+      "No es una factura rectificativa",
+      "RECTIFICATIVA = NO",
+    ]) {
+      expect(textMentionsRectificative(text), text).toBe(false);
+    }
+  });
+
+  it("los dobles espacios de pdfjs, sí", () => {
+    expect(textMentionsRectificative("Factura  de  abono Nº 12")).toBe(true);
+    expect(textMentionsRectificative("NOTA   DE CRÉDITO")).toBe(true);
+  });
+
+  it("una rectificativa de verdad sigue contando, aunque el texto diga «no» en otra parte", () => {
+    expect(textMentionsRectificative("FACTURA RECTIFICATIVA R-1 · No incluye portes")).toBe(true);
+    expect(textMentionsRectificative("Rectificativa: Sí")).toBe(true);
   });
 });
