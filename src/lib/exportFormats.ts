@@ -72,11 +72,15 @@ function getExportLines(inv: InvoiceWithClient): ExportVatLine[] {
 
 /** ¿Todo a 0? Bases, cuotas, recargo y retencion. Solo asi una rectificativa
  *  a cero no tiene nada que llevar a A3 (revision 2 del PR #7). */
-function allAmountsZero(inv: InvoiceWithClient): boolean {
-  const zero = (v: number | null | undefined) => v == null || toCents(Number(v)) === 0;
+const isZeroAmount = (v: number | null | undefined) => v == null || toCents(Number(v)) === 0;
+
+function linesAllZero(inv: InvoiceWithClient): boolean {
   return checkedLines(inv).every((l) =>
-    zero(l.taxBase) && zero(l.vatAmount) && zero(l.equivalenceSurchargeAmount))
-    && zero(inv.irpfAmount == null ? null : Number(inv.irpfAmount));
+    isZeroAmount(l.taxBase) && isZeroAmount(l.vatAmount) && isZeroAmount(l.equivalenceSurchargeAmount));
+}
+
+function allAmountsZero(inv: InvoiceWithClient): boolean {
+  return linesAllZero(inv) && isZeroAmount(inv.irpfAmount == null ? null : Number(inv.irpfAmount));
 }
 
 /** Lineas para vatLineMismatches: como getExportLines, pero sin convertir
@@ -509,10 +513,14 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
     const totalNum = Number(inv.totalAmount ?? 0);
     if (outside === "total_cero") {
       // Una rectificativa a cero con importes (-100 al 21 % y +110 al 10 %)
-      // cuadra, pero A3 nunca recibiria esos importes del 303.
-      blockers.unshift(inv.isRectificative
-        ? "Rectificativa con total 0 pero con importes en las líneas: revísala"
-        : "Total = 0: no entra en el Excel ni se marca como exportada (A3 no acepta importes cero). Corrígela en la revisión");
+      // cuadra, pero A3 nunca recibiria esos importes del 303. Si A3 admite
+      // filas con base y total 0 esta pendiente del asesor: hasta entonces se
+      // queda fuera y el texto dice que hacer con ella.
+      blockers.unshift(!inv.isRectificative
+        ? "Total = 0: no entra en el Excel ni se marca como exportada (A3 no acepta importes cero). Corrígela en la revisión"
+        : linesAllZero(inv)
+          ? "Rectificativa con total 0 pero con retención: A3 no admite total 0; regístrala a mano en A3"
+          : "Rectificativa con total 0 pero con importes en las líneas: A3 no admite total 0; regístrala a mano en A3");
     }
 
     // Un "tipo de IVA" que en realidad es el del recargo (5,2 / 1,4 / 0,5)
