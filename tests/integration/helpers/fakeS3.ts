@@ -17,7 +17,7 @@ export type FakeS3 = {
   endpoint: string;
   keys: () => string[];
   heldGets: () => number;
-  releaseGets: (opts?: { fail?: boolean }) => void;
+  releaseGets: (opts?: { fail?: boolean; count?: number }) => void;
   put: (key: string, body: Buffer | string) => void;
   setMode: (mode: string) => void;
   clear: () => void;
@@ -83,8 +83,9 @@ export async function startFakeS3(bucket: string): Promise<FakeS3> {
     // Claves sin el bucket, como las ve la app.
     keys: () => [...store.keys()].filter((k) => k.startsWith(prefix)).map((k) => k.slice(prefix.length)),
     heldGets: () => held.length,
-    releaseGets: ({ fail: failThem = false } = {}) => {
-      for (const get of held.splice(0)) (failThem ? get.fail : get.respond)();
+    // En orden de llegada; `count` suelta solo los primeros.
+    releaseGets: ({ fail: failThem = false, count } = {}) => {
+      for (const get of held.splice(0, count ?? held.length)) (failThem ? get.fail : get.respond)();
     },
     put: (key, body) => store.set(`${prefix}${key}`, Buffer.from(body)),
     setMode: (next) => {

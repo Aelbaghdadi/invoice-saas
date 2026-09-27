@@ -109,6 +109,38 @@ describe("valla del OCR (ocrAttempts)", () => {
     expect(s.audit).toHaveLength(1);
   });
 
+  it("la ejecución vieja termina mientras la nueva sigue analizando: la valla es el token ocrAttempts", async () => {
+    // Con solo { id, status: "ANALYZING" } la vieja escribiria aqui: la
+    // factura esta en ANALYZING, pero por el claim de la nueva.
+    fakeS3().setMode("hold");
+    const vieja = inFlight(processInvoice(id, w.worker.id)); // ocrAttempts 1
+    await vi.waitFor(() => expect(fakeS3().heldGets()).toBe(1));
+    await prisma.invoice.updateMany({ where: { id, status: "ANALYZING" }, data: { status: "UPLOADED" } });
+    const nueva = inFlight(processInvoice(id, w.worker.id)); // ocrAttempts 2
+    await vi.waitFor(() => expect(fakeS3().heldGets()).toBe(2));
+
+    // Termina la vieja (lee «F-VIEJA») con la nueva aun en ANALYZING.
+    fakeS3().put("k-xml", facturaeXml({ buyerCif: w.client.cif, number: "F-VIEJA" }));
+    fakeS3().releaseGets({ count: 1 });
+    await vieja;
+    const trasLaVieja = await state();
+    expect(trasLaVieja.status).toBe("ANALYZING");
+    expect(trasLaVieja.ocrAttempts).toBe(2);
+    expect(trasLaVieja.invoiceNumber).toBeNull();
+    expect(trasLaVieja.extractions).toBe(0);
+    expect(trasLaVieja.audit).toEqual([]);
+
+    // Termina la nueva (lee «F-NUEVA»): es la unica que escribe.
+    fakeS3().put("k-xml", facturaeXml({ buyerCif: w.client.cif, number: "F-NUEVA" }));
+    fakeS3().releaseGets();
+    await nueva;
+    const s = await state();
+    expect(["PENDING_REVIEW", "NEEDS_ATTENTION"]).toContain(s.status);
+    expect(s.invoiceNumber).toBe("F-NUEVA");
+    expect(s.extractions).toBe(1);
+    expect(s.audit).toHaveLength(1);
+  });
+
   it("un dato del OCR que desborda la columna (P2020) acaba en ERR-OCR-002", async () => {
     fakeS3().put("k-xml", facturaeXml({ buyerCif: w.client.cif, taxRate: "1000.00" }));
     await processInvoice(id, w.worker.id);
