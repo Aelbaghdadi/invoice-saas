@@ -7,7 +7,7 @@ import {
   extractInvoiceFromXml,
 } from "@/lib/ocr";
 import {
-  extractFromPdfTextWithGemini,
+  extractPdfWithGemini,
   extractFromDocumentWithGemini,
 } from "@/lib/ocrLlm";
 import { detectIssues } from "@/lib/issueDetector";
@@ -107,17 +107,7 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
 
           if (ft === "application/pdf" || invoice.filename.endsWith(".pdf")) {
             if (process.env.GEMINI_API_KEY) {
-              try {
-                source = "gemini_text";
-                ocrResult = await extractFromPdfTextWithGemini(base64);
-              } catch (e) {
-                if (e instanceof Error && e.message === "PDF_ESCANEADO") {
-                  source = "gemini_multimodal";
-                  ocrResult = await extractFromDocumentWithGemini(base64, "application/pdf");
-                } else {
-                  throw e;
-                }
-              }
+              ({ source, result: ocrResult } = await extractPdfWithGemini(base64));
             } else {
               source = "document_ai";
               ocrResult = await extractInvoiceFromPdf(base64);

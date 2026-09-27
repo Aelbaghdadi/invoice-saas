@@ -5,8 +5,36 @@ import { normalizeGoodsType } from "./intracomGoods";
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL ?? "gemini-2.5-flash-lite";
 
-// PDFs con menos de este umbral de caracteres se consideran escaneados
+// PDFs con menos de este umbral de caracteres (sin espacios) se consideran escaneados
 const MIN_TEXT_CHARS = 100;
+
+/** NIF, CIF, NIE o VAT europeo (este con al menos un digito). */
+const TAX_ID_RE = /\b(?:[A-HJ-NP-SUVW]\d{7}[0-9A-J]|\d{8}[A-Z]|[XYZ]\d{7}[A-Z]|[A-Z]{2}(?=[A-Z0-9]*\d)[A-Z0-9]{8,12})\b/;
+/** Un importe con dos decimales: 121,00 / 1.234,56 / -21.00. */
+const AMOUNT_RE = /-?\d[\d.]*[.,]\d{2}\b/;
+/** Caracteres que salen de una capa de texto rota: U+FFFD y uso privado. */
+const BROKEN_CHAR_RE = /[\uFFFD\uE000-\uF8FF]/g;
+
+/**
+ * ¿Vale el texto de un PDF para mandarlo a Gemini en vez de la imagen?
+ * Solo la longitud no basta (revision 1 del PR #9): un escaneado con un
+ * sello de registro en texto, una capa OCR mala («T0TAL 217,8O») o una
+ * cabecera en texto con el cuadro de importes como imagen iban por texto y
+ * Gemini no veia los importes. Exige texto de verdad, un importe y un NIF.
+ */
+export function isUsefulPdfText(text: string): boolean {
+  const compact = text.replace(/\s+/g, "");
+  if (compact.length <= MIN_TEXT_CHARS) return false;
+  const broken = compact.match(BROKEN_CHAR_RE)?.length ?? 0;
+  if (broken / compact.length > 0.02) return false;
+  if (!AMOUNT_RE.test(text)) return false;
+  // «B-12345674» o «B 12345674» tambien valen.
+  return TAX_ID_RE.test(text.toUpperCase().replace(/([A-Z])[-.\s](?=\d)/g, "$1"));
+}
+
+/** Errores de la via de texto que mandan el PDF a la multimodal. */
+export const PDF_ESCANEADO = "PDF_ESCANEADO";
+export const PDF_TEXTO_INCOMPLETO = "PDF_TEXTO_INCOMPLETO";
 
 type PdfTextItem = {
   str: string;
@@ -481,13 +509,19 @@ export function extractGeminiBoundingBoxes(rawJson: string): FieldBoundingBoxes 
  */
 export async function extractFromPdfTextWithGemini(base64: string): Promise<OcrResult> {
   const { text, items } = await extractPdfTextAndItems(base64);
-  if (text.length < MIN_TEXT_CHARS) {
-    throw new Error("PDF_ESCANEADO");
+  if (!isUsefulPdfText(text)) {
+    throw new Error(PDF_ESCANEADO);
   }
 
   const { extracted } = await callGemini([
     { text: `Extrae los campos de esta factura:\n\n${text}` },
   ]);
+  // Con el texto no ha salido lo basico: mejor la imagen.
+  const allKeyFieldsNull = [extracted.issuerName, extracted.issuerCif, extracted.invoiceNumber, extracted.totalAmount]
+    .every((v) => v == null);
+  if (extracted.totalAmount == null || extracted.issuerCif == null || allKeyFieldsNull) {
+    throw new Error(PDF_TEXTO_INCOMPLETO);
+  }
 
   const bboxes = findBboxesInPdf(extracted, items);
 
@@ -518,4 +552,20 @@ export async function extractFromDocumentWithGemini(
     extracted,
     rawJson: JSON.stringify({ source: "gemini_multimodal", mimeType, boundingBoxes: bboxes }),
   };
+}
+
+/**
+ * PDF con Gemini: primero por texto y, si el PDF es escaneado, su texto no
+ * vale o con el texto no sale lo basico, por la imagen. Devuelve la via
+ * usada, que se guarda en InvoiceExtraction.source.
+ */
+export async function extractPdfWithGemini(base64: string): Promise<{ source: "gemini_text" | "gemini_multimodal"; result: OcrResult }> {
+  try {
+    return { source: "gemini_text", result: await extractFromPdfTextWithGemini(base64) };
+  } catch (e) {
+    if (e instanceof Error && (e.message === PDF_ESCANEADO || e.message === PDF_TEXTO_INCOMPLETO)) {
+      return { source: "gemini_multimodal", result: await extractFromDocumentWithGemini(base64, "application/pdf") };
+    }
+    throw e;
+  }
 }
