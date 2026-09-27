@@ -6,6 +6,7 @@ import type { AddressInfo } from "node:net";
  * firmas. El modo simula caidas:
  *  - "ok": normal.
  *  - "slow:<ms>": los GET responden bien pero tarde (un OCR o un split lento).
+ *  - "slowdown:<ms>": los GET responden tarde y con 500 (un OCR que falla).
  *  - "down": todo responde 500.
  */
 export type FakeS3 = {
@@ -54,7 +55,12 @@ export async function startFakeS3(bucket: string): Promise<FakeS3> {
         res.end(req.method === "HEAD" ? undefined : obj);
       });
     };
-    if (mode === "slow" && req.method === "GET") setTimeout(respond, delayMs);
+    if (mode === "slowdown" && req.method === "GET") {
+      setTimeout(() => {
+        res.writeHead(500, { "Content-Type": "application/xml" });
+        res.end("<Error><Code>InvalidArgument</Code><Message>fichero roto</Message></Error>");
+      }, delayMs);
+    } else if (mode === "slow" && req.method === "GET") setTimeout(respond, delayMs);
     else respond();
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
