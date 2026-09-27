@@ -155,13 +155,10 @@ function buildSearchCandidates(rawValue: string, field: string): string[] {
       const com2 = dot2.replace(".", ",");
       const dotN = String(n);
       const comN = dotN.replace(".", ",");
-      candidates.push(dot2, com2, dotN, comN);
-      candidates.push(dot2 + " €", com2 + " €", dot2 + "€", com2 + "€");
-      // Miles con punto: "1.234,56"
-      if (n >= 1000) {
-        const thousands = com2.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
-        candidates.push(thousands);
-      }
+      // Primero el formato español: es el que casi siempre aparece.
+      if (n >= 1000) candidates.push(com2.replace(/\B(?=(\d{3})+(?!\d))/g, ".")); // "1.234,56"
+      candidates.push(com2, comN, com2 + " €", com2 + "€");
+      candidates.push(dot2, dotN, dot2 + " €", dot2 + "€");
     }
   }
 
@@ -191,19 +188,24 @@ function mergedBox(span: PdfTextItem[]): BoundingBox {
   return { page: span[0].pageNum, x, y, width: xMax - x, height: yMax - y };
 }
 
-function searchInPdfItems(target: string, items: PdfTextItem[]): BoundingBox | null {
-  const n = (s: string) => s.trim().replace(/\s+/g, " ").toLowerCase();
-  const t = n(target);
+/** Un item con su texto ya normalizado: se normaliza una vez por PDF, no una
+ *  vez por candidato (con 2.754 items tardaba unos 2 s). */
+type SearchItem = { item: PdfTextItem; norm: string };
+const normalizeForSearch = (s: string) => s.trim().replace(/\s+/g, " ").toLowerCase();
+
+function searchInPdfItems(target: string, items: SearchItem[]): BoundingBox | null {
+  const t = normalizeForSearch(target);
   if (!t || t.length < 2) return null;
+  const box = (it: PdfTextItem): BoundingBox => ({ page: it.pageNum, x: it.x, y: it.y, width: it.w, height: it.h });
 
   // 1. Coincidencia exacta con un solo item
-  for (const it of items) {
-    if (n(it.str) === t) return { page: it.pageNum, x: it.x, y: it.y, width: it.w, height: it.h };
+  for (const { item, norm } of items) {
+    if (norm === t) return box(item);
   }
 
   // 2. El target está contenido en un solo item
-  for (const it of items) {
-    if (n(it.str).includes(t)) return { page: it.pageNum, x: it.x, y: it.y, width: it.w, height: it.h };
+  for (const { item, norm } of items) {
+    if (norm.indexOf(t) !== -1) return box(item);
   }
 
   // 3. Ventana deslizante sobre items consecutivos de la misma página
@@ -211,10 +213,10 @@ function searchInPdfItems(target: string, items: PdfTextItem[]): BoundingBox | n
     let concat = "";
     const span: PdfTextItem[] = [];
     for (let j = i; j < Math.min(i + 10, items.length); j++) {
-      if (items[j].pageNum !== items[i].pageNum) break;
-      concat += (j > i ? " " : "") + items[j].str;
-      span.push(items[j]);
-      if (n(concat).includes(t)) return mergedBox(span);
+      if (items[j].item.pageNum !== items[i].item.pageNum) break;
+      if (items[j].norm) concat += (concat ? " " : "") + items[j].norm;
+      span.push(items[j].item);
+      if (concat.indexOf(t) !== -1) return mergedBox(span);
     }
   }
 
@@ -241,11 +243,12 @@ function findBboxesFromValues(
   items: PdfTextItem[],
 ): FieldBoundingBoxes {
   const result: FieldBoundingBoxes = {};
+  const searchItems = items.map((item) => ({ item, norm: normalizeForSearch(item.str) }));
   for (const [field, val] of Object.entries(values)) {
     if (val == null) continue;
     const candidates = buildSearchCandidates(String(val), field);
     for (const candidate of candidates) {
-      const box = searchInPdfItems(candidate, items);
+      const box = searchInPdfItems(candidate, searchItems);
       if (box) { result[field] = box; break; }
     }
   }

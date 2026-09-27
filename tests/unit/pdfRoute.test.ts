@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { readFileSync } from "fs";
 import { PDFDocument, StandardFonts } from "pdf-lib";
-import { extractPdfTextAndItems, extractPdfWithGemini, isUsefulPdfText, pagesToRead } from "@/lib/ocrLlm";
+import { computeBboxesFromPdf, extractPdfTextAndItems, extractPdfWithGemini, isUsefulPdfText, pagesToRead } from "@/lib/ocrLlm";
 
 const factura = {
   issuerName: "Proveedor SL", issuerCif: "B12345674", receiverName: "Cliente SA", receiverCif: "A58818501",
@@ -123,5 +123,16 @@ describe("límites de la extracción (revisión 1 del PR #9, punto 2)", () => {
     await extractPdfWithGemini(await pdfWithText(Array.from({ length: 70 }, () => line), 6));
     expect(sent).toBeGreaterThan(39_000);
     expect(sent).toBeLessThanOrEqual(40_000 + "Extrae los campos de esta factura:\n\n".length);
+  });
+});
+
+describe("cajas del visor (revisión 1 del PR #9, punto 3)", () => {
+  it("encuentra el CIF y el total (en formato español) en un PDF de la demo", async () => {
+    const boxes = await computeBboxesFromPdf(
+      readFileSync("scripts/demo-pdfs/rectificativas/4-multi-iva-mixto.pdf").toString("base64"),
+      { issuerCif: "A12345674", totalAmount: 38.5, invoiceNumber: "SM-2026-0142-R" },
+    );
+    expect(Object.keys(boxes).sort()).toEqual(["invoiceNumber", "issuerCif", "totalAmount"]);
+    expect(boxes.totalAmount!.width).toBeGreaterThan(0);
   });
 });
