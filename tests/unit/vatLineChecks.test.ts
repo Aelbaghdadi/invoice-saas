@@ -70,14 +70,17 @@ describe("vatLineMismatches (F-022)", () => {
 });
 
 describe("validateForA3Export con recargo sin %", () => {
-  it("no avisa «la base × 0 %»: el recargo que no está se queda en null, como en el formulario", () => {
+  it("no avisa «la base × 0 %», pero sí de que A3 recibirá 0 % con esa cuota", () => {
     const inv = {
       id: "inv-2", type: "PURCHASE", invoiceDate: new Date("2026-04-15"), invoiceNumber: "F-002",
       issuerName: "Suministros S.L.", issuerCif: "B12345674", totalAmount: 126.2,
       supplierAccount: "4000001", expenseAccount: "6000001", client: { id: "c1", name: "ACME SL" },
       vatLines: [{ taxBase: 100, vatRate: 21, vatAmount: 21, equivalenceSurchargeRate: null, equivalenceSurchargeAmount: 5.2 }],
     } as unknown as InvoiceWithClient;
-    expect(validateForA3Export([inv])).toEqual([]);
+    expect(validateForA3Export([inv])).toEqual([{
+      invoiceId: "inv-2", invoiceNumber: "F-002", severity: "aviso", blockers: [],
+      warnings: ["Línea 1: cuota de recargo sin %: A3 recibirá 0 %"],
+    }]);
   });
 });
 

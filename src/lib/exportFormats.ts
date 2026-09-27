@@ -523,6 +523,13 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
     for (const m of vatLineMismatches(checkedLines(inv), inv.operationType)) {
       warnings.push(describeVatLineMismatch(m));
     }
+    // Cuota de recargo sin %: vatLineMismatches no la mira (no hay % con el
+    // que comparar), pero a A3 le llegaria M = 0 y N = la cuota.
+    checkedLines(inv).forEach((l, i) => {
+      if (l.equivalenceSurchargeRate == null && l.equivalenceSurchargeAmount != null && toCents(l.equivalenceSurchargeAmount) !== 0) {
+        warnings.push(`Línea ${i + 1}: cuota de recargo sin %: A3 recibirá 0 %`);
+      }
+    });
 
     // Base + IVA + Recargo - IRPF = Total. Suma sobre las lineas si las hay.
     if (inv.totalAmount && Math.abs(totalNum) >= 0.005) {

@@ -97,6 +97,10 @@ export function vatLineProblem(line: VatLineText, position: number): string | nu
   if (text(line.equivalenceSurchargeRate) && !text(line.equivalenceSurchargeAmount)) {
     return `La línea ${position} de IVA está incompleta: tiene % de recargo de equivalencia pero falta su cuota.`;
   }
+  // Y al reves: a A3 llegaria un 0 % con la cuota (revision 2 del PR #7).
+  if (text(line.equivalenceSurchargeAmount) && !text(line.equivalenceSurchargeRate)) {
+    return `La línea ${position} de IVA está incompleta: tiene cuota de recargo de equivalencia pero falta su %.`;
+  }
   return null;
 }
 

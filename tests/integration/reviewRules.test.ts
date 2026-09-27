@@ -81,6 +81,15 @@ describe("líneas de IVA incompletas (F-014)", () => {
     expect(r.error).toBe("La línea 1 de IVA tiene un valor que no es un número en la cuota de recargo.");
   });
 
+  it("cuota de recargo sin %: { error } (A3 recibiría 0 %)", async () => {
+    const r = await save({
+      vatLines: JSON.stringify([{ taxBase: "100", vatRate: "21", vatAmount: "21", equivalenceSurchargeRate: "", equivalenceSurchargeAmount: "5.2" }]),
+      totalAmount: "126.2",
+    });
+    expect(r.error).toBe("La línea 1 de IVA está incompleta: tiene cuota de recargo de equivalencia pero falta su %.");
+    expect((await row()).vatLines.map((l) => l.equivalenceSurchargeAmount)).toEqual([null]);
+  });
+
   it("una exenta con solo la base tampoco se pierde", async () => {
     const r = await save({
       vatLines: JSON.stringify([{ taxBase: "100", vatRate: "21", vatAmount: "21" }, { taxBase: "50", vatRate: "", vatAmount: "" }]),
