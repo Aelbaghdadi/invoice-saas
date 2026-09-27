@@ -43,6 +43,7 @@ import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { invoiceBalanceDiffCents, isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { parseVatLineInputs, vatLinesProblem } from "@/lib/vatLineInput";
 import { validationProblems } from "@/lib/invoiceRules";
+import { describeVatLineMismatch, vatLineMismatches, type VatLineMismatch } from "@/lib/vatLineChecks";
 import { sanitizeAccountingAccountInput, padAccountingAccount } from "@/lib/accountingAccount";
 import {
   isIntracomOperation,
@@ -746,6 +747,25 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   // Una linea a medio rellenar no cuadra nunca: el servidor no la guarda
   // (F-014), asi que el semaforo tampoco puede salir en verde con ella.
   const vatLineIssue = vatLinesProblem(vatLines);
+  // Cuota que no es base × % en alguna linea (F-022): marca la linea, no
+  // bloquea. Las lineas a medio rellenar ya las dice vatLineIssue.
+  const lineMismatches = useMemo(() => {
+    const num = (v: string) => (v.trim() === "" ? NaN : Number(v.replace(",", ".")));
+    const found: VatLineMismatch[] = [];
+    vatLines.forEach((l, index) => {
+      const [taxBase, vatRate, vatAmount] = [num(l.taxBase), num(l.vatRate), num(l.vatAmount)];
+      if ([taxBase, vatRate, vatAmount].some(Number.isNaN)) return;
+      const surchargeRate = num(l.equivalenceSurchargeRate);
+      const surchargeAmount = num(l.equivalenceSurchargeAmount);
+      const line = {
+        taxBase, vatRate, vatAmount,
+        equivalenceSurchargeRate: Number.isNaN(surchargeRate) ? null : surchargeRate,
+        equivalenceSurchargeAmount: Number.isNaN(surchargeAmount) ? null : surchargeAmount,
+      };
+      for (const m of vatLineMismatches([line], operationType)) found.push({ ...m, index });
+    });
+    return found;
+  }, [vatLines, operationType]);
   const mathOk = vatLineIssue ? false : hasValues ? isInvoiceBalanced(balanceInput) : null;
   // Lo que suman las lineas, para ensenarlo junto al total cuando no cuadra.
   const calculado = vatTotals.sumBase + vatTotals.sumAmount + vatTotals.sumSurcharge - retentionAmount;
@@ -2059,8 +2079,11 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                     else if (e.key === "2") { e.preventDefault(); updateVatLine(idx, "vatRate", "10"); }
                     else if (e.key === "3") { e.preventDefault(); updateVatLine(idx, "vatRate", "4"); }
                   };
+                  const mismatches = lineMismatches.filter((m) => m.index === idx);
+                  const vatMismatch = mismatches.some((m) => m.kind === "iva");
                   return (
-                    <div key={idx} className="grid grid-cols-[1fr_90px_1fr_28px] gap-2 items-start">
+                    <div key={idx} className="flex flex-col gap-1">
+                    <div className="grid grid-cols-[1fr_90px_1fr_28px] gap-2 items-start">
                       <input
                         type="number"
                         step="0.01"
@@ -2110,7 +2133,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                         step="0.01"
                         min={minVal}
                         id={idx === 0 ? "vatAmount" : undefined}
-                        className={inputClass}
+                        className={vatMismatch ? inputClass.replace("border-slate-200 bg-white", "border-amber-400 bg-amber-50") : inputClass}
                         value={line.vatAmount}
                         onChange={(e) => updateVatLine(idx, "vatAmount", e.target.value)}
                         placeholder="210.00"
@@ -2124,6 +2147,13 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
+                    </div>
+                    {mismatches.map((m) => (
+                      <p key={m.kind} className="flex items-center gap-1.5 px-1 text-[11px] text-amber-700">
+                        <AlertTriangle className="h-3 w-3 flex-shrink-0" />
+                        {describeVatLineMismatch(m)}. Revisa el tipo o la cuota.
+                      </p>
+                    ))}
                     </div>
                   );
                 })}

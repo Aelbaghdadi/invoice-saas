@@ -11,6 +11,7 @@ import {
 import { isForeignCurrency } from "@/lib/currency";
 import { goodsTypeFromSaleAccount } from "@/lib/intracomGoods";
 import { invoiceBalanceDiffCents, isInvoiceBalanced } from "@/lib/invoiceBalance";
+import { describeVatLineMismatch, vatLineMismatches } from "@/lib/vatLineChecks";
 import { formatEur } from "@/lib/format";
 import { findNumberingGaps } from "@/lib/invoiceNumbering";
 import { isStandardVatRate, isSurchargeRate } from "@/lib/equivalenceSurcharge";
@@ -406,6 +407,12 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
             ? ": parece el recargo de equivalencia metido como línea de IVA"
             : ""),
       );
+    }
+
+    // Cada cuota tiene que ser su base × % (F-022): el total no lo ve si las
+    // cuotas estan cruzadas entre tipos, y A3 se lleva el desglose tal cual.
+    for (const m of vatLineMismatches(getExportLines(inv), inv.operationType)) {
+      warnings.push(describeVatLineMismatch(m));
     }
 
     // Base + IVA + Recargo - IRPF = Total. Suma sobre las lineas si las hay.

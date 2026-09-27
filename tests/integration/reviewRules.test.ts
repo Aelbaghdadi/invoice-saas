@@ -6,6 +6,9 @@ import { makeFirm, makeInvoice, type FirmWorld } from "./helpers/factories";
 import { signInAs } from "./helpers/session";
 import { reviewForm, settleAction, validate } from "./helpers/reviewForm";
 import { saveInvoiceFields } from "@/app/dashboard/worker/review/[id]/actions";
+import { fakeS3 } from "./helpers/fakeS3";
+import { facturaeXml } from "./helpers/fixtures";
+import { processInvoice } from "@/lib/processInvoice";
 
 let w: FirmWorld;
 let id: string;
@@ -119,6 +122,37 @@ describe("validar exige lo mínimo en el servidor (F-009)", () => {
 
   it("una importación de un proveedor sin NIF español se valida", async () => {
     const r = await validate(await form({ issuerCif: "", operationType: "IMPORTACION" }));
+    expect(r.error).toBeNull();
+    expect((await row()).status).toBe("VALIDATED");
+  });
+});
+
+describe("cuota = base × % por línea (F-022)", () => {
+  it("el OCR la manda a «Requiere atención» con el aviso, aunque el total cuadre", async () => {
+    // Facturae con 100 al 10 % y cuota 21: el total (121) cuadra.
+    fakeS3().put("k-xml", facturaeXml({ buyerCif: w.client.cif, taxRate: "10.00" }));
+    const { id: nueva } = await makeInvoice(w.client, {
+      filename: "f.xml", storageKey: "k-xml", fileType: "application/xml", status: "UPLOADED",
+      invoiceNumber: null, invoiceDate: null, issuerName: null, issuerCif: null,
+      taxBase: null, vatRate: null, vatAmount: null, totalAmount: null,
+    });
+    await processInvoice(nueva, w.worker.id);
+    const inv = await prisma.invoice.findUniqueOrThrow({ where: { id: nueva }, include: { issues: true } });
+    expect(inv.status).toBe("NEEDS_ATTENTION");
+    expect(inv.issues.map((i) => [i.type, i.description])).toEqual([[
+      "MATH_MISMATCH",
+      "El desglose por tipo no cuadra. Línea 1: la cuota de IVA es 21,00 € y la base × 10 % da 10,00 €.",
+    ]]);
+  });
+
+  it("es un aviso: se puede validar igual", async () => {
+    const r = await validate(await form({
+      vatLines: JSON.stringify([
+        { taxBase: "100", vatRate: "21", vatAmount: "20" },
+        { taxBase: "200", vatRate: "10", vatAmount: "21" },
+      ]),
+      totalAmount: "341",
+    }));
     expect(r.error).toBeNull();
     expect((await row()).status).toBe("VALIDATED");
   });

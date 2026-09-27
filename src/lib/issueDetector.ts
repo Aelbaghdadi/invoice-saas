@@ -4,6 +4,7 @@ import type { Invoice, IssueType } from "@prisma/client";
 import type { OperationTypeName } from "@/lib/validators";
 import { formatEur } from "@/lib/format";
 import { invoiceBalanceDiffCents, isInvoiceBalanced } from "@/lib/invoiceBalance";
+import { describeVatLineMismatch, vatLineMismatches } from "@/lib/vatLineChecks";
 import { formatDateEs } from "@/lib/dates";
 import { periodLabel } from "@/lib/period";
 
@@ -128,6 +129,16 @@ export async function detectIssues(
         description: `El total (${formatEur(extraction.totalAmount)}) no coincide con ${formula} (${formatEur(expected)}). Diferencia: ${formatEur(diff / 100)}.`,
       });
     }
+  }
+
+  // 3b. Cuota por linea (F-022): el total puede cuadrar con las cuotas
+  // cruzadas entre tipos. Es un aviso: la factura va a «Requiere atención».
+  const lineMismatches = vatLineMismatches(extraction.vatLines, operationTypeHint);
+  if (lineMismatches.length > 0) {
+    issues.push({
+      type: "MATH_MISMATCH",
+      description: `El desglose por tipo no cuadra. ${lineMismatches.map(describeVatLineMismatch).join(". ")}.`,
+    });
   }
 
   // 4. INTRACOM_VAT — operacion intracomunitaria (adquisicion/entrega) con
