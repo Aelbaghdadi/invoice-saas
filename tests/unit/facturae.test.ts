@@ -33,3 +33,11 @@ describe("Facturae: los textos numéricos no se convierten", () => {
     }
   });
 });
+
+describe("Facturae: lote con varias facturas", () => {
+  it("se rechaza con un mensaje para el gestor, en vez de quedarse con la primera", async () => {
+    const invoice = facturae322.slice(facturae322.indexOf("<Invoice>"), facturae322.indexOf("</Invoice>") + "</Invoice>".length);
+    const lote = facturae322.replace(invoice, invoice + invoice.replace("0042", "0043"));
+    await expect(extractInvoiceFromXml(lote)).rejects.toThrow("El XML trae 2 facturas (lote): súbelas por separado.");
+  });
+});

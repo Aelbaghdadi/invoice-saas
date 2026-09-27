@@ -36,7 +36,7 @@ import { routeByCif, clientSideCif, routeByText, detectInvoiceType } from "@/lib
 import { lookupProviderClient } from "@/lib/providerRouting";
 import { accountEntryKey } from "@/lib/supplierMatching";
 import { proposeOperationType, unclassifiedGoodsType } from "@/lib/operationTypeProposal";
-import { classifyOcrError, userMessageForOcrError } from "@/lib/ocrErrors";
+import { classifyOcrError, userMessageForError } from "@/lib/ocrErrors";
 
 /**
  * Convierte el string de fecha del OCR a Date. Si el OCR devuelve algo
@@ -679,7 +679,7 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     const code = classifyOcrError(err);
     // Mensaje LIMPIO para el gestor (nada de stacks de Prisma en la UI). El
     // detalle técnico completo se queda en el log para depuración.
-    const userMsg = `[${code}] ${userMessageForOcrError(code)}`;
+    const userMsg = `[${code}] ${userMessageForError(err, code)}`;
     console.error(`[processInvoice] ${code}:`, err);
     // Mismo fencing que el final: un error de una ejecucion que ya no es la
     // duena no puede pasar a OCR_ERROR una factura rechazada o validada.

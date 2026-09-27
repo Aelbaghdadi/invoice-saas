@@ -1,4 +1,5 @@
 import { GoogleAuth } from "google-auth-library";
+import { DocumentError } from "./ocrErrors";
 import { XMLParser } from "fast-xml-parser";
 import { normalizeCurrency } from "./currency";
 import type { IntracomGoodsTypeName } from "./validators";
@@ -485,6 +486,11 @@ async function parseFacturaeXml(xml: string): Promise<ExtractedInvoice> {
   const parties = facturae?.Parties ?? facturae?.parties;
   const invoices = facturae?.Invoices ?? facturae?.invoices;
   const invoiceNode = invoices?.Invoice ?? invoices?.invoice;
+  // Un lote con varias facturas: antes se leia solo la primera y el resto se
+  // perdia sin avisar. Es determinista (no se reintenta) y se dice.
+  if (Array.isArray(invoiceNode) && invoiceNode.length > 1) {
+    throw new DocumentError(`El XML trae ${invoiceNode.length} facturas (lote): súbelas por separado.`);
+  }
   const inv = Array.isArray(invoiceNode) ? invoiceNode[0] : invoiceNode;
 
   // Seller (issuer)
