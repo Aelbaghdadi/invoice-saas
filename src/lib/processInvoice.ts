@@ -149,11 +149,15 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     extracted.taxBase = roundCents(extracted.taxBase);
     extracted.vatAmount = roundCents(extracted.vatAmount);
     extracted.totalAmount = roundCents(extracted.totalAmount);
-    extracted.irpfAmount = roundCents(extracted.irpfAmount);
+    // La retencion siempre en positivo: una factura que imprime «IRPF −15 %»
+    // guardaba −15 y la pantalla ya no dejaba ni guardar el borrador. El
+    // signo de una rectificativa se pone despues (applyRectificativeSign).
+    const positive = (v: number | null) => (v == null ? v : Math.abs(v));
+    extracted.irpfAmount = roundCents(positive(extracted.irpfAmount));
     // Los % tambien: con 7,005 % la cuota se calculaba con el % sin redondear
     // y la BD guardaba 7,01, asi que la revision la daba por descuadrada.
     extracted.vatRate = roundCents(extracted.vatRate);
-    extracted.irpfRate = roundCents(extracted.irpfRate);
+    extracted.irpfRate = roundCents(positive(extracted.irpfRate));
     extracted.vatLines = extracted.vatLines.map((l) => ({
       ...l,
       taxBase: roundCents(l.taxBase),
@@ -468,7 +472,7 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       const baseParaTipo = vatLines.reduce((acc, l) => acc + l.taxBase, 0);
       const tipoDeducido =
         extracted.irpfAmount != null && baseParaTipo > 0
-          ? parseFloat(((extracted.irpfAmount / baseParaTipo) * 100).toFixed(2))
+          ? parseFloat((Math.abs(extracted.irpfAmount / baseParaTipo) * 100).toFixed(2))
           : null;
       retentionRate =
         extracted.irpfRate ?? tipoDeducido ?? RETENTION_DEFAULT_RATE.PROFESSIONAL;

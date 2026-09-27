@@ -680,3 +680,27 @@ describe("cuentas sin punto: se guardan tal cual (no se rellenan por la derecha)
     expect([after.supplierAccount, after.expenseAccount]).toEqual(["4999999", "6299999"]);
   });
 });
+
+describe("OCR: IRPF impreso en negativo", () => {
+  it("«IRPF −15 %» se guarda en positivo y la factura no pasa a rectificativa", async () => {
+    stubOcr(async () => ({
+      rawJson: "{}",
+      extracted: {
+        issuerName: "Ana Pérez", issuerCif: "12345678Z", receiverName: w.client.name, receiverCif: w.client.cif,
+        invoiceNumber: "AP-2", invoiceDate: "2026-09-10", taxBase: 1000, vatRate: 21, vatAmount: 210,
+        irpfRate: -15, irpfAmount: -150, totalAmount: 1060, currency: "EUR", supplyType: null,
+        vatLines: [{ taxBase: 1000, vatRate: 21, vatAmount: 210 }], confidence: null,
+      } as ExtractedInvoice,
+    }));
+    fakeS3().put("k-irpf-neg", "%PDF-1.4");
+    const { id: inv } = await makeInvoice(w.client, {
+      filename: "irpf-neg.pdf", storageKey: "k-irpf-neg", fileType: "application/pdf", status: "UPLOADED",
+      invoiceNumber: null, issuerCif: null, totalAmount: null, vatRate: null,
+    });
+    await processInvoice(inv, w.worker.id);
+    const after = await prisma.invoice.findUniqueOrThrow({ where: { id: inv } });
+    expect([Number(after.irpfRate), Number(after.irpfAmount), Number(after.taxBase), Number(after.totalAmount)]).toEqual([15, 150, 1000, 1060]);
+    expect(after.isValid).toBe(true);
+    expect(after.status).toBe("PENDING_REVIEW");
+  });
+});
