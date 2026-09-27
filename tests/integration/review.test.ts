@@ -4,54 +4,56 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { prisma } from "./helpers/db";
 import { makeFirm, makeInvoice, type FirmWorld } from "./helpers/factories";
 import { holdLock } from "./helpers/locks";
+import { inFlight } from "./helpers/inflight";
 import { signInAs } from "./helpers/session";
 import { wait } from "./helpers/fixtures";
 import { reject, reviewForm, validate } from "./helpers/reviewForm";
 import { reviewTargetWhere } from "@/lib/invoiceStatuses";
 
 let w: FirmWorld;
-const A = () => prisma.invoice.findUniqueOrThrow({ where: { id: "A" } });
-const reopenA = async () => validate(reviewForm("A", (await A()).updatedAt, w.client, { reopen: "1" }));
+let id: string;
+const A = () => prisma.invoice.findUniqueOrThrow({ where: { id } });
+const reopenA = async () => validate(reviewForm(id, (await A()).updatedAt, w.client, { reopen: "1" }));
 
 beforeEach(async () => {
   w = await makeFirm("A");
-  await makeInvoice(w.client, { id: "A", status: "REJECTED", rejectionReason: "Ilegible", rejectionCategory: "ILLEGIBLE" });
+  ({ id } = await makeInvoice(w.client, { status: "REJECTED", rejectionReason: "Ilegible", rejectionCategory: "ILLEGIBLE" }));
   signInAs(w.worker);
 });
 
 describe("estados de origen en guardar, validar y rechazar", () => {
   it("validar una que se está analizando: { error } y no cambia", async () => {
-    await prisma.invoice.update({ where: { id: "A" }, data: { status: "ANALYZING", rejectionReason: null } });
-    const r = await validate(reviewForm("A", (await A()).updatedAt, w.client));
+    await prisma.invoice.update({ where: { id }, data: { status: "ANALYZING", rejectionReason: null } });
+    const r = await validate(reviewForm(id, (await A()).updatedAt, w.client));
     expect(String(r.error)).toMatch(/analizando/);
     expect((await A()).status).toBe("ANALYZING");
   });
 
   it("validar cruzado con una división (bloqueo de fila): el UPDATE condicionado no valida la SPLIT_SOURCE", async () => {
-    await prisma.invoice.update({ where: { id: "A" }, data: { status: "PENDING_REVIEW", rejectionReason: null } });
+    await prisma.invoice.update({ where: { id }, data: { status: "PENDING_REVIEW", rejectionReason: null } });
     const leido = (await A()).updatedAt;
-    const lock = await holdLock(`SELECT 1 FROM "Invoice" WHERE id = 'A' FOR UPDATE`);
-    const pending = validate(reviewForm("A", leido, w.client));
+    const lock = await holdLock(`SELECT 1 FROM "Invoice" WHERE id = $1 FOR UPDATE`, id);
+    const pending = inFlight(validate(reviewForm(id, leido, w.client)));
     await wait(1500);
-    await lock.release(`UPDATE "Invoice" SET status = 'SPLIT_SOURCE' WHERE id = 'A'`);
+    await lock.release(`UPDATE "Invoice" SET status = 'SPLIT_SOURCE' WHERE id = $1`);
     const r = await pending;
     expect(String(r.error)).toMatch(/dividió en otras/);
     expect((await A()).status).toBe("SPLIT_SOURCE");
   });
 
   it("rechazar cruzado con un reproceso (pasa a ANALYZING): no se rechaza", async () => {
-    await prisma.invoice.update({ where: { id: "A" }, data: { status: "PENDING_REVIEW", rejectionReason: null } });
-    const lock = await holdLock(`SELECT 1 FROM "Invoice" WHERE id = 'A' FOR UPDATE`);
-    const pending = reject("A");
+    await prisma.invoice.update({ where: { id }, data: { status: "PENDING_REVIEW", rejectionReason: null } });
+    const lock = await holdLock(`SELECT 1 FROM "Invoice" WHERE id = $1 FOR UPDATE`, id);
+    const pending = inFlight(reject(id));
     await wait(1500);
-    await lock.release(`UPDATE "Invoice" SET status = 'ANALYZING' WHERE id = 'A'`);
+    await lock.release(`UPDATE "Invoice" SET status = 'ANALYZING' WHERE id = $1`);
     const r = await pending;
     expect(String(r.error)).toMatch(/analizando/);
     expect((await A()).status).toBe("ANALYZING");
   });
 
   it("una rechazada no se valida sin «Reabrir y validar»", async () => {
-    const r = await validate(reviewForm("A", (await A()).updatedAt, w.client));
+    const r = await validate(reviewForm(id, (await A()).updatedAt, w.client));
     expect(String(r.error)).toMatch(/Reabrir y validar/);
     expect((await A()).status).toBe("REJECTED");
   });
@@ -63,18 +65,18 @@ describe("«Reabrir y validar»", () => {
     const a = await A();
     expect(a.status).toBe("VALIDATED");
     expect(a.rejectionReason).toBeNull();
-    const history = await prisma.invoiceStatusHistory.findMany({ where: { invoiceId: "A" } });
+    const history = await prisma.invoiceStatusHistory.findMany({ where: { invoiceId: id } });
     expect(history.map((h) => `${h.fromStatus}->${h.toStatus}`)).toEqual(["REJECTED->VALIDATED"]);
-    const audit = await prisma.auditLog.findMany({ where: { invoiceId: "A" } });
+    const audit = await prisma.auditLog.findMany({ where: { invoiceId: id } });
     expect(audit.map((x) => x.field)).toEqual(expect.arrayContaining(["status", "rejectionReason"]));
     expect(audit.find((x) => x.field === "rejectionCategory")?.oldValue).toBe("ILLEGIBLE");
   });
 
   it("con una versión corregida del cliente: no se reabre (también en el propio UPDATE)", async () => {
-    const b = await makeInvoice(w.client, { status: "VALIDATED", replacesId: "A" });
+    const b = await makeInvoice(w.client, { status: "VALIDATED", replacesId: id });
     expect((await reopenA()).error).toBe("El cliente ya subió una versión corregida de esta factura: valida esa en su lugar.");
     expect((await A()).status).toBe("REJECTED");
-    const where = { id: "A", ...reviewTargetWhere("validate", { reopen: true }) };
+    const where = { id, ...reviewTargetWhere("validate", { reopen: true }) };
     expect((await prisma.invoice.updateMany({ where, data: { status: "VALIDATED" } })).count).toBe(0);
     await prisma.invoice.delete({ where: { id: b.id } });
     expect((await prisma.invoice.updateMany({ where, data: { status: "VALIDATED" } })).count).toBe(1);
@@ -84,11 +86,11 @@ describe("«Reabrir y validar»", () => {
     const bucket = await prisma.client.create({
       data: { name: "Sin clasificar", cif: "X0000000X", advisoryFirmId: w.firm.id, isUnclassifiedBucket: true },
     });
-    await prisma.invoice.update({ where: { id: "A" }, data: { clientId: bucket.id } });
+    await prisma.invoice.update({ where: { id }, data: { clientId: bucket.id } });
     signInAs(w.admin);
     expect((await reopenA()).error).toBe("Esta factura está en «Sin clasificar» y no tiene cliente: no se puede validar.");
     expect((await A()).status).toBe("REJECTED");
-    const where = { id: "A", ...reviewTargetWhere("validate", { reopen: true }) };
+    const where = { id, ...reviewTargetWhere("validate", { reopen: true }) };
     expect((await prisma.invoice.updateMany({ where, data: { status: "VALIDATED" } })).count).toBe(0);
   });
 
@@ -99,7 +101,7 @@ describe("«Reabrir y validar»", () => {
       const a = await A();
       expect(a.status).toBe("REJECTED");
       expect(a.rejectionReason).toBe("Ilegible");
-      expect(await prisma.invoiceStatusHistory.count({ where: { invoiceId: "A" } })).toBe(0);
+      expect(await prisma.invoiceStatusHistory.count({ where: { invoiceId: id } })).toBe(0);
     } finally {
       await prisma.$executeRawUnsafe(`ALTER TABLE "AuditLog" DROP CONSTRAINT falla_a_proposito`);
     }

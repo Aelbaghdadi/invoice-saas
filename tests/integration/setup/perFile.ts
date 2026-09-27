@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, vi } from "vitest";
 import { requireTestDatabase } from "./guard";
 import { startFakeS3 } from "../helpers/fakeS3";
 
@@ -59,6 +59,13 @@ const { resetDatabase, disconnect } = await import("../helpers/db");
 const { signOut } = await import("../helpers/session");
 const { discardAfterCallbacks } = await import("../helpers/after");
 const { resetOcrStub } = await import("../helpers/ocr");
+const { settleInFlight } = await import("../helpers/inflight");
+
+// Bloqueos que un test fallido dejo abiertos y acciones a medias: se cierran
+// antes del TRUNCATE del siguiente test.
+afterEach(async () => {
+  await settleInFlight();
+});
 
 beforeEach(async () => {
   await resetDatabase();

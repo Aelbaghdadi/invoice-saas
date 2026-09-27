@@ -11,16 +11,18 @@ import { POST as closureReminders } from "@/app/api/cron/closure-reminders/route
 import { POST as processRoute } from "@/app/api/invoices/[id]/process/route";
 
 let w: FirmWorld;
+let id: string;
 
-/** inv1: Facturae en S3, en `status`, con `ocrAttempts` y sin tocar desde hace `minutesAgo`. */
+/** Una factura Facturae en S3, en `status`, con `ocrAttempts` y sin tocar desde hace `minutesAgo`. */
 async function stuck(status: "ANALYZING" | "UPLOADED", ocrAttempts: number, minutesAgo: number) {
-  await makeInvoice(w.client, {
-    id: "inv1", filename: "f.xml", storageKey: "k-xml", fileType: "application/xml", status, ocrAttempts,
+  ({ id } = await makeInvoice(w.client, {
+    filename: "f.xml", storageKey: "k-xml", fileType: "application/xml", status, ocrAttempts,
     invoiceNumber: null, invoiceDate: null, issuerName: null, issuerCif: null,
     taxBase: null, vatRate: null, vatAmount: null, totalAmount: null,
-  });
+  }));
   await prisma.$executeRawUnsafe(
-    `UPDATE "Invoice" SET "updatedAt" = ${utcMinutesAgoSql(minutesAgo)}, "createdAt" = ${utcMinutesAgoSql(minutesAgo)} WHERE id = 'inv1'`,
+    `UPDATE "Invoice" SET "updatedAt" = ${utcMinutesAgoSql(minutesAgo)}, "createdAt" = ${utcMinutesAgoSql(minutesAgo)} WHERE id = $1`,
+    id,
   );
 }
 
@@ -29,16 +31,16 @@ beforeEach(async () => {
   fakeS3().put("k-xml", facturaeXml({ buyerCif: w.client.cif }));
 });
 
-const inv = () => prisma.invoice.findUniqueOrThrow({ where: { id: "inv1" } });
+const inv = () => prisma.invoice.findUniqueOrThrow({ where: { id } });
 const history = async () =>
-  (await prisma.invoiceStatusHistory.findMany({ where: { invoiceId: "inv1" }, orderBy: { createdAt: "asc" } }))
+  (await prisma.invoiceStatusHistory.findMany({ where: { invoiceId: id }, orderBy: { createdAt: "asc" } }))
     .map((h) => `${h.fromStatus}->${h.toStatus}`);
 const cronRequest = (secret = "cron-test") =>
   new Request("http://x/api/cron", { headers: { authorization: `Bearer ${secret}` } });
 const cron = () => retryStuck(cronRequest());
 const reprocess = () => {
   signInAs(w.admin);
-  return processRoute(new NextRequest("http://x", { method: "POST" }), { params: Promise.resolve({ id: "inv1" }) });
+  return processRoute(new NextRequest("http://x", { method: "POST" }), { params: Promise.resolve({ id }) });
 };
 
 describe("crons: secreto y métodos", () => {
@@ -68,7 +70,7 @@ describe("retry-stuck", () => {
     expect(i.status).toBe("OCR_ERROR");
     expect(i.lastOcrError).toBe("Se agotaron los reintentos del análisis");
     expect(await history()).toEqual(["ANALYZING->OCR_ERROR"]);
-    const h = await prisma.invoiceStatusHistory.findFirstOrThrow({ where: { invoiceId: "inv1" } });
+    const h = await prisma.invoiceStatusHistory.findFirstOrThrow({ where: { invoiceId: id } });
     expect(h.reason).toBe("Se agotaron los reintentos del análisis (5 análisis; ya no se reintenta sola: pulsa Reprocesar)");
   });
 
@@ -86,7 +88,7 @@ describe("retry-stuck", () => {
     const i = await inv();
     expect(["PENDING_REVIEW", "NEEDS_ATTENTION"]).toContain(i.status);
     expect(i.invoiceNumber).toBe("F-XML-1");
-    expect((await prisma.auditLog.findMany({ where: { invoiceId: "inv1" } })).map((a) => a.userId)).toEqual([w.admin.id]);
+    expect((await prisma.auditLog.findMany({ where: { invoiceId: id } })).map((a) => a.userId)).toEqual([w.admin.id]);
   });
 
   it("con documento, a nombre de quien lo subió", async () => {
@@ -94,9 +96,9 @@ describe("retry-stuck", () => {
     const doc = await prisma.document.create({
       data: { filename: "f.xml", storageKey: "k-xml", fileType: "application/xml", clientId: w.client.id, uploadedBy: w.worker.id },
     });
-    await prisma.$executeRawUnsafe(`UPDATE "Invoice" SET "documentId" = '${doc.id}' WHERE id = 'inv1'`);
+    await prisma.$executeRawUnsafe(`UPDATE "Invoice" SET "documentId" = $1 WHERE id = $2`, doc.id, id);
     await cron();
-    expect((await prisma.auditLog.findMany({ where: { invoiceId: "inv1" } })).map((a) => a.userId)).toEqual([w.worker.id]);
+    expect((await prisma.auditLog.findMany({ where: { invoiceId: id } })).map((a) => a.userId)).toEqual([w.worker.id]);
   });
 
   it("nunca atribuye el OCR a un ADMIN de otra asesoría; sin nadie, no la relanza", async () => {
@@ -132,7 +134,7 @@ describe("Reprocesar a mano una factura parada", () => {
     await stuck("ANALYZING", 3, 10);
     const b = await makeFirm("B");
     signInAs(b.admin);
-    const res = await processRoute(new NextRequest("http://x", { method: "POST" }), { params: Promise.resolve({ id: "inv1" }) });
+    const res = await processRoute(new NextRequest("http://x", { method: "POST" }), { params: Promise.resolve({ id }) });
     expect(res.status).toBe(404);
     expect((await inv()).status).toBe("ANALYZING");
   });

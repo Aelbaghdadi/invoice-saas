@@ -7,6 +7,7 @@ import { makeFirm, makeInvoice, type FirmWorld } from "./helpers/factories";
 import { signInAs } from "./helpers/session";
 import { wait } from "./helpers/fixtures";
 import { holdLock, sessionsWaitingForLock } from "./helpers/locks";
+import { inFlight } from "./helpers/inflight";
 import { commitExportBatch, ExportConflictError, type ExportInvoice } from "@/lib/exportBatch";
 import { appendAuditLogs, verifyFirmAuditChains } from "@/lib/auditLog";
 import { partitionA3Exportable } from "@/lib/exportFormats";
@@ -130,7 +131,7 @@ describe("corrección cruzada con un export (F-049)", () => {
     // El export se para despues de reservar las facturas (antes de crear los items).
     const lock = await holdLock('LOCK TABLE "ExportBatchItem" IN SHARE MODE');
     signInAs(w.admin);
-    const exporting = exportDownload(downloadRequest());
+    const exporting = inFlight(exportDownload(downloadRequest()));
     await wait(1500);
     expect(await sessionsWaitingForLock()).toBeGreaterThan(0);
     // El gestor guarda una correccion con lo que leyo antes del export.
@@ -144,7 +145,7 @@ describe("corrección cruzada con un export (F-049)", () => {
       supplierAccount: "40000001", expenseAccount: "60000001", operationType: "INTERIOR",
       accountingPeriodMonth: "4", accountingPeriodYear: "2026",
     })) fd.set(k, v);
-    const correcting = validateInvoice(null, fd).catch((e) => (e?.message === "NEXT_REDIRECT" ? null : Promise.reject(e)));
+    const correcting = inFlight(validateInvoice(null, fd).catch((e) => (e?.message === "NEXT_REDIRECT" ? null : Promise.reject(e))));
     await wait(1500);
     await lock.release();
     const res = await exporting;
