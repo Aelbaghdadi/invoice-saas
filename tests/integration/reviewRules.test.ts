@@ -704,3 +704,46 @@ describe("OCR: IRPF impreso en negativo", () => {
     expect(after.status).toBe("PENDING_REVIEW");
   });
 });
+
+describe("OCR y rectificativas (F-012): no se cambian signos por el texto", () => {
+  async function ocr(rawText: string, base: number, vat: number, total: number) {
+    stubOcr(async () => ({
+      rawJson: "{}",
+      rawText,
+      extracted: {
+        issuerName: "Proveedor SL", issuerCif: "B12345674", receiverName: w.client.name, receiverCif: w.client.cif,
+        invoiceNumber: "R-1", invoiceDate: "2026-09-10", taxBase: base, vatRate: 21, vatAmount: vat,
+        irpfRate: null, irpfAmount: null, totalAmount: total, currency: "EUR", supplyType: null,
+        vatLines: [{ taxBase: base, vatRate: 21, vatAmount: vat }], confidence: null,
+      } as ExtractedInvoice,
+    }));
+    fakeS3().put("k-rect", "%PDF-1.4");
+    const { id: inv } = await makeInvoice(w.client, {
+      filename: "rect.pdf", storageKey: "k-rect", fileType: "application/pdf", status: "UPLOADED",
+      invoiceNumber: null, issuerCif: null, totalAmount: null, vatRate: null,
+    });
+    await processInvoice(inv, w.worker.id);
+    return prisma.invoice.findUniqueOrThrow({ where: { id: inv }, include: { issues: true, vatLines: true } });
+  }
+
+  it("«no es rectificativa» en el texto: los importes quedan en positivo y sale la incidencia", async () => {
+    const after = await ocr("FACTURA Nº R-1. Esta factura no es rectificativa.", 200, 42, 242);
+    expect([Number(after.taxBase), Number(after.vatAmount), Number(after.totalAmount)]).toEqual([200, 42, 242]);
+    expect(after.vatLines.map((l) => Number(l.taxBase))).toEqual([200]);
+    expect(after.isRectificative).toBe(false);
+    expect(after.status).toBe("NEEDS_ATTENTION");
+    expect(after.issues.map((i) => i.description)).toEqual([expect.stringMatching(/^Parece rectificativa: revisa el signo\./)]);
+  });
+
+  it("importes negativos: se respetan y sale la incidencia de marcar la casilla", async () => {
+    const after = await ocr("ABONO", -200, -42, -242);
+    expect([Number(after.taxBase), Number(after.totalAmount)]).toEqual([-200, -242]);
+    expect(after.issues.map((i) => i.description)).toEqual([expect.stringMatching(/^La factura trae importes negativos/)]);
+  });
+
+  it("una factura normal: sin incidencias", async () => {
+    const after = await ocr("FACTURA Nº R-1. Forma de pago: abono en cuenta.", 200, 42, 242);
+    expect(after.issues.map((i) => i.description)).toEqual([]);
+    expect(after.status).toBe("PENDING_REVIEW");
+  });
+});

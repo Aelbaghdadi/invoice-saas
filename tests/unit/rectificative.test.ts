@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   textMentionsRectificative,
   applyRectificativeSign,
+  rectificativeSignHint,
   type RectificativeAmounts,
 } from "@/lib/rectificative";
 
@@ -104,5 +105,23 @@ describe("applyRectificativeSign", () => {
       taxBase: -100, vatAmount: -21, totalAmount: -126.2, irpfAmount: null, retentionBase: null,
     };
     expect(applyRectificativeSign(input)).toEqual(input);
+  });
+});
+
+describe("rectificativeSignHint (F-012: el OCR no cambia signos)", () => {
+  const amounts = (base: number, vat: number, total: number) => ({
+    lines: [{ taxBase: base, vatRate: 21, vatAmount: vat }], taxBase: base, vatAmount: vat, totalAmount: total, irpfAmount: null, retentionBase: null,
+  });
+
+  it("con la mención en el texto y todo en positivo: «Parece rectificativa: revisa el signo»", () => {
+    expect(rectificativeSignHint(amounts(100, 21, 121), "Esta factura no es rectificativa")).toMatch(/^Parece rectificativa: revisa el signo\./);
+  });
+
+  it("con importes negativos: marcar la casilla o corregir el signo", () => {
+    expect(rectificativeSignHint(amounts(-100, -21, -121), null)).toMatch(/^La factura trae importes negativos/);
+  });
+
+  it("una factura normal: nada", () => {
+    expect(rectificativeSignHint(amounts(100, 21, 121), "Forma de pago: abono en cuenta")).toBeNull();
   });
 });

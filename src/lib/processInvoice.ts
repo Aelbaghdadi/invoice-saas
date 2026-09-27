@@ -31,7 +31,7 @@ import {
   completeReadSurcharges,
   proposeSurchargesFromTotal,
 } from "@/lib/equivalenceSurcharge";
-import { textMentionsRectificative, applyRectificativeSign } from "@/lib/rectificative";
+import { rectificativeSignHint } from "@/lib/rectificative";
 import { routeByCif, clientSideCif, routeByText, detectInvoiceType } from "@/lib/invoiceRouting";
 import { lookupProviderClient } from "@/lib/providerRouting";
 import { accountEntryKey } from "@/lib/supplierMatching";
@@ -503,42 +503,33 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     const issues = isUnclassified
       ? []
       : await detectIssues(invoiceId, { ...extracted, irpfAmount: finalIrpfAmount }, invoice, operationType, { persist: false });
+    // Rectificativa: incidencia en vez de cambiar signos (F-012).
+    if (!isUnclassified) {
+      const hint = rectificativeSignHint({
+        lines: vatLines, taxBase: extracted.taxBase, vatAmount: extracted.vatAmount,
+        totalAmount: extracted.totalAmount, irpfAmount: finalIrpfAmount, retentionBase,
+      }, ocrResult.rawText);
+      if (hint) issues.push({ type: "MANUAL", description: hint, field: "isRectificative" });
+    }
     const targetStatus: InvoiceStatus = isUnclassified
       ? "PENDING_ROUTING"
       : issues.length > 0 ? "NEEDS_ATTENTION" : "PENDING_REVIEW";
 
-    // ── Rectificativa / abono: solo poner el importe en NEGATIVO ───────
+    // ── Rectificativa / abono: el OCR NO cambia signos (F-012) ─────────
     //
-    // Si el documento dice "rectificativa" / "nota de crédito" / "factura de
-    // abono" (o ya trae importes negativos), guardamos los importes en negativo.
-    // NO marcamos el flag isRectificative ni el sufijo _R del export: ese
-    // comportamiento queda encapsulado al check, que el gestor activa a mano
-    // si en el futuro se quiere (serie rectificada, tipo, _R, etc.).
-    const hasNegativeLine = vatLines.some((l) => l.taxBase < 0 || l.vatAmount < 0);
-    const hasNegativeTotal = (extracted.totalAmount ?? 0) < 0;
-    const looksRectificative =
-      hasNegativeLine || hasNegativeTotal || textMentionsRectificative(ocrResult.rawText);
-
-    // Si parece abono y vino en positivo, pasamos los importes a negativo.
-    // Misma regla que en revisión (lib/rectificative): si ya trae signos
-    // mixtos/negativos, se respetan.
-    const signed = looksRectificative
-      ? applyRectificativeSign({
-          lines: vatLines,
-          taxBase: extracted.taxBase,
-          vatAmount: extracted.vatAmount,
-          totalAmount: extracted.totalAmount,
-          irpfAmount: finalIrpfAmount,
-          retentionBase,
-        })
-      : {
-          lines: vatLines,
-          taxBase: extracted.taxBase,
-          vatAmount: extracted.vatAmount,
-          totalAmount: extracted.totalAmount,
-          irpfAmount: finalIrpfAmount,
-          retentionBase,
-        };
+    // Antes, si el texto decia "rectificativa" / "nota de crédito" /
+    // "factura de abono" se negaban todos los importes sin marcar
+    // isRectificative: daba positivo con «no es rectificativa» y una compra
+    // ordinaria pasaba a IVA soportado negativo. Ahora se guardan como se
+    // leyeron y la incidencia de arriba (rectificativeSignHint) avisa.
+    const signed = {
+      lines: vatLines,
+      taxBase: extracted.taxBase,
+      vatAmount: extracted.vatAmount,
+      totalAmount: extracted.totalAmount,
+      irpfAmount: finalIrpfAmount,
+      retentionBase,
+    };
 
     // ── Recargo de equivalencia ─────────────────────────────────────────
     //

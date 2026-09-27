@@ -3,16 +3,18 @@
  *
  * Una rectificativa puede venir del documento con los importes en POSITIVO
  * aunque contablemente sea un abono (resta del periodo). Reglas:
- *  - Detección: por texto del OCR ("rectificativa", "nota de crédito",
- *    "factura de abono") o por traer ya algún importe negativo.
- *  - Signo: si la factura es rectificativa y TODOS los importes vienen en
+ *  - El OCR no cambia signos (F-012): la mencion en el texto daba positivo
+ *    con «no es rectificativa» y negaba facturas ordinarias sin marcarlas.
+ *    Con la mencion, o con importes negativos, crea una incidencia para que
+ *    el gestor lo revise (rectificativeSignHint).
+ *  - Signo: si el gestor marca la casilla y TODOS los importes vienen en
  *    positivo, se pasan a negativo. Si ya trae signos mixtos/negativos
  *    (rectificativa por diferencias), se respetan tal cual — así no se
  *    corrompe una rectificativa por diferencias con líneas que suman y restan.
  *
- * Módulo puro (sin Prisma ni Next): lo consumen `processInvoice` (al detectar
- * la rectificativa tras el OCR) y `parseAndSave` (cuando el gestor marca la
- * casilla en revisión), aplicando la MISMA regla en ambos sitios.
+ * Módulo puro (sin Prisma ni Next): lo consumen `processInvoice` (la
+ * incidencia tras el OCR) y `parseAndSave` (el signo, cuando el gestor marca
+ * la casilla en revisión).
  */
 
 // "rectificativ" cubre rectificativa/rectificativo/rectificativas. Evitamos
@@ -51,7 +53,7 @@ export type RectificativeAmounts = {
 };
 
 /** ¿Hay ya algún importe negativo? (los % de IVA no cuentan, nunca llevan signo). */
-function anyNegativeAmount(a: RectificativeAmounts): boolean {
+export function anyNegativeAmount(a: RectificativeAmounts): boolean {
   if (a.lines.some((l) => l.taxBase < 0 || l.vatAmount < 0 || (l.equivalenceSurchargeAmount ?? 0) < 0)) return true;
   return [a.taxBase, a.vatAmount, a.totalAmount, a.irpfAmount, a.retentionBase].some(
     (v) => v != null && v < 0,
@@ -82,4 +84,21 @@ export function applyRectificativeSign(a: RectificativeAmounts): RectificativeAm
     irpfAmount: neg(a.irpfAmount),
     retentionBase: neg(a.retentionBase),
   };
+}
+
+/**
+ * Incidencia del OCR sobre el signo, o null. El OCR no toca los signos: con
+ * importes negativos hay que marcar la casilla (si es un abono) o corregirlos;
+ * con solo la mencion en el texto, revisar si es un abono que vino en
+ * positivo.
+ */
+export function rectificativeSignHint(a: RectificativeAmounts, rawText: string | null | undefined): string | null {
+  if (anyNegativeAmount(a)) {
+    return "La factura trae importes negativos: si es un abono, marca «Es una rectificativa» en la revisión; si no, corrige el signo.";
+  }
+  if (textMentionsRectificative(rawText)) {
+    return "Parece rectificativa: revisa el signo. El documento habla de rectificativa, nota de crédito o factura de abono, "
+      + "pero los importes vienen en positivo y no se han cambiado.";
+  }
+  return null;
 }
