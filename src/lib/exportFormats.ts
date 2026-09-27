@@ -544,6 +544,8 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
   // Se agrupa por emisor, que en emitidas es el propio cliente: una asesoria
   // exporta varios clientes a la vez y cada uno lleva su numeracion. Sin NIF
   // no hay grupo fiable (ya avisa "NIF vacío" por separado).
+  // Map en vez de results.find: con miles de facturas era cuadratico.
+  const byInvoiceId = new Map(results.map((r) => [r.invoiceId, r]));
   const bySeries = new Map<string, InvoiceWithClient[]>();
   for (const inv of invoices) {
     if (inv.type !== "SALE") continue;
@@ -566,9 +568,13 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
         `Salto de numeración en las facturas emitidas de ${who}: entre la ${gap.previousNumber} y la ${inv.invoiceNumber} `
         + `${gap.missing.length === 1 ? "falta la factura" : "faltan las facturas"} ${list}${more}. `
         + `Revisa si falta subirla o si se saltó el número al emitirla`;
-      const existing = results.find((r) => r.invoiceId === invoiceId);
+      const existing = byInvoiceId.get(invoiceId);
       if (existing) existing.warnings.push(warning);
-      else results.push({ invoiceId, invoiceNumber: inv.invoiceNumber, severity: "aviso", blockers: [], warnings: [warning] });
+      else {
+        const entry: A3ValidationWarning = { invoiceId, invoiceNumber: inv.invoiceNumber, severity: "aviso", blockers: [], warnings: [warning] };
+        results.push(entry);
+        byInvoiceId.set(invoiceId, entry);
+      }
     }
   }
 

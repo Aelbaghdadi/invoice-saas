@@ -49,6 +49,9 @@ export function ExportForm({ clients }: Props) {
   // bloqueantes no entran en el Excel; los avisos no impiden exportar.
   const [warnings,     setWarnings]     = useState<A3Warning[]>([]);
   const [warningCount, setWarningCount] = useState(0);
+  // Cuantas hay de cada gravedad: de avisos y «no van» llegan solo las
+  // primeras, y el resto se dice con «y N más».
+  const [severityCounts, setSeverityCounts] = useState<Partial<Record<A3Warning["severity"], number>>>({});
   // Facturas del periodo que ya salieron en un Excel anterior: no se vuelven
   // a incluir, pero hay que decirlo o el recuento no se entiende.
   const [alreadyExported, setAlreadyExported] = useState(0);
@@ -100,6 +103,7 @@ export function ExportForm({ clients }: Props) {
         setCount(null);
         setWarnings([]);
         setWarningCount(0);
+        setSeverityCounts({});
         setAlreadyExported(0);
         setExcluded(0);
         setExcludedDetail(null);
@@ -110,6 +114,7 @@ export function ExportForm({ clients }: Props) {
       setCount(data.count ?? 0);
       setWarnings(data.warnings ?? []);
       setWarningCount(data.warningCount ?? 0);
+      setSeverityCounts(data.warningCountBySeverity ?? {});
       setAlreadyExported(data.alreadyExported ?? 0);
       setExcluded(data.excluded ?? 0);
       setExcludedDetail(describeExportExclusions((data.excludedByReason ?? {}) as Partial<ExportExclusionCounts>));
@@ -120,6 +125,7 @@ export function ExportForm({ clients }: Props) {
       setCount(null);
       setWarnings([]);
       setWarningCount(0);
+      setSeverityCounts({});
       setAlreadyExported(0);
       setExcluded(0);
       setExcludedDetail(null);
@@ -410,18 +416,21 @@ export function ExportForm({ clients }: Props) {
                   : `${n} facturas no se pueden exportar`}
                 note="No entran en el Excel ni se marcan como exportadas: siguen pendientes hasta que las corrijas en la revisión."
                 items={warnings.filter((w) => w.severity === "bloqueante")}
+                total={severityCounts.bloqueante}
               />
               <WarningList
                 tone="amber"
                 title={(n) => n === 1 ? "1 factura con avisos" : `${n} facturas con avisos`}
                 note="Se exportan igualmente: los avisos no bloquean, pero conviene mirarlos."
                 items={warnings.filter((w) => w.severity === "aviso")}
+                total={severityCounts.aviso}
               />
               <WarningList
                 tone="slate"
                 title={(n) => n === 1 ? "1 factura no va al Excel" : `${n} facturas no van al Excel`}
                 note="No hace falta llevarlas a A3 y no hay nada que corregir."
                 items={warnings.filter((w) => w.severity === "fuera")}
+                total={severityCounts.fuera}
               />
             </div>
           )}
@@ -541,21 +550,24 @@ const WARNING_TONES = {
   },
 } as const;
 
-/** Una caja por gravedad, con todas las facturas (F-025): con muchas se
- *  desplaza dentro de la caja en vez de recortar la lista. */
-function WarningList({ tone, title, note, items }: {
+/** Una caja por gravedad (F-025), con scroll dentro. `total` es cuantas hay
+ *  de verdad: de las que no son bloqueantes el servidor manda solo las
+ *  primeras. */
+function WarningList({ tone, title, note, items, total }: {
   tone: keyof typeof WARNING_TONES;
   title: (count: number) => string;
   note: string;
   items: A3Warning[];
+  total?: number;
 }) {
   if (items.length === 0) return null;
   const c = WARNING_TONES[tone];
+  const count = Math.max(total ?? 0, items.length);
   return (
     <div className={`rounded-xl border px-4 py-3 ${c.box}`}>
       <p className={`flex items-center gap-2 text-[13px] font-semibold ${c.title}`}>
         <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-        {title(items.length)}
+        {title(count)}
       </p>
       <p className={`mt-1 text-[11px] ${c.note}`}>{note}</p>
       <ul className="mt-2 max-h-72 space-y-1.5 overflow-y-auto pr-1">
@@ -565,6 +577,7 @@ function WarningList({ tone, title, note, items }: {
                 el periodo no este cerrado, y sin enlace habia que buscarla a mano. */}
             <Link
               href={`/dashboard/worker/review/${w.invoiceId}`}
+              prefetch={false}
               className={`font-medium underline underline-offset-2 ${c.link}`}
             >
               {w.invoiceNumber || "Sin número"}
@@ -574,6 +587,11 @@ function WarningList({ tone, title, note, items }: {
           </li>
         ))}
       </ul>
+      {count > items.length && (
+        <p className={`mt-2 text-[11px] ${c.note}`}>
+          Y {count - items.length} más: se ven al abrir cada factura desde la revisión.
+        </p>
+      )}
     </div>
   );
 }

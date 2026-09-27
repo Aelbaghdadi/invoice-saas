@@ -56,6 +56,10 @@ async function splitParentIds(invoices: { id: string }[]): Promise<Set<string>> 
  * con el sentido) y se tiraban. Es el unico punto donde un error fiscal se
  * puede ver ANTES de que el fichero entre en la contabilidad del cliente.
  */
+/** Cuantas facturas con avisos (o que no van al Excel) se mandan a la vista
+ *  previa. Las bloqueantes van todas. */
+const PREVIEW_WARNING_LIMIT = 50;
+
 export async function GET(req: NextRequest) {
   const admin = await requireAdmin();
   if (admin instanceof NextResponse) return admin;
@@ -78,6 +82,11 @@ export async function GET(req: NextRequest) {
   });
   const previewInvoices = withSplitCounts(previewRows, await splitParentIds(previewRows));
   const allWarnings = validateForA3Export(previewInvoices);
+  const bySeverity = {
+    bloqueante: allWarnings.filter((w) => w.severity === "bloqueante"),
+    aviso: allWarnings.filter((w) => w.severity === "aviso"),
+    fuera: allWarnings.filter((w) => w.severity === "fuera"),
+  };
   // Cuantas se quedan fuera por haber salido ya en un Excel anterior. Sin
   // este numero, un trimestre ya exportado sale como "0 facturas" y parece
   // que el programa no las encuentra.
@@ -93,10 +102,21 @@ export async function GET(req: NextRequest) {
     excludedByReason: countExportExclusions(excluded.map((e) => e.reason)),
     alreadyExported,
     warningCount: allWarnings.length,
-    blockingCount: allWarnings.filter((w) => w.severity === "bloqueante").length,
-    // Todas, las bloqueantes primero (F-025). Antes se recortaban a 20 sin
-    // mirar la gravedad y una bloqueante podia quedar fuera de la lista.
-    warnings: allWarnings,
+    blockingCount: bySeverity.bloqueante.length,
+    warningCountBySeverity: {
+      bloqueante: bySeverity.bloqueante.length,
+      aviso: bySeverity.aviso.length,
+      fuera: bySeverity.fuera.length,
+    },
+    // Todas las bloqueantes, que son las que hay que arreglar (F-025): antes
+    // se recortaba a 20 sin mirar la gravedad. De las demas, las primeras
+    // PREVIEW_WARNING_LIMIT y el recuento: con miles de facturas la lista
+    // entera pesaba 1 MB en cada cambio de filtro.
+    warnings: [
+      ...bySeverity.bloqueante,
+      ...bySeverity.aviso.slice(0, PREVIEW_WARNING_LIMIT),
+      ...bySeverity.fuera.slice(0, PREVIEW_WARNING_LIMIT),
+    ],
   });
 }
 

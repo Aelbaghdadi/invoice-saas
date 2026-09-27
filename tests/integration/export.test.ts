@@ -291,13 +291,16 @@ describe("bloqueantes en el export (F-025)", () => {
     expect(await prisma.invoice.count({ where: { exportBatchId: { not: null } } })).toBe(0);
   });
 
-  it("la vista previa las da todas, las bloqueantes primero (antes recortaba a 20)", async () => {
-    for (let i = 0; i < 25; i++) await makeInvoice(w.client, { ...april, invoiceNumber: `DESCUADRE-${i}`, totalAmount: 130 });
-    await makeInvoice(w.client, { ...april, invoiceNumber: "SIN-FECHA", invoiceDate: null });
+  it("la vista previa da todas las bloqueantes primero y, de los avisos, las 50 primeras y el recuento", async () => {
+    for (let i = 0; i < 55; i++) await makeInvoice(w.client, { ...april, invoiceNumber: `DESCUADRE-${i}`, totalAmount: 130 });
+    for (let i = 0; i < 22; i++) await makeInvoice(w.client, { ...april, invoiceNumber: `SIN-FECHA-${i}`, invoiceDate: null });
     const body = await preview();
-    expect(body.warningCount).toBe(26);
-    expect(body.warnings).toHaveLength(26);
-    expect(body.warnings[0]).toMatchObject({ invoiceNumber: "SIN-FECHA", severity: "bloqueante", blockers: ["Fecha vacía"] });
-    expect(body.warnings.slice(1).every((x: { severity: string }) => x.severity === "aviso")).toBe(true);
+    expect(body.warningCount).toBe(77);
+    expect(body.warningCountBySeverity).toEqual({ bloqueante: 22, aviso: 55, fuera: 0 });
+    // Todas las bloqueantes (antes se recortaba a 20 sin mirar la gravedad).
+    expect(body.warnings).toHaveLength(22 + 50);
+    expect(body.warnings.slice(0, 22).every((x: { severity: string }) => x.severity === "bloqueante")).toBe(true);
+    expect(body.warnings[0]).toMatchObject({ blockers: ["Fecha vacía"] });
+    expect(body.warnings.slice(22).every((x: { severity: string }) => x.severity === "aviso")).toBe(true);
   });
 });
