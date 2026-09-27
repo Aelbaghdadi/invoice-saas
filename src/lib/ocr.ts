@@ -474,7 +474,10 @@ export async function extractInvoiceFromXml(xml: string): Promise<OcrResult> {
 }
 
 async function parseFacturaeXml(xml: string): Promise<ExtractedInvoice> {
-  const parser = new XMLParser({ ignoreAttributes: false, removeNSPrefix: true });
+  // parseTagValue: false deja los valores como texto. Si no, «0042» se leia
+  // como 42, «1.10» como 1.1 y «12E4» como 120000: el numero de factura
+  // llegaba alterado a A3. Los importes pasan igual por safeNum.
+  const parser = new XMLParser({ ignoreAttributes: false, removeNSPrefix: true, parseTagValue: false });
   const doc = parser.parse(xml);
 
   // Navigate FacturaE structure (v3.2 / v3.2.2)

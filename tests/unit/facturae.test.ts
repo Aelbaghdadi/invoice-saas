@@ -11,6 +11,9 @@ describe("Facturae: fecha de emisión", () => {
     const { extracted } = await extractInvoiceFromXml(facturae322);
     expect(extracted.invoiceDate).toBe("2026-09-14");
     expect([extracted.issuerCif, extracted.totalAmount, extracted.currency]).toEqual(["B12345674", 121, "EUR"]);
+    // Tal cual: antes «0042» llegaba como «42».
+    expect(extracted.invoiceNumber).toBe("0042");
+    expect([extracted.taxBase, extracted.vatRate, extracted.vatAmount]).toEqual([100, 21, 21]);
   });
 
   it("si solo viene en InvoiceHeader (XML antiguos), también", async () => {
@@ -19,5 +22,14 @@ describe("Facturae: fecha de emisión", () => {
       .replace("<InvoiceNumber>0042</InvoiceNumber>", "<InvoiceNumber>0042</InvoiceNumber><IssueDate>2026-09-15</IssueDate>");
     const { extracted } = await extractInvoiceFromXml(xml);
     expect(extracted.invoiceDate).toBe("2026-09-15");
+  });
+});
+
+describe("Facturae: los textos numéricos no se convierten", () => {
+  it("«1.10» y «12E4» como número de factura llegan tal cual", async () => {
+    for (const number of ["1.10", "12E4"]) {
+      const { extracted } = await extractInvoiceFromXml(facturae322.replace("<InvoiceNumber>0042</InvoiceNumber>", `<InvoiceNumber>${number}</InvoiceNumber>`));
+      expect(extracted.invoiceNumber).toBe(number);
+    }
   });
 });
