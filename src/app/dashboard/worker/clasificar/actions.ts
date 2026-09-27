@@ -7,7 +7,7 @@ import { appendAuditLogs } from "@/lib/auditLog";
 import { learnProviderRule } from "@/lib/providerRouting";
 import { detectInvoiceType } from "@/lib/invoiceRouting";
 import { DUPLICATE_SELECT, describeExisting } from "@/lib/issueDetector";
-import { mathIssues } from "@/lib/mathIssues";
+import { intracomVatIssue, mathIssues } from "@/lib/mathIssues";
 import { isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { proposeSurchargesFromTotal } from "@/lib/equivalenceSurcharge";
 import { proposeOperationType } from "@/lib/operationTypeProposal";
@@ -162,6 +162,15 @@ export async function classifyInvoice(invoiceId: string, clientId: string): Prom
     irpfAmount,
     operationType: proposal.operationType,
   });
+  // Intracomunitaria con IVA declarado, con el tipo propuesto para el
+  // cliente elegido (el OCR no la mira en «Por clasificar»).
+  const intracomVat = intracomVatIssue({
+    lines,
+    vatAmount: invoice.vatAmount == null ? null : Number(invoice.vatAmount),
+    vatRate: invoice.vatRate == null ? null : Number(invoice.vatRate),
+    operationType: proposal.operationType,
+  });
+  if (intracomVat) mathProblems.push(intracomVat);
   // isValid con el recargo ya propuesto, como `finalIsValid` en el OCR: el
   // del buzon se calculo sin recargo y la ficha lo pintaba en rojo.
   const isValid = lines.length > 0 && totalAmount != null

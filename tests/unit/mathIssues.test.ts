@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isVatLinesIssue, mathIssues } from "@/lib/mathIssues";
+import { intracomVatIssue, isVatLinesIssue, mathIssues } from "@/lib/mathIssues";
 
 const base = { taxBase: null, vatAmount: null, irpfAmount: null };
 
@@ -31,5 +31,24 @@ describe("mathIssues", () => {
     expect(issues[0].field).toBe("vatLines");
     expect(isVatLinesIssue(issues[0])).toBe(true);
     expect(isVatLinesIssue({ type: "MATH_MISMATCH", field: null })).toBe(false);
+  });
+});
+
+describe("intracomVatIssue", () => {
+  const line = (vatRate: number, vatAmount: number) => ({ vatRate, vatAmount });
+
+  it("intracomunitaria con IVA: aviso con el % de la línea", () => {
+    expect(intracomVatIssue({ lines: [line(21, 21)], vatAmount: 21, vatRate: 21, operationType: "INTRACOM_SERVICIOS" })?.description)
+      .toMatch(/^Operación intracomunitaria con IVA declarado \(21%\)/);
+  });
+
+  it("sin líneas: mira la cuota de la factura", () => {
+    expect(intracomVatIssue({ lines: [], vatAmount: 21, vatRate: null, operationType: "INTRACOM" })?.description)
+      .toMatch(/^Operación intracomunitaria con IVA declarado:/);
+  });
+
+  it("con IVA 0 o de otro tipo: nada", () => {
+    expect(intracomVatIssue({ lines: [line(0, 0)], vatAmount: 0, vatRate: 0, operationType: "INTRACOM" })).toBeNull();
+    expect(intracomVatIssue({ lines: [line(21, 21)], vatAmount: 21, vatRate: 21, operationType: "INTERIOR" })).toBeNull();
   });
 });

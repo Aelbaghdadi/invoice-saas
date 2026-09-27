@@ -3,7 +3,7 @@ import type { ExtractedInvoice } from "@/lib/ocr";
 import type { Invoice, IssueType } from "@prisma/client";
 import { parseTaxId, type OperationTypeName } from "@/lib/validators";
 import { formatEur } from "@/lib/format";
-import { mathIssues } from "@/lib/mathIssues";
+import { intracomVatIssue, mathIssues } from "@/lib/mathIssues";
 import { formatDateEs } from "@/lib/dates";
 import { periodLabel } from "@/lib/period";
 
@@ -118,24 +118,15 @@ export async function detectIssues(
     }));
   }
 
-  // 4. INTRACOM_VAT — operacion intracomunitaria (adquisicion/entrega) con
-  // IVA declarado. Las intracomunitarias van con IVA 0%; si el OCR deja el
-  // 21% por defecto del documento, no puede colarse silenciosamente hasta
-  // el export. Se avisa aqui (NEEDS_ATTENTION) en vez de forzar el 0% a
-  // ciegas: puede ser un error real del proveedor que el gestor deba ver.
-  if (operationTypeHint === "INTRACOM" || operationTypeHint === "INTRACOM_SERVICIOS") {
-    const sumVat = extraction.vatLines.length > 0
-      ? extraction.vatLines.reduce((s, l) => s + l.vatAmount, 0)
-      : (extraction.vatAmount ?? 0);
-    if (Math.abs(sumVat) > 0.01) {
-      const rate = extraction.vatLines.length === 1 ? extraction.vatLines[0].vatRate : extraction.vatRate;
-      issues.push({
-        type: "MANUAL",
-        description: `Operación intracomunitaria con IVA declarado${rate != null ? ` (${rate}%)` : ""}: las intracomunitarias suelen ir con IVA 0%. Revisa el desglose antes de exportar.`,
-        field: "vatRate",
-      });
-    }
-  }
+  // 4. INTRACOM_VAT — intracomunitaria con IVA declarado (intracomVatIssue,
+  // tambien en la clasificacion manual).
+  const intracomVat = intracomVatIssue({
+    lines: extraction.vatLines,
+    vatAmount: extraction.vatAmount ?? null,
+    vatRate: extraction.vatRate ?? null,
+    operationType: operationTypeHint,
+  });
+  if (intracomVat) issues.push(intracomVat);
 
   // 5. POSSIBLE_DUPLICATE — functional dedup (non-blocking alert)
   // Strategy A: exact match by CIF + invoice number (strongest signal)
