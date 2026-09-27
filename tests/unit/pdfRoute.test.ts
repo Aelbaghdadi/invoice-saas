@@ -46,9 +46,12 @@ async function pdfWithText(lines: string[], pages = 1): Promise<string> {
 }
 
 describe("extractPdfWithGemini: vía de texto o de imagen", () => {
-  it("un PDF digital de la demo va por texto", async () => {
-    const { source } = await extractPdfWithGemini(readFileSync("scripts/demo-pdfs/amazon-oficina.pdf").toString("base64"));
+  it("un PDF digital de la demo va por texto, y un trozo del texto queda en el JSON crudo", async () => {
+    const { source, result } = await extractPdfWithGemini(readFileSync("scripts/demo-pdfs/amazon-oficina.pdf").toString("base64"));
     expect([source, calls]).toEqual(["gemini_text", ["texto"]]);
+    const raw = JSON.parse(result.rawJson);
+    expect(raw.textExcerpt).toContain("B85800949");
+    expect(raw.textExcerpt.length).toBe(raw.textLength);
   });
 
   it("un escaneado (sin texto) va por imagen", async () => {

@@ -58,6 +58,8 @@ const MAX_FIRST_PAGES = 5;
 const TEXT_BUDGET_MS = 2_000;
 /** Texto maximo que se manda a Gemini (antes, hasta 1,9 M caracteres). */
 const MAX_TEXT_FOR_GEMINI = 40_000;
+/** Texto que se guarda en el JSON crudo de la extraccion. */
+const RAW_TEXT_EXCERPT = 4_000;
 
 /** Las paginas que se leen, de 1 a numPages. */
 export function pagesToRead(numPages: number): number[] {
@@ -557,7 +559,11 @@ export async function extractFromPdfTextWithGemini(base64: string): Promise<OcrR
   return {
     extracted,
     rawText: text,
-    rawJson: JSON.stringify({ source: "gemini_text", textLength: text.length, boundingBoxes: bboxes }),
+    // Un trozo del texto en el JSON crudo (InvoiceExtraction.rawResponse),
+    // sin migracion: para comparar la via de texto con la de imagen.
+    rawJson: JSON.stringify({
+      source: "gemini_text", textLength: text.length, textExcerpt: text.slice(0, RAW_TEXT_EXCERPT), boundingBoxes: bboxes,
+    }),
   };
 }
 
