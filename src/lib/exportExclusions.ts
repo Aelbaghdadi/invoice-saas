@@ -133,3 +133,30 @@ export function parseExportExclusionBoxes(raw: string | null): Partial<ExportExc
   }
   return counts;
 }
+
+/** Lo que se quedo fuera tras descargar, por caja: solo las que hay que
+ *  corregir «siguen pendientes»; las que no van a A3 no tienen nada
+ *  pendiente. Sin la cabecera por caja (version anterior del servidor), el
+ *  total a secas. Empieza por un espacio: va detras de otra frase. */
+export function exportSuccessExclusionText(success: { excluded: number; boxes: Partial<ExportExclusionBoxCounts> }): string {
+  if (success.excluded <= 0) return "";
+  const fix = success.boxes.corregir ?? 0;
+  const out = success.boxes.fuera ?? 0;
+  if (fix + out === 0) {
+    return success.excluded === 1
+      ? " 1 factura se ha quedado fuera del Excel."
+      : ` ${success.excluded} facturas se han quedado fuera del Excel.`;
+  }
+  const parts: string[] = [];
+  if (fix > 0) {
+    parts.push(fix === 1
+      ? " 1 factura se ha quedado fuera y sigue pendiente hasta que la corrijas."
+      : ` ${fix} facturas se han quedado fuera y siguen pendientes hasta que las corrijas.`);
+  }
+  if (out > 0) {
+    parts.push(out === 1
+      ? " 1 factura se ha quedado fuera del Excel: no va a A3 y no hay nada que hacer con ella."
+      : ` ${out} facturas se han quedado fuera del Excel: no van a A3 y no hay nada que hacer con ellas.`);
+  }
+  return parts.join("");
+}

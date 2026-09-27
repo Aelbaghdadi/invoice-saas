@@ -187,7 +187,7 @@ describe("validateForA3Export", () => {
     expect(res).toHaveLength(1);
     expect(res[0].severity).toBe("bloqueante");
     expect(res[0].blockers).toEqual([
-      "Falta el NIF del proveedor. Si es un ticket o una factura simplificada, configura la cuenta genérica en la ficha del cliente",
+      "Falta el NIF del proveedor. Si es un ticket o una factura simplificada, configura la cuenta genérica en la ficha del cliente y ponla en la factura desde la revisión",
     ]);
   });
 

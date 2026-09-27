@@ -13,7 +13,7 @@ import { ErrorBox } from "@/components/ui/ErrorBox";
 import type { AppError } from "@/lib/errorCodes";
 import { quarterStartMonth, periodLabel, MONTH_OPTIONS, QUARTER_OPTIONS } from "@/lib/period";
 import { filenameFromContentDisposition } from "@/lib/contentDisposition";
-import { describeExportExclusionBoxes, parseExportExclusionBoxes, type ExportExclusionBoxCounts } from "@/lib/exportExclusions";
+import { describeExportExclusionBoxes, exportSuccessExclusionText, parseExportExclusionBoxes, type ExportExclusionBoxCounts } from "@/lib/exportExclusions";
 
 type ClientOption = { id: string; name: string; cif: string };
 
@@ -441,7 +441,7 @@ export function ExportForm({ clients }: Props) {
               <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
               <span>
                 Exportación completada. Las facturas del Excel han quedado marcadas como exportadas.
-                {successExclusionText(success)}
+                {exportSuccessExclusionText(success)}
                 {/* Enlace propio: router.refresh() no siempre llega a pintar el
                     historial (Next 16 aborta a veces el refresco entre los
                     prefetch), y este fichero tiene que poder bajarse otra vez. */}
@@ -590,22 +590,4 @@ function WarningList({ tone, title, note, items, total }: {
       )}
     </div>
   );
-}
-
-/** Lo que se quedo fuera, por caja: solo las que hay que corregir «siguen
- *  pendientes»; las que no van a A3 no tienen nada pendiente. Sin la
- *  cabecera por caja (version anterior del servidor), el total a secas. */
-function successExclusionText(success: { excluded: number; boxes: Partial<ExportExclusionBoxCounts> }): string {
-  if (success.excluded <= 0) return "";
-  const fix = success.boxes.corregir ?? 0;
-  const out = success.boxes.fuera ?? 0;
-  if (fix + out === 0) {
-    return success.excluded === 1
-      ? " 1 factura se ha quedado fuera del Excel."
-      : ` ${success.excluded} facturas se han quedado fuera del Excel.`;
-  }
-  const parts: string[] = [];
-  if (fix > 0) parts.push(fix === 1 ? " 1 factura sigue pendiente hasta que la corrijas." : ` ${fix} facturas siguen pendientes hasta que las corrijas.`);
-  if (out > 0) parts.push(out === 1 ? " 1 no va a A3 y no hay nada que hacer con ella." : ` ${out} no van a A3 y no hay nada que hacer con ellas.`);
-  return parts.join("");
 }

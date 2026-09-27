@@ -3,6 +3,7 @@ import {
   countExportExclusions,
   describeExportExclusions,
   exportExclusionReason,
+  exportSuccessExclusionText,
   parseExportExclusionCounts,
   countExportExclusionBoxes,
   describeExportExclusionBoxes,
@@ -78,5 +79,23 @@ describe("resumen por caja (revisión 2 del PR #7)", () => {
     expect(parseExportExclusionBoxes(JSON.stringify({ corregir: 1, fuera: 2 }))).toEqual({ corregir: 1, fuera: 2 });
     expect(parseExportExclusionBoxes("roto")).toEqual({});
     expect(parseExportExclusionBoxes(JSON.stringify({ corregir: -1, fuera: "2" }))).toEqual({});
+  });
+});
+
+describe("exportSuccessExclusionText", () => {
+  it("por caja: las de corregir siguen pendientes; las de fuera, no", () => {
+    expect(exportSuccessExclusionText({ excluded: 1, boxes: { corregir: 1 } }))
+      .toBe(" 1 factura se ha quedado fuera y sigue pendiente hasta que la corrijas.");
+    expect(exportSuccessExclusionText({ excluded: 2, boxes: { fuera: 2 } }))
+      .toBe(" 2 facturas se han quedado fuera del Excel: no van a A3 y no hay nada que hacer con ellas.");
+    expect(exportSuccessExclusionText({ excluded: 3, boxes: { corregir: 2, fuera: 1 } })).toBe(
+      " 2 facturas se han quedado fuera y siguen pendientes hasta que las corrijas."
+      + " 1 factura se ha quedado fuera del Excel: no va a A3 y no hay nada que hacer con ella.",
+    );
+  });
+
+  it("sin desglose por caja, el total; sin ninguna, nada", () => {
+    expect(exportSuccessExclusionText({ excluded: 2, boxes: {} })).toBe(" 2 facturas se han quedado fuera del Excel.");
+    expect(exportSuccessExclusionText({ excluded: 0, boxes: {} })).toBe("");
   });
 });

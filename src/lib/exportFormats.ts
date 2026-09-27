@@ -386,7 +386,7 @@ export function a3BlockingProblems(inv: InvoiceWithClient): string[] {
         // El export solo lo usa un administrador: no puede mandarle a
         // «pedir a un administrador» que configure la generica.
         blockers.push(problem.message
-          .replace("pide a un administrador que configure la cuenta genérica del cliente", "configura la cuenta genérica en la ficha del cliente")
+          .replace("pide a un administrador que configure la cuenta genérica del cliente", "configura la cuenta genérica en la ficha del cliente y ponla en la factura desde la revisión")
           .replace(/\.$/, ""));
         break;
       case "sin_numero":
