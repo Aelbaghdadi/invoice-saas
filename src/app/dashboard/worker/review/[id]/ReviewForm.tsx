@@ -741,6 +741,10 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   // cambia signos, asi que o es un abono sin marcar o un signo mal leido.
   const negativeWithoutRectificative = !isRectificative && (totalNum < 0 || vatLines.some((l) =>
     parseFloat(l.taxBase) < 0 || parseFloat(l.vatAmount) < 0 || parseFloat(l.equivalenceSurchargeAmount) < 0));
+  // Incidencias abiertas del OCR sobre el signo (F-012): «Parece
+  // rectificativa…» o «importes negativos…». Antes no se pintaban y el gestor
+  // no veia por que la factura estaba en «Con incidencias».
+  const rectificativeIssues = issues.filter((i) => i.field === "isRectificative" && i.status === "OPEN");
   const hasValues  = vatTotals.anyFilled && totalAmount;
   const balanceInput = {
     sumBase: vatTotals.sumBase,
@@ -1950,7 +1954,13 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                   }`}
                 />
               </button>
-              {negativeWithoutRectificative && (
+              {rectificativeIssues.map((issue) => (
+                <p key={issue.id} className="mx-3 mb-2 flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-700">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+                  {issue.description}
+                </p>
+              ))}
+              {negativeWithoutRectificative && rectificativeIssues.length === 0 && (
                 <button
                   type="button"
                   onClick={() => setShowRectificativePanel(true)}
