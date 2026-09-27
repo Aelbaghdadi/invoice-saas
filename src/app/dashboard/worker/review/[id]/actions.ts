@@ -519,6 +519,7 @@ async function parseAndSave(
       lines: linesToSave,
       isRectificative: isRectificativeFlag,
       thirdPartyTaxId: isPurchase ? finalIssuerCif : finalReceiverCif,
+      thirdPartyCountry: isPurchase ? finalIssuerCountry : finalReceiverCountry,
       operationType: submittedOperationType,
       supplierAccount: newData.supplierAccount,
       expenseAccount: newData.expenseAccount,

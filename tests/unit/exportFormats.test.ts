@@ -535,13 +535,23 @@ describe("generateA3Excel — prefijo de pais en la columna E", () => {
 });
 
 describe("validateForA3Export — pais del NIF", () => {
-  it("avisa de la intracomunitaria sin pais detectado (la portuguesa que no imprime el prefijo)", () => {
-    const res = validateForA3Export([mkInvoice({
+  it("la intracomunitaria sin pais detectado es bloqueante (la portuguesa que no imprime el prefijo)", () => {
+    const [res] = validateForA3Export([mkInvoice({
       operationType: "INTRACOM" as any,
       issuerCountry: null,
       vatAmount: 0 as any, taxBase: 100 as any, totalAmount: 100 as any,
     })]);
-    expect(res.some((r) => r.warnings.some((w) => w.includes("sin país en el NIF")))).toBe(true);
+    expect(res.severity).toBe("bloqueante");
+    expect(res.blockers).toEqual([expect.stringContaining("sin país en el NIF")]);
+    expect(res.warnings.filter((w) => w.includes("sin país en el NIF"))).toEqual([]);
+  });
+
+  it("la intracomunitaria sin NIF es bloqueante", () => {
+    const [res] = validateForA3Export([mkInvoice({
+      operationType: "INTRACOM_SERVICIOS", issuerCif: null,
+      vatAmount: new Prisma.Decimal(0), totalAmount: new Prisma.Decimal(100),
+    })]);
+    expect(res.blockers).toEqual(["NIF vacío"]);
   });
 
   it("no avisa si la intracomunitaria ya trae el pais", () => {
@@ -550,7 +560,7 @@ describe("validateForA3Export — pais del NIF", () => {
       issuerCountry: "PT" as any,
       vatAmount: 0 as any, taxBase: 100 as any, totalAmount: 100 as any,
     })]);
-    expect(res.flatMap((r) => r.warnings).filter((w) => w.includes("sin país en el NIF"))).toEqual([]);
+    expect(res.flatMap((r) => [...r.blockers, ...r.warnings]).filter((w) => w.includes("sin país en el NIF"))).toEqual([]);
   });
 
   it("avisa del NIF extranjero marcado como operacion interior", () => {

@@ -27,6 +27,8 @@ export type RuleInvoice = {
   isRectificative: boolean;
   /** NIF de la otra parte: el emisor en recibidas, el receptor en emitidas. */
   thirdPartyTaxId: string | null;
+  /** Pais del prefijo de ese NIF (parseTaxId), o null si no lleva. */
+  thirdPartyCountry: string | null;
   operationType: string | null;
   supplierAccount: string | null;
   expenseAccount: string | null;
@@ -44,15 +46,19 @@ export type RuleCode =
   | "sin_lineas"
   | "sin_cuentas"
   | "sin_nif"
+  | "sin_nif_iva"
   | "moneda"
   | "descuadre";
 
 export type RuleProblem = { rule: RuleCode; message: string };
 
-/** Operaciones nacionales: el tercero tiene NIF espanol sin discusion. En
- *  las demas (intracomunitarias, importaciones, inversion del sujeto pasivo)
- *  puede ser un proveedor extranjero sin NIF espanol: no se bloquea. */
+/** Operaciones nacionales: el tercero tiene NIF espanol sin discusion. */
 const DOMESTIC_OPERATION_TYPES = new Set(["INTERIOR", "AGRARIA", "IVA_NO_DEDUCIBLE"]);
+/** Intracomunitarias: hace falta el NIF-IVA (con el prefijo del pais). Sin el
+ *  no hay modelo 349 y A3 rechaza la fila («el NIF no existe en la tabla»).
+ *  Decidido en el PR #7. En importaciones no se exige; en inversion del sujeto
+ *  pasivo tampoco, pendiente de que lo confirme el asesor. */
+const INTRACOM_OPERATION_TYPES = new Set(["INTRACOM", "INTRACOM_SERVICIOS"]);
 
 const blank = (v: string | null | undefined) => !v || v.trim() === "";
 
@@ -69,6 +75,8 @@ export function usesSimplifiedAccount(inv: Pick<RuleInvoice, "supplierAccount" |
 export function thirdPartyTaxIdRequired(
   inv: Pick<RuleInvoice, "operationType" | "supplierAccount" | "simplifiedSupplierAccount">,
 ): boolean {
+  // Una intracomunitaria no es un ticket: la cuenta generica no la exime.
+  if (INTRACOM_OPERATION_TYPES.has(inv.operationType ?? "")) return true;
   if (usesSimplifiedAccount(inv)) return false;
   return DOMESTIC_OPERATION_TYPES.has(inv.operationType ?? "INTERIOR");
 }
@@ -81,10 +89,22 @@ export function thirdPartyTaxIdRequired(
 export function missingDataProblems(inv: RuleInvoice): RuleProblem[] {
   const problems: RuleProblem[] = [];
   const isPurchase = inv.type === "PURCHASE";
-  if (thirdPartyTaxIdRequired(inv) && blank(inv.thirdPartyTaxId)) {
+  const party = isPurchase ? "proveedor" : "destinatario";
+  const intracom = INTRACOM_OPERATION_TYPES.has(inv.operationType ?? "");
+  if (intracom && blank(inv.thirdPartyTaxId)) {
     problems.push({
       rule: "sin_nif",
-      message: `Falta el NIF del ${isPurchase ? "proveedor" : "destinatario"}. Si es un ticket o una factura simplificada, usa la cuenta genérica del cliente.`,
+      message: `Falta el NIF-IVA del ${party}: en una operación intracomunitaria hace falta para el modelo 349 y para A3.`,
+    });
+  } else if (intracom && (blank(inv.thirdPartyCountry) || inv.thirdPartyCountry!.trim() === "ES")) {
+    problems.push({
+      rule: "sin_nif_iva",
+      message: `El NIF del ${party} no lleva el prefijo del país: en una operación intracomunitaria hace falta el NIF-IVA (p. ej. PT515160873).`,
+    });
+  } else if (thirdPartyTaxIdRequired(inv) && blank(inv.thirdPartyTaxId)) {
+    problems.push({
+      rule: "sin_nif",
+      message: `Falta el NIF del ${party}. Si es un ticket o una factura simplificada, usa la cuenta genérica del cliente.`,
     });
   }
   if (blank(inv.invoiceNumber)) problems.push({ rule: "sin_numero", message: "Falta el número de factura." });

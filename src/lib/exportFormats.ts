@@ -315,6 +315,7 @@ function ruleInvoice(inv: InvoiceWithClient): RuleInvoice {
     lines: getExportLines(inv),
     isRectificative: Boolean(inv.isRectificative),
     thirdPartyTaxId: isPurchase ? inv.issuerCif : inv.receiverCif,
+    thirdPartyCountry: (isPurchase ? inv.issuerCountry : inv.receiverCountry) ?? null,
     operationType: inv.operationType ?? null,
     supplierAccount: inv.supplierAccount,
     expenseAccount: inv.expenseAccount,
@@ -339,6 +340,12 @@ export function a3BlockingProblems(inv: InvoiceWithClient): string[] {
     switch (problem.rule) {
       case "sin_nif":
         blockers.push("NIF vacío");
+        break;
+      case "sin_nif_iva":
+        blockers.push(
+          "Operación intracomunitaria sin país en el NIF: A3 la rechazará "
+          + "(«el NIF no existe en la tabla»). Corrige el NIF en la revisión con su prefijo, p.ej. PT515160873",
+        );
         break;
       case "sin_numero":
         blockers.push("Número de factura vacío");
@@ -402,16 +409,8 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
       if (Math.abs(sumVat) > 0.01) {
         warnings.push("Operación intracomunitaria con IVA declarado (debería ir a 0%)");
       }
-      // El pais solo se detecta si el prefijo venia IMPRESO en la factura.
-      // Una portuguesa que ponga "NIF 515160873" a secas se guarda sin pais y
-      // sale sin prefijo, que es justo lo que A3 rechaza. El gestor lo arregla
-      // tecleando el prefijo en la revision (parseTaxId lo vuelve a separar).
-      if (!country || country.trim() === "ES") {
-        warnings.push(
-          "Operación intracomunitaria sin país en el NIF: A3 la rechazará "
-          + "(«el NIF no existe en la tabla»). Corrige el NIF en la revisión con su prefijo, p.ej. PT515160873",
-        );
-      }
+      // Sin pais en el NIF (la portuguesa que imprime "NIF 515160873" a
+      // secas) es bloqueante: lo pone a3BlockingProblems (sin_nif_iva).
     }
     // Prefijo extranjero con operacion Interior: el NIF sale con prefijo pero
     // la columna G va a 1, y el 303/349 sale mal. Uno de los dos esta mal.

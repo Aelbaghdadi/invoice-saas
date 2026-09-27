@@ -12,6 +12,7 @@ const ok: RuleInvoice = {
   lines: [{ taxBase: 100, vatAmount: 21 }],
   isRectificative: false,
   thirdPartyTaxId: "B12345674",
+  thirdPartyCountry: null,
   operationType: "INTERIOR",
   supplierAccount: "40000001",
   expenseAccount: "60000001",
@@ -91,10 +92,29 @@ describe("NIF del tercero", () => {
     expect(usesSimplifiedAccount({ supplierAccount: "", simplifiedSupplierAccount: "" })).toBe(false);
   });
 
-  it("no en operaciones que pueden ser con un extranjero sin NIF español", () => {
-    for (const operationType of ["INTRACOM", "INTRACOM_SERVICIOS", "IMPORTACION", "INVERSION_SP"]) {
+  it("no en importaciones ni (pendiente del asesor) en inversión del sujeto pasivo", () => {
+    for (const operationType of ["IMPORTACION", "INVERSION_SP"]) {
       expect(thirdPartyTaxIdRequired({ ...ok, operationType })).toBe(false);
+      expect(rules({ operationType, thirdPartyTaxId: null })).toEqual([]);
     }
+  });
+
+  it("en intracomunitarias, el NIF-IVA con el prefijo del país (decidido en el PR #7)", () => {
+    for (const operationType of ["INTRACOM", "INTRACOM_SERVICIOS"]) {
+      expect(thirdPartyTaxIdRequired({ ...ok, operationType })).toBe(true);
+      expect(rules({ operationType, thirdPartyTaxId: "515160873", thirdPartyCountry: "PT" })).toEqual([]);
+      expect(rules({ operationType, thirdPartyTaxId: null })).toEqual(["sin_nif"]);
+      expect(rules({ operationType, thirdPartyTaxId: "515160873", thirdPartyCountry: null })).toEqual(["sin_nif_iva"]);
+      expect(rules({ operationType, thirdPartyTaxId: "B12345674", thirdPartyCountry: "ES" })).toEqual(["sin_nif_iva"]);
+    }
+    expect(validationProblems({ ...ok, operationType: "INTRACOM", thirdPartyTaxId: null })[0].message)
+      .toBe("Falta el NIF-IVA del proveedor: en una operación intracomunitaria hace falta para el modelo 349 y para A3.");
+    expect(validationProblems({ ...ok, type: "SALE", operationType: "INTRACOM", thirdPartyTaxId: "515160873" })[0].message)
+      .toBe("El NIF del destinatario no lleva el prefijo del país: en una operación intracomunitaria hace falta el NIF-IVA (p. ej. PT515160873).");
+  });
+
+  it("la cuenta genérica no exime a una intracomunitaria", () => {
+    expect(rules({ operationType: "INTRACOM", thirdPartyTaxId: null, supplierAccount: "40099999" })).toEqual(["sin_nif"]);
   });
 });
 

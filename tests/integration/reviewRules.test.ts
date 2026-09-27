@@ -120,6 +120,26 @@ describe("validar exige lo mínimo en el servidor (F-009)", () => {
     expect((await row()).status).toBe("VALIDATED");
   });
 
+  describe("intracomunitarias: NIF-IVA obligatorio (decidido en el PR #7)", () => {
+    const intracom = { operationType: "INTRACOM_SERVICIOS", vatLines: JSON.stringify([{ taxBase: "100", vatRate: "0", vatAmount: "0" }]), totalAmount: "100" };
+
+    it.each([
+      ["sin NIF", "", "Falta el NIF-IVA del proveedor: en una operación intracomunitaria hace falta para el modelo 349 y para A3."],
+      ["con NIF sin prefijo", "515160873",
+        "El NIF del proveedor no lleva el prefijo del país: en una operación intracomunitaria hace falta el NIF-IVA (p. ej. PT515160873)."],
+    ])("%s: no se valida", async (_caso, issuerCif, mensaje) => {
+      expect((await validate(await form({ ...intracom, issuerCif }))).error).toBe(mensaje);
+      expect((await row()).status).toBe("PENDING_REVIEW");
+    });
+
+    it("con el NIF-IVA sí, y el país se guarda aparte", async () => {
+      expect((await validate(await form({ ...intracom, issuerCif: "PT515160873" }))).error).toBeNull();
+      const after = await row();
+      expect(after.status).toBe("VALIDATED");
+      expect([after.issuerCountry, after.issuerCif]).toEqual(["PT", "515160873"]);
+    });
+  });
+
   it("una importación de un proveedor sin NIF español se valida", async () => {
     const r = await validate(await form({ issuerCif: "", operationType: "IMPORTACION" }));
     expect(r.error).toBeNull();

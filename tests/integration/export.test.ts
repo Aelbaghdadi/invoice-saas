@@ -250,24 +250,30 @@ describe("bloqueantes en el export (F-025)", () => {
     await makeInvoice(w.client, { ...april, invoiceNumber: "BUENA" });
     const sinNif = await makeInvoice(w.client, { ...april, invoiceNumber: "SIN-NIF", issuerCif: null });
     const usd = await makeInvoice(w.client, { ...april, invoiceNumber: "USD", currency: "USD" });
+    // Intracomunitaria sin pais en el NIF: bloqueante desde el PR #7.
+    const intracom = await makeInvoice(w.client, {
+      ...april, invoiceNumber: "INTRA", operationType: "INTRACOM_SERVICIOS", issuerCif: "515160873", issuerCountry: null,
+      vatAmount: 0, totalAmount: 100,
+    });
 
     const body = await preview();
     expect(body.count).toBe(1);
-    expect(body.excludedByReason).toEqual({ total_cero: 0, dividida: 0, bloqueante: 2 });
-    expect(body.blockingCount).toBe(2);
+    expect(body.excludedByReason).toEqual({ total_cero: 0, dividida: 0, bloqueante: 3 });
+    expect(body.blockingCount).toBe(3);
     expect(body.warnings.map((x: { invoiceNumber: string; severity: string; blockers: string[] }) =>
       [x.invoiceNumber, x.severity, x.blockers])).toEqual([
       ["SIN-NIF", "bloqueante", ["NIF vacío"]],
       ["USD", "bloqueante", ["Importes en USD: A3 solo admite euros. Conviértelos y márcala en euros en la revisión"]],
+      ["INTRA", "bloqueante", [expect.stringContaining("Operación intracomunitaria sin país en el NIF")]],
     ]);
 
     const download = await exportDownload(downloadRequest());
     expect(download.status).toBe(200);
-    expect(download.headers.get("X-Export-Excluded")).toBe("2");
-    expect(JSON.parse(download.headers.get("X-Export-Excluded-Detail")!)).toEqual({ total_cero: 0, dividida: 0, bloqueante: 2 });
+    expect(download.headers.get("X-Export-Excluded")).toBe("3");
+    expect(JSON.parse(download.headers.get("X-Export-Excluded-Detail")!)).toEqual({ total_cero: 0, dividida: 0, bloqueante: 3 });
     const marked = await prisma.invoice.findMany({ where: { exportBatchId: { not: null } }, select: { invoiceNumber: true } });
     expect(marked.map((i) => i.invoiceNumber)).toEqual(["BUENA"]);
-    for (const { id } of [sinNif, usd]) {
+    for (const { id } of [sinNif, usd, intracom]) {
       const inv = await prisma.invoice.findUniqueOrThrow({ where: { id } });
       expect(inv.status).toBe("VALIDATED");
       expect(inv.exportBatchId).toBeNull();

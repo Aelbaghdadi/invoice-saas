@@ -1046,6 +1046,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       lines: "lines" in parsedLines ? parsedLines.lines : [],
       isRectificative,
       thirdPartyTaxId: counterpartyNif,
+      thirdPartyCountry: parseTaxId(counterpartyNif).countryCode,
       operationType,
       supplierAccount: supplierAccountVal,
       expenseAccount: expenseAccountVal,
