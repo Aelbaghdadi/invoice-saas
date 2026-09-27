@@ -32,8 +32,15 @@ const REQUIRED_FIELDS = [
   ["vatAmount", "la cuota"],
 ] as const;
 
+/** Texto del campo. Un numero (JSON enviado a mano) cuenta como su texto:
+ *  antes contaba como vacio y la linea se descartaba en silencio. Lo que no
+ *  es ni texto ni un numero finito va como "?" para que salga como «no es
+ *  un número» en vez de desaparecer. */
 function text(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : "?";
+  if (value == null) return "";
+  return "?";
 }
 
 /** "12,5", "12.5" y "1e3" valen; "", "abc" o "12,5,3" no. */
@@ -62,6 +69,15 @@ export function vatLineProblem(line: VatLineText, position: number): string | nu
   const notNumbers = values.filter((v) => parseDecimal(v.value) === null).map((v) => v.label);
   if (notNumbers.length > 0) {
     return `La línea ${position} de IVA tiene un valor que no es un número en ${joinSpanish(notNumbers)}.`;
+  }
+  // El recargo es opcional, pero si trae algo tiene que ser un numero: antes
+  // un valor raro se descartaba sin avisar.
+  const badSurcharge = [
+    { label: "el % de recargo", value: text(line.equivalenceSurchargeRate) },
+    { label: "la cuota de recargo", value: text(line.equivalenceSurchargeAmount) },
+  ].filter((v) => v.value !== "" && parseDecimal(v.value) === null).map((v) => v.label);
+  if (badSurcharge.length > 0) {
+    return `La línea ${position} de IVA tiene un valor que no es un número en ${joinSpanish(badSurcharge)}.`;
   }
   // La BD guarda 2 decimales: 1,005 se guardaria como 1,01 y el cuadre que
   // se calculo con 1,005 dejaria de valer.

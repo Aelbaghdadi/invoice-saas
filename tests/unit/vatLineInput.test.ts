@@ -44,6 +44,17 @@ describe("vatLineProblem (F-014)", () => {
     expect(vatLineProblem(line("100,50", "21", "21,11"), 1)).toBeNull();
   });
 
+  it("números sin comillas (JSON a mano) valen; lo demás es «no es un número», nunca vacío", () => {
+    expect(parseVatLineInputs(JSON.stringify([{ taxBase: 100, vatRate: 21, vatAmount: 21 }]))).toEqual({
+      lines: [{ taxBase: 100, vatRate: 21, vatAmount: 21, equivalenceSurchargeRate: null, equivalenceSurchargeAmount: null }],
+    });
+    expect(vatLineProblem({ taxBase: 100, vatRate: 21, vatAmount: true }, 1)).toBe(
+      "La línea 1 de IVA tiene un valor que no es un número en la cuota.",
+    );
+    expect(vatLineProblem({ taxBase: "100", vatRate: "21", vatAmount: "21", equivalenceSurchargeRate: "5.2", equivalenceSurchargeAmount: "x" }, 1))
+      .toBe("La línea 1 de IVA tiene un valor que no es un número en la cuota de recargo.");
+  });
+
   it("valores que no son números", () => {
     expect(vatLineProblem(line("100", "21", "abc"), 1)).toBe(
       "La línea 1 de IVA tiene un valor que no es un número en la cuota.",

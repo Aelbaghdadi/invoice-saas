@@ -67,6 +67,20 @@ describe("líneas de IVA incompletas (F-014)", () => {
     expect(await row()).toEqual(antes);
   });
 
+  it("una línea con números sin comillas se guarda, no se descarta", async () => {
+    const r = await save({ vatLines: JSON.stringify([{ taxBase: 100, vatRate: 21, vatAmount: 21 }, { taxBase: 50, vatRate: 10, vatAmount: 5 }]), totalAmount: "176" });
+    expect(r.error).toBeNull();
+    expect((await row()).vatLines).toHaveLength(2);
+  });
+
+  it("un recargo que no es un número: { error }, no se descarta sin avisar", async () => {
+    const r = await save({
+      vatLines: JSON.stringify([{ taxBase: "100", vatRate: "21", vatAmount: "21", equivalenceSurchargeRate: "5.2", equivalenceSurchargeAmount: "cinco" }]),
+      totalAmount: "126.2",
+    });
+    expect(r.error).toBe("La línea 1 de IVA tiene un valor que no es un número en la cuota de recargo.");
+  });
+
   it("una exenta con solo la base tampoco se pierde", async () => {
     const r = await save({
       vatLines: JSON.stringify([{ taxBase: "100", vatRate: "21", vatAmount: "21" }, { taxBase: "50", vatRate: "", vatAmount: "" }]),
