@@ -3,6 +3,7 @@
 import { prisma } from "@/lib/prisma";
 import { sendPasswordResetEmail } from "@/lib/email";
 import { headers } from "next/headers";
+import { after } from "next/server";
 import { resetPasswordRateLimit, getClientIp } from "@/lib/rateLimit";
 
 type ForgotPasswordState = {
@@ -58,13 +59,19 @@ export async function forgotPasswordAction(
 
       const resetUrl = `${getAppUrl()}/login/reset-password?token=${token}`;
 
-      const sent = await sendPasswordResetEmail({ to: user.email, resetUrl });
-      // Al usuario se le responde lo mismo, llegue o no el correo: si no,
-      // se sabria que el email existe. Solo queda en el log (send ya dice la
-      // plantilla y el destinatario enmascarado).
-      if (!sent.ok) {
-        console.error(`[FORGOT_PASSWORD] El enlace de restablecimiento no se ha enviado (usuario ${user.id})`);
-      }
+      // El envio va en after(): la respuesta tarda lo mismo exista o no el
+      // email, aunque Resend vaya lento o este colgado (si no, el tiempo
+      // delataba que la cuenta existe). Al usuario se le responde lo mismo;
+      // el fallo solo queda en el log (send ya dice la plantilla y el
+      // destinatario enmascarado).
+      const to = user.email;
+      const userId = user.id;
+      after(async () => {
+        const sent = await sendPasswordResetEmail({ to, resetUrl });
+        if (!sent.ok) {
+          console.error(`[FORGOT_PASSWORD] El enlace de restablecimiento no se ha enviado (usuario ${userId})`);
+        }
+      });
     }
 
     return { success: true };
