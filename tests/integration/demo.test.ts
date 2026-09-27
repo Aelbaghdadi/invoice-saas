@@ -4,6 +4,7 @@ import { describe, it, expect } from "vitest";
 import { prisma } from "./helpers/db";
 import { makeFirm } from "./helpers/factories";
 import { reseedDemo } from "@/lib/demoSeed";
+import { isValidNIF } from "@/lib/validators";
 import { validateForA3Export, type InvoiceWithClient } from "@/lib/exportFormats";
 
 describe("Reset demo", () => {
@@ -21,5 +22,17 @@ describe("Reset demo", () => {
     }
     const blocked = validateForA3Export(validated as InvoiceWithClient[]).filter((r) => r.severity === "bloqueante");
     expect(blocked).toEqual([]);
+  });
+
+  it("todos los NIF sembrados son válidos (el de Repsol tenía mal el dígito de control)", async () => {
+    const w = await makeFirm("A");
+    expect((await reseedDemo(w.firm.id, w.admin.id)).ok).toBe(true);
+    const invoices = await prisma.invoice.findMany({
+      where: { client: { advisoryFirmId: w.firm.id } }, select: { issuerCif: true, receiverCif: true },
+    });
+    const entries = await prisma.accountEntry.findMany({ where: { client: { advisoryFirmId: w.firm.id } }, select: { nif: true } });
+    const nifs = [...invoices.flatMap((i) => [i.issuerCif, i.receiverCif]), ...entries.map((e) => e.nif)].filter(Boolean) as string[];
+    expect(nifs.length).toBeGreaterThan(0);
+    expect(nifs.filter((n) => !isValidNIF(n))).toEqual([]);
   });
 });
