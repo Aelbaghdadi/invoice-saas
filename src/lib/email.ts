@@ -33,6 +33,9 @@ export function maskEmail(email: string): string {
   return `${email[0]}***${email.slice(at)}`;
 }
 
+/** Tope de espera de un envio (Resend no pone ninguno). */
+export const EMAIL_TIMEOUT_MS = 10_000;
+
 /**
  * Envia un correo. Resend no lanza: devuelve { data, error }, y antes solo se
  * miraba la excepcion, asi que una clave caducada o un dominio sin verificar
@@ -40,9 +43,6 @@ export function maskEmail(email: string): string {
  * enmascarado y devuelve { ok: false } si falla; quien necesite saberlo
  * (invitacion, restablecer contraseña) mira el resultado.
  */
-/** Tope de espera de un envio (Resend no pone ninguno). */
-export const EMAIL_TIMEOUT_MS = 10_000;
-
 async function send(template: string, to: string, subject: string, html: string): Promise<EmailResult> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   if (!resend) {
