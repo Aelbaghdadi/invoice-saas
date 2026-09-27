@@ -204,8 +204,8 @@ describe("cuota = base × % por línea (F-022)", () => {
     await processInvoice(nueva, w.worker.id);
     const inv = await prisma.invoice.findUniqueOrThrow({ where: { id: nueva }, include: { issues: true } });
     expect(inv.status).toBe("NEEDS_ATTENTION");
-    expect(inv.issues.map((i) => [i.type, i.description])).toEqual([[
-      "MATH_MISMATCH",
+    expect(inv.issues.map((i) => [i.type, i.field, i.description])).toEqual([[
+      "MATH_MISMATCH", "vatLines",
       "El desglose por tipo no cuadra. Línea 1: la cuota de IVA es 21,00 € y la base × 10 % da 10,00 €.",
     ]]);
   });

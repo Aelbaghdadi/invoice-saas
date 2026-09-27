@@ -8,6 +8,7 @@ import { pageWindow, parsePage } from "@/lib/listing";
 import { periodLabel } from "@/lib/period";
 import { formatDateEs } from "@/lib/dates";
 import { IssueActions } from "./IssueActions";
+import { isVatLinesIssue } from "@/lib/mathIssues";
 
 const TYPE_LABELS: Record<string, string> = {
   OCR_FAILED: "Error OCR",
@@ -163,8 +164,9 @@ export default async function WorkerIssuesPage({
           {issues.map((issue) => (
             <div key={issue.id} className="flex items-center justify-between px-5 py-3.5">
               <div className="flex items-start gap-3 min-w-0">
-                <Badge variant={TYPE_VARIANT[issue.type] ?? "slate"}>
-                  {TYPE_LABELS[issue.type] ?? issue.type}
+                {/* El desglose por tipo es un aviso (F-022), no el descuadre del total. */}
+                <Badge variant={isVatLinesIssue(issue) ? "yellow" : TYPE_VARIANT[issue.type] ?? "slate"}>
+                  {isVatLinesIssue(issue) ? "Desglose por tipo" : TYPE_LABELS[issue.type] ?? issue.type}
                 </Badge>
                 <div className="min-w-0">
                   <p className="text-[13px] text-slate-700 truncate">{issue.description}</p>

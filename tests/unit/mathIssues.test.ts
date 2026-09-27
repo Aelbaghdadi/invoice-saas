@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mathIssues } from "@/lib/mathIssues";
+import { isVatLinesIssue, mathIssues } from "@/lib/mathIssues";
 
 const base = { taxBase: null, vatAmount: null, irpfAmount: null };
 
@@ -27,5 +27,9 @@ describe("mathIssues", () => {
     });
     expect(issues).toHaveLength(1);
     expect(issues[0].description).toMatch(/^El desglose por tipo no cuadra\. Línea 1/);
+    // Se distingue del descuadre del total por el field (sin migración).
+    expect(issues[0].field).toBe("vatLines");
+    expect(isVatLinesIssue(issues[0])).toBe(true);
+    expect(isVatLinesIssue({ type: "MATH_MISMATCH", field: null })).toBe(false);
   });
 });
