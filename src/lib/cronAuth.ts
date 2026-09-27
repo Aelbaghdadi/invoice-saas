@@ -6,8 +6,12 @@ import { timingSafeEqual } from "crypto";
  * pasa nadie. Comparacion en tiempo constante.
  */
 export function verifyCronSecret(header: string | null, secret: string | undefined = process.env.CRON_SECRET): boolean {
-  if (!secret) return false;
-  const expected = `Bearer ${secret}`;
-  if (!header || header.length !== expected.length) return false;
-  return timingSafeEqual(Buffer.from(header), Buffer.from(expected));
+  if (!secret || !header) return false;
+  // Longitud en bytes, no en caracteres: una cabecera con «é» tiene los mismos
+  // caracteres que el secreto pero mas bytes, y timingSafeEqual lanzaba un
+  // RangeError (500 en vez de 401).
+  const received = Buffer.from(header);
+  const expected = Buffer.from(`Bearer ${secret}`);
+  if (received.length !== expected.length) return false;
+  return timingSafeEqual(received, expected);
 }

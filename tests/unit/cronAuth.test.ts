@@ -12,6 +12,12 @@ describe("verifyCronSecret", () => {
 
   afterEach(() => vi.unstubAllEnvs());
 
+  it("una cabecera con los mismos caracteres pero más bytes es 401, no un error", () => {
+    expect(() => verifyCronSecret("Bearer éééééé", "s3cr3t")).not.toThrow();
+    expect(verifyCronSecret("Bearer éééééé", "s3cr3t")).toBe(false);
+    expect(verifyCronSecret("Bearer s3cré", "s3cr3t")).toBe(false);
+  });
+
   it("sin CRON_SECRET configurado no pasa nadie", () => {
     expect(verifyCronSecret("Bearer ", "")).toBe(false);
     vi.stubEnv("CRON_SECRET", "");
