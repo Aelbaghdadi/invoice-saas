@@ -814,3 +814,30 @@ describe("Facturae: un lote con varias facturas (revisión 1 del PR #9, punto 12
     expect(after.lastOcrError).toBe("[ERR-OCR-002] El XML trae 2 facturas (lote): súbelas por separado.");
   });
 });
+
+describe("Facturae rectificativa: la incidencia del signo (revisión 1 del PR #9, punto 15)", () => {
+  const rectXml = () => facturaeXml({ buyerCif: w.client.cif, base: "300.00", taxAmount: "63.00", total: "363.00", number: "R-9" })
+    .replace("<InvoiceNumber>R-9</InvoiceNumber>", "<InvoiceNumber>R-9</InvoiceNumber><InvoiceClass>OR</InvoiceClass>");
+  const xmlInvoice = (key: string, extra = {}) => makeInvoice(w.client, {
+    filename: "r.xml", storageKey: key, fileType: "application/xml", status: "UPLOADED",
+    invoiceNumber: null, invoiceDate: null, issuerName: null, issuerCif: null,
+    taxBase: null, vatRate: null, vatAmount: null, totalAmount: null, ...extra,
+  });
+  const issuesOf = async (invoiceId: string) => (await prisma.invoiceIssue.findMany({ where: { invoiceId } })).map((i) => i.description);
+
+  it("al procesarla", async () => {
+    fakeS3().put("k-rect-xml", rectXml());
+    const { id: inv } = await xmlInvoice("k-rect-xml");
+    await processInvoice(inv, w.worker.id);
+    expect(await issuesOf(inv)).toEqual([expect.stringMatching(/^Parece rectificativa: revisa el signo/)]);
+  });
+
+  it("y si queda en el buzón, al clasificarla", async () => {
+    fakeS3().put("k-rect-xml-buzon", rectXml().replace(`<TaxIdentificationNumber>${w.client.cif}</TaxIdentificationNumber>`, "<TaxIdentificationNumber>B99999999</TaxIdentificationNumber>"));
+    const { id: inv } = await xmlInvoice("k-rect-xml-buzon", { routingCandidateIds: [w.client.id] });
+    await processInvoice(inv, w.worker.id);
+    expect((await prisma.invoice.findUniqueOrThrow({ where: { id: inv } })).status).toBe("PENDING_ROUTING");
+    expect(await classifyInvoice(inv, w.client.id)).toEqual({ ok: true });
+    expect(await issuesOf(inv)).toEqual([expect.stringMatching(/^Parece rectificativa: revisa el signo/)]);
+  });
+});

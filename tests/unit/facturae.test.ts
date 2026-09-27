@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
-import { extractInvoiceFromXml } from "@/lib/ocr";
+import { extractInvoiceFromXml, facturaeXmlIsCorrective } from "@/lib/ocr";
 
 // Estructura de Facturae 3.2.2 (con el prefijo fe: y la fecha en
 // InvoiceIssueData, como la genera el programa de la AEAT).
@@ -60,5 +60,24 @@ describe("Facturae: emisor persona física (revisión 1 del PR #9, punto 14)", (
     const { extracted } = await extractInvoiceFromXml(xml);
     expect(extracted.issuerName).toBe("Juan García López");
     expect(extracted.receiverName).toBe("Cliente Ejemplo SA");
+  });
+});
+
+describe("Facturae rectificativa (revisión 1 del PR #9, punto 15)", () => {
+  it("InvoiceClass OR o CR, o el bloque Corrective: isCorrective", async () => {
+    for (const cls of ["OR", "CR"]) {
+      const { extracted } = await extractInvoiceFromXml(facturae322.replace("<InvoiceClass>OO</InvoiceClass>", `<InvoiceClass>${cls}</InvoiceClass>`));
+      expect(extracted.isCorrective, cls).toBe(true);
+    }
+    const corrective = facturae322.replace("<InvoiceClass>OO</InvoiceClass>",
+      "<InvoiceClass>OO</InvoiceClass><Corrective><InvoiceNumber>0041</InvoiceNumber><ReasonCode>01</ReasonCode></Corrective>");
+    expect((await extractInvoiceFromXml(corrective)).extracted.isCorrective).toBe(true);
+    expect(await facturaeXmlIsCorrective(corrective)).toBe(true);
+  });
+
+  it("una original (OO): no", async () => {
+    expect((await extractInvoiceFromXml(facturae322)).extracted.isCorrective).toBe(false);
+    expect(await facturaeXmlIsCorrective(facturae322)).toBe(false);
+    expect(await facturaeXmlIsCorrective("no es xml")).toBe(false);
   });
 });

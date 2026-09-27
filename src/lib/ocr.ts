@@ -41,6 +41,9 @@ export type ExtractedInvoice = {
   /** Si lo facturado son BIENES o SERVICIOS segun la IA. Solo se usa en
    *  intracomunitarias (compras 3/8, ventas cuenta 700/705); null si no lo sabe. */
   supplyType: IntracomGoodsTypeName | null;
+  /** Facturae: el XML dice que es rectificativa (InvoiceClass OR/CR o bloque
+   *  Corrective). Cuenta como la mencion en el texto de un PDF (F-012). */
+  isCorrective?: boolean;
   /** Desglose de IVA. Vacio si no se pudo extraer. */
   vatLines:      ExtractedVatLine[];
   confidence:    Record<string, number> | null;
@@ -474,6 +477,26 @@ export async function extractInvoiceFromXml(xml: string): Promise<OcrResult> {
   return { extracted, rawJson: xml };
 }
 
+/** ¿Es rectificativa la factura de un Facturae? InvoiceClass OR (original
+ *  rectificativa) o CR (copia rectificativa), o el bloque Corrective de la
+ *  cabecera. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- nodo de fast-xml-parser
+function facturaeInvoiceIsCorrective(inv: any): boolean {
+  const header = inv?.InvoiceHeader ?? inv?.invoiceHeader;
+  const invoiceClass = String(header?.InvoiceClass ?? header?.invoiceClass ?? "").trim().toUpperCase();
+  return invoiceClass === "OR" || invoiceClass === "CR" || (header?.Corrective ?? header?.corrective) != null;
+}
+
+/** ¿El XML Facturae guardado es de una rectificativa? Para classifyInvoice,
+ *  que solo tiene el XML crudo de la extraccion. No lanza. */
+export async function facturaeXmlIsCorrective(xml: string): Promise<boolean> {
+  try {
+    return (await parseFacturaeXml(xml)).isCorrective === true;
+  } catch {
+    return false;
+  }
+}
+
 /** «2026-09-14», «2026-09-14+02:00» o «2026-09-14T10:00:00Z» -> «2026-09-14». */
 function calendarDay(value: string | null): string | null {
   return value?.match(/^\s*(\d{4}-\d{2}-\d{2})/)?.[1] ?? value;
@@ -593,6 +616,7 @@ async function parseFacturaeXml(xml: string): Promise<ExtractedInvoice> {
       issueData?.InvoiceCurrencyCode ?? issueData?.invoiceCurrencyCode
       ?? facturae?.FileHeader?.Batch?.InvoiceCurrencyCode ?? facturae?.fileHeader?.batch?.invoiceCurrencyCode,
     ),
+    isCorrective: facturaeInvoiceIsCorrective(inv),
     // El recargo de equivalencia en Facturae iria como una linea de impuesto
     // adicional dentro de TaxesOutputs con un TaxTypeCode distinto de IVA;
     // no lo mapeamos aqui (fuera de alcance) para no inventar una lectura

@@ -10,6 +10,7 @@ import { DUPLICATE_SELECT, describeExisting } from "@/lib/issueDetector";
 import { intracomVatIssue, mathIssues } from "@/lib/mathIssues";
 import { isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { hasRectificativeMention, rectificativeSignHint } from "@/lib/rectificative";
+import { facturaeXmlIsCorrective } from "@/lib/ocr";
 import { proposeSurchargesFromTotal } from "@/lib/equivalenceSurcharge";
 import { proposeOperationType } from "@/lib/operationTypeProposal";
 import { parseTaxId, taxIdWithCountry } from "@/lib/validators";
@@ -187,8 +188,11 @@ async function classify(invoiceId: string, clientId: string): Promise<ClassifySt
   // Signo (F-012): el OCR no crea incidencias en el buzon. Se miran los
   // importes guardados y la mencion que dejo el OCR en la extraccion.
   const lastExtraction = await prisma.invoiceExtraction.findFirst({
-    where: { invoiceId }, orderBy: { ocrFinishedAt: "desc" }, select: { rawResponse: true },
+    where: { invoiceId }, orderBy: { ocrFinishedAt: "desc" }, select: { rawResponse: true, source: true },
   });
+  const mentioned = lastExtraction?.source === "xml_parse"
+    ? await facturaeXmlIsCorrective(lastExtraction.rawResponse ?? "")
+    : hasRectificativeMention(lastExtraction?.rawResponse);
   const signHint = rectificativeSignHint({
     lines,
     taxBase: invoice.taxBase == null ? null : Number(invoice.taxBase),
@@ -196,7 +200,7 @@ async function classify(invoiceId: string, clientId: string): Promise<ClassifySt
     totalAmount,
     irpfAmount,
     retentionBase: invoice.retentionBase == null ? null : Number(invoice.retentionBase),
-  }, null, hasRectificativeMention(lastExtraction?.rawResponse));
+  }, null, mentioned);
   if (signHint) mathProblems.push({ type: "MANUAL", description: signHint, field: "isRectificative" });
   // isValid con el recargo ya propuesto, como `finalIsValid` en el OCR: el
   // del buzon se calculo sin recargo y la ficha lo pintaba en rojo.

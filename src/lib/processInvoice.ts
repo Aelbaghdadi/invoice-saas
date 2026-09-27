@@ -284,6 +284,7 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     const isUnclassified = isRoutingUpload && routingReason !== null;
     // En el buzon no se crean incidencias y al clasificar ya no hay texto: la
     // mencion de rectificativa se guarda para que classifyInvoice la lea.
+    // (Un Facturae rectificativo lo lee classifyInvoice del propio XML.)
     if (isUnclassified && textMentionsRectificative(ocrResult.rawText)) {
       extractionData.rawResponse = withRectificativeMention(extractionData.rawResponse);
     }
@@ -504,7 +505,7 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       const hint = rectificativeSignHint({
         lines: vatLines, taxBase: extracted.taxBase, vatAmount: extracted.vatAmount,
         totalAmount: extracted.totalAmount, irpfAmount: finalIrpfAmount, retentionBase,
-      }, ocrResult.rawText);
+      }, ocrResult.rawText, extracted.isCorrective === true);
       if (hint) issues.push({ type: "MANUAL", description: hint, field: "isRectificative" });
     }
     const targetStatus: InvoiceStatus = isUnclassified
