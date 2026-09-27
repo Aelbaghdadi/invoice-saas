@@ -521,8 +521,10 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
       blockers.unshift(!inv.isRectificative
         ? "Total = 0: no entra en el Excel ni se marca como exportada (A3 no acepta importes cero). Corrígela en la revisión"
         : linesAllZero(inv)
-          ? "Rectificativa con total 0 pero con retención: A3 no admite total 0; regístrala a mano en A3"
-          : "Rectificativa con total 0 pero con importes en las líneas: A3 no admite total 0; regístrala a mano en A3");
+          // Lineas a 0 y retencion: 0 − retencion no es 0, no cuadra.
+          ? `Rectificativa con total 0 pero con retención de ${formatEur(Math.abs(Number(inv.irpfAmount ?? 0)))}: no cuadra; corrígela en la revisión`
+          : "Rectificativa con total 0 pero con importes en las líneas: A3 no admite total 0; regístrala a mano en A3. "
+            + "Si ya la has registrado, no la registres otra vez: seguirá saliendo aquí");
     }
 
     // Un "tipo de IVA" que en realidad es el del recargo (5,2 / 1,4 / 0,5)
@@ -672,6 +674,9 @@ export function a3ExclusionBox(inv: InvoiceWithClient): ExportExclusionBox | nul
   if (!reason) return null;
   if (reason === "dividida") return "fuera";
   if (reason === "total_cero" && inv.isRectificative && allAmountsZero(inv)) return "fuera";
+  // Rectificativa a cero con importes en las lineas: cuadra y no hay nada que
+  // corregir, pero A3 no la admite (pendiente del asesor): a mano.
+  if (reason === "total_cero" && inv.isRectificative && !linesAllZero(inv)) return "a_mano";
   return "corregir";
 }
 

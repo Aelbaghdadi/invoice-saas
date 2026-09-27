@@ -48,12 +48,12 @@ export function withSplitCounts<T extends { id: string }>(
  * que corregir). El resumen se da por caja: por motivo mezclaba las dos
  * (revision 2 del PR #7).
  */
-export type ExportExclusionBox = "corregir" | "fuera";
+export type ExportExclusionBox = "corregir" | "fuera" | "a_mano";
 
 export type ExportExclusionBoxCounts = Record<ExportExclusionBox, number>;
 
 export function countExportExclusionBoxes(boxes: ExportExclusionBox[]): ExportExclusionBoxCounts {
-  const counts: ExportExclusionBoxCounts = { corregir: 0, fuera: 0 };
+  const counts: ExportExclusionBoxCounts = { corregir: 0, fuera: 0, a_mano: 0 };
   for (const b of boxes) counts[b] += 1;
   return counts;
 }
@@ -64,8 +64,10 @@ export function describeExportExclusionBoxes(counts: Partial<ExportExclusionBoxC
   const fix = counts.corregir ?? 0;
   const out = counts.fuera ?? 0;
   if (fix > 0) parts.push(`${fix} que hay que corregir`);
+  const manual = counts.a_mano ?? 0;
+  if (manual > 0) parts.push(`${manual} que hay que registrar a mano en A3`);
   if (out > 0) parts.push(`${out} que no ${out === 1 ? "va" : "van"} a A3`);
-  return parts.length ? parts.join(" y ") : null;
+  return parts.length > 1 ? `${parts.slice(0, -1).join(", ")} y ${parts[parts.length - 1]}` : parts[0] ?? null;
 }
 
 /** Cabecera X-Export-Excluded-Boxes de la descarga; {} si no se entiende. */
@@ -79,7 +81,7 @@ export function parseExportExclusionBoxes(raw: string | null): Partial<ExportExc
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
   const counts: Partial<ExportExclusionBoxCounts> = {};
-  for (const key of ["corregir", "fuera"] as const) {
+  for (const key of ["corregir", "fuera", "a_mano"] as const) {
     const value = (parsed as Record<string, unknown>)[key];
     if (typeof value === "number" && Number.isInteger(value) && value > 0) counts[key] = value;
   }
@@ -94,7 +96,8 @@ export function exportSuccessExclusionText(success: { excluded: number; boxes: P
   if (success.excluded <= 0) return "";
   const fix = success.boxes.corregir ?? 0;
   const out = success.boxes.fuera ?? 0;
-  if (fix + out === 0) {
+  const manual = success.boxes.a_mano ?? 0;
+  if (fix + out + manual === 0) {
     return success.excluded === 1
       ? " 1 factura se ha quedado fuera del Excel."
       : ` ${success.excluded} facturas se han quedado fuera del Excel.`;
@@ -104,6 +107,13 @@ export function exportSuccessExclusionText(success: { excluded: number; boxes: P
     parts.push(fix === 1
       ? " 1 factura se ha quedado fuera y sigue pendiente hasta que la corrijas."
       : ` ${fix} facturas se han quedado fuera y siguen pendientes hasta que las corrijas.`);
+  }
+  if (manual > 0) {
+    // No hay nada que corregir y seguiran saliendo en cada exportacion
+    // mientras el asesor no decida si A3 las admite (PR #8, punto 13).
+    parts.push(manual === 1
+      ? " 1 factura se ha quedado fuera: es una rectificativa con total 0 que hay que registrar a mano en A3 (si ya lo has hecho, no la registres otra vez)."
+      : ` ${manual} facturas se han quedado fuera: son rectificativas con total 0 que hay que registrar a mano en A3 (si ya lo has hecho, no las registres otra vez).`);
   }
   if (out > 0) {
     parts.push(out === 1

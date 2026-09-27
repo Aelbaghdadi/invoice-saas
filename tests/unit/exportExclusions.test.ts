@@ -36,7 +36,9 @@ describe("withSplitCounts", () => {
 
 describe("resumen por caja (revisión 2 del PR #7)", () => {
   it("cuenta y describe por caja, no por motivo", () => {
-    expect(countExportExclusionBoxes(["corregir", "fuera", "corregir"])).toEqual({ corregir: 2, fuera: 1 });
+    expect(countExportExclusionBoxes(["corregir", "fuera", "corregir", "a_mano"])).toEqual({ corregir: 2, fuera: 1, a_mano: 1 });
+    expect(describeExportExclusionBoxes({ corregir: 2, fuera: 1, a_mano: 1 }))
+      .toBe("2 que hay que corregir, 1 que hay que registrar a mano en A3 y 1 que no va a A3");
     expect(describeExportExclusionBoxes({ corregir: 2, fuera: 1 })).toBe("2 que hay que corregir y 1 que no va a A3");
     expect(describeExportExclusionBoxes({ fuera: 2 })).toBe("2 que no van a A3");
     expect(describeExportExclusionBoxes({})).toBeNull();
@@ -44,6 +46,7 @@ describe("resumen por caja (revisión 2 del PR #7)", () => {
 
   it("lee la cabecera y descarta lo raro", () => {
     expect(parseExportExclusionBoxes(JSON.stringify({ corregir: 1, fuera: 2 }))).toEqual({ corregir: 1, fuera: 2 });
+    expect(parseExportExclusionBoxes(JSON.stringify({ a_mano: 1 }))).toEqual({ a_mano: 1 });
     expect(parseExportExclusionBoxes("roto")).toEqual({});
     expect(parseExportExclusionBoxes(JSON.stringify({ corregir: -1, fuera: "2" }))).toEqual({});
   });
@@ -58,6 +61,12 @@ describe("exportSuccessExclusionText", () => {
     expect(exportSuccessExclusionText({ excluded: 3, boxes: { corregir: 2, fuera: 1 } })).toBe(
       " 2 facturas se han quedado fuera y siguen pendientes hasta que las corrijas."
       + " 1 factura se ha quedado fuera del Excel: no va a A3 y no hay nada que hacer con ella.",
+    );
+  });
+
+  it("las rectificativas a cero con importes: a mano en A3, una sola vez", () => {
+    expect(exportSuccessExclusionText({ excluded: 1, boxes: { a_mano: 1 } })).toBe(
+      " 1 factura se ha quedado fuera: es una rectificativa con total 0 que hay que registrar a mano en A3 (si ya lo has hecho, no la registres otra vez).",
     );
   });
 

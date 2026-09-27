@@ -59,6 +59,8 @@ export function ExportForm({ clients }: Props) {
   // y siguen pendientes. El desglose es para el aviso.
   const [excluded, setExcluded] = useState(0);
   const [excludedDetail, setExcludedDetail] = useState<string | null>(null);
+  // Rectificativas a cero con importes (caja «a_mano»): la nota roja lo explica.
+  const [manualCount, setManualCount] = useState(0);
   const [counting, setCounting] = useState(false);
   const [downloading, setDownloading] = useState(false);
   // Tras descargar: cuantas se quedaron fuera del fichero y el lote, si se
@@ -107,6 +109,7 @@ export function ExportForm({ clients }: Props) {
         setAlreadyExported(0);
         setExcluded(0);
         setExcludedDetail(null);
+        setManualCount(0);
         return;
       }
       const data = await res.json();
@@ -118,6 +121,7 @@ export function ExportForm({ clients }: Props) {
       setAlreadyExported(data.alreadyExported ?? 0);
       setExcluded(data.excluded ?? 0);
       setExcludedDetail(describeExportExclusionBoxes((data.excludedByBox ?? {}) as Partial<ExportExclusionBoxCounts>));
+      setManualCount(data.excludedByBox?.a_mano ?? 0);
     } catch {
       if (stale()) return;
       // Todo a cero: si no, seguian los avisos de "N con total 0" del filtro
@@ -129,6 +133,7 @@ export function ExportForm({ clients }: Props) {
       setAlreadyExported(0);
       setExcluded(0);
       setExcludedDetail(null);
+      setManualCount(0);
     } finally {
       if (!stale()) setCounting(false);
     }
@@ -414,7 +419,10 @@ export function ExportForm({ clients }: Props) {
                 title={(n) => n === 1
                   ? "1 factura no se puede exportar"
                   : `${n} facturas no se pueden exportar`}
-                note="No entran en el Excel ni se marcan como exportadas: siguen pendientes hasta que las corrijas en la revisión."
+                note={"No entran en el Excel ni se marcan como exportadas: siguen pendientes hasta que las corrijas en la revisión."
+                  + (manualCount > 0
+                    ? " Las rectificativas con total 0 e importes no se corrigen: se registran a mano en A3, una sola vez, y seguirán saliendo aquí."
+                    : "")}
                 items={warnings.filter((w) => w.severity === "bloqueante")}
                 total={severityCounts.bloqueante}
               />
