@@ -50,3 +50,15 @@ describe("Facturae: fecha con zona (revisión 1 del PR #9, punto 13)", () => {
     }
   });
 });
+
+describe("Facturae: emisor persona física (revisión 1 del PR #9, punto 14)", () => {
+  it("une nombre y apellidos", async () => {
+    const xml = facturae322.replace(
+      /<LegalEntity>\s*<CorporateName>Proveedor Ejemplo SL<\/CorporateName>/,
+      "<Individual><Name>Juan</Name><FirstSurname>García</FirstSurname><SecondSurname>López</SecondSurname>",
+    ).replace(/(<Individual>[\s\S]*?)<\/LegalEntity>/, "$1</Individual>");
+    const { extracted } = await extractInvoiceFromXml(xml);
+    expect(extracted.issuerName).toBe("Juan García López");
+    expect(extracted.receiverName).toBe("Cliente Ejemplo SA");
+  });
+});

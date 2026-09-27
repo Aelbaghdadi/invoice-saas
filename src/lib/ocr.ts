@@ -533,6 +533,19 @@ async function parseFacturaeXml(xml: string): Promise<ExtractedInvoice> {
   const safeStr = (v: unknown): string | null =>
     v != null ? String(v).trim() || null : null;
 
+  // Sociedad: CorporateName. Persona fisica (Individual): nombre y los dos
+  // apellidos; antes se guardaba solo «Juan», y eso iba a la columna F.
+  const partyName = (entity: Record<string, unknown> | null | undefined): string | null => {
+    const corporate = safeStr(entity?.CorporateName ?? entity?.corporateName);
+    if (corporate) return corporate;
+    const parts = [
+      entity?.Name ?? entity?.name,
+      entity?.FirstSurname ?? entity?.firstSurname,
+      entity?.SecondSurname ?? entity?.secondSurname,
+    ].map(safeStr).filter(Boolean);
+    return parts.length > 0 ? parts.join(" ") : null;
+  };
+
   // All fields from XML are deterministic → confidence 1.0
   const confidence: Record<string, number> = {};
   for (const f of ALL_FIELDS) confidence[f] = 1.0;
@@ -559,11 +572,9 @@ async function parseFacturaeXml(xml: string): Promise<ExtractedInvoice> {
     : null;
 
   return {
-    issuerName:    safeStr(sellerEntity?.CorporateName ?? sellerEntity?.corporateName
-                     ?? sellerEntity?.Name ?? sellerEntity?.name),
+    issuerName:    partyName(sellerEntity),
     issuerCif:     safeStr(sellerTax?.TaxIdentificationNumber ?? sellerTax?.taxIdentificationNumber),
-    receiverName:  safeStr(buyerEntity?.CorporateName ?? buyerEntity?.corporateName
-                     ?? buyerEntity?.Name ?? buyerEntity?.name),
+    receiverName:  partyName(buyerEntity),
     receiverCif:   safeStr(buyerTax?.TaxIdentificationNumber ?? buyerTax?.taxIdentificationNumber),
     invoiceNumber: safeStr(header?.InvoiceNumber ?? header?.invoiceNumber
                      ?? header?.InvoiceSeriesCode ?? header?.invoiceSeriesCode),
