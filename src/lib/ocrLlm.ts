@@ -551,11 +551,18 @@ export function extractGeminiBoundingBoxes(rawJson: string): FieldBoundingBoxes 
   }
 }
 
+/** ¿Falta el total? La plantilla del prompt trae «"totalAmount": 0.00», asi
+ *  que un 0 con confianza 0 es «no lo he encontrado». Un 0 con confianza es
+ *  un total a cero de verdad (una rectificativa que anula a otra). */
+function totalMissing(extracted: ExtractedInvoice): boolean {
+  return extracted.totalAmount == null || (extracted.totalAmount === 0 && extracted.confidence?.totalAmount === 0);
+}
+
 /** ¿Ha salido lo basico: el total y el CIF del emisor? */
 function hasBasics(extracted: ExtractedInvoice): boolean {
   const allKeyFieldsNull = [extracted.issuerName, extracted.issuerCif, extracted.invoiceNumber, extracted.totalAmount]
     .every((v) => v == null);
-  return !(extracted.totalAmount == null || extracted.issuerCif == null || allKeyFieldsNull);
+  return !(totalMissing(extracted) || extracted.issuerCif == null || allKeyFieldsNull);
 }
 
 /**
@@ -638,7 +645,7 @@ export async function extractPdfWithGemini(base64: string): Promise<{ source: "g
   }
   try {
     const image = await extractFromDocumentWithGemini(base64, "application/pdf");
-    if (image.extracted.totalAmount == null) return { source: "gemini_text", result: fromText.result };
+    if (totalMissing(image.extracted)) return { source: "gemini_text", result: fromText.result };
     return { source: "gemini_multimodal", result: { ...image, rawText: fromText.result.rawText } };
   } catch (e) {
     console.warn("extractPdfWithGemini: la imagen fallo; se usa lo que salio del texto", e);

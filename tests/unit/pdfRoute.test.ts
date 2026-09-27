@@ -107,6 +107,17 @@ describe("extractPdfWithGemini: vía de texto o de imagen", () => {
     expect(calls).toEqual(["imagen"]);
   });
 
+  it("un total 0 con confianza 0 cuenta como que falta; con confianza, no (rectificativa a cero)", async () => {
+    textReply = { ...factura, totalAmount: 0, confidence: { totalAmount: 0 } };
+    await extractPdfWithGemini(readFileSync("scripts/demo-pdfs/amazon-oficina.pdf").toString("base64"));
+    expect(calls).toEqual(["texto", "imagen"]);
+
+    calls = [];
+    textReply = { ...factura, totalAmount: 0, confidence: { totalAmount: 0.9 } };
+    const { source } = await extractPdfWithGemini(readFileSync("scripts/demo-pdfs/amazon-oficina.pdf").toString("base64"));
+    expect([source, calls]).toEqual(["gemini_text", ["texto"]]);
+  });
+
   it("si la imagen tampoco saca el total, también el texto", async () => {
     textReply = { ...factura, totalAmount: null, invoiceNumber: "DEL-TEXTO" };
     imageReply = { ...factura, totalAmount: null };
