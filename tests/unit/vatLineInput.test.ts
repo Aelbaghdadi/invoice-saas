@@ -128,3 +128,23 @@ describe("amountFieldsProblem (total y retención)", () => {
     expect(amountFieldsProblem({ totalAmount: "", retentionRate: " " })).toBeNull();
   });
 });
+
+describe("% entre 0 y 100 (numeric(5,2))", () => {
+  it("retención", () => {
+    expect(amountFieldsProblem({ retentionRate: "1500" })).toBe("El % de retención tiene que estar entre 0 y 100.");
+    expect(amountFieldsProblem({ retentionRate: "-1" })).toBe("El % de retención tiene que estar entre 0 y 100.");
+    expect(amountFieldsProblem({ retentionRate: "100" })).toBeNull();
+    expect(amountFieldsProblem({ retentionRate: "0" })).toBeNull();
+  });
+
+  it("recargo e IVA de una línea", () => {
+    expect(vatLineProblem(line("100", "21", "21", { equivalenceSurchargeRate: "1500", equivalenceSurchargeAmount: "1500" }), 1)).toBe(
+      "La línea 1 de IVA tiene el % de recargo fuera de rango: tiene que estar entre 0 y 100.",
+    );
+    expect(vatLineProblem(line("100", "210", "210"), 2)).toBe(
+      "La línea 2 de IVA tiene el % de IVA fuera de rango: tiene que estar entre 0 y 100.",
+    );
+    // Una rectificativa lleva los importes en negativo, no el %.
+    expect(vatLineProblem(line("-100", "21", "-21"), 1)).toBeNull();
+  });
+});

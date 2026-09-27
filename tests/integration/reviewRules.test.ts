@@ -592,3 +592,15 @@ describe("cuentas completadas en el servidor", () => {
     expect(r.error).toBe("La cuenta 40000001 es de proveedor y esta factura es emitida: usa una cuenta de cliente (43x).");
   });
 });
+
+describe("% fuera de 0-100: { error } y no ERR-SYS-001", () => {
+  it("recargo al 1500 %", async () => {
+    const r = await save({ vatLines: JSON.stringify([{ taxBase: "100", vatRate: "21", vatAmount: "21", equivalenceSurchargeRate: "1500", equivalenceSurchargeAmount: "1500" }]), totalAmount: "1621" });
+    expect(r.error).toBe("La línea 1 de IVA tiene el % de recargo fuera de rango: tiene que estar entre 0 y 100.");
+  });
+
+  it("retención al 1500 %", async () => {
+    const r = await save({ retentionType: "PROFESSIONAL", retentionBase: "100", retentionRate: "1500", retentionAmount: "1500", irpfAmount: "1500" });
+    expect(r.error).toBe("El % de retención tiene que estar entre 0 y 100.");
+  });
+});

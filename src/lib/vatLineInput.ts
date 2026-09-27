@@ -55,6 +55,10 @@ function parseDecimal(value: string): number | null {
  *  veia un ERR-SYS-001 generico. */
 const MAX_AMOUNT = 1e10;
 
+function isPercent(n: number): boolean {
+  return n >= 0 && n <= 100;
+}
+
 function joinSpanish(items: string[]): string {
   return items.length > 1 ? `${items.slice(0, -1).join(", ")} y ${items[items.length - 1]}` : items[0];
 }
@@ -84,6 +88,15 @@ export function vatLineProblem(line: VatLineText, position: number): string | nu
   ].filter((v) => v.value !== "" && parseDecimal(v.value) === null).map((v) => v.label);
   if (badSurcharge.length > 0) {
     return `La línea ${position} de IVA tiene un valor que no es un número en ${joinSpanish(badSurcharge)}.`;
+  }
+  // Los % van a numeric(5,2): con un 1500 la BD lo rechazaba y el gestor
+  // veia un ERR-SYS-001 generico.
+  const outOfRange = [
+    { label: "el % de IVA", value: text(line.vatRate) },
+    { label: "el % de recargo", value: text(line.equivalenceSurchargeRate) },
+  ].filter((v) => v.value !== "" && !isPercent(parseDecimal(v.value)!)).map((v) => v.label);
+  if (outOfRange.length > 0) {
+    return `La línea ${position} de IVA tiene ${joinSpanish(outOfRange)} fuera de rango: tiene que estar entre 0 y 100.`;
   }
   // La BD guarda 2 decimales: 1,005 se guardaria como 1,01 y el cuadre que
   // se calculo con 1,005 dejaria de valer.
@@ -188,6 +201,7 @@ export function amountFieldsProblem(fields: {
     if (!value) continue;
     const n = parseDecimal(value);
     if (n === null) return `${label} no es un número.`;
+    if (label.startsWith("El %") && !isPercent(n)) return `${label} tiene que estar entre 0 y 100.`;
     if (Math.abs(n) >= MAX_AMOUNT) return `${label} es demasiado grande.`;
     if (hasMoreThanTwoDecimals(n)) {
       return `${label} tiene más de 2 decimales. ${label.startsWith("El %") ? "Usa como máximo 2 decimales." : "Redondéalo a céntimos."}`;
