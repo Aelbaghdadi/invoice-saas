@@ -109,3 +109,21 @@ describe("envío con Resend", () => {
     log.mockRestore();
   });
 });
+
+describe("sin RESEND_API_KEY", () => {
+  it("no envía, cuenta como enviado y no deja el email completo en el log", async () => {
+    vi.stubEnv("RESEND_API_KEY", "");
+    vi.resetModules();
+    const sinClave = await import("@/lib/email");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await sinClave.sendPasswordResetEmail({ to: "ana@dominio.es", resetUrl: "https://x" })).toEqual({ ok: true });
+      const line = String(log.mock.calls[0][0]);
+      expect(line).toContain("a***@dominio.es");
+      expect(line).not.toContain("ana@dominio.es");
+    } finally {
+      log.mockRestore();
+      vi.stubEnv("RESEND_API_KEY", "re_test");
+    }
+  });
+});

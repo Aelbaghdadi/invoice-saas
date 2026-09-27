@@ -46,7 +46,10 @@ export const EMAIL_TIMEOUT_MS = 10_000;
 async function send(template: string, to: string, subject: string, html: string): Promise<EmailResult> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   if (!resend) {
-    console.log(`[EMAIL-DEV] ${template} | To: ${to} | Subject: ${subject}`);
+    // Sin RESEND_API_KEY no se envia nada y cuenta como enviado: cambiarlo
+    // haria saltar el aviso de invitacion donde el correo aun no esta
+    // montado. El destinatario, enmascarado tambien aqui.
+    console.log(`[EMAIL-DEV] ${template} | To: ${maskEmail(to)} | Subject: ${subject}`);
     return { ok: true };
   }
 
