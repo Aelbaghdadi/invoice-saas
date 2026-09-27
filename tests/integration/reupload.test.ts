@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { prisma } from "./helpers/db";
 import { fakeS3 } from "./helpers/fakeS3";
 import { makeFirm, makeInvoice, type FirmWorld } from "./helpers/factories";
-import { blankPdf, wait } from "./helpers/fixtures";
+import { blankPdf, utcMinutesAgoSql, wait } from "./helpers/fixtures";
 import { holdLock } from "./helpers/locks";
 import { signInAs } from "./helpers/session";
 import { reviewForm, validate } from "./helpers/reviewForm";
@@ -38,7 +38,7 @@ describe("resubida del cliente contra «Reabrir y validar»", () => {
     const pending = reupload();
     await wait(1500); // fichero subido; la transaccion de la resubida espera la fila
     expect(reuploadKeys()).toHaveLength(1);
-    await lock.release(`UPDATE "Invoice" SET status = 'VALIDATED', "rejectionReason" = NULL, "updatedAt" = now() WHERE id = 'A'`);
+    await lock.release(`UPDATE "Invoice" SET status = 'VALIDATED', "rejectionReason" = NULL, "updatedAt" = ${utcMinutesAgoSql(0)} WHERE id = 'A'`);
     expect(await pending).toEqual({ error: "Esta factura ya no está rechazada. Recarga la página." });
     expect(await prisma.invoice.count({ where: { replacesId: "A" } })).toBe(0);
     expect(reuploadKeys()).toHaveLength(0);

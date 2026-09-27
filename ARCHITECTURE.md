@@ -281,6 +281,12 @@ si:
 
 Al arrancar dice por stderr a qué host y base de datos va.
 
+**Zona horaria.** Las fechas de Prisma son `timestamp(3)` sin zona, en UTC.
+Los tests no pueden depender de la zona del Postgres (uno instalado en
+Windows suele ir en hora de Madrid): en SQL crudo, «hace n minutos» es
+`utcMinutesAgoSql(n)` (`(now() AT TIME ZONE 'UTC') - interval …`), nunca
+`now()` a secas.
+
 Un Postgres local, por ejemplo con Docker:
 
 ```bash

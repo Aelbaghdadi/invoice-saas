@@ -4,7 +4,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "./helpers/db";
 import { fakeS3 } from "./helpers/fakeS3";
 import { makeFirm, makeInvoice, makeUser, type FirmWorld } from "./helpers/factories";
-import { facturaeXml } from "./helpers/fixtures";
+import { facturaeXml, utcMinutesAgoSql } from "./helpers/fixtures";
 import { signInAs } from "./helpers/session";
 import { GET as retryStuck, POST as retryStuckPost } from "@/app/api/cron/retry-stuck/route";
 import { POST as closureReminders } from "@/app/api/cron/closure-reminders/route";
@@ -20,7 +20,7 @@ async function stuck(status: "ANALYZING" | "UPLOADED", ocrAttempts: number, minu
     taxBase: null, vatRate: null, vatAmount: null, totalAmount: null,
   });
   await prisma.$executeRawUnsafe(
-    `UPDATE "Invoice" SET "updatedAt" = now() - interval '${minutesAgo} minutes', "createdAt" = now() - interval '${minutesAgo} minutes' WHERE id = 'inv1'`,
+    `UPDATE "Invoice" SET "updatedAt" = ${utcMinutesAgoSql(minutesAgo)}, "createdAt" = ${utcMinutesAgoSql(minutesAgo)} WHERE id = 'inv1'`,
   );
 }
 
