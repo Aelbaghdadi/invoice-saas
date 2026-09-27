@@ -55,7 +55,19 @@ describe("envío con Resend", () => {
     log.mockRestore();
   });
 
-  it("si lanza (red caída), también ok: false", async () => {
+  it("con la red caída (Resend no lanza: devuelve application_error) devuelve ok: false", async () => {
+    // La forma real de Resend 6.9.4 cuando fetch falla.
+    resendReply = async () => ({
+      data: null,
+      error: { name: "application_error", statusCode: null, message: "Unable to fetch data. The request could not be resolved." },
+    });
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await email.sendPasswordResetEmail(reset)).toEqual({ ok: false });
+    expect(String(log.mock.calls[0][0])).toContain("application_error: Unable to fetch data");
+    log.mockRestore();
+  });
+
+  it("si lanza (fallo inesperado del cliente), también ok: false", async () => {
     resendReply = async () => {
       throw new TypeError("fetch failed");
     };
