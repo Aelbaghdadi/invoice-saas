@@ -305,12 +305,15 @@ function buildA3Row(
   ];
 }
 
-export type A3Severity = "bloqueante" | "aviso";
+export type A3Severity = "bloqueante" | "aviso" | "fuera";
 
 export type A3ValidationWarning = {
   invoiceId: string;
   invoiceNumber: string | null;
-  /** bloqueante: no entra en el fichero ni se marca como exportada. */
+  /** bloqueante: no entra en el fichero ni se marca como exportada hasta que
+   *  se corrija. fuera: tampoco entra, pero no hay nada que corregir (la
+   *  original de una division, una rectificativa a cero); su texto va en
+   *  warnings. aviso: entra, pero conviene mirarlo. */
   severity: A3Severity;
   /** Por que se queda fuera (vacio si solo tiene avisos). */
   blockers: string[];
@@ -388,6 +391,19 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
   const results: A3ValidationWarning[] = [];
 
   for (const inv of invoices) {
+    // Lo que no hace falta llevar a A3 no se revisa ni va a la caja roja
+    // (revision 1 del PR #7): la original de una division (van sus hijas) y
+    // una rectificativa a cero (A3 no acepta importes cero).
+    const outside = a3ExclusionReason(inv);
+    if (outside === "dividida" || (outside === "total_cero" && inv.isRectificative)) {
+      results.push({
+        invoiceId: inv.id, invoiceNumber: inv.invoiceNumber, severity: "fuera", blockers: [],
+        warnings: [outside === "dividida"
+          ? "Es la original de una división: van al Excel las facturas que salieron de ella, no esta"
+          : "Rectificativa con total 0: no va al Excel (A3 no acepta importes cero)"],
+      });
+      continue;
+    }
     const blockers = a3BlockingProblems(inv);
     const warnings: string[] = [];
     const isPurchase = inv.type === "PURCHASE";
@@ -460,11 +476,8 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
     // Se queda fuera del fichero (ver a3ExclusionReason): no se marca como
     // exportada y sigue pendiente hasta que se corrija.
     const totalNum = Number(inv.totalAmount ?? 0);
-    const exclusion = a3ExclusionReason(inv);
-    if (exclusion === "total_cero") {
+    if (outside === "total_cero") {
       blockers.unshift("Total = 0: no entra en el Excel ni se marca como exportada (A3 no acepta importes cero). Corrígela en la revisión");
-    } else if (exclusion === "dividida") {
-      blockers.unshift("Es la original de una división: se exportan las facturas que salieron de ella, no esta");
     }
 
     // Un "tipo de IVA" que en realidad es el del recargo (5,2 / 1,4 / 0,5)
@@ -558,6 +571,7 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
   return [
     ...results.filter((r) => r.severity === "bloqueante"),
     ...results.filter((r) => r.severity === "aviso"),
+    ...results.filter((r) => r.severity === "fuera"),
   ];
 }
 

@@ -417,6 +417,12 @@ export function ExportForm({ clients }: Props) {
                 note="Se exportan igualmente: los avisos no bloquean, pero conviene mirarlos."
                 items={warnings.filter((w) => w.severity === "aviso")}
               />
+              <WarningList
+                tone="slate"
+                title={(n) => n === 1 ? "1 factura no va al Excel" : `${n} facturas no van al Excel`}
+                note="No hace falta llevarlas a A3 y no hay nada que corregir."
+                items={warnings.filter((w) => w.severity === "fuera")}
+              />
             </div>
           )}
 
@@ -525,6 +531,13 @@ const WARNING_TONES = {
     item: "text-amber-700",
     link: "decoration-amber-300 hover:text-amber-900",
     note: "text-amber-600",
+  },
+  slate: {
+    box: "border-slate-200 bg-slate-50",
+    title: "text-slate-700",
+    item: "text-slate-600",
+    link: "decoration-slate-300 hover:text-slate-800",
+    note: "text-slate-500",
   },
 } as const;
 

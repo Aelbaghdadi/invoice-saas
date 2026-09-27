@@ -82,8 +82,29 @@ describe("aviso de factura excluida", () => {
     expect(warning.blockers.join(" ")).toContain("no entra en el Excel ni se marca como exportada");
   });
 
-  it("la original dividida lo dice con su motivo", () => {
-    const [warning] = validateForA3Export([mkInvoice("d", 121, 2)]);
-    expect(warning.blockers.join(" ")).toContain("Es la original de una división: se exportan las facturas que salieron de ella, no esta");
+  it("la original dividida va aparte, con un texto neutro y sin revisar sus datos", () => {
+    const sinCuentas = { ...mkInvoice("d", 121, 2), supplierAccount: null, issuerCif: null } as InvoiceWithClient;
+    const [warning] = validateForA3Export([sinCuentas]);
+    expect(warning).toEqual({
+      invoiceId: "d", invoiceNumber: "F-d", severity: "fuera", blockers: [],
+      warnings: ["Es la original de una división: van al Excel las facturas que salieron de ella, no esta"],
+    });
+  });
+
+  it("una rectificativa a cero va aparte; una factura normal a cero sigue siendo bloqueante", () => {
+    const rect = { ...mkInvoice("r", 0), isRectificative: true } as InvoiceWithClient;
+    expect(validateForA3Export([rect])[0]).toMatchObject({
+      severity: "fuera", blockers: [], warnings: ["Rectificativa con total 0: no va al Excel (A3 no acepta importes cero)"],
+    });
+    expect(validateForA3Export([mkInvoice("n", 0)])[0].severity).toBe("bloqueante");
+  });
+
+  it("orden: bloqueantes, avisos y las que no van al Excel", () => {
+    const res = validateForA3Export([
+      mkInvoice("d", 121, 2),
+      { ...mkInvoice("a", 121), totalAmount: 130 } as unknown as InvoiceWithClient,
+      mkInvoice("b", 0),
+    ]);
+    expect(res.map((r) => [r.invoiceId, r.severity])).toEqual([["b", "bloqueante"], ["a", "aviso"], ["d", "fuera"]]);
   });
 });
