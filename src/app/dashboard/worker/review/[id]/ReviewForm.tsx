@@ -683,7 +683,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       const suggested = !isNaN(rateNum) ? equivalenceSurchargeRateForVat(rateNum) : null;
       const baseNum = parseFloat(copy[idx].taxBase);
       const suggestedAmount = suggested != null && !isNaN(baseNum)
-        ? ((baseNum * suggested) / 100).toFixed(2)
+        ? percentOf(baseNum, suggested).toFixed(2)
         : "";
       copy[idx] = {
         ...copy[idx],
