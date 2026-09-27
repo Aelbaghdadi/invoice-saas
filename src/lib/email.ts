@@ -406,7 +406,7 @@ export async function sendClosureReminder(params: {
   clientName: string;
   month: number;
   year: number;
-}) {
+}): Promise<EmailResult> {
   const period = periodLabel("MONTHLY", params.month, params.year);
   const periodText = periodInSentence("MONTHLY", params.month, params.year);
 
@@ -422,7 +422,7 @@ export async function sendClosureReminder(params: {
       Si ya has subido todo, puedes ignorar este mensaje. Tu asesoría se encargará del cierre.
     </p>`;
 
-  await send(
+  return send(
     "recordatorio-cierre",
     params.clientEmail,
     `Recordatorio: cierre pendiente de ${periodText}`,

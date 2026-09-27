@@ -26,6 +26,7 @@ async function handle(req: Request) {
   });
 
   let sent = 0;
+  let failed = 0;
 
   for (const client of clients) {
     // Check if period is already closed
@@ -43,17 +44,20 @@ async function handle(req: Request) {
     // mando el recordatorio: cada ejecucion lo reenvia (una vez al mes).
     if (closure && !closure.reopenedAt) continue;
 
-    await sendClosureReminder({
+    const result = await sendClosureReminder({
       clientEmail: client.email!,
       clientName: client.name,
       month: targetMonth,
       year: targetYear,
     });
 
-    sent++;
+    // Solo cuenta lo que Resend acepto; el motivo de cada fallo ya esta en
+    // el log de send.
+    if (result.ok) sent++;
+    else failed++;
   }
 
-  return NextResponse.json({ sent, month: targetMonth, year: targetYear });
+  return NextResponse.json({ sent, failed, month: targetMonth, year: targetYear });
 }
 
 // GET y POST con el mismo handler y la misma comprobacion del secreto: la

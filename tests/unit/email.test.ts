@@ -98,12 +98,13 @@ describe("envío con Resend", () => {
     }
   });
 
-  it("el resto de correos solo registran el fallo, sin lanzar", async () => {
+  it("el recordatorio de cierre registra el fallo, no lanza y devuelve ok: false", async () => {
     resendReply = async () => ({ data: null, error: { name: "rate_limit_exceeded", message: "too many" } });
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    // El recordatorio devuelve el resultado: el cron solo cuenta los enviados.
     await expect(email.sendClosureReminder({
       clientEmail: "cli@empresa.es", clientName: "Cliente", month: 9, year: 2026,
-    } as Parameters<typeof email.sendClosureReminder>[0])).resolves.toBeUndefined();
+    })).resolves.toEqual({ ok: false });
     expect(String(log.mock.calls[0][0])).toContain("recordatorio-cierre");
     log.mockRestore();
   });
