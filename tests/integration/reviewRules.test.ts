@@ -500,18 +500,21 @@ describe("duplicados en ventas (estrategia B): se compara el destinatario", () =
   // detectIssues directo: el parser Facturae no lee la fecha de la fixture
   // (IssueDate va en InvoiceIssueData y lo busca en InvoiceHeader), y la
   // estrategia B necesita fecha.
-  async function saleDuplicates(buyerCif: string) {
+  async function saleDuplicates(
+    buyerCif: string | null,
+    read: { issuerCif?: string | null; invoiceNumber?: string | null; receiverName?: string | null } = {},
+  ) {
     const venta = await makeInvoice(w.client, { type: "SALE", issuerCif: w.client.cif, receiverCif: buyerCif, invoiceNumber: "V-2" });
     const extraction = {
       issuerCif: w.client.cif, receiverCif: buyerCif, invoiceNumber: "V-2", invoiceDate: "2026-09-10",
       taxBase: 100, vatAmount: 21, totalAmount: 121, irpfAmount: null, vatLines: [{ taxBase: 100, vatRate: 21, vatAmount: 21 }],
-      confidence: null,
+      confidence: null, receiverName: null, ...read,
     } as unknown as ExtractedInvoice;
     const issues = await detectIssues(venta.id, extraction, venta, "INTERIOR", { persist: false });
     return issues.filter((i) => i.type === "POSSIBLE_DUPLICATE").map((i) => i.description);
   }
-  const existing = (receiverCif: string) => makeInvoice(w.client, {
-    type: "SALE", issuerCif: w.client.cif, invoiceNumber: "V-1", invoiceDate: new Date("2026-09-10"), totalAmount: 121, receiverCif,
+  const existing = (receiverCif: string | null, receiverName: string | null = null) => makeInvoice(w.client, {
+    type: "SALE", issuerCif: w.client.cif, invoiceNumber: "V-1", invoiceDate: new Date("2026-09-10"), totalAmount: 121, receiverCif, receiverName,
   });
 
   it("misma fecha e importe a otro cliente: no es un posible duplicado", async () => {
@@ -522,6 +525,33 @@ describe("duplicados en ventas (estrategia B): se compara el destinatario", () =
   it("mismo destinatario, fecha e importe: sí", async () => {
     await existing("A58818501");
     expect(await saleDuplicates("A58818501")).toEqual([expect.stringContaining("mismo destinatario (A58818501)")]);
+  });
+
+  it("sin el CIF del emisor leído: se compara el destinatario igual", async () => {
+    await existing("A58818501");
+    expect(await saleDuplicates("A58818501", { issuerCif: null })).toEqual([expect.stringContaining("mismo destinatario (A58818501)")]);
+  });
+
+  it("ticket sin NIF ni número subido dos veces: sí", async () => {
+    await existing(null);
+    expect(await saleDuplicates(null, { invoiceNumber: null })).toEqual([
+      expect.stringContaining("venta sin NIF del destinatario con el mismo total (121,00 €) y fecha"),
+    ]);
+  });
+
+  it("ticket sin NIF con el mismo nombre (normalizado): sí", async () => {
+    await existing(null, "Juan García");
+    expect(await saleDuplicates(null, { invoiceNumber: null, receiverName: "JUAN GARCIA" })).toHaveLength(1);
+  });
+
+  it("ticket sin NIF con otro nombre: no", async () => {
+    await existing(null, "Juan García");
+    expect(await saleDuplicates(null, { invoiceNumber: null, receiverName: "Pedro López" })).toEqual([]);
+  });
+
+  it("venta sin NIF pero con número: no se compara por importe y fecha", async () => {
+    await existing(null);
+    expect(await saleDuplicates(null, { invoiceNumber: "V-2" })).toEqual([]);
   });
 });
 

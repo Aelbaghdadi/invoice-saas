@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import type { ExtractedInvoice } from "@/lib/ocr";
 import type { Invoice, IssueType } from "@prisma/client";
-import { parseTaxId, type OperationTypeName } from "@/lib/validators";
+import { normalizeBusinessName, parseTaxId, type OperationTypeName } from "@/lib/validators";
 import { formatEur } from "@/lib/format";
 import { intracomVatIssue, mathIssues } from "@/lib/mathIssues";
 import { formatDateEs } from "@/lib/dates";
@@ -131,63 +131,88 @@ export async function detectIssues(
   // 5. POSSIBLE_DUPLICATE — functional dedup (non-blocking alert)
   // Strategy A: exact match by CIF + invoice number (strongest signal)
   // Strategy B: fuzzy match by CIF + total + date (catches re-scans / different PDFs)
-  if (extraction.issuerCif) {
-    const baseWhere = {
-      clientId: invoice.clientId,
-      issuerCif: extraction.issuerCif,
-      type: invoice.type,
-      id: { not: invoiceId },
-      status: { notIn: ["REJECTED" as const] },
-    };
+  const baseWhere = {
+    clientId: invoice.clientId,
+    type: invoice.type,
+    id: { not: invoiceId },
+    status: { notIn: ["REJECTED" as const] },
+  };
 
-    // Strategy A: CIF + invoice number
-    if (extraction.invoiceNumber) {
-      const dupByNumber = await prisma.invoice.findFirst({
-        where: { ...baseWhere, invoiceNumber: extraction.invoiceNumber },
-        select: DUPLICATE_SELECT,
+  // Strategy A: CIF + invoice number
+  if (extraction.issuerCif && extraction.invoiceNumber) {
+    const dupByNumber = await prisma.invoice.findFirst({
+      where: { ...baseWhere, issuerCif: extraction.issuerCif, invoiceNumber: extraction.invoiceNumber },
+      select: DUPLICATE_SELECT,
+    });
+    if (dupByNumber) {
+      issues.push({
+        type: "POSSIBLE_DUPLICATE",
+        description: `Posible duplicado de ${describeExisting(dupByNumber)}: mismo número y mismo CIF emisor (${extraction.issuerCif}).`,
       });
-      if (dupByNumber) {
-        issues.push({
-          type: "POSSIBLE_DUPLICATE",
-          description: `Posible duplicado de ${describeExisting(dupByNumber)}: mismo número y mismo CIF emisor (${extraction.issuerCif}).`,
-        });
-      }
     }
+  }
 
-    // Strategy B: CIF + total + date (only if Strategy A didn't match).
-    // Protegemos la fecha: el OCR a veces devuelve un RANGO (facturas de
-    // suministros, p.ej. "14-jul-25 / 10-set-25") que produce un Date inválido,
-    // y Prisma lo rechaza con un error crudo que dejaba la factura en Error OCR
-    // sin posible recuperación. Si no es parseable, saltamos esta estrategia.
-    const parsedDate = extraction.invoiceDate ? new Date(extraction.invoiceDate) : null;
-    const validDate = parsedDate && !isNaN(parsedDate.getTime()) ? parsedDate : null;
-    if (
-      !issues.some((i) => i.type === "POSSIBLE_DUPLICATE") &&
-      extraction.totalAmount != null &&
-      validDate
-    ) {
+  // Strategy B: CIF + total + date (only if Strategy A didn't match).
+  // Protegemos la fecha: el OCR a veces devuelve un RANGO (facturas de
+  // suministros, p.ej. "14-jul-25 / 10-set-25") que produce un Date inválido,
+  // y Prisma lo rechaza con un error crudo que dejaba la factura en Error OCR
+  // sin posible recuperación. Si no es parseable, saltamos esta estrategia.
+  const parsedDate = extraction.invoiceDate ? new Date(extraction.invoiceDate) : null;
+  const validDate = parsedDate && !isNaN(parsedDate.getTime()) ? parsedDate : null;
+  if (
+    !issues.some((i) => i.type === "POSSIBLE_DUPLICATE") &&
+    extraction.totalAmount != null &&
+    validDate
+  ) {
+    const sameAmountAndDate = { ...baseWhere, totalAmount: extraction.totalAmount, invoiceDate: validDate };
+    const total = formatEur(extraction.totalAmount);
+    if (invoice.type === "SALE") {
       // En ventas el emisor es el propio cliente: comparar su CIF sacaba como
       // duplicadas dos ventas del mismo importe y dia a clientes distintos.
       // Ahi se compara el destinatario, limpio como se guarda (revision 2 del
-      // PR #7).
-      const isSale = invoice.type === "SALE";
-      const saleReceiver = isSale ? parseTaxId(extraction.receiverCif).clean || null : null;
-      const dupByFields = isSale && !saleReceiver
-        ? null
-        : await prisma.invoice.findFirst({
-            where: {
-              ...(isSale ? { ...baseWhere, issuerCif: undefined, receiverCif: saleReceiver } : baseWhere),
-              totalAmount: extraction.totalAmount,
-              invoiceDate: validDate,
-            },
-            select: DUPLICATE_SELECT,
+      // PR #7), aunque el OCR no haya leido el CIF del emisor.
+      const saleReceiver = parseTaxId(extraction.receiverCif).clean || null;
+      if (saleReceiver) {
+        const dup = await prisma.invoice.findFirst({
+          where: { ...sameAmountAndDate, receiverCif: saleReceiver },
+          select: DUPLICATE_SELECT,
+        });
+        if (dup) {
+          issues.push({
+            type: "POSSIBLE_DUPLICATE",
+            description: `Posible duplicado de ${describeExisting(dup)}: mismo destinatario (${saleReceiver}), total (${total}) y fecha.`,
           });
-      if (dupByFields) {
+        }
+      } else if (!extraction.invoiceNumber) {
+        // Ticket a un consumidor final, sin NIF ni numero: el mismo ticket
+        // subido dos veces no lo cogia ninguna estrategia. Con nombre, tiene
+        // que coincidir (normalizado) si el otro tambien lo tiene.
+        const name = normalizeBusinessName(extraction.receiverName ?? "");
+        const candidates = await prisma.invoice.findMany({
+          where: { ...sameAmountAndDate, receiverCif: null },
+          select: { ...DUPLICATE_SELECT, receiverName: true },
+          take: 20,
+        });
+        const dup = candidates.find((c) => {
+          const other = normalizeBusinessName(c.receiverName ?? "");
+          return !name || !other || name === other;
+        });
+        if (dup) {
+          issues.push({
+            type: "POSSIBLE_DUPLICATE",
+            description: `Posible duplicado de ${describeExisting(dup)}: venta sin NIF del destinatario con el mismo total (${total}) y fecha.`,
+          });
+        }
+      }
+    } else if (extraction.issuerCif) {
+      const dup = await prisma.invoice.findFirst({
+        where: { ...sameAmountAndDate, issuerCif: extraction.issuerCif },
+        select: DUPLICATE_SELECT,
+      });
+      if (dup) {
         issues.push({
           type: "POSSIBLE_DUPLICATE",
-          description: isSale
-            ? `Posible duplicado de ${describeExisting(dupByFields)}: mismo destinatario (${saleReceiver}), total (${formatEur(extraction.totalAmount)}) y fecha.`
-            : `Posible duplicado de ${describeExisting(dupByFields)}: mismo CIF emisor (${extraction.issuerCif}), total (${formatEur(extraction.totalAmount)}) y fecha.`,
+          description: `Posible duplicado de ${describeExisting(dup)}: mismo CIF emisor (${extraction.issuerCif}), total (${total}) y fecha.`,
         });
       }
     }
