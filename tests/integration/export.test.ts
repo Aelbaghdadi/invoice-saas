@@ -8,7 +8,7 @@ import { signInAs } from "./helpers/session";
 import { holdLock, sessionsWaitingForLock } from "./helpers/locks";
 import { inFlight } from "./helpers/inflight";
 import { reject } from "./helpers/reviewForm";
-import { commitExportBatch, ExportConflictError, type ExportInvoice } from "@/lib/exportBatch";
+import { commitExportBatch, EXPORT_TRANSACTION_OPTIONS, ExportConflictError, type ExportInvoice } from "@/lib/exportBatch";
 import { appendAuditLogs, verifyFirmAuditChains } from "@/lib/auditLog";
 import { partitionA3Exportable } from "@/lib/exportFormats";
 import { exportInvoiceWhere } from "@/lib/exportRequest";
@@ -114,7 +114,10 @@ describe("commitExportBatch contra Postgres real", () => {
     await seedValidated(3000);
     const t0 = performance.now();
     await commitExportBatch(batchData("batch-big"), await readCandidates());
-    expect(performance.now() - t0).toBeLessThan(30_000);
+    // Pasar del timeout ya lo hace fallar (la transaccion aborta). Esto avisa
+    // antes: en local, sin latencia de red, tiene que ir muy por debajo, o en
+    // produccion (Supabase) no hay margen.
+    expect(performance.now() - t0).toBeLessThan(EXPORT_TRANSACTION_OPTIONS.timeout / 3);
     expect(await prisma.invoice.count({ where: { exportBatchId: "batch-big" } })).toBe(3000);
     expect((await verifyFirmAuditChains(w.firm.id)).brokenChains).toBe(0);
   });
@@ -153,7 +156,7 @@ describe("corrección cruzada con un export (F-049)", () => {
     const res = await exporting;
     const corrected = await correcting;
     expect(res.status).toBe(200);
-    expect(corrected?.error).toBeTruthy();
+    expect(corrected?.error).toMatchObject({ code: "ERR-VALIDATE-003" });
     const row = await prisma.invoice.findUniqueOrThrow({ where: { id: inv.id } });
     const item = await prisma.exportBatchItem.findFirstOrThrow({ where: { invoiceId: inv.id } });
     expect(row.invoiceNumber).toBe("F-001");
@@ -220,9 +223,11 @@ describe("aislamiento entre asesorías", () => {
     const preview = await exportPreview(new NextRequest(
       `http://app.local/api/export?clientId=${w.client.id}&periodType=MONTHLY&month=4&year=2026&preview=1`,
     ));
-    expect((await preview.json()).count ?? 0).toBe(0);
+    expect(preview.status).toBe(200);
+    expect((await preview.json()).count).toBe(0);
     const download = await exportDownload(downloadRequest(w.client.id));
-    expect(download.status).not.toBe(200);
+    expect(download.status).toBe(404);
+    expect((await download.json()).error).toMatchObject({ code: "ERR-EXPORT-001" });
     expect(await prisma.invoice.count({ where: { exportBatchId: { not: null } } })).toBe(0);
     expect(await prisma.exportBatch.count()).toBe(0);
   });
