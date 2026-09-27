@@ -524,3 +524,25 @@ describe("duplicados en ventas (estrategia B): se compara el destinatario", () =
     expect(await saleDuplicates("A58818501")).toEqual([expect.stringContaining("mismo destinatario (A58818501)")]);
   });
 });
+
+describe("OCR: los % también se redondean a 2 decimales", () => {
+  it("retención al 7,005 %: se guarda 7,01 % y la cuota con ese %", async () => {
+    stubOcr(async () => ({
+      rawJson: "{}",
+      extracted: {
+        issuerName: "Ana Pérez", issuerCif: "12345678Z", receiverName: w.client.name, receiverCif: w.client.cif,
+        invoiceNumber: "AP-1", invoiceDate: "2026-09-10", taxBase: 1000, vatRate: 21.004, vatAmount: 210,
+        irpfRate: 7.005, irpfAmount: 70.05, totalAmount: 1139.95, currency: "EUR", supplyType: null,
+        vatLines: [{ taxBase: 1000, vatRate: 21, vatAmount: 210 }], confidence: null,
+      } as ExtractedInvoice,
+    }));
+    fakeS3().put("k-irpf", "%PDF-1.4");
+    const { id: inv } = await makeInvoice(w.client, {
+      filename: "irpf.pdf", storageKey: "k-irpf", fileType: "application/pdf", status: "UPLOADED",
+      invoiceNumber: null, issuerCif: null, totalAmount: null, vatRate: null,
+    });
+    await processInvoice(inv, w.worker.id);
+    const after = await prisma.invoice.findUniqueOrThrow({ where: { id: inv } });
+    expect([Number(after.irpfRate), Number(after.irpfAmount), Number(after.vatRate)]).toEqual([7.01, 70.1, 21]);
+  });
+});

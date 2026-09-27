@@ -150,6 +150,10 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     extracted.vatAmount = roundCents(extracted.vatAmount);
     extracted.totalAmount = roundCents(extracted.totalAmount);
     extracted.irpfAmount = roundCents(extracted.irpfAmount);
+    // Los % tambien: con 7,005 % la cuota se calculaba con el % sin redondear
+    // y la BD guardaba 7,01, asi que la revision la daba por descuadrada.
+    extracted.vatRate = roundCents(extracted.vatRate);
+    extracted.irpfRate = roundCents(extracted.irpfRate);
     extracted.vatLines = extracted.vatLines.map((l) => ({
       ...l,
       taxBase: roundCents(l.taxBase),
