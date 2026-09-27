@@ -14,7 +14,7 @@ import { detectIssues } from "@/lib/issueDetector";
 import { appendAuditLogs } from "@/lib/auditLog";
 import { ocrFenceWhere } from "@/lib/invoiceStatuses";
 import { isInvoiceBalanced } from "@/lib/invoiceBalance";
-import { percentOf } from "@/lib/money";
+import { percentOf, roundCents } from "@/lib/money";
 
 // La escritura final son unas pocas consultas; 15 s por si espera un bloqueo
 // de fila (los 5 s por defecto dejaban el resultado en OCR_ERROR).
@@ -143,6 +143,22 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     }
 
     const extracted = ocrResult.extracted;
+    // A centimos antes de nada: la BD guarda numeric(12,2), y el cuadre
+    // (isValid, incidencias) se calculaba con los importes sin redondear que
+    // luego no son los guardados (revision 2 del PR #7). Los % tambien van a
+    // 2 decimales (numeric(5,2)).
+    extracted.taxBase = roundCents(extracted.taxBase);
+    extracted.vatAmount = roundCents(extracted.vatAmount);
+    extracted.totalAmount = roundCents(extracted.totalAmount);
+    extracted.irpfAmount = roundCents(extracted.irpfAmount);
+    extracted.vatLines = extracted.vatLines.map((l) => ({
+      ...l,
+      taxBase: roundCents(l.taxBase),
+      vatRate: roundCents(l.vatRate),
+      vatAmount: roundCents(l.vatAmount),
+      equivalenceSurchargeRate: roundCents(l.equivalenceSurchargeRate),
+      equivalenceSurchargeAmount: roundCents(l.equivalenceSurchargeAmount),
+    }));
     // El recargo de equivalencia llega a veces como una linea de IVA mas, con
     // el tipo del recargo (5,2 / 1,4 / 0,5) y el importe en la cuota o en la
     // base, porque en la factura aparece como otra fila del cuadro de

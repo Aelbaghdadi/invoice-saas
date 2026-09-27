@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { hasMoreThanTwoDecimals, percentCents, percentOf, toCents } from "@/lib/money";
+import { hasMoreThanTwoDecimals, percentCents, percentOf, roundCents, toCents } from "@/lib/money";
 
 describe("toCents", () => {
   it("redondea la mitad lejos del cero, igual en positivo que en negativo", () => {
@@ -41,5 +41,15 @@ describe("hasMoreThanTwoDecimals", () => {
     expect(hasMoreThanTwoDecimals(1.005)).toBe(true);
     expect(hasMoreThanTwoDecimals(-0.001)).toBe(true);
     for (const n of [1.5, 15.05, 100, -12.11, 0.29]) expect(hasMoreThanTwoDecimals(n)).toBe(false);
+  });
+});
+
+describe("roundCents", () => {
+  it("a céntimos como numeric(12,2), y null se queda null", () => {
+    expect(roundCents(10.004)).toBe(10);
+    expect(roundCents(2.105)).toBe(2.11);
+    expect(roundCents(-2.105)).toBe(-2.11);
+    expect(roundCents(null)).toBeNull();
+    expect(roundCents(undefined)).toBeNull();
   });
 });

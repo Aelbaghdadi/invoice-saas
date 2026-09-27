@@ -36,3 +36,10 @@ export function hasMoreThanTwoDecimals(amount: number): boolean {
   const cents = amount * 100;
   return Math.abs(cents - Math.round(cents)) > Math.max(1e-6, Math.abs(cents) * Number.EPSILON * 8);
 }
+
+/** Redondeado a centimos (como lo guarda numeric(12,2)), o null. */
+export function roundCents(amount: number): number;
+export function roundCents(amount: number | null | undefined): number | null;
+export function roundCents(amount: number | null | undefined): number | null {
+  return amount == null || !Number.isFinite(amount) ? amount ?? null : toCents(amount) / 100;
+}

@@ -253,6 +253,23 @@ describe("cuota = base × % por línea (F-022)", () => {
     ]);
   });
 
+  it("importes con 3 decimales: el cuadre se mira con lo que se guarda (a céntimos)", async () => {
+    // Sin redondear, 10,004 + 2,104 = 12,108 ≈ 12,11 y cuadraba; guardado a
+    // céntimos es 10,00 + 2,10 = 12,10, que no cuadra con 12,11.
+    fakeS3().put("k-3dec", facturaeXml({ buyerCif: w.client.cif, base: "10.004", taxAmount: "2.104", total: "12.11" }));
+    const { id: dec } = await makeInvoice(w.client, {
+      filename: "3dec.xml", storageKey: "k-3dec", fileType: "application/xml", status: "UPLOADED",
+      invoiceNumber: null, invoiceDate: null, issuerName: null, issuerCif: null,
+      taxBase: null, vatRate: null, vatAmount: null, totalAmount: null,
+    });
+    await processInvoice(dec, w.worker.id);
+    const inv = await prisma.invoice.findUniqueOrThrow({ where: { id: dec }, include: { issues: true, vatLines: true } });
+    expect([Number(inv.vatLines[0].taxBase), Number(inv.vatLines[0].vatAmount), Number(inv.totalAmount)]).toEqual([10, 2.1, 12.11]);
+    expect(inv.isValid).toBe(false);
+    expect(inv.status).toBe("NEEDS_ATTENTION");
+    expect(inv.issues.map((i) => i.description)).toContain("El total (12,11 €) no coincide con Base + IVA (12,10 €). Diferencia: 0,01 €.");
+  });
+
   it("con el tipo aprendido del tercero: una inversión del sujeto pasivo con cuota 0 no es un desglose descuadrado", async () => {
     // El prefijo del NIF (B...) dice INTERIOR; lo aprendido, INVERSION_SP.
     await prisma.accountEntry.create({
