@@ -62,6 +62,12 @@ export function vatLineProblem(line: VatLineText, position: number): string | nu
   if (notNumbers.length > 0) {
     return `La línea ${position} de IVA tiene un valor que no es un número en ${joinSpanish(notNumbers)}.`;
   }
+  // % de recargo sin cuota: la pantalla la daba por cuadrada (cuenta la cuota
+  // como 0) y el servidor la completaba con completeReadSurcharges, con una
+  // cuota que el gestor no habia visto (revision 1 del PR #7).
+  if (text(line.equivalenceSurchargeRate) && !text(line.equivalenceSurchargeAmount)) {
+    return `La línea ${position} de IVA está incompleta: tiene % de recargo de equivalencia pero falta su cuota.`;
+  }
   return null;
 }
 

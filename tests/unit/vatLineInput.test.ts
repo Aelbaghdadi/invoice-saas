@@ -28,6 +28,13 @@ describe("vatLineProblem (F-014)", () => {
       .toContain("falta la base, el % de IVA y la cuota");
   });
 
+  it("% de recargo sin su cuota: incompleta", () => {
+    expect(vatLineProblem(line("100", "21", "21", { equivalenceSurchargeRate: "5.2" }), 2)).toBe(
+      "La línea 2 de IVA está incompleta: tiene % de recargo de equivalencia pero falta su cuota.",
+    );
+    expect(vatLineProblem(line("100", "21", "21", { equivalenceSurchargeRate: "5.2", equivalenceSurchargeAmount: "5.2" }), 1)).toBeNull();
+  });
+
   it("valores que no son números", () => {
     expect(vatLineProblem(line("100", "21", "abc"), 1)).toBe(
       "La línea 1 de IVA tiene un valor que no es un número en la cuota.",
