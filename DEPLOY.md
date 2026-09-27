@@ -103,9 +103,11 @@ Con SIGTERM, Next deja de aceptar peticiones y espera a que terminen los
 - En Coolify, en la configuración de la aplicación, pon el periodo de gracia
   al parar (stop grace period / timeout) en **120 s como mínimo**. Un OCR
   con reintentos puede tardar más de un minuto.
-- `docker-entrypoint.sh` arranca con `exec node node_modules/next/dist/bin/next start`
-  para que el SIGTERM le llegue a Node directamente. Con `npx next start`
-  se lo llevaba npm y Node no tenía margen.
+- `docker-entrypoint.sh` arranca con `exec node node_modules/next/dist/bin/next start`:
+  Node es el PID 1 y recibe el SIGTERM sin depender de que npm lo reenvíe
+  (con `npx next start` npm también lo reenviaba y esperaba; no era lo que
+  cortaba las facturas). Lo que corta los `after()` es el SIGKILL al acabar el
+  periodo de gracia.
 
 ## 6. Almacenamiento (Garage)
 
