@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { readFileSync } from "fs";
 import { PDFDocument, StandardFonts } from "pdf-lib";
-import { computeBboxesFromPdf, extractPdfTextAndItems, extractPdfWithGemini, isUsefulPdfText, pagesToRead } from "@/lib/ocrLlm";
+import { computeBboxesFromPdf, extractPdfTextAndItems, extractPdfWithGemini, isUsefulPdfText, pagesToRead, textHasTaxId } from "@/lib/ocrLlm";
 
 const factura = {
   issuerName: "Proveedor SL", issuerCif: "B12345674", receiverName: "Cliente SA", receiverCif: "A58818501",
@@ -80,23 +80,55 @@ describe("extractPdfWithGemini: vía de texto o de imagen", () => {
   });
 });
 
-describe("isUsefulPdfText", () => {
-  const base = "FACTURA Nº F-2026-0042 Proveedor Ejemplo SL CIF B12345674 Cliente Ejemplo SA NIF A58818501 ";
-  it("con texto, un importe y un NIF: sí", () => {
-    expect(isUsefulPdfText(base + "Base imponible 100,00 IVA 21 % 21,00 Total 121,00")).toBe(true);
-    expect(isUsefulPdfText(base.replace("B12345674", "B-12345674").replace("A58818501", "") + "Base imponible 100,00 IVA 21,00 Total 121,00")).toBe(true);
-  });
+describe("isUsefulPdfText: cada requisito tiene su caso", () => {
+  const cabecera = "FACTURA Nº F-2026-0042 · Proveedor Ejemplo SL · Calle Mayor 1, 28013 Madrid · Cliente Ejemplo SA · Gran Via 2 ";
+  const importes = "Base imponible 100,00 · IVA 21 % 21,00 · Total 121,00";
 
-  it("una capa OCR mala, sin importes legibles: no", () => {
-    expect(isUsefulPdfText("FACTURA Nº F-2026-0042 Proveedor Ejemplo SL C1F B4567B919 Cliente Ejemplo SA domicilio Calle Mayor T0TAL 217,8O")).toBe(false);
-  });
-
-  it("con muchos caracteres rotos: no", () => {
-    expect(isUsefulPdfText(base + "Total 121,00 " + "�".repeat(10))).toBe(false);
+  it("con texto, un importe y un NIF válido: sí", () => {
+    expect(isUsefulPdfText(`${cabecera} CIF B12345674 ${importes}`)).toBe(true);
+    expect(isUsefulPdfText(`${cabecera} CIF B-12345674 ${importes}`)).toBe(true);
+    expect(isUsefulPdfText(`${cabecera} VAT DE123456789 ${importes}`)).toBe(true);
   });
 
   it("corto (los espacios no cuentan): no", () => {
-    expect(isUsefulPdfText("B12345674 121,00" + " ".repeat(200))).toBe(false);
+    expect(isUsefulPdfText(`B12345674 121,00${" ".repeat(200)}`)).toBe(false);
+  });
+
+  it("muchos caracteres rotos: no", () => {
+    expect(isUsefulPdfText(`${cabecera} CIF B12345674 ${importes} ${"\uFFFD".repeat(10)}`)).toBe(false);
+  });
+
+  it("sin importes (el sello con fecha y hora con puntos, o un teléfono con puntos): no", () => {
+    expect(isUsefulPdfText(`REGISTRO GENERAL DE ENTRADA · Ayuntamiento de Leganés · CIF P2807400B · ${cabecera} Fecha 14.09.2026 Hora 10.32.15`)).toBe(false);
+    expect(isUsefulPdfText(`${cabecera} CIF B12345674 · Teléfono 91.123.45.67 · www.ejemplo.es`)).toBe(false);
+  });
+
+  it("sin un NIF de verdad (palabras con números, un pedido o un CIF con el dígito mal): no", () => {
+    expect(isUsefulPdfText(`${cabecera} REGISTRO2026 FACTURA2026 ALBARAN2026 IMPONIBLE100 Pedido 12345678 ${importes}`)).toBe(false);
+    expect(isUsefulPdfText(`${cabecera} C1F B4567B919 Pedido 12345678 T0TAL 217,80`)).toBe(false);
+    expect(isUsefulPdfText(`${cabecera} CIF B12345678 ${importes}`)).toBe(false);
+  });
+});
+
+describe("importes", () => {
+  it("121,00, 1.234,56, 1,234.56 y -21.00 cuentan; fechas, horas y teléfonos con puntos, no", () => {
+    const withId = (amount: string) => isUsefulPdfText(`FACTURA F-1 Proveedor Ejemplo SL Calle Mayor 1 Madrid Cliente Ejemplo SA Gran Via 2 Madrid Servicio de mantenimiento CIF B12345674 importe ${amount}`);
+    for (const amount of ["121,00", "1.234,56", "1,234.56", "-21.00", "3.000,00"]) expect(withId(amount), amount).toBe(true);
+    for (const other of ["14.09.2026", "10.32.15", "91.123.45.67", "14/09/26"]) expect(withId(other), other).toBe(false);
+  });
+});
+
+describe("textHasTaxId", () => {
+  it("NIF, CIF y NIE con el dígito bien; VAT con prefijo de la lista", () => {
+    for (const id of ["B12345674", "B 12345674", "X1234567L", "DE123456789", "FRXX123456789", "NL123456789B01", "ATU12345678", "CHE-123.456.789", "GB123456789"]) {
+      expect(textHasTaxId(`CIF ${id}`), id).toBe(true);
+    }
+  });
+
+  it("no lo que solo se le parece", () => {
+    for (const text of ["REGISTRO2026", "PEDIDO12345678", "ESTADO12345678", "B12345678", "IMPONIBLE100"]) {
+      expect(textHasTaxId(text), text).toBe(false);
+    }
   });
 });
 

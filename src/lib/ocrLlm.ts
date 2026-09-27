@@ -2,18 +2,40 @@ import type { OcrResult, ExtractedInvoice, ExtractedVatLine } from "./ocr";
 import type { FieldBoundingBoxes, BoundingBox } from "./boundingBoxes";
 import { normalizeCurrency } from "./currency";
 import { normalizeGoodsType } from "./intracomGoods";
+import { isValidNIF } from "./validators";
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL ?? "gemini-2.5-flash-lite";
 
 // PDFs con menos de este umbral de caracteres (sin espacios) se consideran escaneados
 const MIN_TEXT_CHARS = 100;
 
-/** NIF, CIF, NIE o VAT europeo (este con al menos un digito). */
-const TAX_ID_RE = /\b(?:[A-HJ-NP-SUVW]\d{7}[0-9A-J]|\d{8}[A-Z]|[XYZ]\d{7}[A-Z]|[A-Z]{2}(?=[A-Z0-9]*\d)[A-Z0-9]{8,12})\b/;
-/** Un importe con dos decimales: 121,00 / 1.234,56 / -21.00. */
-const AMOUNT_RE = /-?\d[\d.]*[.,]\d{2}\b/;
+/** Candidatos a NIF, CIF o NIE, ya con la letra pegada; se validan con
+ *  isValidNIF (digito de control). */
+const SPANISH_TAX_ID_RE = /\b(?:[A-HJ-NP-SUVW]\d{7}[0-9A-J]|\d{8}[A-Z]|[XYZ]\d{7}[A-Z])\b/g;
+/** VAT de la UE, Reino Unido e Irlanda del Norte (GB, XI) y Suiza (CHE), con
+ *  una lista cerrada de prefijos: con «dos letras y 8-12 caracteres»
+ *  contaban como VAT «PEDIDO12345678» o «REGISTRO2026». */
+const VAT_RE =
+  /\b(?:(?:AT|BE|BG|CY|CZ|DE|DK|EE|EL|ES|FI|FR|HR|HU|IE|IT|LT|LU|LV|MT|NL|PL|PT|RO|SE|SI|SK|GB|XI)[A-Z0-9]{0,2}\d{7,12}(?:[A-Z]\d{2}|[A-Z0-9])?|CHE[-.\s]?\d{3}[.\s]?\d{3}[.\s]?\d{3})\b/;
+/** Un importe con dos decimales (121,00 / 1.234,56 / 1,234.56 / -21.00):
+ *  la parte entera es un numero o miles bien agrupados, y no va pegado a
+ *  otro numero. «14.09» de «14.09.2026», «10.32.15» o un telefono
+ *  «91.123.45.67» contaban como importes. */
+const AMOUNT_RE = /(?<![\d.,:/])-?(?:\d{1,3}(?:\.\d{3})+|\d{1,3}(?:,\d{3})+|\d+)[.,]\d{2}(?![.,:/]?\d)/;
 /** Caracteres que salen de una capa de texto rota: U+FFFD y uso privado. */
 const BROKEN_CHAR_RE = /[\uFFFD\uE000-\uF8FF]/g;
+
+/** ¿Trae el texto un NIF, CIF o NIE valido, o un VAT? */
+export function textHasTaxId(text: string): boolean {
+  const upper = text.toUpperCase();
+  // Solo se pega el prefijo de una letra a sus 7 digitos («B-12345674»,
+  // «B 12345674»), no cualquier palabra seguida de un numero.
+  const joined = upper.replace(/\b([A-Z])[-.\s]?(?=\d{7})/g, "$1");
+  for (const candidate of joined.match(SPANISH_TAX_ID_RE) ?? []) {
+    if (isValidNIF(candidate)) return true;
+  }
+  return VAT_RE.test(upper);
+}
 
 /**
  * ¿Vale el texto de un PDF para mandarlo a Gemini en vez de la imagen?
@@ -28,8 +50,7 @@ export function isUsefulPdfText(text: string): boolean {
   const broken = compact.match(BROKEN_CHAR_RE)?.length ?? 0;
   if (broken / compact.length > 0.02) return false;
   if (!AMOUNT_RE.test(text)) return false;
-  // «B-12345674» o «B 12345674» tambien valen.
-  return TAX_ID_RE.test(text.toUpperCase().replace(/([A-Z])[-.\s](?=\d)/g, "$1"));
+  return textHasTaxId(text);
 }
 
 /** Errores de la via de texto que mandan el PDF a la multimodal. */
