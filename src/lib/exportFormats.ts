@@ -411,13 +411,15 @@ export function a3BlockingProblems(inv: InvoiceWithClient): string[] {
 }
 
 /**
- * Revisa las facturas antes de exportar. Una entrada por factura con algo
+ * Revisa las facturas antes de exportar. Entradas de las facturas con algo
  * que decir, con su severidad: «bloqueante» (no entra en el fichero hasta
  * que se corrija), «aviso» (entra) o «fuera» (no entra y no hay nada que
  * corregir: la original de una division, una rectificativa todo a cero).
  * Primero las bloqueantes, luego los avisos y al final las de fuera; dentro
  * de cada una, en el orden de las facturas. Sin recortar: eso lo hace la
- * vista previa.
+ * vista previa. Casi siempre es una entrada por factura; una «fuera» con un
+ * salto de numeracion da dos: la gris y un aviso aparte con el salto, que
+ * dice que esa factura no va al Excel.
  */
 export function validateForA3Export(invoices: InvoiceWithClient[]): A3ValidationWarning[] {
   const results: A3ValidationWarning[] = [];
@@ -626,8 +628,10 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
         existing.warnings.push(warning);
         existing.numberingGap = true;
       } else {
+        // La de la caja ambar se exporta igualmente, salvo esta: se dice.
+        const text = existing ? `No va al Excel (sale abajo, en gris). ${warning}` : warning;
         const entry: A3ValidationWarning = {
-          invoiceId, invoiceNumber: inv.invoiceNumber, severity: "aviso", blockers: [], warnings: [warning], numberingGap: true,
+          invoiceId, invoiceNumber: inv.invoiceNumber, severity: "aviso", blockers: [], warnings: [text], numberingGap: true,
         };
         results.push(entry);
         if (!existing) byInvoiceId.set(invoiceId, entry);

@@ -621,7 +621,12 @@ describe("validateForA3Export — huecos en la numeración (solo emitidas)", () 
     const entries = res.filter((r) => r.invoiceId === "inv-3");
     expect(entries.map((r) => r.severity)).toEqual(["aviso", "fuera"]);
     expect(entries[0]).toMatchObject({ numberingGap: true, warnings: [expect.stringContaining("falta la factura 2")] });
+    // La caja ámbar dice «se exportan igualmente»: esta no, y se dice.
+    expect(entries[0].warnings[0]).toMatch(/^No va al Excel \(sale abajo, en gris\)\. Salto de numeración/);
     expect(entries[1].warnings.join()).not.toContain("Salto de numeración");
+    // Un salto sobre una que sí se exporta no lleva esa marca.
+    const normal = validateForA3Export([emitida({ id: "inv-1", invoiceNumber: "1" }), emitida({ id: "inv-3", invoiceNumber: "3" })]);
+    expect(normal.find((r) => r.invoiceId === "inv-3")?.warnings[0]).toMatch(/^Salto de numeración/);
   });
 
   it("NO avisa en las recibidas: cada proveedor numera para todos sus clientes", () => {

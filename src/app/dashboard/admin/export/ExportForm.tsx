@@ -421,7 +421,7 @@ export function ExportForm({ clients }: Props) {
               <WarningList
                 tone="amber"
                 title={(n) => n === 1 ? "1 factura con avisos" : `${n} facturas con avisos`}
-                note="Se exportan igualmente: los avisos no bloquean, pero conviene mirarlos."
+                note="Se exportan igualmente (salvo las que dicen «No va al Excel»): los avisos no bloquean, pero conviene mirarlos."
                 items={warnings.filter((w) => w.severity === "aviso")}
                 total={severityCounts.aviso}
               />
