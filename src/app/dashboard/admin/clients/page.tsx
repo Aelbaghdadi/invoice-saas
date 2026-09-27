@@ -30,13 +30,13 @@ function avatarColor(name: string) {
 export default async function ClientsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string | string[] }>;
+  searchParams: Promise<{ q?: string | string[]; invitacion?: string | string[]; cliente?: string | string[] }>;
 }) {
   const session = await auth();
   if (!session?.user || session.user.role !== "ADMIN") redirect("/login");
   const firmId = session.user.advisoryFirmId ?? undefined;
 
-  const { q: rawQuery } = await searchParams;
+  const { q: rawQuery, invitacion, cliente } = await searchParams;
   const query = typeof rawQuery === "string" ? rawQuery.trim() : "";
 
   const clients = await prisma.client.findMany({
@@ -50,6 +50,12 @@ export default async function ClientsPage({
   // Se filtra en memoria: son los clientes de una asesoria (decenas) y asi
   // la busqueda ignora tildes igual que el resto de listados.
   const visibleClients = clients.filter((c) => matchesSearch([c.name, c.cif, c.email], query));
+
+  // Vuelta de «Nuevo cliente» con la invitacion sin enviar (F-039). Se busca
+  // entre los clientes de la asesoria: un id de otra no muestra nada.
+  const uninvited = invitacion === "no-enviada" && typeof cliente === "string"
+    ? clients.find((c) => c.id === cliente) ?? null
+    : null;
 
   return (
     <div>
@@ -66,6 +72,17 @@ export default async function ClientsPage({
           </Link>
         }
       />
+
+      {uninvited && (
+        <div role="alert" className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-[13px] text-amber-800">
+          <p className="font-semibold">
+            Se ha creado «{uninvited.name}», pero no se ha podido enviar la invitación{uninvited.email ? ` a ${uninvited.email}` : ""}.
+          </p>
+          <p className="mt-0.5">
+            Para entrar al portal, el cliente puede pedir un enlace en «¿Olvidaste tu contraseña?» con ese email. Si tampoco le llega, revisa la configuración del correo.
+          </p>
+        </div>
+      )}
 
       {/* Search + filters */}
       <div className="mb-4 flex items-center gap-3">

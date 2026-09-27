@@ -21,16 +21,42 @@ function escapeHtml(str: string): string {
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-async function send(to: string, subject: string, html: string) {
+export type EmailResult = { ok: true } | { ok: false };
+
+/**
+ * Para los logs: «a***@dominio.es». El dominio se deja entero (ayuda a ver
+ * si falla un proveedor concreto) y del usuario solo la inicial.
+ */
+export function maskEmail(email: string): string {
+  const at = email.lastIndexOf("@");
+  if (at <= 0) return "***";
+  return `${email[0]}***${email.slice(at)}`;
+}
+
+/**
+ * Envia un correo. Resend no lanza: devuelve { data, error }, y antes solo se
+ * miraba la excepcion, asi que una clave caducada o un dominio sin verificar
+ * se tragaban en silencio (F-039). Registra la plantilla y el destinatario
+ * enmascarado y devuelve { ok: false } si falla; quien necesite saberlo
+ * (invitacion, restablecer contraseña) mira el resultado.
+ */
+async function send(template: string, to: string, subject: string, html: string): Promise<EmailResult> {
   if (!resend) {
-    console.log(`[EMAIL-DEV] To: ${to} | Subject: ${subject}`);
-    return;
+    console.log(`[EMAIL-DEV] ${template} | To: ${to} | Subject: ${subject}`);
+    return { ok: true };
   }
 
   try {
-    await resend.emails.send({ from: FROM, to, subject, html });
+    const { error } = await resend.emails.send({ from: FROM, to, subject, html });
+    if (error) {
+      console.error(`[EMAIL] No se ha enviado «${template}» a ${maskEmail(to)}: ${error.name}: ${error.message}`);
+      return { ok: false };
+    }
+    return { ok: true };
   } catch (err) {
-    console.error("[EMAIL] Error sending:", err);
+    const detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    console.error(`[EMAIL] No se ha enviado «${template}» a ${maskEmail(to)}: ${detail}`);
+    return { ok: false };
   }
 }
 
@@ -214,6 +240,7 @@ export async function notifyClientInvoiceValidated(params: {
     </p>`;
 
   await send(
+    "factura-validada",
     params.clientEmail,
     `Factura validada: ${invoiceRef}`,
     wrap({
@@ -258,6 +285,7 @@ export async function notifyClientInvoiceRejected(params: {
     </p>`;
 
   await send(
+    "factura-rechazada",
     params.clientEmail,
     `Factura rechazada: ${invoiceRef}`,
     wrap({
@@ -279,7 +307,7 @@ export async function notifyClientInvoiceRejected(params: {
 export async function sendPasswordResetEmail(params: {
   to: string;
   resetUrl: string;
-}) {
+}): Promise<EmailResult> {
   const body = `
     <p style="margin:0 0 16px;font-size:15px;color:#475569;line-height:1.7">
       Hemos recibido una solicitud para restablecer la contraseña de tu cuenta en ${BRAND}.
@@ -291,7 +319,8 @@ export async function sendPasswordResetEmail(params: {
       Si no solicitaste este cambio, puedes ignorar este email. Tu contraseña seguirá siendo la misma.
     </p>`;
 
-  await send(
+  return send(
+    "restablecer-contrasena",
     params.to,
     `Restablecer contraseña - ${BRAND}`,
     wrap({
@@ -314,7 +343,7 @@ export async function sendClientInvitationEmail(params: {
   to: string;
   clientName: string;
   inviteUrl: string;
-}) {
+}): Promise<EmailResult> {
   const body = `
     <p style="margin:0 0 4px;font-size:15px;color:#475569;line-height:1.7">
       Hola <strong style="color:#0f172a">${escapeHtml(params.clientName)}</strong>,
@@ -329,7 +358,8 @@ export async function sendClientInvitationEmail(params: {
       Si no esperabas esta invitación, puedes ignorar este email.
     </p>`;
 
-  await send(
+  return send(
+    "invitacion-cliente",
     params.to,
     `Bienvenido a ${BRAND} — Establece tu contraseña`,
     wrap({
@@ -370,6 +400,7 @@ export async function sendClosureReminder(params: {
     </p>`;
 
   await send(
+    "recordatorio-cierre",
     params.clientEmail,
     `Recordatorio: cierre pendiente de ${periodText}`,
     wrap({
@@ -418,6 +449,7 @@ export async function notifyWorkersNewUpload(params: {
 
   for (const email of params.workerEmails) {
     await send(
+      "nuevas-facturas-gestor",
       email,
       `${params.clientName} — ${params.count} factura${plural} nueva${plural} (${period})`,
       wrap({

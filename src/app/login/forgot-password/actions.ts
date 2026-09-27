@@ -50,7 +50,13 @@ export async function forgotPasswordAction(
 
       const resetUrl = `${getAppUrl()}/login/reset-password?token=${token}`;
 
-      await sendPasswordResetEmail({ to: email, resetUrl });
+      const sent = await sendPasswordResetEmail({ to: email, resetUrl });
+      // Al usuario se le responde lo mismo, llegue o no el correo: si no,
+      // se sabria que el email existe. Solo queda en el log (send ya dice la
+      // plantilla y el destinatario enmascarado).
+      if (!sent.ok) {
+        console.error(`[FORGOT_PASSWORD] El enlace de restablecimiento no se ha enviado (usuario ${user.id})`);
+      }
     }
 
     return { success: true };
