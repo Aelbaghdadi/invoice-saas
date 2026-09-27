@@ -95,16 +95,16 @@ describe("«Reabrir y validar»", () => {
   });
 
   it("si la auditoría falla, no queda reabierta a medias", async () => {
-    await prisma.$executeRawUnsafe(`ALTER TABLE "AuditLog" ADD CONSTRAINT falla_a_proposito CHECK ("field" <> 'rejectionReason') NOT VALID`);
-    try {
-      expect((await reopenA()).error).not.toBeNull();
-      const a = await A();
-      expect(a.status).toBe("REJECTED");
-      expect(a.rejectionReason).toBe("Ilegible");
-      expect(await prisma.invoiceStatusHistory.count({ where: { invoiceId: id } })).toBe(0);
-    } finally {
-      await prisma.$executeRawUnsafe(`ALTER TABLE "AuditLog" DROP CONSTRAINT falla_a_proposito`);
-    }
+    // Sin DDL: un ADMIN de la asesoria cuyo usuario no existe. El acceso se
+    // decide por la asesoria, y AuditLog.userId (FK a User) falla dentro de
+    // la transaccion.
+    signInAs({ id: "usuario-que-no-existe", role: "ADMIN", advisoryFirmId: w.firm.id });
+    // Error del sistema al escribir (no un «no tienes acceso»).
+    expect((await reopenA()).error).toMatchObject({ code: "ERR-SYS-001" });
+    const a = await A();
+    expect(a.status).toBe("REJECTED");
+    expect(a.rejectionReason).toBe("Ilegible");
+    expect(await prisma.invoiceStatusHistory.count({ where: { invoiceId: id } })).toBe(0);
   });
 
   it("el gestor de otra asesoría no la puede reabrir", async () => {
