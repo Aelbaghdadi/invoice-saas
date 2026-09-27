@@ -586,7 +586,9 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
         + `${gap.missing.length === 1 ? "falta la factura" : "faltan las facturas"} ${list}${more}. `
         + `Revisa si falta subirla o si se saltó el número al emitirla`;
       const existing = byInvoiceId.get(invoiceId);
-      if (existing) {
+      // De una «fuera» no puede colgar: saldria en la caja gris, bajo «no hay
+      // nada que corregir». Va en una entrada de aviso aparte.
+      if (existing && existing.severity !== "fuera") {
         existing.warnings.push(warning);
         existing.numberingGap = true;
       } else {
@@ -594,7 +596,7 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
           invoiceId, invoiceNumber: inv.invoiceNumber, severity: "aviso", blockers: [], warnings: [warning], numberingGap: true,
         };
         results.push(entry);
-        byInvoiceId.set(invoiceId, entry);
+        if (!existing) byInvoiceId.set(invoiceId, entry);
       }
     }
   }

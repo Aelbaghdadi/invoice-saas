@@ -599,6 +599,17 @@ describe("validateForA3Export — huecos en la numeración (solo emitidas)", () 
     expect(res.find((r) => r.invoiceId === "inv-1")).toBeUndefined();
   });
 
+  it("un salto sobre una factura que no va al Excel sale como aviso aparte, no en la caja gris", () => {
+    const res = validateForA3Export([
+      emitida({ id: "inv-1", invoiceNumber: "1" }),
+      emitida({ id: "inv-3", invoiceNumber: "3", _count: { splitInvoices: 2 } }),
+    ]);
+    const entries = res.filter((r) => r.invoiceId === "inv-3");
+    expect(entries.map((r) => r.severity)).toEqual(["aviso", "fuera"]);
+    expect(entries[0]).toMatchObject({ numberingGap: true, warnings: [expect.stringContaining("falta la factura 2")] });
+    expect(entries[1].warnings.join()).not.toContain("Salto de numeración");
+  });
+
   it("NO avisa en las recibidas: cada proveedor numera para todos sus clientes", () => {
     // Caso real: entre dos facturas de Galma a la misma tienda hay 29 numeros
     // que fue a otras tiendas. Avisar de eso era una falsa alarma por factura.
