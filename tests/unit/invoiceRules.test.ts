@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { parseTaxId } from "@/lib/validators";
 import {
   missingDataProblems, thirdPartyTaxIdRequired, usesSimplifiedAccount, validationProblems, type RuleInvoice,
 } from "@/lib/invoiceRules";
@@ -77,6 +78,12 @@ describe("validationProblems (F-009, F-014)", () => {
 });
 
 describe("NIF del tercero", () => {
+  it("con el NIF limpio que usa la pantalla, «-» es un NIF vacío", () => {
+    // La pantalla pasa parseTaxId(...).clean, como guarda el servidor.
+    expect(parseTaxId(" - ").clean).toBe("");
+    expect(rules({ thirdPartyTaxId: parseTaxId("-").clean || null })).toEqual(["sin_nif"]);
+  });
+
   it("hace falta en compras nacionales", () => {
     expect(rules({ thirdPartyTaxId: "" })).toEqual(["sin_nif"]);
     expect(validationProblems({ ...ok, thirdPartyTaxId: null })[0].message).toContain("Falta el NIF del proveedor");

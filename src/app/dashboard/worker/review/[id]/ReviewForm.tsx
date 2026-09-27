@@ -1050,7 +1050,9 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       irpfAmount: retentionAmount,
       lines: "lines" in parsedLines ? parsedLines.lines : [],
       isRectificative,
-      thirdPartyTaxId: counterpartyNif,
+      // Limpio, como lo guarda el servidor: con «-» la pantalla dejaba validar
+      // y el servidor no.
+      thirdPartyTaxId: parseTaxId(counterpartyNif).clean || null,
       thirdPartyCountry: parseTaxId(counterpartyNif).countryCode,
       operationType,
       supplierAccount: supplierAccountVal,
