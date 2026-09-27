@@ -1676,7 +1676,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                       placeholder="B12345678"
                     />
                   )}
-                  {type === "SALE" && !isIntracom && !editableReceiverCif.trim() && (
+                  {/* Limpio, como en validateChecksPass: «-» no es un NIF. */}
+                  {type === "SALE" && !isIntracom && !parseTaxId(editableReceiverCif).clean && (
                     <p className="mt-1 flex items-center gap-1 text-[11px] text-amber-600">
                       <AlertTriangle className="h-3 w-3" />
                       Venta sin NIF del destinatario: se puede validar, pero irá a A3 sin NIF
