@@ -100,7 +100,7 @@ describe("validar exige lo mínimo en el servidor (F-009)", () => {
       "Falta al menos una línea de IVA con base distinta de 0."],
     ["descuadrada", { totalAmount: "121.01" }, "El importe no cuadra: las líneas suman 121,00 € y el total es 121,01 €."],
     ["sin NIF del proveedor", { issuerCif: "" },
-      "Falta el NIF del proveedor. Si es un ticket o una factura simplificada, usa la cuenta genérica del cliente."],
+      "Falta el NIF del proveedor. Si es un ticket o una factura simplificada, pide a un administrador que configure la cuenta genérica del cliente."],
     ["sin cuentas", { supplierAccount: "" }, "Faltan cuentas contables: rellénalas antes de validar."],
   ])("%s: { error } y sigue pendiente", async (_caso, extra, mensaje) => {
     const antes = await row();
@@ -128,6 +128,13 @@ describe("validar exige lo mínimo en el servidor (F-009)", () => {
     expect((await save({ totalAmount: "" })).error).toBe("Falta el total de la factura.");
     expect((await save({ totalAmount: "130" })).error).toMatch(/^El importe no cuadra/);
     expect(await row()).toEqual(antes);
+  });
+
+  it("una genérica antigua de 7 dígitos sigue valiendo con el campo completado a 8", async () => {
+    await prisma.client.update({ where: { id: w.client.id }, data: { simplifiedSupplierAccount: "4009999", simplifiedExpenseAccount: "6290000" } });
+    const r = await validate(await form({ issuerCif: "", issuerName: "", supplierAccount: "40099990", expenseAccount: "62900000" }));
+    expect(r.error).toBeNull();
+    expect((await row()).status).toBe("VALIDATED");
   });
 
   it("un ticket con la cuenta genérica se valida sin NIF", async () => {

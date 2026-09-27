@@ -9,6 +9,7 @@
 import { isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { formatEur } from "@/lib/format";
 import { isForeignCurrency } from "@/lib/currency";
+import { padAccountingAccount } from "@/lib/accountingAccount";
 
 export type RuleLine = {
   taxBase: number;
@@ -63,11 +64,12 @@ const INTRACOM_OPERATION_TYPES = new Set(["INTRACOM", "INTRACOM_SERVICIOS"]);
 const blank = (v: string | null | undefined) => !v || v.trim() === "";
 
 /** ¿Va con la cuenta generica de simplificadas / tickets? Es lo que pone el
- *  boton «Usar cuenta genérica» de la revision. */
+ *  boton «Usar cuenta genérica» de la revision. Se comparan completadas con
+ *  padAccountingAccount: una generica antigua de 7 digitos dejaba de coincidir
+ *  en cuanto el campo de la revision la completaba a 8. */
 export function usesSimplifiedAccount(inv: Pick<RuleInvoice, "supplierAccount" | "simplifiedSupplierAccount">): boolean {
-  return !blank(inv.simplifiedSupplierAccount)
-    && !blank(inv.supplierAccount)
-    && inv.supplierAccount!.trim() === inv.simplifiedSupplierAccount!.trim();
+  if (blank(inv.simplifiedSupplierAccount) || blank(inv.supplierAccount)) return false;
+  return padAccountingAccount(inv.supplierAccount!.trim()) === padAccountingAccount(inv.simplifiedSupplierAccount!.trim());
 }
 
 /** ¿Hace falta el NIF de la otra parte? Si, salvo en simplificadas y tickets
@@ -110,7 +112,9 @@ export function missingDataProblems(inv: RuleInvoice): RuleProblem[] {
   } else if (thirdPartyTaxIdRequired(inv) && blank(inv.thirdPartyTaxId)) {
     problems.push({
       rule: "sin_nif",
-      message: `Falta el NIF del ${party}. Si es un ticket o una factura simplificada, usa la cuenta genérica del cliente.`,
+      message: blank(inv.simplifiedSupplierAccount)
+        ? `Falta el NIF del ${party}. Si es un ticket o una factura simplificada, pide a un administrador que configure la cuenta genérica del cliente.`
+        : `Falta el NIF del ${party}. Si es un ticket o una factura simplificada, usa la cuenta genérica del cliente.`,
     });
   }
   if (blank(inv.invoiceNumber)) problems.push({ rule: "sin_numero", message: "Falta el número de factura." });

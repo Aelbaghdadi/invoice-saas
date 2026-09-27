@@ -96,6 +96,19 @@ describe("NIF del tercero", () => {
     expect(rules({ type: "SALE", thirdPartyTaxId: null, operationType: "INTRACOM" })).toEqual(["sin_nif"]);
   });
 
+  it("la genérica se compara completada: una antigua de 7 dígitos sigue valiendo", () => {
+    expect(usesSimplifiedAccount({ supplierAccount: "40099990", simplifiedSupplierAccount: "4009999" })).toBe(true);
+    expect(usesSimplifiedAccount({ supplierAccount: "400.9999", simplifiedSupplierAccount: "40009999" })).toBe(true);
+    expect(usesSimplifiedAccount({ supplierAccount: "40000001", simplifiedSupplierAccount: "4009999" })).toBe(false);
+  });
+
+  it("sin genérica configurada, el mensaje manda a configurarla, no a usarla", () => {
+    expect(validationProblems({ ...ok, thirdPartyTaxId: null, simplifiedSupplierAccount: null })[0].message).toBe(
+      "Falta el NIF del proveedor. Si es un ticket o una factura simplificada, pide a un administrador que configure la cuenta genérica del cliente.",
+    );
+    expect(validationProblems({ ...ok, thirdPartyTaxId: null })[0].message).toContain("usa la cuenta genérica del cliente");
+  });
+
   it("no con la cuenta genérica de simplificadas y tickets", () => {
     expect(rules({ thirdPartyTaxId: null, supplierAccount: "40099999" })).toEqual([]);
     expect(rules({ thirdPartyTaxId: null, supplierAccount: " 40099999 " })).toEqual([]);
