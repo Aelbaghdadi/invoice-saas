@@ -16,16 +16,21 @@ const factura = {
 /** Lo que pide cada llamada: "texto" o "imagen". */
 let calls: string[];
 let textReply: object;
+let imageReply: object;
+let imageStatus: number;
 
 beforeEach(() => {
   calls = [];
   textReply = factura;
+  imageReply = factura;
+  imageStatus = 200;
   vi.stubEnv("GEMINI_API_KEY", "prueba");
   vi.stubGlobal("fetch", vi.fn(async (_url: string, init: { body: string }) => {
     const body = JSON.parse(init.body);
     const isImage = body.contents[0].parts.some((p: object) => "inlineData" in p);
     calls.push(isImage ? "imagen" : "texto");
-    const reply = isImage ? factura : textReply;
+    if (isImage && imageStatus !== 200) return new Response("demasiado grande", { status: imageStatus });
+    const reply = isImage ? imageReply : textReply;
     return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify(reply) }] } }] }));
   }));
 });
@@ -77,6 +82,24 @@ describe("extractPdfWithGemini: vía de texto o de imagen", () => {
     const { source, result } = await extractPdfWithGemini(readFileSync("scripts/demo-pdfs/amazon-oficina.pdf").toString("base64"));
     expect([source, calls]).toEqual(["gemini_multimodal", ["texto", "imagen"]]);
     expect(result.extracted.totalAmount).toBe(121);
+    // El texto del PDF se conserva para las heurísticas.
+    expect(result.rawText).toContain("B85800949");
+  });
+
+  it("si la imagen falla, se queda con lo que salió del texto (a revisar, no Error OCR)", async () => {
+    textReply = { ...factura, totalAmount: null };
+    imageStatus = 400;
+    const { source, result } = await extractPdfWithGemini(readFileSync("scripts/demo-pdfs/amazon-oficina.pdf").toString("base64"));
+    expect([source, calls]).toEqual(["gemini_text", ["texto", "imagen"]]);
+    expect(result.extracted.issuerCif).toBe("B12345674");
+  });
+
+  it("si la imagen tampoco saca el total, también el texto", async () => {
+    textReply = { ...factura, totalAmount: null, invoiceNumber: "DEL-TEXTO" };
+    imageReply = { ...factura, totalAmount: null };
+    const { source, result } = await extractPdfWithGemini(readFileSync("scripts/demo-pdfs/amazon-oficina.pdf").toString("base64"));
+    expect(source).toBe("gemini_text");
+    expect(result.extracted.invoiceNumber).toBe("DEL-TEXTO");
   });
 });
 

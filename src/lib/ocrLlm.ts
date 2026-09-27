@@ -53,9 +53,8 @@ export function isUsefulPdfText(text: string): boolean {
   return textHasTaxId(text);
 }
 
-/** Errores de la via de texto que mandan el PDF a la multimodal. */
+/** Error de la via de texto que manda el PDF a la multimodal: no hay texto util. */
 export const PDF_ESCANEADO = "PDF_ESCANEADO";
-export const PDF_TEXTO_INCOMPLETO = "PDF_TEXTO_INCOMPLETO";
 
 type PdfTextItem = {
   str: string;
@@ -552,13 +551,22 @@ export function extractGeminiBoundingBoxes(rawJson: string): FieldBoundingBoxes 
   }
 }
 
+/** ¿Ha salido lo basico: el total y el CIF del emisor? */
+function hasBasics(extracted: ExtractedInvoice): boolean {
+  const allKeyFieldsNull = [extracted.issuerName, extracted.issuerCif, extracted.invoiceNumber, extracted.totalAmount]
+    .every((v) => v == null);
+  return !(extracted.totalAmount == null || extracted.issuerCif == null || allKeyFieldsNull);
+}
+
 /**
  * Nivel 1 — PDF digital: extrae texto con pdfjs y lo procesa con Gemini Flash.
- * Lanza el error "PDF_ESCANEADO" si el texto es insuficiente para señalizar al nivel 2.
+ * Lanza PDF_ESCANEADO si el texto no vale (isUsefulPdfText). Si Gemini no
+ * saca lo basico, devuelve el resultado con complete: false: no se tira,
+ * por si la imagen tambien falla.
  * Las bounding boxes se obtienen buscando los valores extraídos en los items de pdfjs,
  * que sí conocen la posición exacta de cada fragmento de texto en la página.
  */
-export async function extractFromPdfTextWithGemini(base64: string): Promise<OcrResult> {
+export async function extractFromPdfTextWithGemini(base64: string): Promise<{ result: OcrResult; complete: boolean }> {
   const { text, items, timedOut } = await extractPdfTextAndItems(base64);
   if (timedOut) console.warn("extractFromPdfTextWithGemini: el texto tardaba demasiado, va por la imagen");
   if (!isUsefulPdfText(text)) {
@@ -568,23 +576,19 @@ export async function extractFromPdfTextWithGemini(base64: string): Promise<OcrR
   const { extracted } = await callGemini([
     { text: `Extrae los campos de esta factura:\n\n${text.slice(0, MAX_TEXT_FOR_GEMINI)}` },
   ]);
-  // Con el texto no ha salido lo basico: mejor la imagen.
-  const allKeyFieldsNull = [extracted.issuerName, extracted.issuerCif, extracted.invoiceNumber, extracted.totalAmount]
-    .every((v) => v == null);
-  if (extracted.totalAmount == null || extracted.issuerCif == null || allKeyFieldsNull) {
-    throw new Error(PDF_TEXTO_INCOMPLETO);
-  }
-
   const bboxes = findBboxesInPdf(extracted, items);
 
   return {
-    extracted,
-    rawText: text,
-    // Un trozo del texto en el JSON crudo (InvoiceExtraction.rawResponse),
-    // sin migracion: para comparar la via de texto con la de imagen.
-    rawJson: JSON.stringify({
-      source: "gemini_text", textLength: text.length, textExcerpt: text.slice(0, RAW_TEXT_EXCERPT), boundingBoxes: bboxes,
-    }),
+    complete: hasBasics(extracted),
+    result: {
+      extracted,
+      rawText: text,
+      // Un trozo del texto en el JSON crudo (InvoiceExtraction.rawResponse),
+      // sin migracion: para comparar la via de texto con la de imagen.
+      rawJson: JSON.stringify({
+        source: "gemini_text", textLength: text.length, textExcerpt: text.slice(0, RAW_TEXT_EXCERPT), boundingBoxes: bboxes,
+      }),
+    },
   };
 }
 
@@ -611,17 +615,33 @@ export async function extractFromDocumentWithGemini(
 }
 
 /**
- * PDF con Gemini: primero por texto y, si el PDF es escaneado, su texto no
- * vale o con el texto no sale lo basico, por la imagen. Devuelve la via
- * usada, que se guarda en InvoiceExtraction.source.
+ * PDF con Gemini: primero por texto; si el PDF es escaneado, su texto no
+ * vale o con el texto no sale lo basico, por la imagen. Devuelve la via que
+ * se usa de verdad (InvoiceExtraction.source).
+ *
+ * El resultado del texto no se tira: si la imagen falla (un 400 por tamaño,
+ * un 5xx) o tampoco saca el total, se devuelve el del texto, con datos
+ * parciales para revisar en vez de Error OCR. Si se usa la imagen, se
+ * conserva el texto del PDF (rawText) para las heuristicas.
  */
 export async function extractPdfWithGemini(base64: string): Promise<{ source: "gemini_text" | "gemini_multimodal"; result: OcrResult }> {
+  let fromText: { result: OcrResult; complete: boolean } | null = null;
   try {
-    return { source: "gemini_text", result: await extractFromPdfTextWithGemini(base64) };
+    fromText = await extractFromPdfTextWithGemini(base64);
   } catch (e) {
-    if (e instanceof Error && (e.message === PDF_ESCANEADO || e.message === PDF_TEXTO_INCOMPLETO)) {
-      return { source: "gemini_multimodal", result: await extractFromDocumentWithGemini(base64, "application/pdf") };
-    }
-    throw e;
+    if (!(e instanceof Error && e.message === PDF_ESCANEADO)) throw e;
+  }
+  if (fromText?.complete) return { source: "gemini_text", result: fromText.result };
+
+  if (!fromText) {
+    return { source: "gemini_multimodal", result: await extractFromDocumentWithGemini(base64, "application/pdf") };
+  }
+  try {
+    const image = await extractFromDocumentWithGemini(base64, "application/pdf");
+    if (image.extracted.totalAmount == null) return { source: "gemini_text", result: fromText.result };
+    return { source: "gemini_multimodal", result: { ...image, rawText: fromText.result.rawText } };
+  } catch (e) {
+    console.warn("extractPdfWithGemini: la imagen fallo; se usa lo que salio del texto", e);
+    return { source: "gemini_text", result: fromText.result };
   }
 }
