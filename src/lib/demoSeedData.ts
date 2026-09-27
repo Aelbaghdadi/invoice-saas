@@ -197,3 +197,14 @@ export const SEED_ACCOUNT_ENTRIES = {
     { nif: "A95758389", name: "Iberdrola Clientes S.A.U.",    supplierAccount: "4100002", expenseAccount: "6280001", defaultVatRate: 21 },
   ],
 } as const;
+
+/**
+ * Cuentas de una factura sembrada: las del tercero en SEED_ACCOUNT_ENTRIES.
+ * Sin ellas, tras «Reset demo» las validadas de la demo no se podian
+ * exportar (sin cuentas es bloqueante, F-025). null si el tercero no esta.
+ */
+export function seedInvoiceAccounts(def: Pick<SeedInvoiceDef, "client" | "type" | "pdf">): { supplierAccount: string; expenseAccount: string } | null {
+  const thirdPartyNif = def.type === "PURCHASE" ? def.pdf.emisor.cif : def.pdf.receptor.cif;
+  const entry = SEED_ACCOUNT_ENTRIES[def.client].find((e) => e.nif === thirdPartyNif);
+  return entry ? { supplierAccount: entry.supplierAccount, expenseAccount: entry.expenseAccount } : null;
+}

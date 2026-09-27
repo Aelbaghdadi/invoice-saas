@@ -20,6 +20,7 @@ import {
   SEED_INVOICE_DEFS,
   SEED_CLIENTS,
   SEED_ACCOUNT_ENTRIES,
+  seedInvoiceAccounts,
   type SeedInvoiceDef,
 } from "@/lib/demoSeedData";
 
@@ -230,6 +231,7 @@ export async function reseedDemo(
         vatAmount:     def.pdf.iva as unknown as never,
         totalAmount:   def.pdf.total as unknown as never,
         isValid: def.status === "VALIDATED" ? true : null,
+        ...seedInvoiceAccounts(def),
       },
     });
 
