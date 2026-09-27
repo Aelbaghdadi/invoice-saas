@@ -77,12 +77,16 @@ describe("validationProblems (F-009, F-014)", () => {
 });
 
 describe("NIF del tercero", () => {
-  it("hace falta en operaciones nacionales, recibidas y emitidas", () => {
+  it("hace falta en compras nacionales", () => {
     expect(rules({ thirdPartyTaxId: "" })).toEqual(["sin_nif"]);
     expect(validationProblems({ ...ok, thirdPartyTaxId: null })[0].message).toContain("Falta el NIF del proveedor");
-    expect(validationProblems({ ...ok, type: "SALE", thirdPartyTaxId: null })[0].message).toContain("Falta el NIF del destinatario");
     expect(rules({ thirdPartyTaxId: null, operationType: null })).toEqual(["sin_nif"]);
     expect(rules({ thirdPartyTaxId: null, operationType: "AGRARIA" })).toEqual(["sin_nif"]);
+  });
+
+  it("en ventas nacionales no: no hay genérica de clientes (revisión 1 del PR #7)", () => {
+    expect(rules({ type: "SALE", thirdPartyTaxId: null })).toEqual([]);
+    expect(rules({ type: "SALE", thirdPartyTaxId: null, operationType: "INTRACOM" })).toEqual(["sin_nif"]);
   });
 
   it("no con la cuenta genérica de simplificadas y tickets", () => {

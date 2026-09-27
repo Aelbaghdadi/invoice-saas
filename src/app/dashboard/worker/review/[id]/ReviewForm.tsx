@@ -1667,6 +1667,12 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                       placeholder="B12345678"
                     />
                   )}
+                  {type === "SALE" && !isIntracom && !editableReceiverCif.trim() && (
+                    <p className="mt-1 flex items-center gap-1 text-[11px] text-amber-600">
+                      <AlertTriangle className="h-3 w-3" />
+                      Venta sin NIF del destinatario: se puede validar, pero irá a A3 sin NIF
+                    </p>
+                  )}
                   {(() => {
                     const v = lockedSide === "receiver" ? editableIssuerCif : editableReceiverCif;
                     return v && !isValidTaxIdWithPrefix(v) ? (
@@ -2522,7 +2528,9 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
               </div>
               {/* Cuenta genérica para tickets/simplificadas sin datos: vuelca
                   la cuenta configurada por cliente con un clic. */}
-              {genericAccounts?.supplier && (
+              {/* Solo en recibidas: la generica es de proveedor y gasto, y en
+                  una emitida A3 recibiria la venta contra esas cuentas. */}
+              {genericAccounts?.supplier && type === "PURCHASE" && (
                 <button
                   type="button"
                   onClick={() => {

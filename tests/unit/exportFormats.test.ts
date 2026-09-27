@@ -188,6 +188,11 @@ describe("validateForA3Export", () => {
     expect(res[0].blockers).toContain("NIF vacío");
   });
 
+  it("una venta nacional sin NIF: solo aviso", () => {
+    const [res] = validateForA3Export([mkInvoice({ type: "SALE", receiverCif: null })]);
+    expect(res).toMatchObject({ severity: "aviso", blockers: [], warnings: ["NIF vacío"] });
+  });
+
   it("sin NIF en una importación: solo aviso (puede ser un proveedor extranjero)", () => {
     const [res] = validateForA3Export([mkInvoice({ issuerCif: null, operationType: "IMPORTACION" })]);
     expect(res.severity).toBe("aviso");

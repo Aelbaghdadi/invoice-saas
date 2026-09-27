@@ -71,12 +71,18 @@ export function usesSimplifiedAccount(inv: Pick<RuleInvoice, "supplierAccount" |
 }
 
 /** ¿Hace falta el NIF de la otra parte? Si, salvo en simplificadas y tickets
- *  con la cuenta generica, y en operaciones que no son nacionales. */
+ *  con la cuenta generica, en ventas nacionales y en operaciones que no son
+ *  nacionales ni intracomunitarias. */
 export function thirdPartyTaxIdRequired(
-  inv: Pick<RuleInvoice, "operationType" | "supplierAccount" | "simplifiedSupplierAccount">,
+  inv: Pick<RuleInvoice, "type" | "operationType" | "supplierAccount" | "simplifiedSupplierAccount">,
 ): boolean {
   // Una intracomunitaria no es un ticket: la cuenta generica no la exime.
   if (INTRACOM_OPERATION_TYPES.has(inv.operationType ?? "")) return true;
+  // Ventas: la generica del cliente es de proveedor (4xx/6xx) y no hay una de
+  // clientes, asi que una venta a un consumidor final sin NIF no tendria
+  // salida. Hasta que exista (simplifiedCustomerAccount, con migracion), en
+  // ventas nacionales el NIF que falta es un aviso (revision 1 del PR #7).
+  if (inv.type === "SALE") return false;
   if (usesSimplifiedAccount(inv)) return false;
   return DOMESTIC_OPERATION_TYPES.has(inv.operationType ?? "INTERIOR");
 }

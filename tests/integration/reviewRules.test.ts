@@ -140,6 +140,15 @@ describe("validar exige lo mínimo en el servidor (F-009)", () => {
     });
   });
 
+  it("una venta nacional sin NIF del destinatario se valida (aviso, no bloqueo)", async () => {
+    await prisma.invoice.update({ where: { id }, data: { type: "SALE" } });
+    const r = await validate(await form({ type: "SALE", receiverCif: "", receiverName: "Consumidor final", supplierAccount: "43000001", expenseAccount: "70000001" }));
+    expect(r.error).toBeNull();
+    const after = await row();
+    expect(after.status).toBe("VALIDATED");
+    expect(after.receiverCif).toBeNull();
+  });
+
   it("una importación de un proveedor sin NIF español se valida", async () => {
     const r = await validate(await form({ issuerCif: "", operationType: "IMPORTACION" }));
     expect(r.error).toBeNull();
