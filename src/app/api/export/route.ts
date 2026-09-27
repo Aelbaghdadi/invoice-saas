@@ -125,8 +125,12 @@ export async function GET(req: NextRequest) {
     // entera pesaba 1 MB en cada cambio de filtro.
     warnings: [
       ...bySeverity.bloqueante,
-      // Los saltos de numeracion siempre: solo los calcula el export.
-      ...bySeverity.aviso.filter((w, i) => i < PREVIEW_WARNING_LIMIT || w.numberingGap),
+      // Los saltos de numeracion primero, que solo los calcula el export,
+      // pero dentro del recorte: con 400 emitidas salteadas se mandaban 399.
+      ...[
+        ...bySeverity.aviso.filter((w) => w.numberingGap),
+        ...bySeverity.aviso.filter((w) => !w.numberingGap),
+      ].slice(0, PREVIEW_WARNING_LIMIT),
       ...bySeverity.fuera.slice(0, PREVIEW_WARNING_LIMIT),
     ],
   });

@@ -295,7 +295,20 @@ describe("bloqueantes en el export (F-025)", () => {
     const gap = body.warnings.find((x: { invoiceNumber: string }) => x.invoiceNumber === "3");
     expect(gap).toMatchObject({ severity: "aviso", numberingGap: true });
     expect(gap.warnings.join()).toContain("falta la factura 2");
-    expect(body.warnings.filter((x: { severity: string }) => x.severity === "aviso")).toHaveLength(51);
+    const avisos = body.warnings.filter((x: { severity: string }) => x.severity === "aviso");
+    expect(avisos).toHaveLength(50);
+    expect(avisos[0]).toBe(gap);
+  });
+
+  it("con muchos saltos de numeración, también el recorte de 50", async () => {
+    // 1, 3, 5... 121: 60 saltos.
+    const venta = { ...april, type: "SALE" as const, issuerCif: w.client.cif, issuerName: w.client.name, receiverCif: "B12345674", receiverName: "Cliente final SL", supplierAccount: "43000001", expenseAccount: "70000001" };
+    for (let n = 1; n <= 121; n += 2) await makeInvoice(w.client, { ...venta, invoiceNumber: String(n) });
+    const body = await preview();
+    expect(body.warningCountBySeverity.aviso).toBe(60);
+    const avisos = body.warnings.filter((x: { severity: string }) => x.severity === "aviso");
+    expect(avisos).toHaveLength(50);
+    expect(avisos.every((x: { numberingGap?: boolean }) => x.numberingGap)).toBe(true);
   });
 
   it("orden estable: con la misma fecha desempata el id", async () => {
