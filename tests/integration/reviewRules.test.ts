@@ -373,6 +373,16 @@ describe("«Por clasificar»: al clasificar se miran también el cuadre y el des
     expect(after.vatLines.map((l) => [Number(l.equivalenceSurchargeRate), Number(l.equivalenceSurchargeAmount)])).toEqual([[5.2, 5.2]]);
   });
 
+  it("dos clasificaciones a la vez: solo una escribe incidencias, historial y auditoría", async () => {
+    const inv = await routed([[100, 21, 21]], 121.01);
+    const results = await Promise.all([classifyInvoice(inv, w.client.id), classifyInvoice(inv, w.client.id)]);
+    expect(results.filter((r) => r?.ok)).toHaveLength(1);
+    expect(results.filter((r) => r?.error)).toEqual([{ error: "La factura no está pendiente de clasificar" }]);
+    expect(await issuesOf(inv)).toHaveLength(1);
+    expect(await prisma.invoiceStatusHistory.count({ where: { invoiceId: inv } })).toBe(1);
+    expect(await prisma.auditLog.count({ where: { invoiceId: inv, field: "status" } })).toBe(1);
+  });
+
   it("cuadrada: a revisión normal y sin incidencias", async () => {
     const inv = await routed([[100, 21, 21]], 121);
     await classifyInvoice(inv, w.client.id);
