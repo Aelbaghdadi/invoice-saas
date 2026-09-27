@@ -43,7 +43,7 @@ import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { invoiceBalanceDiffCents, isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { parseVatLineInputs, vatLinesProblem } from "@/lib/vatLineInput";
 import { validationProblems } from "@/lib/invoiceRules";
-import { hasMoreThanTwoDecimals } from "@/lib/money";
+import { hasMoreThanTwoDecimals, percentOf } from "@/lib/money";
 import { describeVatLineMismatch, vatLineMismatches, type VatLineMismatch } from "@/lib/vatLineChecks";
 import { sanitizeAccountingAccountInput, padAccountingAccount } from "@/lib/accountingAccount";
 import {
@@ -561,7 +561,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     const b = parseFloat(retentionBase);
     const r = parseFloat(retentionRate);
     if (!retentionType || isNaN(b) || isNaN(r)) return 0;
-    return Math.round((b * r)) / 100;
+    return percentOf(b, r);
   }, [retentionBase, retentionRate, retentionType]);
 
   // Al cambiar el tipo, siempre actualizamos el % al default del nuevo
@@ -614,7 +614,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
         const b = parseFloat(field === "taxBase" ? value : copy[idx].taxBase);
         const r = parseFloat(field === "vatRate" ? value : copy[idx].vatRate);
         if (!isNaN(b) && !isNaN(r)) {
-          copy[idx].vatAmount = (Math.round(b * r) / 100).toFixed(2);
+          copy[idx].vatAmount = percentOf(b, r).toFixed(2);
         }
       }
       // La cuota de recargo depende de la base: si se corrige la base y no se
@@ -624,7 +624,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
         const b = parseFloat(value);
         const r = parseFloat(copy[idx].equivalenceSurchargeRate);
         if (!isNaN(b) && !isNaN(r)) {
-          copy[idx].equivalenceSurchargeAmount = ((b * r) / 100).toFixed(2);
+          copy[idx].equivalenceSurchargeAmount = percentOf(b, r).toFixed(2);
         }
       }
       // Idem para la cuota de recargo cuando se edita el % de recargo. Si se
@@ -636,7 +636,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
         if (value.trim() === "") {
           copy[idx].equivalenceSurchargeAmount = "";
         } else if (!isNaN(b) && !isNaN(r)) {
-          copy[idx].equivalenceSurchargeAmount = ((b * r) / 100).toFixed(2);
+          copy[idx].equivalenceSurchargeAmount = percentOf(b, r).toFixed(2);
         }
       }
       return copy;

@@ -14,6 +14,7 @@ import { detectIssues } from "@/lib/issueDetector";
 import { appendAuditLogs } from "@/lib/auditLog";
 import { ocrFenceWhere } from "@/lib/invoiceStatuses";
 import { isInvoiceBalanced } from "@/lib/invoiceBalance";
+import { percentOf } from "@/lib/money";
 
 // La escritura final son unas pocas consultas; 15 s por si espera un bloqueo
 // de fila (los 5 s por defecto dejaban el resultado en OCR_ERROR).
@@ -489,7 +490,10 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     const sumBasesAll = vatLines.reduce((s, l) => s + l.taxBase, 0);
     const retentionBase = retentionType ? sumBasesAll : null;
     const computedIrpfAmount = retentionType && retentionRate != null
-      ? parseFloat(((sumBasesAll * retentionRate) / 100).toFixed(2))
+      // El mismo redondeo que la pantalla (percentOf): con toFixed, 100,30
+      // al 15 % daba 15,04 frente a los 15,05 impresos y la factura quedaba
+      // isValid=false sin ninguna incidencia.
+      ? percentOf(sumBasesAll, retentionRate)
       : (extracted.irpfAmount ?? null);
     const finalIrpfRate = retentionRate ?? extracted.irpfRate ?? null;
     const finalIrpfAmount = computedIrpfAmount;

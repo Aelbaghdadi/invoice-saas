@@ -34,7 +34,7 @@ import { normalizeCurrency } from "@/lib/currency";
 import { isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { parseVatLineInputs } from "@/lib/vatLineInput";
 import { validationProblems } from "@/lib/invoiceRules";
-import { hasMoreThanTwoDecimals } from "@/lib/money";
+import { hasMoreThanTwoDecimals, percentOf } from "@/lib/money";
 import { applyRectificativeSign } from "@/lib/rectificative";
 import { foldSurchargeLines, completeReadSurcharges, surchargeAuditValue } from "@/lib/equivalenceSurcharge";
 import { exportFingerprint, type FingerprintInvoice } from "@/lib/exportFingerprint";
@@ -365,7 +365,7 @@ async function parseAndSave(
   const retentionAmountNum = retentionType
     ? (parse(data.retentionAmount)
         ?? (retentionBaseNum != null && retentionRateNum != null
-            ? parseFloat(((retentionBaseNum * retentionRateNum) / 100).toFixed(2))
+            ? percentOf(retentionBaseNum, retentionRateNum)
             : null))
     : null;
 
