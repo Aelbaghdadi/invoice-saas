@@ -534,16 +534,28 @@ describe("duplicados en ventas (estrategia B): se compara el destinatario", () =
     expect(await saleDuplicates("A58818501", { issuerCif: null })).toEqual([expect.stringContaining("mismo destinatario (A58818501)")]);
   });
 
-  it("ticket sin NIF ni número subido dos veces: sí", async () => {
-    await existing(null);
-    expect(await saleDuplicates(null, { invoiceNumber: null })).toEqual([
-      expect.stringContaining("venta sin NIF del destinatario con el mismo total (121,00 €) y fecha"),
+  it("tickets distintos sin NIF, número ni nombre, del mismo importe y día: ninguno es duplicado", async () => {
+    for (let i = 0; i < 5; i++) await existing(null);
+    expect(await saleDuplicates(null, { invoiceNumber: null })).toEqual([]);
+  });
+
+  it("el mismo fichero subido dos veces: duplicado por el hash, aunque no se lea nada", async () => {
+    await makeInvoice(w.client, { type: "SALE", fileHash: "abc123", invoiceNumber: null, receiverCif: null });
+    const venta = await makeInvoice(w.client, { type: "SALE", fileHash: "abc123", invoiceNumber: null, receiverCif: null });
+    const issues = await detectIssues(venta.id, {
+      issuerCif: null, receiverCif: null, invoiceNumber: null, invoiceDate: null, receiverName: null,
+      taxBase: null, vatAmount: null, totalAmount: null, irpfAmount: null, vatLines: [], confidence: null,
+    } as unknown as ExtractedInvoice, venta, "INTERIOR", { persist: false });
+    expect(issues.filter((i) => i.type === "POSSIBLE_DUPLICATE").map((i) => i.description)).toEqual([
+      expect.stringContaining("es el mismo fichero"),
     ]);
   });
 
   it("ticket sin NIF con el mismo nombre (normalizado): sí", async () => {
     await existing(null, "Juan García");
-    expect(await saleDuplicates(null, { invoiceNumber: null, receiverName: "JUAN GARCIA" })).toHaveLength(1);
+    expect(await saleDuplicates(null, { invoiceNumber: null, receiverName: "JUAN GARCIA" })).toEqual([
+      expect.stringContaining("venta sin NIF al mismo destinatario (JUAN GARCIA), con el mismo total (121,00 €) y fecha"),
+    ]);
   });
 
   it("ticket sin NIF con otro nombre: no", async () => {

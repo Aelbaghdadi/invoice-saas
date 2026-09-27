@@ -138,8 +138,24 @@ export async function detectIssues(
     status: { notIn: ["REJECTED" as const] },
   };
 
+  // Mismo fichero (hash) ya subido a este cliente: duplicado seguro. La
+  // subida normal ya lo frena, pero no la del buzon (aun sin cliente real)
+  // ni un ticket sin NIF, numero ni nombre que las otras no pueden ver.
+  if (invoice.fileHash) {
+    const sameFile = await prisma.invoice.findFirst({
+      where: { clientId: invoice.clientId, id: { not: invoiceId }, status: { notIn: ["REJECTED" as const] }, fileHash: invoice.fileHash },
+      select: DUPLICATE_SELECT,
+    });
+    if (sameFile) {
+      issues.push({
+        type: "POSSIBLE_DUPLICATE",
+        description: `Posible duplicado de ${describeExisting(sameFile)}: es el mismo fichero.`,
+      });
+    }
+  }
+
   // Strategy A: CIF + invoice number
-  if (extraction.issuerCif && extraction.invoiceNumber) {
+  if (extraction.issuerCif && extraction.invoiceNumber && !issues.some((i) => i.type === "POSSIBLE_DUPLICATE")) {
     const dupByNumber = await prisma.invoice.findFirst({
       where: { ...baseWhere, issuerCif: extraction.issuerCif, invoiceNumber: extraction.invoiceNumber },
       select: DUPLICATE_SELECT,
@@ -184,23 +200,23 @@ export async function detectIssues(
           });
         }
       } else if (!extraction.invoiceNumber) {
-        // Ticket a un consumidor final, sin NIF ni numero: el mismo ticket
-        // subido dos veces no lo cogia ninguna estrategia. Con nombre, tiene
-        // que coincidir (normalizado) si el otro tambien lo tiene.
+        // Venta sin NIF ni numero: solo con el nombre del destinatario, no
+        // vacio e igual en las dos (normalizado). Por importe y fecha a secas,
+        // seis tickets distintos de 1,50 € del mismo dia salian como
+        // duplicados; el mismo fichero dos veces ya lo coge el hash.
         const name = normalizeBusinessName(extraction.receiverName ?? "");
-        const candidates = await prisma.invoice.findMany({
-          where: { ...sameAmountAndDate, receiverCif: null },
-          select: { ...DUPLICATE_SELECT, receiverName: true },
-          take: 20,
-        });
-        const dup = candidates.find((c) => {
-          const other = normalizeBusinessName(c.receiverName ?? "");
-          return !name || !other || name === other;
-        });
+        const candidates = name
+          ? await prisma.invoice.findMany({
+              where: { ...sameAmountAndDate, receiverCif: null, receiverName: { not: null } },
+              select: { ...DUPLICATE_SELECT, receiverName: true },
+              take: 50,
+            })
+          : [];
+        const dup = candidates.find((c) => normalizeBusinessName(c.receiverName ?? "") === name);
         if (dup) {
           issues.push({
             type: "POSSIBLE_DUPLICATE",
-            description: `Posible duplicado de ${describeExisting(dup)}: venta sin NIF del destinatario con el mismo total (${total}) y fecha.`,
+            description: `Posible duplicado de ${describeExisting(dup)}: venta sin NIF al mismo destinatario (${extraction.receiverName}), con el mismo total (${total}) y fecha.`,
           });
         }
       }
