@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import type { ExtractedInvoice } from "@/lib/ocr";
 import type { Invoice, IssueType } from "@prisma/client";
-import type { OperationTypeName } from "@/lib/validators";
+import { parseTaxId, type OperationTypeName } from "@/lib/validators";
 import { formatEur } from "@/lib/format";
 import { mathIssues } from "@/lib/mathIssues";
 import { formatDateEs } from "@/lib/dates";
@@ -175,18 +175,28 @@ export async function detectIssues(
       extraction.totalAmount != null &&
       validDate
     ) {
-      const dupByFields = await prisma.invoice.findFirst({
-        where: {
-          ...baseWhere,
-          totalAmount: extraction.totalAmount,
-          invoiceDate: validDate,
-        },
-        select: DUPLICATE_SELECT,
-      });
+      // En ventas el emisor es el propio cliente: comparar su CIF sacaba como
+      // duplicadas dos ventas del mismo importe y dia a clientes distintos.
+      // Ahi se compara el destinatario, limpio como se guarda (revision 2 del
+      // PR #7).
+      const isSale = invoice.type === "SALE";
+      const saleReceiver = isSale ? parseTaxId(extraction.receiverCif).clean || null : null;
+      const dupByFields = isSale && !saleReceiver
+        ? null
+        : await prisma.invoice.findFirst({
+            where: {
+              ...(isSale ? { ...baseWhere, issuerCif: undefined, receiverCif: saleReceiver } : baseWhere),
+              totalAmount: extraction.totalAmount,
+              invoiceDate: validDate,
+            },
+            select: DUPLICATE_SELECT,
+          });
       if (dupByFields) {
         issues.push({
           type: "POSSIBLE_DUPLICATE",
-          description: `Posible duplicado de ${describeExisting(dupByFields)}: mismo CIF emisor (${extraction.issuerCif}), total (${formatEur(extraction.totalAmount)}) y fecha.`,
+          description: isSale
+            ? `Posible duplicado de ${describeExisting(dupByFields)}: mismo destinatario (${saleReceiver}), total (${formatEur(extraction.totalAmount)}) y fecha.`
+            : `Posible duplicado de ${describeExisting(dupByFields)}: mismo CIF emisor (${extraction.issuerCif}), total (${formatEur(extraction.totalAmount)}) y fecha.`,
         });
       }
     }

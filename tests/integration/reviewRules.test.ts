@@ -9,6 +9,8 @@ import { saveInvoiceFields } from "@/app/dashboard/worker/review/[id]/actions";
 import { fakeS3 } from "./helpers/fakeS3";
 import { facturaeXml } from "./helpers/fixtures";
 import { processInvoice } from "@/lib/processInvoice";
+import { detectIssues } from "@/lib/issueDetector";
+import type { ExtractedInvoice } from "@/lib/ocr";
 import { classifyInvoice } from "@/app/dashboard/worker/clasificar/actions";
 
 let w: FirmWorld;
@@ -408,5 +410,34 @@ describe("«Por clasificar»: al clasificar se miran también el cuadre y el des
     await classifyInvoice(inv, w.client.id);
     expect((await prisma.invoice.findUniqueOrThrow({ where: { id: inv } })).status).toBe("PENDING_REVIEW");
     expect(await issuesOf(inv)).toEqual([]);
+  });
+});
+
+describe("duplicados en ventas (estrategia B): se compara el destinatario", () => {
+  // detectIssues directo: el parser Facturae no lee la fecha de la fixture
+  // (IssueDate va en InvoiceIssueData y lo busca en InvoiceHeader), y la
+  // estrategia B necesita fecha.
+  async function saleDuplicates(buyerCif: string) {
+    const venta = await makeInvoice(w.client, { type: "SALE", issuerCif: w.client.cif, receiverCif: buyerCif, invoiceNumber: "V-2" });
+    const extraction = {
+      issuerCif: w.client.cif, receiverCif: buyerCif, invoiceNumber: "V-2", invoiceDate: "2026-09-10",
+      taxBase: 100, vatAmount: 21, totalAmount: 121, irpfAmount: null, vatLines: [{ taxBase: 100, vatRate: 21, vatAmount: 21 }],
+      confidence: null,
+    } as unknown as ExtractedInvoice;
+    const issues = await detectIssues(venta.id, extraction, venta, "INTERIOR", { persist: false });
+    return issues.filter((i) => i.type === "POSSIBLE_DUPLICATE").map((i) => i.description);
+  }
+  const existing = (receiverCif: string) => makeInvoice(w.client, {
+    type: "SALE", issuerCif: w.client.cif, invoiceNumber: "V-1", invoiceDate: new Date("2026-09-10"), totalAmount: 121, receiverCif,
+  });
+
+  it("misma fecha e importe a otro cliente: no es un posible duplicado", async () => {
+    await existing("B87654321");
+    expect(await saleDuplicates("A58818501")).toEqual([]);
+  });
+
+  it("mismo destinatario, fecha e importe: sí", async () => {
+    await existing("A58818501");
+    expect(await saleDuplicates("A58818501")).toEqual([expect.stringContaining("mismo destinatario (A58818501)")]);
   });
 });
