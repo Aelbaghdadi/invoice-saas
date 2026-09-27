@@ -264,10 +264,22 @@ una DB Postgres de test y por eso fuera de `tests/unit`.
 ### Tests de integración
 
 **Base de datos.** Solo usan `TEST_DATABASE_URL`, nunca `DATABASE_URL` (en
-local apunta a Supabase). La guarda (`tests/integration/setup/guard.ts`) no
-arranca si falta, si no es Postgres o si no es claramente de pruebas: tiene
-que estar en esta máquina (`localhost`, `127.0.0.1`, `::1`) o llevar «test»
-en el nombre de la base de datos. Cada test la vacía.
+local apunta a Supabase). Cada test la vacía, así que el harness no arranca
+si:
+- falta o no es Postgres;
+- el nombre de la base de datos no es de pruebas, con límite de palabra
+  (`facturocr_test`, `test`, `tests-local`; no `latest` ni `facturas`), esté
+  donde esté: un túnel SSH o un volcado de producción en localhost también
+  son «locales»;
+- la URL lleva parámetros que cambian el destino (`?host=`, `?dbname=`…);
+- la base de datos a la que conecta de verdad no se llama así;
+- tiene tablas y no es del harness. La primera vez, sobre una base de datos
+  vacía, se crea el marcador `"_facturocr_test"."marker"` (en su propio
+  schema: Prisma no migra un `public` con tablas ajenas); después solo se
+  toca si lo tiene. Una BD de tests creada antes de este marcador hay que
+  borrarla y crearla de nuevo.
+
+Al arrancar dice por stderr a qué host y base de datos va.
 
 Un Postgres local, por ejemplo con Docker:
 

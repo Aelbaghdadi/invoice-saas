@@ -1,11 +1,11 @@
 import { afterAll, beforeEach, vi } from "vitest";
-import { requireTestDatabaseUrl } from "./guard";
+import { requireTestDatabase } from "./guard";
 import { startFakeS3 } from "../helpers/fakeS3";
 
 // Antes de importar nada de la app: src/lib/prisma lee DATABASE_URL al
 // crearse. Siempre la de pruebas (la guarda ya lo comprobo en globalSetup,
 // pero cada fichero corre en su propio contexto).
-process.env.DATABASE_URL = requireTestDatabaseUrl();
+process.env.DATABASE_URL = requireTestDatabase().url;
 
 // Almacenamiento: un S3 en memoria por fichero, en un puerto libre.
 const BUCKET = "facturas-test";

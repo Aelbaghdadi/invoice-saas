@@ -1,12 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { prisma } from "./helpers/db";
+import { requireTestDatabase } from "./setup/guard";
 import { fakeS3 } from "./helpers/fakeS3";
 import { getObjectBytes, putObject } from "@/lib/storage";
 
 describe("harness de integración", () => {
   it("usa la base de datos de TEST_DATABASE_URL, con las migraciones aplicadas", async () => {
     const [{ current_database }] = await prisma.$queryRaw<{ current_database: string }[]>`SELECT current_database()`;
-    expect(process.env.TEST_DATABASE_URL).toContain(current_database);
+    expect(current_database).toBe(requireTestDatabase().database);
     const applied = await prisma.$queryRaw<{ n: bigint }[]>`SELECT count(*) AS n FROM _prisma_migrations WHERE finished_at IS NOT NULL`;
     expect(Number(applied[0].n)).toBeGreaterThan(0);
   });

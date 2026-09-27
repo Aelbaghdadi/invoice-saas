@@ -1,20 +1,26 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { TEST_DATABASE_MARKER } from "../setup/guard";
 
-let tables: string[] | null = null;
+// Solo las tablas de los modelos de Prisma (ninguno usa @@map), no todo el
+// schema public: ni la de migraciones ni nada ajeno.
+const MODEL_TABLES = Object.values(Prisma.ModelName).map((name) => `"${name}"`).join(", ");
+let markerChecked = false;
 
 /**
- * Vacia todas las tablas menos la de migraciones. TRUNCATE no dispara los
- * triggers de fila de AuditLog (append-only), asi que no hace falta el bypass.
+ * Vacia las tablas de la app. TRUNCATE no dispara los triggers de fila de
+ * AuditLog (append-only), asi que no hace falta el bypass; por lo mismo, antes
+ * del primer TRUNCATE se vuelve a comprobar que la base de datos es del
+ * harness.
  */
 export async function resetDatabase() {
-  tables ??= (
-    await prisma.$queryRaw<{ tablename: string }[]>`
-      SELECT tablename FROM pg_tables
-      WHERE schemaname = 'public' AND tablename <> '_prisma_migrations'`
-  ).map((t) => `"${t.tablename}"`);
-  if (tables.length > 0) {
-    await prisma.$executeRawUnsafe(`TRUNCATE ${tables.join(", ")} RESTART IDENTITY CASCADE`);
+  if (!markerChecked) {
+    const [{ marker }] = await prisma.$queryRaw<{ marker: string | null }[]>`
+      SELECT to_regclass(${TEST_DATABASE_MARKER})::text AS marker`;
+    if (!marker) throw new Error(`[tests de integración] Falta ${TEST_DATABASE_MARKER}: esta base de datos no es del harness. No se vacía.`);
+    markerChecked = true;
   }
+  await prisma.$executeRawUnsafe(`TRUNCATE ${MODEL_TABLES} RESTART IDENTITY CASCADE`);
 }
 
 export async function disconnect() {

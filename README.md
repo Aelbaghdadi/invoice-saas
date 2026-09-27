@@ -143,9 +143,9 @@ tests/
 ## Tests de integración
 
 Van contra un Postgres de pruebas, nunca contra el de `DATABASE_URL` (en
-local, Supabase): la URL sale solo de `TEST_DATABASE_URL`, y el harness no
-arranca si no es local o no lleva «test» en el nombre de la base de datos.
-Cada test la vacía.
+local, Supabase): la URL sale solo de `TEST_DATABASE_URL`. Cada test la
+vacía, así que tiene que ser una base de datos **vacía la primera vez** y con
+nombre de pruebas (`facturocr_test`); si no, el harness no arranca.
 
 ```bash
 # Postgres local con Docker (o createdb facturocr_test en uno instalado)
