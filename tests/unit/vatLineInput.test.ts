@@ -109,6 +109,16 @@ describe("amountFieldsProblem (total y retención)", () => {
     expect(amountFieldsProblem({ retentionAmount: "15,005" })).toMatch(/^La cuota de la retención/);
   });
 
+  it("magnitud: «1e400» no es un número y 10.000 M€ no caben", () => {
+    expect(amountFieldsProblem({ totalAmount: "1e400" })).toBe("El total no es un número.");
+    expect(amountFieldsProblem({ totalAmount: "10000000000" })).toBe("El total es demasiado grande.");
+    expect(amountFieldsProblem({ totalAmount: "9999999999.99" })).toBeNull();
+    expect(vatLineProblem(line("1e400", "21", "21"), 1)).toBe("La línea 1 de IVA tiene un valor que no es un número en la base.");
+    expect(vatLineProblem(line("10000000000", "21", "2100000000"), 1)).toBe(
+      "La línea 1 de IVA tiene un importe demasiado grande en la base.",
+    );
+  });
+
   it("con 2 decimales o vacío, nada", () => {
     expect(amountFieldsProblem({ totalAmount: "121,01", retentionBase: "100", retentionRate: "15", retentionAmount: "15.05" })).toBeNull();
     expect(amountFieldsProblem({ totalAmount: "", retentionRate: " " })).toBeNull();

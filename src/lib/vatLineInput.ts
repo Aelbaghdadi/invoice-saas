@@ -46,8 +46,14 @@ function text(value: unknown): string {
 /** "12,5", "12.5" y "1e3" valen; "", "abc" o "12,5,3" no. */
 function parseDecimal(value: string): number | null {
   if (!/^[-+]?(\d+([.,]\d*)?|[.,]\d+)([eE][-+]?\d+)?$/.test(value)) return null;
-  return Number(value.replace(",", "."));
+  const n = Number(value.replace(",", "."));
+  // «1e400» es Infinity: no es un importe.
+  return Number.isFinite(n) ? n : null;
 }
+
+/** Lo que cabe en numeric(12,2): por encima la BD lo rechaza y el gestor
+ *  veia un ERR-SYS-001 generico. */
+const MAX_AMOUNT = 1e10;
 
 function joinSpanish(items: string[]): string {
   return items.length > 1 ? `${items.slice(0, -1).join(", ")} y ${items[items.length - 1]}` : items[0];
@@ -85,6 +91,12 @@ export function vatLineProblem(line: VatLineText, position: number): string | nu
     { label: "el % de recargo", value: text(line.equivalenceSurchargeRate) },
     { label: "la cuota de recargo", value: text(line.equivalenceSurchargeAmount) },
   ].filter((v) => v.value !== "" && parseDecimal(v.value) !== null);
+  const tooBig = [...values, ...surchargeValues]
+    .filter((v) => Math.abs(parseDecimal(v.value)!) >= MAX_AMOUNT)
+    .map((v) => v.label);
+  if (tooBig.length > 0) {
+    return `La línea ${position} de IVA tiene un importe demasiado grande en ${joinSpanish(tooBig)}.`;
+  }
   const tooPrecise = [...values, ...surchargeValues]
     .filter((v) => hasMoreThanTwoDecimals(parseDecimal(v.value)!))
     .map((v) => v.label);
@@ -172,7 +184,9 @@ export function amountFieldsProblem(fields: {
     const value = (raw ?? "").trim();
     if (!value) continue;
     const n = parseDecimal(value);
-    if (n !== null && hasMoreThanTwoDecimals(n)) return `${label} tiene más de 2 decimales. Redondéalo a céntimos.`;
+    if (n === null) return `${label} no es un número.`;
+    if (Math.abs(n) >= MAX_AMOUNT) return `${label} es demasiado grande.`;
+    if (hasMoreThanTwoDecimals(n)) return `${label} tiene más de 2 decimales. Redondéalo a céntimos.`;
   }
   return null;
 }

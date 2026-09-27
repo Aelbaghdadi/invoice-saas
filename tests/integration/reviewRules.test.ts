@@ -61,10 +61,12 @@ describe("líneas de IVA incompletas (F-014)", () => {
     ["una base con 3 decimales", { vatLines: JSON.stringify([{ taxBase: "1.005", vatRate: "21", vatAmount: "0.21" }]), totalAmount: "1.21" },
       "La línea 1 de IVA tiene más de 2 decimales en la base. Redondéalo a céntimos."],
     ["un total con 3 decimales", { totalAmount: "121.005" }, "El total tiene más de 2 decimales. Redondéalo a céntimos."],
+    ["un total «1e400»", { totalAmount: "1e400" }, "El total no es un número."],
+    ["un total que no cabe en la BD", { totalAmount: "10000000000" }, "El total es demasiado grande."],
     ["un % de retención con 3 decimales",
       { retentionType: "PROFESSIONAL", retentionBase: "100", retentionRate: "15.555", retentionAmount: "15.56", totalAmount: "105.44" },
       "El % de retención tiene más de 2 decimales. Redondéalo a céntimos."],
-  ])("%s: { error } (se guardaría redondeada y dejaría de cuadrar)", async (_caso, extra, mensaje) => {
+  ])("%s: { error } en el límite y la factura no cambia", async (_caso, extra, mensaje) => {
     const antes = await row();
     expect((await validate(await form(extra))).error).toBe(mensaje);
     expect(await row()).toEqual(antes);
