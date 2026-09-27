@@ -24,6 +24,10 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 # El script "build" ya hace `prisma generate && next build`.
 RUN npm run build
+# Barrera (F-032): si falla un test unitario, no hay imagen. Corren sin .env
+# ni base de datos (.dockerignore deja fuera .env*): los tests que necesitan
+# Postgres no van en tests/unit.
+RUN npx vitest run tests/unit
 
 # ---- prod-deps (solo producción; incluye el CLI de Prisma porque está en
 #      dependencies) + cliente Prisma generado ----
