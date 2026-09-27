@@ -28,6 +28,15 @@ describe("percentCents / percentOf", () => {
 });
 
 describe("hasMoreThanTwoDecimals", () => {
+  it("importes altos: la tolerancia es relativa (antes fallaba a partir de ~134 M€)", () => {
+    expect(hasMoreThanTwoDecimals(134218247.52)).toBe(false);
+    expect(hasMoreThanTwoDecimals(9999999999.99)).toBe(false);
+    expect(hasMoreThanTwoDecimals(-9999999999.99)).toBe(false);
+    expect(hasMoreThanTwoDecimals(1.005)).toBe(true);
+    expect(toCents(134218247.52)).toBe(13421824752);
+    expect(toCents(9999999999.99)).toBe(999999999999);
+  });
+
   it("1,005 sí; 1,5, 15,05 y 100 no", () => {
     expect(hasMoreThanTwoDecimals(1.005)).toBe(true);
     expect(hasMoreThanTwoDecimals(-0.001)).toBe(true);
