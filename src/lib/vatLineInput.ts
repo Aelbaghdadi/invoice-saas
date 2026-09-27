@@ -101,7 +101,10 @@ export function vatLineProblem(line: VatLineText, position: number): string | nu
     .filter((v) => hasMoreThanTwoDecimals(parseDecimal(v.value)!))
     .map((v) => v.label);
   if (tooPrecise.length > 0) {
-    return `La línea ${position} de IVA tiene más de 2 decimales en ${joinSpanish(tooPrecise)}. Redondéalo a céntimos.`;
+    // Un % no se «redondea a céntimos».
+    const onlyRates = tooPrecise.every((label) => label.startsWith("el %"));
+    return `La línea ${position} de IVA tiene más de 2 decimales en ${joinSpanish(tooPrecise)}. `
+      + (onlyRates ? "Usa como máximo 2 decimales." : "Redondéalo a céntimos.");
   }
   // % de recargo sin cuota: la pantalla la daba por cuadrada (cuenta la cuota
   // como 0) y el servidor la completaba con completeReadSurcharges, con una
@@ -186,7 +189,9 @@ export function amountFieldsProblem(fields: {
     const n = parseDecimal(value);
     if (n === null) return `${label} no es un número.`;
     if (Math.abs(n) >= MAX_AMOUNT) return `${label} es demasiado grande.`;
-    if (hasMoreThanTwoDecimals(n)) return `${label} tiene más de 2 decimales. Redondéalo a céntimos.`;
+    if (hasMoreThanTwoDecimals(n)) {
+      return `${label} tiene más de 2 decimales. ${label.startsWith("El %") ? "Usa como máximo 2 decimales." : "Redondéalo a céntimos."}`;
+    }
   }
   return null;
 }

@@ -65,7 +65,7 @@ describe("líneas de IVA incompletas (F-014)", () => {
     ["un total que no cabe en la BD", { totalAmount: "10000000000" }, "El total es demasiado grande."],
     ["un % de retención con 3 decimales",
       { retentionType: "PROFESSIONAL", retentionBase: "100", retentionRate: "15.555", retentionAmount: "15.56", totalAmount: "105.44" },
-      "El % de retención tiene más de 2 decimales. Redondéalo a céntimos."],
+      "El % de retención tiene más de 2 decimales. Usa como máximo 2 decimales."],
   ])("%s: { error } en el límite y la factura no cambia", async (_caso, extra, mensaje) => {
     const antes = await row();
     expect((await validate(await form(extra))).error).toBe(mensaje);

@@ -48,6 +48,10 @@ describe("vatLineProblem (F-014)", () => {
     expect(vatLineProblem(line("100", "21", "21", { equivalenceSurchargeRate: "5.2", equivalenceSurchargeAmount: "5.205" }), 1))
       .toContain("en la cuota de recargo");
     expect(vatLineProblem(line("100,50", "21", "21,11"), 1)).toBeNull();
+    // Un % no se redondea a céntimos.
+    expect(vatLineProblem(line("100", "21.125", "21.13"), 1)).toBe(
+      "La línea 1 de IVA tiene más de 2 decimales en el % de IVA. Usa como máximo 2 decimales.",
+    );
   });
 
   it("números sin comillas (JSON a mano) valen; lo demás es «no es un número», nunca vacío", () => {
@@ -105,7 +109,7 @@ describe("amountFieldsProblem (total y retención)", () => {
   it("más de 2 decimales en el total, la base, el % o la cuota de la retención", () => {
     expect(amountFieldsProblem({ totalAmount: "121.005" })).toBe("El total tiene más de 2 decimales. Redondéalo a céntimos.");
     expect(amountFieldsProblem({ retentionBase: "100.005" })).toMatch(/^La base de la retención/);
-    expect(amountFieldsProblem({ retentionRate: "15.555" })).toMatch(/^El % de retención tiene más de 2 decimales/);
+    expect(amountFieldsProblem({ retentionRate: "15.555" })).toBe("El % de retención tiene más de 2 decimales. Usa como máximo 2 decimales.");
     expect(amountFieldsProblem({ retentionAmount: "15,005" })).toMatch(/^La cuota de la retención/);
   });
 
