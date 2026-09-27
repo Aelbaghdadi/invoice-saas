@@ -163,21 +163,38 @@ const REDUCING_RESULT_ACCOUNT: Record<"PURCHASE" | "SALE", RegExp> = {
 };
 
 /**
- * Cuentas del sentido contrario: una venta con cuenta de proveedor (40x/41x)
- * o de gasto (6xx), o una compra con cuenta de cliente (43x) o de ingreso
- * (7xx). Pasaba con una «No lo sé» abierta como recibida, con «Usar cuenta
- * genérica» (400/629) y cambiada despues a emitida (revision 2 del PR #7).
- * Las que minoran (REDUCING_RESULT_ACCOUNT) no cuentan como contrarias.
+ * ¿Que cuentas son del sentido contrario? Una venta con cuenta de proveedor
+ * (40x/41x) o de gasto (6xx), o una compra con cuenta de cliente (43x) o de
+ * ingreso (7xx). Las que minoran (REDUCING_RESULT_ACCOUNT) no cuentan. Se
+ * comparan completadas, como se guardan: «4.1» (Ctrl+Enter sin salir del
+ * campo) no empieza por 40 hasta que se completa a 40000001. Lo usan la
+ * validacion y la pantalla, que al cambiar de sentido vacia las que no
+ * encajan.
+ */
+export function accountsAgainstDirection(
+  inv: Pick<RuleInvoice, "type" | "supplierAccount" | "expenseAccount">,
+): { party: string | null; result: string | null } {
+  const party = padAccountingAccount(inv.supplierAccount?.trim() ?? "");
+  const result = padAccountingAccount(inv.expenseAccount?.trim() ?? "");
+  return {
+    party: party && !partyAccountMatchesType(party, inv.type) ? party : null,
+    result: result && !resultAccountMatchesType(result, inv.type) && !REDUCING_RESULT_ACCOUNT[inv.type].test(result)
+      ? result
+      : null,
+  };
+}
+
+/**
+ * Cuentas del sentido contrario (accountsAgainstDirection). Pasaba con una
+ * «No lo sé» abierta como recibida, con «Usar cuenta genérica» (400/629) y
+ * cambiada despues a emitida (revision 2 del PR #7).
  */
 export function accountDirectionProblem(
   inv: Pick<RuleInvoice, "type" | "supplierAccount" | "expenseAccount">,
 ): RuleProblem | null {
   const isSale = inv.type === "SALE";
-  // Completadas, como se guardan: «4.1» (Ctrl+Enter sin salir del campo) no
-  // empieza por 40 hasta que se completa a 40000001.
-  const party = padAccountingAccount(inv.supplierAccount?.trim() ?? "");
-  const result = padAccountingAccount(inv.expenseAccount?.trim() ?? "");
-  if (party && !partyAccountMatchesType(party, inv.type)) {
+  const { party, result } = accountsAgainstDirection(inv);
+  if (party) {
     return {
       rule: "cuenta_sentido",
       message: isSale
@@ -185,7 +202,7 @@ export function accountDirectionProblem(
         : `La cuenta ${party} es de cliente y esta factura es recibida: usa una cuenta de proveedor (40x o 41x).`,
     };
   }
-  if (result && !resultAccountMatchesType(result, inv.type) && !REDUCING_RESULT_ACCOUNT[inv.type].test(result)) {
+  if (result) {
     return {
       rule: "cuenta_sentido",
       message: isSale

@@ -42,7 +42,7 @@ import {
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { invoiceBalanceDiffCents, isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { amountFieldsProblem, parseVatLineInputs, vatLinesProblem } from "@/lib/vatLineInput";
-import { validationProblems } from "@/lib/invoiceRules";
+import { accountsAgainstDirection, validationProblems } from "@/lib/invoiceRules";
 import { percentOf } from "@/lib/money";
 import { describeVatLineMismatch, vatLineMismatches, type VatLineMismatch } from "@/lib/vatLineChecks";
 import { sanitizeAccountingAccountInput, padAccountingAccount } from "@/lib/accountingAccount";
@@ -1734,13 +1734,14 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                       } else if (!OPERATION_TYPE_OPTIONS[next].includes(operationType)) {
                         setOperationType(OPERATION_TYPE_OPTIONS[next][0]);
                       }
-                      // Las genericas son de proveedor y gasto: en una emitida
-                      // no valen (y el servidor las rechaza), asi que se vacian.
-                      if (next === "SALE" && genericAccounts?.supplier
-                        && padAccountingAccount(supplierAccountVal.trim()) === padAccountingAccount(genericAccounts.supplier.trim())) {
-                        setSupplierAccount("");
-                        if (genericAccounts.expense && expenseAccountVal.trim() === genericAccounts.expense.trim()) setExpenseAccount("");
-                      }
+                      // Las cuentas del otro sentido (las genericas de
+                      // proveedor y gasto en una emitida, una 43x/7xx en una
+                      // recibida) no valen y el servidor las rechaza: se vacian.
+                      const against = accountsAgainstDirection({
+                        type: next, supplierAccount: supplierAccountVal, expenseAccount: expenseAccountVal,
+                      });
+                      if (against.party) setSupplierAccount("");
+                      if (against.result) setExpenseAccount("");
                     }}
                   />
                   {invoice.typeUnconfirmed && (

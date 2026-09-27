@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { parseTaxId } from "@/lib/validators";
 import {
-  missingDataProblems, thirdPartyTaxIdRequired, usesSimplifiedAccount, validationProblems, type RuleInvoice,
+  accountsAgainstDirection, missingDataProblems, thirdPartyTaxIdRequired, usesSimplifiedAccount, validationProblems, type RuleInvoice,
 } from "@/lib/invoiceRules";
 
 const ok: RuleInvoice = {
@@ -181,5 +181,26 @@ describe("NIF del tercero", () => {
 describe("missingDataProblems", () => {
   it("no mira el cuadre", () => {
     expect(missingDataProblems({ ...ok, totalAmount: 500 })).toEqual([]);
+  });
+});
+
+describe("accountsAgainstDirection (al cambiar de sentido se vacían)", () => {
+  it("a emitida: las genéricas de proveedor y gasto, y cualquier 40x/6xx", () => {
+    expect(accountsAgainstDirection({ type: "SALE", supplierAccount: "40099999", expenseAccount: "62900000" }))
+      .toEqual({ party: "40099999", result: "62900000" });
+    expect(accountsAgainstDirection({ type: "SALE", supplierAccount: "4.1", expenseAccount: "6.1" }))
+      .toEqual({ party: "40000001", result: "60000001" });
+  });
+
+  it("a recibida: una 43x y una 7xx", () => {
+    expect(accountsAgainstDirection({ type: "PURCHASE", supplierAccount: "43000001", expenseAccount: "70000001" }))
+      .toEqual({ party: "43000001", result: "70000001" });
+  });
+
+  it("las que encajan, las que minoran y las vacías se quedan", () => {
+    expect(accountsAgainstDirection({ type: "SALE", supplierAccount: "43000001", expenseAccount: "60900000" }))
+      .toEqual({ party: null, result: null });
+    expect(accountsAgainstDirection({ type: "PURCHASE", supplierAccount: "", expenseAccount: null }))
+      .toEqual({ party: null, result: null });
   });
 });
