@@ -747,3 +747,20 @@ describe("OCR y rectificativas (F-012): no se cambian signos por el texto", () =
     expect(after.status).toBe("PENDING_REVIEW");
   });
 });
+
+describe("rectificativa en la revisión: la inversión del signo se audita (F-012)", () => {
+  const signAudit = () => prisma.auditLog.findMany({ where: { invoiceId: id, field: "rectificativeSign" } });
+
+  it("marcada con todo en positivo: se guarda en negativo y queda en la auditoría", async () => {
+    expect((await save({ isRectificative: "1", rectificativeType: "BY_DIFFERENCE" })).error).toBeNull();
+    expect(Number((await row()).totalAmount)).toBe(-121);
+    expect((await signAudit()).map((a) => a.newValue)).toEqual(["importes en negativo (marcada como rectificativa)"]);
+  });
+
+  it("marcada y ya en negativo, o sin marcar: no hay inversión", async () => {
+    const negativos = { vatLines: JSON.stringify([{ taxBase: "-100", vatRate: "21", vatAmount: "-21" }]), totalAmount: "-121" };
+    expect((await save({ ...negativos, isRectificative: "1", rectificativeType: "BY_DIFFERENCE" })).error).toBeNull();
+    expect((await save({})).error).toBeNull();
+    expect(await signAudit()).toEqual([]);
+  });
+});

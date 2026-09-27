@@ -438,16 +438,13 @@ async function parseAndSave(
   // (lib/rectificative): si ya hay signos mixtos/negativos, se respetan.
   // Reflejamos el signo en newData y en las lineas que se persisten para que
   // calculo, auditoria y BD usen los mismos valores.
-  const signedLines = isRectificativeFlag
-    ? applyRectificativeSign({
-        lines: vatLines,
-        taxBase: newData.taxBase,
-        vatAmount: newData.vatAmount,
-        totalAmount: newData.totalAmount,
-        irpfAmount: newData.irpfAmount,
-        retentionBase: newData.retentionBase,
-      })
-    : { lines: vatLines, taxBase: newData.taxBase, vatAmount: newData.vatAmount, totalAmount: newData.totalAmount, irpfAmount: newData.irpfAmount, retentionBase: newData.retentionBase };
+  const asTyped = { lines: vatLines, taxBase: newData.taxBase, vatAmount: newData.vatAmount, totalAmount: newData.totalAmount, irpfAmount: newData.irpfAmount, retentionBase: newData.retentionBase };
+  const signedLines = isRectificativeFlag ? applyRectificativeSign(asTyped) : asTyped;
+  // La inversion se audita aparte (F-012): en los campos solo se veia el
+  // importe cambiado, no que lo habia negado la casilla y no el gestor.
+  // applyRectificativeSign devuelve el mismo objeto si respeta los signos.
+  const signInverted = signedLines !== asTyped
+    && (asTyped.lines.some((l) => l.taxBase !== 0 || l.vatAmount !== 0) || (asTyped.totalAmount ?? 0) !== 0);
   newData.taxBase       = signedLines.taxBase;
   newData.vatAmount     = signedLines.vatAmount;
   newData.totalAmount   = signedLines.totalAmount;
@@ -477,6 +474,13 @@ async function parseAndSave(
 
   // Build audit log entries for changed fields
   const auditEntries: { field: string; oldValue: string | null; newValue: string | null }[] = [];
+  if (signInverted) {
+    auditEntries.push({
+      field: "rectificativeSign",
+      oldValue: "importes en positivo",
+      newValue: "importes en negativo (marcada como rectificativa)",
+    });
+  }
   // Reabrir borra el motivo del rechazo: la factura deja de estar rechazada.
   if (options.reopen && invoice.rejectionReason) {
     auditEntries.push({ field: "rejectionReason", oldValue: invoice.rejectionReason, newValue: null });

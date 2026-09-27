@@ -150,6 +150,7 @@ export const AUDIT_FIELD_LABELS: Record<string, string> = {
   isRectificative: "Rectificativa",
   rectifiedInvoiceNumber: "Factura rectificada",
   rectificativeType: "Tipo de rectificación",
+  rectificativeSign: "Signo de la rectificativa",
   equivalenceSurcharge: "Recargo de equivalencia",
   export: "Exportación",
   reexport: "Por reexportar",
