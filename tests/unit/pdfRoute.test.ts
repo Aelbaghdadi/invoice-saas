@@ -94,6 +94,19 @@ describe("extractPdfWithGemini: vía de texto o de imagen", () => {
     expect(result.extracted.issuerCif).toBe("B12345674");
   });
 
+  it("texto incompleto e imagen con 503: dos llamadas y el del texto, sin lanzar (el reintento no repetiría el texto)", async () => {
+    textReply = { ...factura, totalAmount: null };
+    imageStatus = 503;
+    const { source } = await extractPdfWithGemini(readFileSync("scripts/demo-pdfs/amazon-oficina.pdf").toString("base64"));
+    expect([source, calls]).toEqual(["gemini_text", ["texto", "imagen"]]);
+  });
+
+  it("escaneado e imagen con 503: lanza (lo reintenta processInvoice) sin haber llamado por texto", async () => {
+    imageStatus = 503;
+    await expect(extractPdfWithGemini(await pdfWithText([]))).rejects.toThrow(/503/);
+    expect(calls).toEqual(["imagen"]);
+  });
+
   it("si la imagen tampoco saca el total, también el texto", async () => {
     textReply = { ...factura, totalAmount: null, invoiceNumber: "DEL-TEXTO" };
     imageReply = { ...factura, totalAmount: null };

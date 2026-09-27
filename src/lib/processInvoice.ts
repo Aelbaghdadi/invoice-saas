@@ -107,6 +107,11 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
 
           if (ft === "application/pdf" || invoice.filename.endsWith(".pdf")) {
             if (process.env.GEMINI_API_KEY) {
+              // Solo lanza si falla la llamada que no tiene alternativa: la
+              // del texto, o la de la imagen cuando el texto no valia. Si el
+              // texto ya salio (aunque incompleto) y la imagen falla, devuelve
+              // el del texto: el reintento no repite una llamada que ya fue
+              // bien (temperatura 0, saldria lo mismo).
               ({ source, result: ocrResult } = await extractPdfWithGemini(base64));
             } else {
               source = "document_ai";
