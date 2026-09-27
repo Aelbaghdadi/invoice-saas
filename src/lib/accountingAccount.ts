@@ -49,10 +49,14 @@ export function padAccountingAccount(value: string): string {
  * compras, customer/income en ventas), asi que estas dos comprobaciones ya
  * no eligen entre cuentas guardadas: eso lo hace `accountsForDirection`.
  *
- * Lo que hacen ahora es guardar la ESCRITURA. Son la unica red que impide
- * que un 43000053 tecleado por error en una compra se aprenda como cuenta de
- * proveedor, o que un 40000046 tecleado en una venta caiga en la de cliente
- * y vuelva a dejar la ficha mezclada.
+ * Guardan la ESCRITURA: impiden que un 43000053 tecleado por error en una
+ * compra se aprenda como cuenta de proveedor, o que un 40000046 tecleado en
+ * una venta caiga en la de cliente y vuelva a dejar la ficha mezclada.
+ *
+ * Tambien las usa la validacion (`accountDirectionProblem` en
+ * invoiceRules.ts), que ademas admite las cuentas que minoran (606/608/609 en
+ * ventas, 706/708/709 en compras). Aqui no se admiten: un rappel no es la
+ * cuenta que se aprende para las siguientes facturas del tercero.
  */
 export function partyAccountMatchesType(
   account: string | null | undefined,

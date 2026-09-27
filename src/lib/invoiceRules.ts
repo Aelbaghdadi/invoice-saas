@@ -154,11 +154,20 @@ export function currencyProblem(inv: Pick<RuleInvoice, "currency">): RuleProblem
   };
 }
 
+/** Cuentas de resultado del sentido contrario que el PGC usa para minorar
+ *  (devoluciones, descuentos y rappels): 606/608/609 en una emitida (p. ej.
+ *  el rappel que se factura al proveedor) y 706/708/709 en una recibida. */
+const REDUCING_RESULT_ACCOUNT: Record<"PURCHASE" | "SALE", RegExp> = {
+  SALE: /^60[689]/,
+  PURCHASE: /^70[689]/,
+};
+
 /**
  * Cuentas del sentido contrario: una venta con cuenta de proveedor (40x/41x)
  * o de gasto (6xx), o una compra con cuenta de cliente (43x) o de ingreso
  * (7xx). Pasaba con una «No lo sé» abierta como recibida, con «Usar cuenta
  * genérica» (400/629) y cambiada despues a emitida (revision 2 del PR #7).
+ * Las que minoran (REDUCING_RESULT_ACCOUNT) no cuentan como contrarias.
  */
 export function accountDirectionProblem(
   inv: Pick<RuleInvoice, "type" | "supplierAccount" | "expenseAccount">,
@@ -174,7 +183,7 @@ export function accountDirectionProblem(
         : `La cuenta ${party} es de cliente y esta factura es recibida: usa una cuenta de proveedor (40x o 41x).`,
     };
   }
-  if (result && !resultAccountMatchesType(result, inv.type)) {
+  if (result && !resultAccountMatchesType(result, inv.type) && !REDUCING_RESULT_ACCOUNT[inv.type].test(result)) {
     return {
       rule: "cuenta_sentido",
       message: isSale

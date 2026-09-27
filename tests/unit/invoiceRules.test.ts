@@ -82,6 +82,18 @@ describe("validationProblems (F-009, F-014)", () => {
     expect(rules({ type: "SALE", supplierAccount: "44000001", expenseAccount: "20000001" })).toEqual([]);
   });
 
+  it("las cuentas que minoran no son del sentido contrario (rappels, devoluciones, descuentos)", () => {
+    for (const account of ["60600000", "60800000", "60900001"]) {
+      expect(rules({ type: "SALE", supplierAccount: "43000001", expenseAccount: account })).toEqual([]);
+    }
+    for (const account of ["70600000", "70800000", "70900001"]) {
+      expect(rules({ expenseAccount: account })).toEqual([]);
+    }
+    // El resto del 60x/70x sigue siendo del sentido contrario.
+    expect(rules({ type: "SALE", supplierAccount: "43000001", expenseAccount: "60000001" })).toEqual(["cuenta_sentido"]);
+    expect(rules({ expenseAccount: "70500000" })).toEqual(["cuenta_sentido"]);
+  });
+
   it("sin cuentas", () => {
     expect(rules({ supplierAccount: "" })).toEqual(["sin_cuentas"]);
     expect(rules({ expenseAccount: null })).toEqual(["sin_cuentas"]);
