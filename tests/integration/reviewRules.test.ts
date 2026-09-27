@@ -66,3 +66,60 @@ describe("líneas de IVA incompletas (F-014)", () => {
     expect(lines.map((l) => [Number(l.taxBase), Number(l.vatRate), Number(l.vatAmount)])).toEqual([[100, 21, 21], [50, 0, 0]]);
   });
 });
+
+describe("validar exige lo mínimo en el servidor (F-009)", () => {
+  it.each([
+    ["sin total", { totalAmount: "" }, "Falta el total de la factura."],
+    ["sin fecha", { invoiceDate: "" }, "Falta la fecha de la factura."],
+    ["sin número", { invoiceNumber: "" }, "Falta el número de factura."],
+    ["sin líneas", { vatLines: "[]", totalAmount: "0" }, "Falta al menos una línea de IVA con base distinta de 0."],
+    ["solo líneas a 0", { vatLines: JSON.stringify([{ taxBase: "0", vatRate: "21", vatAmount: "0" }]), totalAmount: "0" },
+      "Falta al menos una línea de IVA con base distinta de 0."],
+    ["descuadrada", { totalAmount: "121.01" }, "El importe no cuadra: las líneas suman 121,00 € y el total es 121,01 €."],
+    ["sin NIF del proveedor", { issuerCif: "" },
+      "Falta el NIF del proveedor. Si es un ticket o una factura simplificada, usa la cuenta genérica del cliente."],
+    ["sin cuentas", { supplierAccount: "" }, "Faltan cuentas contables: rellénalas antes de validar."],
+  ])("%s: { error } y sigue pendiente", async (_caso, extra, mensaje) => {
+    const antes = await row();
+    expect((await validate(await form(extra))).error).toBe(mensaje);
+    expect(await row()).toEqual(antes);
+    expect(await prisma.invoiceStatusHistory.count({ where: { invoiceId: id } })).toBe(0);
+  });
+
+  it("guardar sin validar no exige nada de eso", async () => {
+    expect((await save({ totalAmount: "", invoiceNumber: "", issuerCif: "" })).error).toBeNull();
+    const r = await row();
+    expect(r.status).toBe("PENDING_REVIEW");
+    expect(r.totalAmount).toBeNull();
+  });
+
+  it("tampoco se guarda así la corrección de una ya validada", async () => {
+    await prisma.invoice.update({ where: { id }, data: { status: "VALIDATED" } });
+    expect((await validate(await form({ totalAmount: "130" }))).error).toMatch(/^El importe no cuadra/);
+    expect(Number((await row()).totalAmount)).toBe(121);
+  });
+
+  it("un ticket con la cuenta genérica se valida sin NIF", async () => {
+    await prisma.client.update({ where: { id: w.client.id }, data: { simplifiedSupplierAccount: "40099999", simplifiedExpenseAccount: "62900000" } });
+    const r = await validate(await form({ issuerCif: "", issuerName: "", supplierAccount: "40099999", expenseAccount: "62900000" }));
+    expect(r.error).toBeNull();
+    const after = await row();
+    expect(after.status).toBe("VALIDATED");
+    expect(after.issuerCif).toBeNull();
+  });
+
+  it("una rectificativa a cero se valida", async () => {
+    const r = await validate(await form({
+      isRectificative: "1", rectifiedInvoiceNumber: "F-0",
+      vatLines: JSON.stringify([{ taxBase: "0", vatRate: "21", vatAmount: "0" }]), totalAmount: "0",
+    }));
+    expect(r.error).toBeNull();
+    expect((await row()).status).toBe("VALIDATED");
+  });
+
+  it("una importación de un proveedor sin NIF español se valida", async () => {
+    const r = await validate(await form({ issuerCif: "", operationType: "IMPORTACION" }));
+    expect(r.error).toBeNull();
+    expect((await row()).status).toBe("VALIDATED");
+  });
+});

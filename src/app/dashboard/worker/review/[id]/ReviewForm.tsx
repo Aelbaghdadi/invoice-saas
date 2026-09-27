@@ -41,7 +41,8 @@ import {
 } from "@/lib/invoiceStatuses";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { invoiceBalanceDiffCents, isInvoiceBalanced } from "@/lib/invoiceBalance";
-import { vatLinesProblem } from "@/lib/vatLineInput";
+import { parseVatLineInputs, vatLinesProblem } from "@/lib/vatLineInput";
+import { validationProblems } from "@/lib/invoiceRules";
 import { sanitizeAccountingAccountInput, padAccountingAccount } from "@/lib/accountingAccount";
 import {
   isIntracomOperation,
@@ -1013,14 +1014,27 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       error(vatLineIssue);
       return false;
     }
-    if (mathOk === false) {
-      triggerShake("math");
-      error(`El importe no cuadra: hay ${formatEur(Math.abs(balanceDiffCents) / 100)} de diferencia.`);
-      return false;
-    }
-    if (accountsIncomplete) {
-      triggerShake("accounts");
-      error("Faltan cuentas contables: rellénalas antes de validar.");
+    // Lo mismo que exige el servidor al validar (invoiceRules), para decirlo
+    // aqui y resaltar el campo en vez de esperar al { error }.
+    const parsedLines = parseVatLineInputs(JSON.stringify(vatLines));
+    const [problem] = validationProblems({
+      type,
+      invoiceNumber: (document.getElementById("invoiceNumber") as HTMLInputElement | null)?.value ?? null,
+      invoiceDate: invoiceDateVal,
+      totalAmount: totalAmount.trim() === "" ? null : parseFloat(totalAmount.replace(",", ".")),
+      irpfAmount: retentionAmount,
+      lines: "lines" in parsedLines ? parsedLines.lines : [],
+      isRectificative,
+      thirdPartyTaxId: counterpartyNif,
+      operationType,
+      supplierAccount: supplierAccountVal,
+      expenseAccount: expenseAccountVal,
+      simplifiedSupplierAccount: genericAccounts?.supplier ?? null,
+    });
+    if (problem) {
+      if (problem.rule === "descuadre") triggerShake("math");
+      if (problem.rule === "sin_cuentas") triggerShake("accounts");
+      error(problem.message);
       return false;
     }
     // La misma regla que el servidor: sin esto «Reabrir y validar» pedia la

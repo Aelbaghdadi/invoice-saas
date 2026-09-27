@@ -33,6 +33,7 @@ import {
 import { normalizeCurrency } from "@/lib/currency";
 import { isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { parseVatLineInputs } from "@/lib/vatLineInput";
+import { validationProblems } from "@/lib/invoiceRules";
 import { applyRectificativeSign } from "@/lib/rectificative";
 import { foldSurchargeLines, completeReadSurcharges, surchargeAuditValue } from "@/lib/equivalenceSurcharge";
 import { exportFingerprint, type FingerprintInvoice } from "@/lib/exportFingerprint";
@@ -506,8 +507,24 @@ async function parseAndSave(
     auditEntries.push({ field: "equivalenceSurcharge", oldValue: oldSurcharge, newValue: newSurcharge });
   }
 
-  if (validate && !isValid && isValid !== null) {
-    // Allow validating with warning but don't block
+  // Lo minimo para validar, tambien al guardar la correccion de una ya
+  // validada (F-009, F-014). La pantalla lo avisa antes, con la misma funcion.
+  if (validate) {
+    const [problem] = validationProblems({
+      type: effectiveType,
+      invoiceNumber: newData.invoiceNumber,
+      invoiceDate: newData.invoiceDate,
+      totalAmount: newData.totalAmount,
+      irpfAmount: newData.irpfAmount,
+      lines: linesToSave,
+      isRectificative: isRectificativeFlag,
+      thirdPartyTaxId: isPurchase ? finalIssuerCif : finalReceiverCif,
+      operationType: submittedOperationType,
+      supplierAccount: newData.supplierAccount,
+      expenseAccount: newData.expenseAccount,
+      simplifiedSupplierAccount: invoice.client.simplifiedSupplierAccount,
+    });
+    if (problem) return { error: problem.message };
   }
 
   // Volver a validar una factura ya validada (se vuelve a ella con "<" o desde
