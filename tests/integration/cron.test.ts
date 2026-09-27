@@ -46,7 +46,11 @@ const reprocess = () => {
 describe("crons: secreto y métodos", () => {
   it("sin el secreto, 401; con el secreto, GET y POST", async () => {
     expect((await retryStuck(cronRequest("otro"))).status).toBe(401);
-    expect((await retryStuck(new Request("http://x/api/cron", { headers: { authorization: "Bearer éééééééééé" } }))).status).toBe(401);
+    // Mismos caracteres que «Bearer cron-test» (16) pero más bytes: comparando
+    // por caracteres, timingSafeEqual lanzaba y salía un 500.
+    const accented = `Bearer ${"é".repeat(9)}`;
+    expect(accented.length).toBe("Bearer cron-test".length);
+    expect((await retryStuck(new Request("http://x/api/cron", { headers: { authorization: accented } }))).status).toBe(401);
     expect((await retryStuck(cronRequest())).status).toBe(200);
     expect((await retryStuckPost(new Request("http://x/api/cron", { method: "POST", headers: { authorization: "Bearer cron-test" } }))).status).toBe(200);
   });
