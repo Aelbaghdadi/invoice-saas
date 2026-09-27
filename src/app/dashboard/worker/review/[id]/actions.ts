@@ -20,7 +20,7 @@ import {
 import { appendAuditLogs } from "@/lib/auditLog";
 import { canAccessClient } from "@/lib/accessibleClients";
 import { parseTaxId, isPersonaFisica, operationTypeLabel, OPERATION_TYPE_OPTIONS, OPERATION_TYPE_LABEL, type OperationTypeName } from "@/lib/validators";
-import { learnAccountsForDirection, padAccountingAccount } from "@/lib/accountingAccount";
+import { learnAccountsForDirection, normalizePlanAccount } from "@/lib/accountingAccount";
 import { accountEntryKey, entryNameMatches, NO_RELIABLE_NIF_PREFIX } from "@/lib/supplierMatching";
 import {
   isIntracomOperation,
@@ -419,10 +419,11 @@ async function parseAndSave(
     currency:      data.currency === null ? invoice.currency : normalizeCurrency(data.currency),
     accountingPeriodMonth: parseInt2(data.accountingPeriodMonth),
     accountingPeriodYear:  parseInt2(data.accountingPeriodYear),
-    // Completadas antes de validar y guardar, como al salir del campo: con
-    // Ctrl+Enter sin salir, «4.1» se guardaba tal cual.
-    supplierAccount: padAccountingAccount(data.supplierAccount.trim()) || null,
-    expenseAccount:  padAccountingAccount(data.expenseAccount.trim())  || null,
+    // Con punto se completa, como al salir del campo (con Ctrl+Enter sin
+    // salir, «4.1» se guardaba tal cual); sin punto se deja: rellenar por la
+    // derecha una 4000001 la convertia en otra subcuenta (40000010).
+    supplierAccount: normalizePlanAccount(data.supplierAccount) || null,
+    expenseAccount:  normalizePlanAccount(data.expenseAccount)  || null,
     operationType:   submittedOperationType,
     intracomGoodsType,
     intracomGoodsSource,

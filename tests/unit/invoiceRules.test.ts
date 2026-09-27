@@ -87,6 +87,10 @@ describe("validationProblems (F-009, F-014)", () => {
       "La cuenta 40000001 es de proveedor y esta factura es emitida: usa una cuenta de cliente (43x).",
     );
     expect(rules({ supplierAccount: "4.1", expenseAccount: "6.1" })).toEqual([]);
+    // Sin punto se enseña tal cual, como va a la columna H (no 40000010).
+    expect(validationProblems({ ...ok, type: "SALE", supplierAccount: "4000001", expenseAccount: "70000001" })[0]?.message).toBe(
+      "La cuenta 4000001 es de proveedor y esta factura es emitida: usa una cuenta de cliente (43x).",
+    );
   });
 
   it("las cuentas que minoran no son del sentido contrario (rappels, devoluciones, descuentos)", () => {

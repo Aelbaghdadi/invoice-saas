@@ -9,7 +9,7 @@
 import { isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { formatEur } from "@/lib/format";
 import { isForeignCurrency } from "@/lib/currency";
-import { padAccountingAccount, partyAccountMatchesType, resultAccountMatchesType } from "@/lib/accountingAccount";
+import { normalizePlanAccount, padAccountingAccount, partyAccountMatchesType, resultAccountMatchesType } from "@/lib/accountingAccount";
 
 export type RuleLine = {
   taxBase: number;
@@ -166,16 +166,17 @@ const REDUCING_RESULT_ACCOUNT: Record<"PURCHASE" | "SALE", RegExp> = {
  * ¿Que cuentas son del sentido contrario? Una venta con cuenta de proveedor
  * (40x/41x) o de gasto (6xx), o una compra con cuenta de cliente (43x) o de
  * ingreso (7xx). Las que minoran (REDUCING_RESULT_ACCOUNT) no cuentan. Se
- * comparan completadas, como se guardan: «4.1» (Ctrl+Enter sin salir del
- * campo) no empieza por 40 hasta que se completa a 40000001. Lo usan la
+ * comparan como se guardan (normalizePlanAccount): «4.1» (Ctrl+Enter sin
+ * salir del campo) no empieza por 40 hasta que se completa a 40000001, y
+ * una 4000001 se queda como esta, que es la que va a la columna H. Lo usan la
  * validacion y la pantalla, que al cambiar de sentido vacia las que no
  * encajan.
  */
 export function accountsAgainstDirection(
   inv: Pick<RuleInvoice, "type" | "supplierAccount" | "expenseAccount">,
 ): { party: string | null; result: string | null } {
-  const party = padAccountingAccount(inv.supplierAccount?.trim() ?? "");
-  const result = padAccountingAccount(inv.expenseAccount?.trim() ?? "");
+  const party = normalizePlanAccount(inv.supplierAccount ?? "");
+  const result = normalizePlanAccount(inv.expenseAccount ?? "");
   return {
     party: party && !partyAccountMatchesType(party, inv.type) ? party : null,
     result: result && !resultAccountMatchesType(result, inv.type) && !REDUCING_RESULT_ACCOUNT[inv.type].test(result)

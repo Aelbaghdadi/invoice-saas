@@ -15,6 +15,8 @@ import { processInvoice } from "@/lib/processInvoice";
 import { detectIssues } from "@/lib/issueDetector";
 import type { ExtractedInvoice } from "@/lib/ocr";
 import { classifyInvoice } from "@/app/dashboard/worker/clasificar/actions";
+import { NextRequest } from "next/server";
+import { POST as exportDownload } from "@/app/api/export/route";
 
 let w: FirmWorld;
 let id: string;
@@ -602,5 +604,47 @@ describe("% fuera de 0-100: { error } y no ERR-SYS-001", () => {
   it("retención al 1500 %", async () => {
     const r = await save({ retentionType: "PROFESSIONAL", retentionBase: "100", retentionRate: "1500", retentionAmount: "1500", irpfAmount: "1500" });
     expect(r.error).toBe("El % de retención tiene que estar entre 0 y 100.");
+  });
+});
+
+describe("cuentas sin punto: se guardan tal cual (no se rellenan por la derecha)", () => {
+  const siete = { supplierAccount: "4000001", expenseAccount: "6000001" };
+
+  it("validar con la sugerencia de la ficha sin tocarla no cambia la ficha", async () => {
+    await prisma.accountEntry.create({ data: { clientId: w.client.id, nif: "B12345674", name: "Proveedor SL", ...siete } });
+    expect((await validate(await form(siete))).error).toBeNull();
+    const after = await row();
+    expect([after.supplierAccount, after.expenseAccount]).toEqual(["4000001", "6000001"]);
+    const entry = await prisma.accountEntry.findUniqueOrThrow({ where: { clientId_nif: { clientId: w.client.id, nif: "B12345674" } } });
+    expect([entry.supplierAccount, entry.expenseAccount]).toEqual(["4000001", "6000001"]);
+  });
+
+  it("una exportada guardada sin cambios no vuelve a la cola", async () => {
+    // Validada antes con cuentas de 7 dígitos, tal como están en la BD.
+    await prisma.invoice.update({
+      where: { id },
+      data: {
+        status: "VALIDATED", ...siete, invoiceNumber: "F-1", invoiceDate: new Date("2026-09-10"), issuerName: "Proveedor SL",
+        issuerCif: "B12345674", taxBase: 100, vatRate: 21, vatAmount: 21, totalAmount: 121, accountingPeriodMonth: 9, accountingPeriodYear: 2026,
+      },
+    });
+    signInAs(w.admin);
+    const download = await exportDownload(new NextRequest("http://app.local/api/export", {
+      method: "POST",
+      headers: { "content-type": "application/json", "sec-fetch-site": "same-origin", host: "app.local" },
+      body: JSON.stringify({ periodType: "MONTHLY", month: 9, year: 2026, type: "ALL", format: "a3excel", clientId: w.client.id }),
+    }));
+    expect(download.status).toBe(200);
+    const exported = await row();
+    expect(exported.exportBatchId).not.toBeNull();
+    expect((await save(siete)).error).toBeNull();
+    expect((await row()).exportBatchId).toBe(exported.exportBatchId);
+  });
+
+  it("la genérica de 7 dígitos se guarda tal cual", async () => {
+    await prisma.client.update({ where: { id: w.client.id }, data: { simplifiedSupplierAccount: "4999999", simplifiedExpenseAccount: "6299999" } });
+    expect((await save({ supplierAccount: "4999999", expenseAccount: "6299999" })).error).toBeNull();
+    const after = await row();
+    expect([after.supplierAccount, after.expenseAccount]).toEqual(["4999999", "6299999"]);
   });
 });
