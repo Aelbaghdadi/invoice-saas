@@ -3,8 +3,7 @@ import type { ExtractedInvoice } from "@/lib/ocr";
 import type { Invoice, IssueType } from "@prisma/client";
 import type { OperationTypeName } from "@/lib/validators";
 import { formatEur } from "@/lib/format";
-import { invoiceBalanceDiffCents, isInvoiceBalanced } from "@/lib/invoiceBalance";
-import { describeVatLineMismatch, vatLineMismatches } from "@/lib/vatLineChecks";
+import { mathIssues } from "@/lib/mathIssues";
 import { formatDateEs } from "@/lib/dates";
 import { periodLabel } from "@/lib/period";
 
@@ -101,45 +100,22 @@ export async function detectIssues(
     }
   }
 
-  // 3. MATH_MISMATCH — tax calculation doesn't match
-  if (
-    extraction.taxBase != null &&
-    extraction.vatAmount != null &&
-    extraction.totalAmount != null
-  ) {
-    const sumBases = extraction.vatLines.length > 0
-      ? extraction.vatLines.reduce((s, l) => s + l.taxBase, 0)
-      : extraction.taxBase;
-    const sumAmounts = extraction.vatLines.length > 0
-      ? extraction.vatLines.reduce((s, l) => s + l.vatAmount, 0)
-      : extraction.vatAmount;
-    // El recargo de equivalencia suma al total igual que el IVA: sin el,
-    // cualquier factura de un cliente en recargo salia como descuadrada.
-    const sumSurcharge = extraction.vatLines.reduce(
-      (s, l) => s + (l.equivalenceSurchargeAmount ?? 0), 0);
-    const expected = sumBases + sumAmounts + sumSurcharge - (extraction.irpfAmount ?? 0);
-    const balance = {
-      sumBase: sumBases, sumAmount: sumAmounts, sumSurcharge,
-      irpf: extraction.irpfAmount ?? 0, total: extraction.totalAmount,
-    };
-    if (!isInvoiceBalanced(balance)) {
-      const diff = Math.abs(invoiceBalanceDiffCents(balance));
-      const formula = `Base + IVA${sumSurcharge ? " + Rec. Equiv." : ""}${extraction.irpfAmount ? " - IRPF" : ""}`;
-      issues.push({
-        type: "MATH_MISMATCH",
-        description: `El total (${formatEur(extraction.totalAmount)}) no coincide con ${formula} (${formatEur(expected)}). Diferencia: ${formatEur(diff / 100)}.`,
-      });
-    }
-  }
-
-  // 3b. Cuota por linea (F-022): el total puede cuadrar con las cuotas
-  // cruzadas entre tipos. Es un aviso: la factura va a «Requiere atención».
-  const lineMismatches = vatLineMismatches(extraction.vatLines, operationTypeHint);
-  if (lineMismatches.length > 0) {
-    issues.push({
-      type: "MATH_MISMATCH",
-      description: `El desglose por tipo no cuadra. ${lineMismatches.map(describeVatLineMismatch).join(". ")}.`,
-    });
+  // 3. Cuadre del total y 3b. cuota por linea (mathIssues, tambien en la
+  // clasificacion manual). El total solo si el OCR leyo base, cuota y total.
+  if (extraction.taxBase != null && extraction.vatAmount != null && extraction.totalAmount != null) {
+    issues.push(...mathIssues({
+      lines: extraction.vatLines,
+      taxBase: extraction.taxBase,
+      vatAmount: extraction.vatAmount,
+      totalAmount: extraction.totalAmount,
+      irpfAmount: extraction.irpfAmount ?? null,
+      operationType: operationTypeHint,
+    }));
+  } else {
+    issues.push(...mathIssues({
+      lines: extraction.vatLines, taxBase: null, vatAmount: null, totalAmount: null, irpfAmount: null,
+      operationType: operationTypeHint,
+    }));
   }
 
   // 4. INTRACOM_VAT — operacion intracomunitaria (adquisicion/entrega) con

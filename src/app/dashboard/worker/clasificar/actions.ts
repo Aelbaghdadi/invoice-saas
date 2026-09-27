@@ -7,6 +7,7 @@ import { appendAuditLogs } from "@/lib/auditLog";
 import { learnProviderRule } from "@/lib/providerRouting";
 import { detectInvoiceType } from "@/lib/invoiceRouting";
 import { DUPLICATE_SELECT, describeExisting } from "@/lib/issueDetector";
+import { mathIssues } from "@/lib/mathIssues";
 import { revalidatePath } from "next/cache";
 
 export type ClassifyState = { ok?: boolean; error?: string } | null;
@@ -22,7 +23,10 @@ export async function classifyInvoice(invoiceId: string, clientId: string): Prom
     return { error: "No autorizado" };
   }
 
-  const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
+  const invoice = await prisma.invoice.findUnique({
+    where: { id: invoiceId },
+    include: { vatLines: { orderBy: { position: "asc" } } },
+  });
   if (!invoice || invoice.status !== "PENDING_ROUTING") {
     return { error: "La factura no está pendiente de clasificar" };
   }
@@ -102,7 +106,28 @@ export async function classifyInvoice(invoiceId: string, clientId: string): Prom
     }
   }
 
-  const targetStatus = isDuplicate || invoice.isValid === false ? "NEEDS_ATTENTION" : "PENDING_REVIEW";
+  // Cuadre del total y cuota por linea, como en el OCR (que no las mira en
+  // «Por clasificar»). Antes se usaba isValid a secas: con un centimo de
+  // descuadre quedaba en «Requiere atención» sin incidencia que resolver.
+  const mathProblems = mathIssues({
+    lines: invoice.vatLines.map((l) => ({
+      taxBase: Number(l.taxBase),
+      vatRate: Number(l.vatRate),
+      vatAmount: Number(l.vatAmount),
+      equivalenceSurchargeRate: l.equivalenceSurchargeRate == null ? null : Number(l.equivalenceSurchargeRate),
+      equivalenceSurchargeAmount: l.equivalenceSurchargeAmount == null ? null : Number(l.equivalenceSurchargeAmount),
+    })),
+    taxBase: invoice.taxBase == null ? null : Number(invoice.taxBase),
+    vatAmount: invoice.vatAmount == null ? null : Number(invoice.vatAmount),
+    totalAmount: invoice.totalAmount == null ? null : Number(invoice.totalAmount),
+    irpfAmount: invoice.irpfAmount == null ? null : Number(invoice.irpfAmount),
+    operationType: invoice.operationType,
+  });
+  if (mathProblems.length > 0) {
+    await prisma.invoiceIssue.createMany({ data: mathProblems.map((p) => ({ invoiceId, ...p })) });
+  }
+
+  const targetStatus = isDuplicate || mathProblems.length > 0 ? "NEEDS_ATTENTION" : "PENDING_REVIEW";
 
   await prisma.invoice.update({
     where: { id: invoiceId },

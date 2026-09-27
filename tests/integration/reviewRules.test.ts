@@ -9,6 +9,7 @@ import { saveInvoiceFields } from "@/app/dashboard/worker/review/[id]/actions";
 import { fakeS3 } from "./helpers/fakeS3";
 import { facturaeXml } from "./helpers/fixtures";
 import { processInvoice } from "@/lib/processInvoice";
+import { classifyInvoice } from "@/app/dashboard/worker/clasificar/actions";
 
 let w: FirmWorld;
 let id: string;
@@ -257,5 +258,43 @@ describe("moneda extranjera sin convertir (F-025)", () => {
     const after = await row();
     expect(after.status).toBe("VALIDATED");
     expect(after.currency).toBe("EUR");
+  });
+});
+
+describe("«Por clasificar»: al clasificar se miran también el cuadre y el desglose", () => {
+  async function routed(lines: [number, number, number][], total: number) {
+    const inv = await makeInvoice(w.client, {
+      status: "PENDING_ROUTING", routingCandidateIds: [w.client.id], totalAmount: total,
+      taxBase: lines.reduce((s, l) => s + l[0], 0), vatAmount: lines.reduce((s, l) => s + l[2], 0),
+    });
+    for (const [i, [taxBase, vatRate, vatAmount]] of lines.entries()) {
+      await prisma.invoiceVatLine.create({ data: { invoiceId: inv.id, position: i, taxBase, vatRate, vatAmount } });
+    }
+    return inv.id;
+  }
+  const issuesOf = async (invoiceId: string) =>
+    (await prisma.invoiceIssue.findMany({ where: { invoiceId } })).map((i) => [i.type, i.description]);
+
+  it("un céntimo de descuadre: «Requiere atención» con su incidencia", async () => {
+    const inv = await routed([[100, 21, 21]], 121.01);
+    expect(await classifyInvoice(inv, w.client.id)).toEqual({ ok: true });
+    expect((await prisma.invoice.findUniqueOrThrow({ where: { id: inv } })).status).toBe("NEEDS_ATTENTION");
+    expect(await issuesOf(inv)).toEqual([[
+      "MATH_MISMATCH", "El total (121,01 €) no coincide con Base + IVA (121,00 €). Diferencia: 0,01 €.",
+    ]]);
+  });
+
+  it("cuotas cruzadas con el total cuadrado: también", async () => {
+    const inv = await routed([[100, 21, 20], [200, 10, 21]], 341);
+    await classifyInvoice(inv, w.client.id);
+    expect((await prisma.invoice.findUniqueOrThrow({ where: { id: inv } })).status).toBe("NEEDS_ATTENTION");
+    expect((await issuesOf(inv)).map(([, d]) => d)).toEqual([expect.stringMatching(/^El desglose por tipo no cuadra\. Línea 1/)]);
+  });
+
+  it("cuadrada: a revisión normal y sin incidencias", async () => {
+    const inv = await routed([[100, 21, 21]], 121);
+    await classifyInvoice(inv, w.client.id);
+    expect((await prisma.invoice.findUniqueOrThrow({ where: { id: inv } })).status).toBe("PENDING_REVIEW");
+    expect(await issuesOf(inv)).toEqual([]);
   });
 });
