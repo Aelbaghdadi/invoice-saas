@@ -1968,7 +1968,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                         Es una rectificativa (abono o corrección)
                       </span>
                       <span className="text-[10px] text-slate-400">
-                        Detección automática si el OCR encuentra líneas con importe negativo
+                        El OCR no la marca: márcala tú. Al marcarla, si todos los importes están en positivo, se guardan en negativo
                       </span>
                     </div>
                     <input
