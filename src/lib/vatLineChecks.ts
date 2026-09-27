@@ -8,6 +8,7 @@
  * y el formulario de revision.
  */
 import { formatEur } from "@/lib/format";
+import { percentCents, toCents } from "@/lib/money";
 
 export type CheckedLine = {
   taxBase: number;
@@ -32,8 +33,8 @@ const OPERATIONS_WITHOUT_OWN_VAT = new Set(["INVERSION_SP", "INTRACOM", "INTRACO
 
 /** Tolerancia: max(2 centimos; 0,5 % de la cuota esperada). */
 function mismatch(base: number, rate: number, actual: number): { expected: number } | null {
-  const expectedCents = Math.round(base * rate); // base × % / 100, en centimos
-  const actualCents = Math.round(actual * 100);
+  const expectedCents = percentCents(base, rate);
+  const actualCents = toCents(actual);
   const toleranceCents = Math.max(2, Math.abs(expectedCents) * 0.005);
   if (Math.abs(expectedCents - actualCents) <= toleranceCents + 1e-9) return null;
   return { expected: expectedCents / 100 };

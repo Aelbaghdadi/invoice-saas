@@ -25,6 +25,11 @@ describe("isInvoiceBalanced (F-058: una sola tolerancia)", () => {
     expect(isInvoiceBalanced({ sumBase: 100, sumAmount: 21, total: 120.98 })).toBe(false);
   });
 
+  it("redondeo simétrico: una rectificativa no sale descuadrada con los dos importes iguales", () => {
+    expect(invoiceBalanceDiffCents({ sumBase: -10.005, sumAmount: -2.1, total: -12.11 })).toBe(0);
+    expect(invoiceBalanceDiffCents({ sumBase: 10.005, sumAmount: 2.1, total: 12.11 })).toBe(0);
+  });
+
   it("abonos: el signo no cambia el resultado", () => {
     expect(isInvoiceBalanced({ sumBase: -100, sumAmount: -21, total: -121 })).toBe(true);
     expect(isInvoiceBalanced({ sumBase: -100, sumAmount: -21, total: -121.01 })).toBe(false);

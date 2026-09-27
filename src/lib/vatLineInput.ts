@@ -7,6 +7,7 @@
  * ([50 / "" / 5]) y el semaforo sumaba lo que pudiera leer de ella: la
  * pantalla salia en verde y se guardaba una factura con una linea de menos.
  */
+import { hasMoreThanTwoDecimals } from "@/lib/money";
 
 export type VatLineText = {
   taxBase?: unknown;
@@ -61,6 +62,18 @@ export function vatLineProblem(line: VatLineText, position: number): string | nu
   const notNumbers = values.filter((v) => parseDecimal(v.value) === null).map((v) => v.label);
   if (notNumbers.length > 0) {
     return `La línea ${position} de IVA tiene un valor que no es un número en ${joinSpanish(notNumbers)}.`;
+  }
+  // La BD guarda 2 decimales: 1,005 se guardaria como 1,01 y el cuadre que
+  // se calculo con 1,005 dejaria de valer.
+  const surchargeValues = [
+    { label: "el % de recargo", value: text(line.equivalenceSurchargeRate) },
+    { label: "la cuota de recargo", value: text(line.equivalenceSurchargeAmount) },
+  ].filter((v) => v.value !== "" && parseDecimal(v.value) !== null);
+  const tooPrecise = [...values, ...surchargeValues]
+    .filter((v) => hasMoreThanTwoDecimals(parseDecimal(v.value)!))
+    .map((v) => v.label);
+  if (tooPrecise.length > 0) {
+    return `La línea ${position} de IVA tiene más de 2 decimales en ${joinSpanish(tooPrecise)}. Redondéalo a céntimos.`;
   }
   // % de recargo sin cuota: la pantalla la daba por cuadrada (cuenta la cuota
   // como 0) y el servidor la completaba con completeReadSurcharges, con una

@@ -1,3 +1,5 @@
+import { toCents } from "@/lib/money";
+
 export type InvoiceBalanceInput = {
   sumBase: number;
   sumAmount: number;
@@ -17,12 +19,13 @@ export type InvoiceBalanceInput = {
 export const BALANCE_TOLERANCE_CENTS = 0;
 
 /** Diferencia en centimos entre lo calculado (Base+IVA+Recargo-IRPF) y el
- *  Total declarado de una factura. Redondea a centimos antes de restar
- *  para evitar ruido de coma flotante. */
+ *  Total declarado de una factura. Redondea a centimos antes de restar, igual
+ *  en positivo que en negativo (toCents): con Math.round una rectificativa
+ *  salia descuadrada con los dos importes iguales en pantalla. */
 export function invoiceBalanceDiffCents(params: InvoiceBalanceInput): number {
   const { sumBase, sumAmount, sumSurcharge = 0, irpf = 0, total } = params;
   const expected = sumBase + sumAmount + sumSurcharge - irpf;
-  return Math.round(expected * 100) - Math.round(total * 100);
+  return toCents(expected) - toCents(total);
 }
 
 /** ¿Cuadra con la tolerancia comun? La usan la revision (servidor y

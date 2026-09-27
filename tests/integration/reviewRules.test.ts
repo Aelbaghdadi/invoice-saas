@@ -56,6 +56,16 @@ describe("líneas de IVA incompletas (F-014)", () => {
     expect(lines.map((l) => l.equivalenceSurchargeAmount)).toEqual([null]);
   });
 
+  it.each([
+    ["una base con 3 decimales", { vatLines: JSON.stringify([{ taxBase: "1.005", vatRate: "21", vatAmount: "0.21" }]), totalAmount: "1.21" },
+      "La línea 1 de IVA tiene más de 2 decimales en la base. Redondéalo a céntimos."],
+    ["un total con 3 decimales", { totalAmount: "121.005" }, "El total tiene más de 2 decimales. Redondéalo a céntimos."],
+  ])("%s: { error } (se guardaría redondeada y dejaría de cuadrar)", async (_caso, extra, mensaje) => {
+    const antes = await row();
+    expect((await validate(await form(extra))).error).toBe(mensaje);
+    expect(await row()).toEqual(antes);
+  });
+
   it("una exenta con solo la base tampoco se pierde", async () => {
     const r = await save({
       vatLines: JSON.stringify([{ taxBase: "100", vatRate: "21", vatAmount: "21" }, { taxBase: "50", vatRate: "", vatAmount: "" }]),

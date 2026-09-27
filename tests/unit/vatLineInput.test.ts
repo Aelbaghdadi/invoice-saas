@@ -35,6 +35,15 @@ describe("vatLineProblem (F-014)", () => {
     expect(vatLineProblem(line("100", "21", "21", { equivalenceSurchargeRate: "5.2", equivalenceSurchargeAmount: "5.2" }), 1)).toBeNull();
   });
 
+  it("más de 2 decimales: error, la BD los redondearía y el cuadre dejaría de valer", () => {
+    expect(vatLineProblem(line("1.005", "21", "0.21"), 1)).toBe(
+      "La línea 1 de IVA tiene más de 2 decimales en la base. Redondéalo a céntimos.",
+    );
+    expect(vatLineProblem(line("100", "21", "21", { equivalenceSurchargeRate: "5.2", equivalenceSurchargeAmount: "5.205" }), 1))
+      .toContain("en la cuota de recargo");
+    expect(vatLineProblem(line("100,50", "21", "21,11"), 1)).toBeNull();
+  });
+
   it("valores que no son números", () => {
     expect(vatLineProblem(line("100", "21", "abc"), 1)).toBe(
       "La línea 1 de IVA tiene un valor que no es un número en la cuota.",
