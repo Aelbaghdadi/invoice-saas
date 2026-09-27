@@ -45,9 +45,10 @@ export function describeExisting(existing: {
  * Detects issues after OCR extraction and creates InvoiceIssue records.
  * Returns the list of issues created.
  *
- * `operationTypeHint` es una pista (derivada del prefijo del NIF de la otra
- * parte, ver processInvoice) de si la factura es intracomunitaria — se usa
- * SOLO para decidir si avisar de IVA no-cero, no se persiste aqui.
+ * `operationTypeHint` es el tipo de operacion que processInvoice va a guardar
+ * (el aprendido del tercero o, si no hay, el del prefijo del NIF). Decide si
+ * se avisa de IVA no-cero en intracomunitarias y si se comprueba la cuota por
+ * linea (no en inversion del sujeto pasivo). No se persiste aqui.
  */
 export async function detectIssues(
   invoiceId: string,

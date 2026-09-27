@@ -1,8 +1,8 @@
 /** Ficheros de prueba. */
 
 /** Facturae minima: el parser real la lee sin OCR (camino xml_parse). */
-export function facturaeXml(opts: { number?: string; taxRate?: string; buyerCif?: string } = {}) {
-  const { number = "F-XML-1", taxRate = "21.00", buyerCif = "B00000002" } = opts;
+export function facturaeXml(opts: { number?: string; taxRate?: string; taxAmount?: string; total?: string; buyerCif?: string } = {}) {
+  const { number = "F-XML-1", taxRate = "21.00", taxAmount = "21.00", total = "121.00", buyerCif = "B00000002" } = opts;
   return `<?xml version="1.0" encoding="UTF-8"?>
 <fe:Facturae xmlns:fe="http://www.facturae.es/Facturae/2014/v3.2.1/Facturae">
   <Parties>
@@ -14,8 +14,8 @@ export function facturaeXml(opts: { number?: string; taxRate?: string; buyerCif?
   <Invoices><Invoice>
     <InvoiceHeader><InvoiceNumber>${number}</InvoiceNumber></InvoiceHeader>
     <InvoiceIssueData><IssueDate>2026-09-10</IssueDate></InvoiceIssueData>
-    <TaxesOutputs><Tax><TaxRate>${taxRate}</TaxRate><TaxableBase><TotalAmount>100.00</TotalAmount></TaxableBase><TaxAmount><TotalAmount>21.00</TotalAmount></TaxAmount></Tax></TaxesOutputs>
-    <InvoiceTotals><InvoiceTotal>121.00</InvoiceTotal></InvoiceTotals>
+    <TaxesOutputs><Tax><TaxRate>${taxRate}</TaxRate><TaxableBase><TotalAmount>100.00</TotalAmount></TaxableBase><TaxAmount><TotalAmount>${taxAmount}</TotalAmount></TaxAmount></Tax></TaxesOutputs>
+    <InvoiceTotals><InvoiceTotal>${total}</InvoiceTotal></InvoiceTotals>
   </Invoice></Invoices>
 </fe:Facturae>`;
 }

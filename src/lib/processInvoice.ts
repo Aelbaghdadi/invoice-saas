@@ -269,13 +269,9 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     const isUnclassified = isRoutingUpload && routingReason !== null;
 
     // Normalizacion de NIFs y deteccion de tipo de operacion a partir del
-    // prefijo del NIF (parser en validators.ts para no tocar OCR). Se
-    // calcula ya aqui (en vez de mas abajo, donde se usaba antes) porque
-    // detectIssues necesita una pista de operationType para avisar de IVA
-    // no-cero en intracomunitarias antes de decidir el estado de la factura.
+    // prefijo del NIF (parser en validators.ts para no tocar OCR).
     const issuerParsed   = parseTaxId(extracted.issuerCif);
     const receiverParsed = parseTaxId(extracted.receiverCif);
-    const operationTypeHint = (invoice.type === "PURCHASE" ? issuerParsed : receiverParsed).operationType;
 
     // El cliente hace falta ya aqui: su marca de Recargo de Equivalencia
     // decide si se propone el recargo, y eso tiene que estar hecho ANTES de
@@ -299,16 +295,6 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
         extracted.vatLines[p.index].equivalenceSurchargeAmount = p.amount;
       }
     }
-
-    // Detect issues (duplicates, low confidence, math mismatch, IVA no-cero
-    // en intracomunitarias, etc.). En las "Por clasificar" no tiene sentido
-    // (aún no hay cliente real).
-    const issues = isUnclassified
-      ? []
-      : await detectIssues(invoiceId, extracted, invoice, operationTypeHint, { persist: false });
-    const targetStatus: InvoiceStatus = isUnclassified
-      ? "PENDING_ROUTING"
-      : issues.length > 0 ? "NEEDS_ATTENTION" : "PENDING_REVIEW";
 
     // vatRate denormalizado: solo significativo cuando hay una unica linea.
     // Multi-IVA -> null (el desglose vive en InvoiceVatLine).
@@ -431,6 +417,19 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       ai: extracted.supplyType,
     });
     const operationType = intracomProposal.operationType;
+
+    // Detect issues (duplicates, low confidence, math mismatch, IVA no-cero
+    // en intracomunitarias, etc.). En las "Por clasificar" no tiene sentido
+    // (aún no hay cliente real). Va despues de decidir el tipo de operacion
+    // final (el aprendido del tercero incluido): con la pista del prefijo del
+    // NIF, una inversion del sujeto pasivo con cuota 0 salia como desglose
+    // descuadrado (revision 1 del PR #7).
+    const issues = isUnclassified
+      ? []
+      : await detectIssues(invoiceId, extracted, invoice, operationType, { persist: false });
+    const targetStatus: InvoiceStatus = isUnclassified
+      ? "PENDING_ROUTING"
+      : issues.length > 0 ? "NEEDS_ATTENTION" : "PENDING_REVIEW";
 
     // ── Deteccion de retencion IRPF ────────────────────────────────────
     //

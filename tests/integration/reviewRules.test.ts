@@ -174,6 +174,24 @@ describe("cuota = base × % por línea (F-022)", () => {
     ]]);
   });
 
+  it("con el tipo aprendido del tercero: una inversión del sujeto pasivo con cuota 0 no es un desglose descuadrado", async () => {
+    // El prefijo del NIF (B...) dice INTERIOR; lo aprendido, INVERSION_SP.
+    await prisma.accountEntry.create({
+      data: { clientId: w.client.id, nif: "B12345674", name: "Proveedor SL", defaultOperationType: "INVERSION_SP" },
+    });
+    fakeS3().put("k-isp", facturaeXml({ buyerCif: w.client.cif, taxRate: "21.00", taxAmount: "0.00", total: "100.00" }));
+    const { id: isp } = await makeInvoice(w.client, {
+      filename: "isp.xml", storageKey: "k-isp", fileType: "application/xml", status: "UPLOADED",
+      invoiceNumber: null, invoiceDate: null, issuerName: null, issuerCif: null,
+      taxBase: null, vatRate: null, vatAmount: null, totalAmount: null,
+    });
+    await processInvoice(isp, w.worker.id);
+    const inv = await prisma.invoice.findUniqueOrThrow({ where: { id: isp }, include: { issues: true } });
+    expect(inv.operationType).toBe("INVERSION_SP");
+    expect(inv.issues).toEqual([]);
+    expect(inv.status).toBe("PENDING_REVIEW");
+  });
+
   it("es un aviso: se puede validar igual", async () => {
     const r = await validate(await form({
       vatLines: JSON.stringify([
