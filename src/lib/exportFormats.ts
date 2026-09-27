@@ -11,7 +11,7 @@ import {
 import { currencyProblem, missingDataProblems, type RuleInvoice } from "@/lib/invoiceRules";
 import { goodsTypeFromSaleAccount } from "@/lib/intracomGoods";
 import { invoiceBalanceDiffCents, isInvoiceBalanced } from "@/lib/invoiceBalance";
-import { describeVatLineMismatch, vatLineMismatches } from "@/lib/vatLineChecks";
+import { describeVatLineMismatch, vatLineMismatches, type CheckedLine } from "@/lib/vatLineChecks";
 import { formatEur } from "@/lib/format";
 import { findNumberingGaps } from "@/lib/invoiceNumbering";
 import { isStandardVatRate, isSurchargeRate } from "@/lib/equivalenceSurcharge";
@@ -67,6 +67,20 @@ function getExportLines(inv: InvoiceWithClient): ExportVatLine[] {
     equivalenceSurchargeRate: 0,
     equivalenceSurchargeAmount: 0,
   }];
+}
+
+/** Lineas para vatLineMismatches: como getExportLines, pero sin convertir
+ *  en 0 un recargo que no esta (null). Con 0, una cuota de recargo sin % daba
+ *  «la base × 0 % da 0,00 €» en el export mientras el formulario callaba. */
+function checkedLines(inv: InvoiceWithClient): CheckedLine[] {
+  if (!inv.vatLines || inv.vatLines.length === 0) return getExportLines(inv);
+  return inv.vatLines.map((l) => ({
+    taxBase: Number(l.taxBase),
+    vatRate: Number(l.vatRate),
+    vatAmount: Number(l.vatAmount),
+    equivalenceSurchargeRate: l.equivalenceSurchargeRate == null ? null : Number(l.equivalenceSurchargeRate),
+    equivalenceSurchargeAmount: l.equivalenceSurchargeAmount == null ? null : Number(l.equivalenceSurchargeAmount),
+  }));
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -471,7 +485,7 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
 
     // Cada cuota tiene que ser su base × % (F-022): el total no lo ve si las
     // cuotas estan cruzadas entre tipos, y A3 se lleva el desglose tal cual.
-    for (const m of vatLineMismatches(getExportLines(inv), inv.operationType)) {
+    for (const m of vatLineMismatches(checkedLines(inv), inv.operationType)) {
       warnings.push(describeVatLineMismatch(m));
     }
 
