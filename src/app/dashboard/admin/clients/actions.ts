@@ -101,16 +101,20 @@ export async function createClient(_prev: State, formData: FormData): Promise<St
 
   try {
     await prisma.$transaction(async (tx) => {
-      const email = parsed.data.email;
+      // El email se guarda en minusculas («¿Olvidaste tu contraseña?» lo
+      // busca asi). El username, tal cual se tecleo: el login lo compara
+      // exacto y es lo que se le da al cliente para entrar.
+      const typedEmail = parsed.data.email;
+      const email = typedEmail?.toLowerCase();
       let portalUserId: string | null = null;
 
       // El usuario de portal es opcional: muchas asesorias gestionan las
       // facturas ellas mismas y no dan acceso al cliente.
-      if (email && passwordHash) {
+      if (typedEmail && email && passwordHash) {
         const user = await tx.user.create({
           data: {
             // El cliente inicia sesión con su username; por defecto = su email.
-            username: email,
+            username: typedEmail,
             email,
             passwordHash,
             name: contactName,

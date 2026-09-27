@@ -21,7 +21,7 @@ export async function createWorker(_prev: State, formData: FormData): Promise<St
 
   const raw = {
     name: formData.get("name") as string,
-    email: formData.get("email") as string,
+    email: ((formData.get("email") as string) || "").trim(),
     password: formData.get("password") as string,
   };
 
@@ -44,7 +44,10 @@ export async function createWorker(_prev: State, formData: FormData): Promise<St
         // El gestor inicia sesión con su username; por defecto = su email
         // (único), hasta que exista un campo de usuario propio en el alta.
         username: parsed.data.email,
-        email: parsed.data.email,
+        // En minusculas, como en el alta de clientes: «¿Olvidaste tu
+        // contraseña?» lo busca asi. El username, tal cual (el login lo
+        // compara exacto).
+        email: parsed.data.email.toLowerCase(),
         passwordHash,
         role: "WORKER",
         advisoryFirmId: firm.id,
