@@ -149,3 +149,30 @@ export function parseVatLineInputs(raw: string): { lines: ParsedVatLineInput[] }
   }
   return { lines };
 }
+
+/**
+ * El total y la retencion van a numeric(12,2) y el % a numeric(5,2): con mas
+ * decimales la BD los redondea y el cuadre que se calculo antes deja de
+ * valer (con un % de 15,555 se guardaba 15,56 y la cuota de 155,55, y al
+ * reabrir salia «No cuadra: 0,05 €»). La usan el servidor y la pantalla.
+ */
+export function amountFieldsProblem(fields: {
+  totalAmount?: string;
+  retentionBase?: string;
+  retentionRate?: string;
+  retentionAmount?: string;
+}): string | null {
+  const checks = [
+    ["El total", fields.totalAmount],
+    ["La base de la retención", fields.retentionBase],
+    ["El % de retención", fields.retentionRate],
+    ["La cuota de la retención", fields.retentionAmount],
+  ] as const;
+  for (const [label, raw] of checks) {
+    const value = (raw ?? "").trim();
+    if (!value) continue;
+    const n = parseDecimal(value);
+    if (n !== null && hasMoreThanTwoDecimals(n)) return `${label} tiene más de 2 decimales. Redondéalo a céntimos.`;
+  }
+  return null;
+}

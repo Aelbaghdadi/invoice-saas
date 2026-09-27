@@ -41,9 +41,9 @@ import {
 } from "@/lib/invoiceStatuses";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { invoiceBalanceDiffCents, isInvoiceBalanced } from "@/lib/invoiceBalance";
-import { parseVatLineInputs, vatLinesProblem } from "@/lib/vatLineInput";
+import { amountFieldsProblem, parseVatLineInputs, vatLinesProblem } from "@/lib/vatLineInput";
 import { validationProblems } from "@/lib/invoiceRules";
-import { hasMoreThanTwoDecimals, percentOf } from "@/lib/money";
+import { percentOf } from "@/lib/money";
 import { describeVatLineMismatch, vatLineMismatches, type VatLineMismatch } from "@/lib/vatLineChecks";
 import { sanitizeAccountingAccountInput, padAccountingAccount } from "@/lib/accountingAccount";
 import {
@@ -747,11 +747,13 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   const balanceDiffCents = invoiceBalanceDiffCents(balanceInput);
   // Una linea a medio rellenar no cuadra nunca: el servidor no la guarda
   // (F-014), asi que el semaforo tampoco puede salir en verde con ella.
-  const totalNumber = totalAmount.trim() === "" ? NaN : parseFloat(totalAmount.replace(",", "."));
+  // Mismo criterio que el servidor: lineas completas, y total y retencion
+  // con 2 decimales como mucho.
   const vatLineIssue = vatLinesProblem(vatLines)
-    ?? (Number.isFinite(totalNumber) && hasMoreThanTwoDecimals(totalNumber)
-      ? "El total tiene más de 2 decimales. Redondéalo a céntimos."
-      : null);
+    ?? amountFieldsProblem({
+      totalAmount,
+      ...(retentionType ? { retentionBase, retentionRate } : {}),
+    });
   // Cuota que no es base × % en alguna linea (F-022): marca la linea, no
   // bloquea. Las lineas a medio rellenar ya las dice vatLineIssue.
   const lineMismatches = useMemo(() => {

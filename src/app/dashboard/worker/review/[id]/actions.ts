@@ -32,9 +32,9 @@ import {
 } from "@/lib/intracomGoods";
 import { normalizeCurrency } from "@/lib/currency";
 import { isInvoiceBalanced } from "@/lib/invoiceBalance";
-import { parseVatLineInputs } from "@/lib/vatLineInput";
+import { amountFieldsProblem, parseVatLineInputs } from "@/lib/vatLineInput";
 import { validationProblems } from "@/lib/invoiceRules";
-import { hasMoreThanTwoDecimals, percentOf } from "@/lib/money";
+import { percentOf } from "@/lib/money";
 import { applyRectificativeSign } from "@/lib/rectificative";
 import { foldSurchargeLines, completeReadSurcharges, surchargeAuditValue } from "@/lib/equivalenceSurcharge";
 import { exportFingerprint, type FingerprintInvoice } from "@/lib/exportFingerprint";
@@ -162,21 +162,6 @@ type ParsedVatLine = {
   equivalenceSurchargeAmount: number | null;
 };
 
-/** El total y la retencion van a numeric(12,2): con mas decimales la BD los
- *  redondea y el cuadre que se calculo antes deja de valer. */
-function amountDecimalsError(data: Pick<FieldData, "totalAmount" | "retentionBase" | "retentionAmount">): string | null {
-  const fields = [
-    ["El total", data.totalAmount],
-    ["La base de la retención", data.retentionBase],
-    ["La cuota de la retención", data.retentionAmount],
-  ] as const;
-  for (const [label, raw] of fields) {
-    const n = raw.trim() === "" ? NaN : parseFloat(raw.replace(",", "."));
-    if (Number.isFinite(n) && hasMoreThanTwoDecimals(n)) return `${label} tiene más de 2 decimales. Redondéalo a céntimos.`;
-  }
-  return null;
-}
-
 /** Lineas del formulario a numeros. Una linea a medio rellenar es un error
  *  (F-014): antes se descartaba en silencio y la factura se guardaba con una
  *  linea de menos. */
@@ -298,7 +283,12 @@ async function parseAndSave(
   const parsedLines = parseVatLines(data.vatLines);
   if ("error" in parsedLines) return { error: parsedLines.error };
   const vatLines = parsedLines.lines;
-  const amountsError = amountDecimalsError(data);
+  // Solo con retencion: sin tipo, el % y la base que queden en el
+  // formulario no se guardan.
+  const amountsError = amountFieldsProblem({
+    totalAmount: data.totalAmount,
+    ...(data.retentionType ? { retentionBase: data.retentionBase, retentionRate: data.retentionRate, retentionAmount: data.retentionAmount } : {}),
+  });
   if (amountsError) return { error: amountsError };
   const isRectificativeFlag = data.isRectificative === "1";
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseVatLineInputs, vatLineProblem, vatLinesProblem } from "@/lib/vatLineInput";
+import { amountFieldsProblem, parseVatLineInputs, vatLineProblem, vatLinesProblem } from "@/lib/vatLineInput";
 
 const line = (taxBase: string, vatRate: string, vatAmount: string, extra: Record<string, string> = {}) =>
   ({ taxBase, vatRate, vatAmount, equivalenceSurchargeRate: "", equivalenceSurchargeAmount: "", ...extra });
@@ -98,5 +98,19 @@ describe("parseVatLineInputs", () => {
     expect(parseVatLineInputs("[]")).toEqual({ lines: [] });
     expect(parseVatLineInputs("{roto")).toHaveProperty("error");
     expect(parseVatLineInputs('{"taxBase":"1"}')).toHaveProperty("error");
+  });
+});
+
+describe("amountFieldsProblem (total y retención)", () => {
+  it("más de 2 decimales en el total, la base, el % o la cuota de la retención", () => {
+    expect(amountFieldsProblem({ totalAmount: "121.005" })).toBe("El total tiene más de 2 decimales. Redondéalo a céntimos.");
+    expect(amountFieldsProblem({ retentionBase: "100.005" })).toMatch(/^La base de la retención/);
+    expect(amountFieldsProblem({ retentionRate: "15.555" })).toMatch(/^El % de retención tiene más de 2 decimales/);
+    expect(amountFieldsProblem({ retentionAmount: "15,005" })).toMatch(/^La cuota de la retención/);
+  });
+
+  it("con 2 decimales o vacío, nada", () => {
+    expect(amountFieldsProblem({ totalAmount: "121,01", retentionBase: "100", retentionRate: "15", retentionAmount: "15.05" })).toBeNull();
+    expect(amountFieldsProblem({ totalAmount: "", retentionRate: " " })).toBeNull();
   });
 });
