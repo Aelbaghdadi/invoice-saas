@@ -262,9 +262,9 @@ describe("bloqueantes en el export (F-025)", () => {
     expect(body.blockingCount).toBe(3);
     expect(body.warnings.map((x: { invoiceNumber: string; severity: string; blockers: string[] }) =>
       [x.invoiceNumber, x.severity, x.blockers])).toEqual([
-      ["SIN-NIF", "bloqueante", ["NIF vacío"]],
+      ["SIN-NIF", "bloqueante", [expect.stringMatching(/^Falta el NIF del proveedor/)]],
       ["USD", "bloqueante", ["Importes en USD: A3 solo admite euros. Conviértelos y márcala en euros en la revisión"]],
-      ["INTRA", "bloqueante", [expect.stringContaining("Operación intracomunitaria sin país en el NIF")]],
+      ["INTRA", "bloqueante", [expect.stringContaining("no lleva el prefijo del país")]],
     ]);
 
     const download = await exportDownload(downloadRequest());

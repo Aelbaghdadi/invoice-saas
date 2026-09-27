@@ -343,9 +343,17 @@ function ruleInvoice(inv: InvoiceWithClient): RuleInvoice {
 
 /**
  * Lo que impide exportar una factura (F-025): los mismos datos minimos que
- * exige validar (invoiceRules), con los textos del export. Una validada antes
- * de estas reglas puede no tenerlos: se queda fuera del fichero y sin marcar,
- * igual que las de total 0, hasta que se corrija.
+ * exige validar (invoiceRules). Una validada antes de estas reglas puede no
+ * tenerlos: se queda fuera del fichero y sin marcar, igual que las de total
+ * 0, hasta que se corrija.
+ *
+ * El descuadre NO bloquea a proposito: las validadas antes del PR #7 se
+ * validaron con una tolerancia de 2 centimos, y A3 no recibe el total
+ * (calcula el asiento con base, cuota y retencion), asi que el fichero sale
+ * bien. Se queda como aviso.
+ *
+ * El NIF usa el mismo texto que validar (con la pista de la cuenta generica),
+ * para no confundirlo con el aviso de «NIF vacío» de las que pueden ir sin el.
  */
 export function a3BlockingProblems(inv: InvoiceWithClient): string[] {
   const rule = ruleInvoice(inv);
@@ -356,13 +364,8 @@ export function a3BlockingProblems(inv: InvoiceWithClient): string[] {
   for (const problem of missingDataProblems(rule)) {
     switch (problem.rule) {
       case "sin_nif":
-        blockers.push("NIF vacío");
-        break;
       case "sin_nif_iva":
-        blockers.push(
-          "Operación intracomunitaria sin país en el NIF: A3 la rechazará "
-          + "(«el NIF no existe en la tabla»). Corrige el NIF en la revisión con su prefijo, p.ej. PT515160873",
-        );
+        blockers.push(problem.message.replace(/\.$/, ""));
         break;
       case "sin_numero":
         blockers.push("Número de factura vacío");
@@ -412,7 +415,9 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
 
     // Sin NIF en una operacion no nacional (importacion, intracomunitaria...)
     // no bloquea: puede ser un proveedor extranjero sin NIF espanol.
-    if (!nif && !blockers.includes("NIF vacío")) warnings.push("NIF vacío");
+    if (!nif && !blockers.some((b) => b.includes("NIF"))) {
+      warnings.push("Sin NIF: en esta operación no es obligatorio, pero irá a A3 sin NIF");
+    }
 
     // El codigo de la columna G sale de un mapa unico compartido por las dos
     // hojas, pero en expedidas los codigos significan otra cosa: el 4 es

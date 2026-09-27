@@ -185,18 +185,20 @@ describe("validateForA3Export", () => {
     const res = validateForA3Export([mkInvoice({ issuerCif: null })]);
     expect(res).toHaveLength(1);
     expect(res[0].severity).toBe("bloqueante");
-    expect(res[0].blockers).toContain("NIF vacío");
+    expect(res[0].blockers).toEqual([
+      "Falta el NIF del proveedor. Si es un ticket o una factura simplificada, pide a un administrador que configure la cuenta genérica del cliente",
+    ]);
   });
 
   it("una venta nacional sin NIF: solo aviso", () => {
     const [res] = validateForA3Export([mkInvoice({ type: "SALE", receiverCif: null })]);
-    expect(res).toMatchObject({ severity: "aviso", blockers: [], warnings: ["NIF vacío"] });
+    expect(res).toMatchObject({ severity: "aviso", blockers: [], warnings: ["Sin NIF: en esta operación no es obligatorio, pero irá a A3 sin NIF"] });
   });
 
   it("sin NIF en una importación: solo aviso (puede ser un proveedor extranjero)", () => {
     const [res] = validateForA3Export([mkInvoice({ issuerCif: null, operationType: "IMPORTACION" })]);
     expect(res.severity).toBe("aviso");
-    expect(res.warnings).toContain("NIF vacío");
+    expect(res.warnings).toContain("Sin NIF: en esta operación no es obligatorio, pero irá a A3 sin NIF");
   });
 
   it("sin NIF con la cuenta genérica de simplificadas: aviso, no bloquea", () => {
@@ -204,7 +206,7 @@ describe("validateForA3Export", () => {
       issuerCif: null, supplierAccount: "4009999",
       client: { id: "c1", name: "ACME SL", simplifiedSupplierAccount: "4009999" } as InvoiceWithClient["client"],
     })]);
-    expect(res).toMatchObject({ severity: "aviso", blockers: [], warnings: ["NIF vacío"] });
+    expect(res).toMatchObject({ severity: "aviso", blockers: [], warnings: ["Sin NIF: en esta operación no es obligatorio, pero irá a A3 sin NIF"] });
   });
 
   it("sin cuentas: bloqueante", () => {
@@ -547,8 +549,9 @@ describe("validateForA3Export — pais del NIF", () => {
       vatAmount: 0 as any, taxBase: 100 as any, totalAmount: 100 as any,
     })]);
     expect(res.severity).toBe("bloqueante");
-    expect(res.blockers).toEqual([expect.stringContaining("sin país en el NIF")]);
-    expect(res.warnings.filter((w) => w.includes("sin país en el NIF"))).toEqual([]);
+    expect(res.blockers).toEqual([
+      "El NIF del proveedor no lleva el prefijo del país: en una operación intracomunitaria hace falta el NIF-IVA (p. ej. PT515160873)",
+    ]);
   });
 
   it("la intracomunitaria sin NIF es bloqueante", () => {
@@ -556,7 +559,7 @@ describe("validateForA3Export — pais del NIF", () => {
       operationType: "INTRACOM_SERVICIOS", issuerCif: null,
       vatAmount: new Prisma.Decimal(0), totalAmount: new Prisma.Decimal(100),
     })]);
-    expect(res.blockers).toEqual(["NIF vacío"]);
+    expect(res.blockers).toEqual(["Falta el NIF-IVA del proveedor: en una operación intracomunitaria hace falta para el modelo 349 y para A3"]);
   });
 
   it("no avisa si la intracomunitaria ya trae el pais", () => {
@@ -565,7 +568,7 @@ describe("validateForA3Export — pais del NIF", () => {
       issuerCountry: "PT" as any,
       vatAmount: 0 as any, taxBase: 100 as any, totalAmount: 100 as any,
     })]);
-    expect(res.flatMap((r) => [...r.blockers, ...r.warnings]).filter((w) => w.includes("sin país en el NIF"))).toEqual([]);
+    expect(res.flatMap((r) => [...r.blockers, ...r.warnings]).filter((w) => w.includes("prefijo del país"))).toEqual([]);
   });
 
   it("avisa del NIF extranjero marcado como operacion interior", () => {
