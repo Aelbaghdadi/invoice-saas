@@ -3,6 +3,8 @@ import {
   textMentionsRectificative,
   applyRectificativeSign,
   rectificativeSignHint,
+  withRectificativeMention,
+  hasRectificativeMention,
   type RectificativeAmounts,
 } from "@/lib/rectificative";
 
@@ -148,5 +150,19 @@ describe("textMentionsRectificative: negaciones y espacios (revisión 1 del PR #
   it("una rectificativa de verdad sigue contando, aunque el texto diga «no» en otra parte", () => {
     expect(textMentionsRectificative("FACTURA RECTIFICATIVA R-1 · No incluye portes")).toBe(true);
     expect(textMentionsRectificative("Rectificativa: Sí")).toBe(true);
+  });
+});
+
+describe("la mención guardada en el buzón (revisión 1 del PR #9, punto 8)", () => {
+  it("se añade al JSON crudo y se lee", () => {
+    const raw = withRectificativeMention(JSON.stringify({ source: "gemini_text", textLength: 900 }));
+    expect(JSON.parse(raw)).toEqual({ source: "gemini_text", textLength: 900, rectificativeMention: true });
+    expect(hasRectificativeMention(raw)).toBe(true);
+  });
+
+  it("un XML se deja igual; sin marca, no hay mención", () => {
+    expect(withRectificativeMention("<Facturae/>")).toBe("<Facturae/>");
+    expect(hasRectificativeMention("<Facturae/>")).toBe(false);
+    expect(hasRectificativeMention(JSON.stringify({ source: "gemini_text" }))).toBe(false);
   });
 });

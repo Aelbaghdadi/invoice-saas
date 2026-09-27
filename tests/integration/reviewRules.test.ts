@@ -505,6 +505,34 @@ describe("«Por clasificar»: al clasificar se miran también el cuadre y el des
     expect((await prisma.invoice.findUniqueOrThrow({ where: { id: inv } })).status).toBe("PENDING_REVIEW");
   });
 
+  it("con importes negativos: la incidencia del signo (F-012)", async () => {
+    const inv = await routed([[-100, 21, -21]], -121);
+    await classifyInvoice(inv, w.client.id);
+    expect((await issuesOf(inv)).map(([, d]) => d)).toEqual([expect.stringMatching(/^La factura trae importes negativos/)]);
+  });
+
+  it("«FACTURA RECTIFICATIVA» leída en el buzón: la incidencia sale al clasificar (F-012)", async () => {
+    stubOcr(async () => ({
+      rawJson: JSON.stringify({ source: "gemini_text" }),
+      rawText: "FACTURA RECTIFICATIVA Nº R-7 · Rectifica a la F-3",
+      extracted: {
+        issuerName: "Proveedor SL", issuerCif: "B12345674", receiverName: null, receiverCif: null,
+        invoiceNumber: "R-7", invoiceDate: "2026-09-12", taxBase: 300, vatRate: 21, vatAmount: 63,
+        irpfRate: null, irpfAmount: null, totalAmount: 363, currency: "EUR", supplyType: null,
+        vatLines: [{ taxBase: 300, vatRate: 21, vatAmount: 63 }], confidence: null,
+      } as ExtractedInvoice,
+    }));
+    fakeS3().put("k-rect-buzon", "%PDF-1.4");
+    const { id: inv } = await makeInvoice(w.client, {
+      filename: "r.pdf", storageKey: "k-rect-buzon", fileType: "application/pdf", status: "UPLOADED",
+      routingCandidateIds: [w.client.id], invoiceNumber: null, issuerCif: null, totalAmount: null,
+    });
+    await processInvoice(inv, w.worker.id);
+    expect((await prisma.invoice.findUniqueOrThrow({ where: { id: inv } })).status).toBe("PENDING_ROUTING");
+    expect(await classifyInvoice(inv, w.client.id)).toEqual({ ok: true });
+    expect((await issuesOf(inv)).map(([, d]) => d)).toEqual([expect.stringMatching(/^Parece rectificativa: revisa el signo/)]);
+  });
+
   it("cuadrada: a revisión normal y sin incidencias", async () => {
     const inv = await routed([[100, 21, 21]], 121);
     await classifyInvoice(inv, w.client.id);

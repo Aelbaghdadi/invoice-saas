@@ -31,7 +31,7 @@ import {
   completeReadSurcharges,
   proposeSurchargesFromTotal,
 } from "@/lib/equivalenceSurcharge";
-import { rectificativeSignHint } from "@/lib/rectificative";
+import { rectificativeSignHint, textMentionsRectificative, withRectificativeMention } from "@/lib/rectificative";
 import { routeByCif, clientSideCif, routeByText, detectInvoiceType } from "@/lib/invoiceRouting";
 import { lookupProviderClient } from "@/lib/providerRouting";
 import { accountEntryKey } from "@/lib/supplierMatching";
@@ -281,6 +281,11 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       }
     }
     const isUnclassified = isRoutingUpload && routingReason !== null;
+    // En el buzon no se crean incidencias y al clasificar ya no hay texto: la
+    // mencion de rectificativa se guarda para que classifyInvoice la lea.
+    if (isUnclassified && textMentionsRectificative(ocrResult.rawText)) {
+      extractionData.rawResponse = withRectificativeMention(extractionData.rawResponse);
+    }
 
     // Normalizacion de NIFs y deteccion de tipo de operacion a partir del
     // prefijo del NIF (parser en validators.ts para no tocar OCR).

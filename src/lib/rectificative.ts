@@ -99,13 +99,44 @@ export function applyRectificativeSign(a: RectificativeAmounts): RectificativeAm
  * con solo la mencion en el texto, revisar si es un abono que vino en
  * positivo.
  */
-export function rectificativeSignHint(a: RectificativeAmounts, rawText: string | null | undefined): string | null {
+export function rectificativeSignHint(
+  a: RectificativeAmounts,
+  rawText: string | null | undefined,
+  /** Ya se sabe que el documento lo menciona (guardado en el buzon). */
+  mentioned = false,
+): string | null {
   if (anyNegativeAmount(a)) {
     return "La factura trae importes negativos: si es un abono, marca «Es una rectificativa» en la revisión; si no, corrige el signo.";
   }
-  if (textMentionsRectificative(rawText)) {
+  if (mentioned || textMentionsRectificative(rawText)) {
     return "Parece rectificativa: revisa el signo. El documento habla de rectificativa, nota de crédito o factura de abono, "
       + "pero los importes vienen en positivo y no se han cambiado.";
   }
   return null;
+}
+
+/**
+ * La mencion en el texto se guarda en el JSON crudo de la extraccion
+ * (rawResponse) cuando la factura queda «Por clasificar»: ahi el OCR no crea
+ * incidencias y classifyInvoice ya no tiene el texto. Sin migracion. Un
+ * rawResponse que no es un objeto JSON (el XML de Facturae) se deja igual.
+ */
+export function withRectificativeMention(rawResponse: string): string {
+  try {
+    const parsed = JSON.parse(rawResponse);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return rawResponse;
+    return JSON.stringify({ ...parsed, rectificativeMention: true });
+  } catch {
+    return rawResponse;
+  }
+}
+
+/** ¿El rawResponse guardado lleva la mencion? */
+export function hasRectificativeMention(rawResponse: string | null | undefined): boolean {
+  if (!rawResponse) return false;
+  try {
+    return JSON.parse(rawResponse)?.rectificativeMention === true;
+  } catch {
+    return false;
+  }
 }
