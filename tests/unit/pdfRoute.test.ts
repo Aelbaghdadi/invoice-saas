@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { readFileSync } from "fs";
 import { PDFDocument, StandardFonts } from "pdf-lib";
-import { extractPdfWithGemini, isUsefulPdfText } from "@/lib/ocrLlm";
+import { extractPdfTextAndItems, extractPdfWithGemini, isUsefulPdfText, pagesToRead } from "@/lib/ocrLlm";
 
 const factura = {
   issuerName: "Proveedor SL", issuerCif: "B12345674", receiverName: "Cliente SA", receiverCif: "A58818501",
@@ -35,11 +35,13 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-async function pdfWithText(lines: string[]): Promise<string> {
+async function pdfWithText(lines: string[], pages = 1): Promise<string> {
   const doc = await PDFDocument.create();
-  const page = doc.addPage([595, 842]);
   const font = await doc.embedFont(StandardFonts.Helvetica);
-  lines.forEach((line, i) => page.drawText(line, { x: 40, y: 800 - i * 16, size: 10, font }));
+  for (let p = 0; p < pages; p++) {
+    const page = doc.addPage([595, 842]);
+    lines.forEach((line, i) => page.drawText(line.replace("{p}", String(p + 1)), { x: 20, y: 820 - i * 11, size: 5, font }));
+  }
   return Buffer.from(await doc.save()).toString("base64");
 }
 
@@ -92,5 +94,34 @@ describe("isUsefulPdfText", () => {
 
   it("corto (los espacios no cuentan): no", () => {
     expect(isUsefulPdfText("B12345674 121,00" + " ".repeat(200))).toBe(false);
+  });
+});
+
+describe("límites de la extracción (revisión 1 del PR #9, punto 2)", () => {
+  it("lee las 5 primeras páginas y la última", () => {
+    expect(pagesToRead(3)).toEqual([1, 2, 3]);
+    expect(pagesToRead(50)).toEqual([1, 2, 3, 4, 5, 50]);
+  });
+
+  it("un PDF de 30 páginas: solo el texto de esas 6", async () => {
+    const { text } = await extractPdfTextAndItems(await pdfWithText(["Pagina {p} de la factura"], 30));
+    expect(text.match(/Pagina \d+/g)).toEqual(["Pagina 1", "Pagina 2", "Pagina 3", "Pagina 4", "Pagina 5", "Pagina 30"]);
+  });
+
+  it("si se pasa del tiempo, texto vacío (y va por la imagen)", async () => {
+    const pdf = readFileSync("scripts/demo-pdfs/amazon-oficina.pdf").toString("base64");
+    expect(await extractPdfTextAndItems(pdf, -1)).toEqual({ text: "", items: [], timedOut: true });
+  });
+
+  it("a Gemini le llegan como mucho 40.000 caracteres", async () => {
+    let sent = 0;
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init: { body: string }) => {
+      sent = JSON.parse(init.body).contents[0].parts[0].text.length;
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify(factura) }] } }] }));
+    }));
+    const line = "Concepto 0042 Servicio de mantenimiento mensual de la instalacion B12345674 importe 121,00 EUR ".repeat(2);
+    await extractPdfWithGemini(await pdfWithText(Array.from({ length: 70 }, () => line), 6));
+    expect(sent).toBeGreaterThan(39_000);
+    expect(sent).toBeLessThanOrEqual(40_000 + "Extrae los campos de esta factura:\n\n".length);
   });
 });

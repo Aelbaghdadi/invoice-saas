@@ -50,9 +50,26 @@ type PdfTextItem = {
  * los tests.
  * La posición está normalizada a 0-1 (y desde arriba, al contrario que PDF space).
  */
+/** Paginas que se leen: las primeras y la ultima. Una factura rara vez pasa
+ *  de ahi, y pdfjs en Node no cede el event loop (su «fake worker» corre en
+ *  el hilo principal): 500 paginas lo bloqueaban unos 3 s. */
+const MAX_FIRST_PAGES = 5;
+/** Tiempo maximo leyendo texto; si se pasa, el PDF va por la imagen. */
+const TEXT_BUDGET_MS = 2_000;
+/** Texto maximo que se manda a Gemini (antes, hasta 1,9 M caracteres). */
+const MAX_TEXT_FOR_GEMINI = 40_000;
+
+/** Las paginas que se leen, de 1 a numPages. */
+export function pagesToRead(numPages: number): number[] {
+  const pages = Array.from({ length: Math.min(numPages, MAX_FIRST_PAGES) }, (_, i) => i + 1);
+  if (numPages > MAX_FIRST_PAGES) pages.push(numPages);
+  return pages;
+}
+
 export async function extractPdfTextAndItems(
   base64: string,
-): Promise<{ text: string; items: PdfTextItem[] }> {
+  budgetMs: number = TEXT_BUDGET_MS,
+): Promise<{ text: string; items: PdfTextItem[]; timedOut?: boolean }> {
   try {
     // En Node pdfjs usa un «fake worker» que carga pdf.worker.mjs. Antes se
     // ponia GlobalWorkerOptions.workerSrc = "", que pisa su valor por defecto:
@@ -70,8 +87,10 @@ export async function extractPdfTextAndItems(
 
     let text = "";
     const items: PdfTextItem[] = [];
+    const startedAt = Date.now();
 
-    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+    for (const pageNum of pagesToRead(pdf.numPages)) {
+      if (Date.now() - startedAt > budgetMs) return { text: "", items: [], timedOut: true };
       const page = await pdf.getPage(pageNum);
 
       // viewport a escala 1: convierte coordenadas PDF (origen abajo-izquierda)
@@ -508,13 +527,14 @@ export function extractGeminiBoundingBoxes(rawJson: string): FieldBoundingBoxes 
  * que sí conocen la posición exacta de cada fragmento de texto en la página.
  */
 export async function extractFromPdfTextWithGemini(base64: string): Promise<OcrResult> {
-  const { text, items } = await extractPdfTextAndItems(base64);
+  const { text, items, timedOut } = await extractPdfTextAndItems(base64);
+  if (timedOut) console.warn("extractFromPdfTextWithGemini: el texto tardaba demasiado, va por la imagen");
   if (!isUsefulPdfText(text)) {
     throw new Error(PDF_ESCANEADO);
   }
 
   const { extracted } = await callGemini([
-    { text: `Extrae los campos de esta factura:\n\n${text}` },
+    { text: `Extrae los campos de esta factura:\n\n${text.slice(0, MAX_TEXT_FOR_GEMINI)}` },
   ]);
   // Con el texto no ha salido lo basico: mejor la imagen.
   const allKeyFieldsNull = [extracted.issuerName, extracted.issuerCif, extracted.invoiceNumber, extracted.totalAmount]
