@@ -79,6 +79,8 @@ export function ClasificarTable({ rows }: { rows: Row[] }) {
         if (res?.error) toastError(res.error);
         else { success("Clasificada"); advance(id); }
       })
+      // La accion no lanza, pero la red si puede fallar (o caducar la sesion).
+      .catch(() => toastError("No se pudo clasificar la factura. Inténtalo de nuevo."))
       .finally(() => setBusy(false));
   }, [cur, busy, advance, success, toastError]);
 
@@ -91,6 +93,7 @@ export function ClasificarTable({ rows }: { rows: Row[] }) {
         if (res?.error) toastError(res.error);
         else { success("Descartada"); advance(id); }
       })
+      .catch(() => toastError("No se pudo descartar la factura. Inténtalo de nuevo."))
       .finally(() => setBusy(false));
   }, [cur, busy, advance, success, toastError]);
 

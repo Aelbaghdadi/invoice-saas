@@ -483,6 +483,20 @@ describe("«Por clasificar»: al clasificar se miran también el cuadre y el des
     expect((await prisma.invoice.findUniqueOrThrow({ where: { id: inv } })).status).toBe("PENDING_ROUTING");
   });
 
+  it("si falla una lectura previa a la transacción: { error }, no lanza", async () => {
+    const inv = await routed([[100, 21, 21]], 121);
+    // Un fallo real: la tabla de la ficha del tercero no está (se restaura).
+    await prisma.$executeRawUnsafe(`ALTER TABLE "AccountEntry" RENAME TO "AccountEntry_fuera"`);
+    let r;
+    try {
+      r = await classifyInvoice(inv, w.client.id);
+    } finally {
+      await prisma.$executeRawUnsafe(`ALTER TABLE "AccountEntry_fuera" RENAME TO "AccountEntry"`);
+    }
+    expect(r).toEqual({ error: "No se pudo clasificar la factura. Inténtalo de nuevo." });
+    expect((await prisma.invoice.findUniqueOrThrow({ where: { id: inv } })).status).toBe("PENDING_ROUTING");
+  });
+
   it("si falla aprender el proveedor: la clasificación ya guardada vale", async () => {
     const inv = await routed([[100, 21, 21]], 121);
     const r = await failingInserts("ProviderRoutingRule", () => classifyInvoice(inv, w.client.id));
