@@ -281,6 +281,20 @@ describe("bloqueantes en el export (F-025)", () => {
     }
   });
 
+  it("con más de 50 avisos, el salto de numeración se manda igual (solo lo calcula el export)", async () => {
+    for (let i = 0; i < 55; i++) await makeInvoice(w.client, { ...april, invoiceNumber: `DESCUADRE-${i}`, totalAmount: 130 });
+    // Dos emitidas del propio cliente, 1 y 3, las últimas del periodo: falta la 2.
+    const venta = { ...april, type: "SALE" as const, issuerCif: w.client.cif, issuerName: w.client.name, receiverCif: "B12345674", receiverName: "Cliente final SL" };
+    await makeInvoice(w.client, { ...venta, invoiceNumber: "1", invoiceDate: new Date("2026-04-28") });
+    await makeInvoice(w.client, { ...venta, invoiceNumber: "3", invoiceDate: new Date("2026-04-29") });
+    const body = await preview();
+    expect(body.warningCountBySeverity.aviso).toBe(56);
+    const gap = body.warnings.find((x: { invoiceNumber: string }) => x.invoiceNumber === "3");
+    expect(gap).toMatchObject({ severity: "aviso", numberingGap: true });
+    expect(gap.warnings.join()).toContain("falta la factura 2");
+    expect(body.warnings.filter((x: { severity: string }) => x.severity === "aviso")).toHaveLength(51);
+  });
+
   it("orden estable: con la misma fecha desempata el id", async () => {
     for (const id of ["orden-z", "orden-a", "orden-m"]) {
       await makeInvoice(w.client, { ...april, id, invoiceNumber: null });

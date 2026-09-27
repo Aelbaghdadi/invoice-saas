@@ -589,7 +589,7 @@ function WarningList({ tone, title, note, items, total }: {
       </ul>
       {count > items.length && (
         <p className={`mt-2 text-[11px] ${c.note}`}>
-          Y {count - items.length} más: se ven al abrir cada factura desde la revisión.
+          Y {count - items.length} más que no se muestran aquí.
         </p>
       )}
     </div>

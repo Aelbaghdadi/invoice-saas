@@ -329,6 +329,9 @@ export type A3ValidationWarning = {
   blockers: string[];
   /** Lo que conviene mirar pero no impide exportarla. */
   warnings: string[];
+  /** Lleva un aviso de salto de numeracion: solo lo calcula el export, asi
+   *  que la vista previa lo manda siempre, aunque recorte los demas avisos. */
+  numberingGap?: boolean;
 };
 
 function ruleInvoice(inv: InvoiceWithClient): RuleInvoice {
@@ -583,14 +586,23 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
         + `${gap.missing.length === 1 ? "falta la factura" : "faltan las facturas"} ${list}${more}. `
         + `Revisa si falta subirla o si se saltó el número al emitirla`;
       const existing = byInvoiceId.get(invoiceId);
-      if (existing) existing.warnings.push(warning);
-      else {
-        const entry: A3ValidationWarning = { invoiceId, invoiceNumber: inv.invoiceNumber, severity: "aviso", blockers: [], warnings: [warning] };
+      if (existing) {
+        existing.warnings.push(warning);
+        existing.numberingGap = true;
+      } else {
+        const entry: A3ValidationWarning = {
+          invoiceId, invoiceNumber: inv.invoiceNumber, severity: "aviso", blockers: [], warnings: [warning], numberingGap: true,
+        };
         results.push(entry);
         byInvoiceId.set(invoiceId, entry);
       }
     }
   }
+
+  // En el orden de las facturas: las entradas de los saltos se anadian al
+  // final y el recorte de la vista previa se las llevaba las primeras.
+  const position = new Map(invoices.map((inv, i) => [inv.id, i]));
+  results.sort((a, b) => (position.get(a.invoiceId) ?? 0) - (position.get(b.invoiceId) ?? 0));
 
   // Estable: dentro de cada gravedad se mantiene el orden de las facturas.
   return [
