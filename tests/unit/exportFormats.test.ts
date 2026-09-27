@@ -354,6 +354,14 @@ describe("validateForA3Export — negativos sin marcar como rectificativa (F-012
     expect(res.warnings).toContain("Importes negativos sin marcar como rectificativa: si es un abono, márcala en la revisión; si no, corrige el signo");
   });
 
+  it("también con solo el recargo en negativo (la misma regla que la revisión)", () => {
+    const [res] = validateForA3Export([mkInvoice({
+      vatLines: [{ taxBase: 100, vatRate: 21, vatAmount: 21, equivalenceSurchargeRate: 5.2, equivalenceSurchargeAmount: -5.2 }] as never,
+      totalAmount: 115.8 as never,
+    })]);
+    expect(res.warnings).toContain("Importes negativos sin marcar como rectificativa: si es un abono, márcala en la revisión; si no, corrige el signo");
+  });
+
   it("marcada, o en positivo: no", () => {
     const res = validateForA3Export([mkInvoice({ ...negativos, isRectificative: true }), mkInvoice({ id: "inv-2" })]);
     expect(res.flatMap((r) => r.warnings).filter((w) => w.startsWith("Importes negativos"))).toEqual([]);

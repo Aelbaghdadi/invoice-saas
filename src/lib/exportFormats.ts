@@ -9,6 +9,7 @@ import {
   type OperationTypeName,
 } from "@/lib/validators";
 import { accountDirectionProblem, currencyProblem, missingDataProblems, type RuleInvoice } from "@/lib/invoiceRules";
+import { anyNegativeAmount } from "@/lib/rectificative";
 import { goodsTypeFromSaleAccount } from "@/lib/intracomGoods";
 import { invoiceBalanceDiffCents, isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { describeVatLineMismatch, vatLineMismatches, type CheckedLine } from "@/lib/vatLineChecks";
@@ -559,8 +560,12 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
     // Negativos sin la casilla de rectificativa (F-012): el OCR ya no cambia
     // signos. O es un abono sin marcar (sin serie ni tipo en A3) o un signo
     // mal leido.
-    if (!inv.isRectificative
-        && (Number(inv.totalAmount ?? 0) < 0 || checkedLines(inv).some((l) => l.taxBase < 0 || l.vatAmount < 0))) {
+    const amount = (v: unknown) => (v == null ? null : Number(v));
+    if (!inv.isRectificative && anyNegativeAmount({
+      lines: checkedLines(inv),
+      taxBase: amount(inv.taxBase), vatAmount: amount(inv.vatAmount), totalAmount: amount(inv.totalAmount),
+      irpfAmount: amount(inv.irpfAmount), retentionBase: amount(inv.retentionBase),
+    })) {
       warnings.push("Importes negativos sin marcar como rectificativa: si es un abono, márcala en la revisión; si no, corrige el signo");
     }
 

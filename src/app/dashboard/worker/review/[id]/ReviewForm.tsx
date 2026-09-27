@@ -43,6 +43,7 @@ import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { invoiceBalanceDiffCents, isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { amountFieldsProblem, parseVatLineInputs, vatLinesProblem } from "@/lib/vatLineInput";
 import { accountsAgainstDirection, validationProblems } from "@/lib/invoiceRules";
+import { anyNegativeAmount } from "@/lib/rectificative";
 import { percentOf } from "@/lib/money";
 import { describeVatLineMismatch, vatLineMismatches, type VatLineMismatch } from "@/lib/vatLineChecks";
 import { sanitizeAccountingAccountInput, padAccountingAccount } from "@/lib/accountingAccount";
@@ -739,8 +740,15 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   const totalNum   = parseFloat(totalAmount) || 0;
   // Importes negativos sin la casilla de rectificativa (F-012): el OCR ya no
   // cambia signos, asi que o es un abono sin marcar o un signo mal leido.
-  const negativeWithoutRectificative = !isRectificative && (totalNum < 0 || vatLines.some((l) =>
-    parseFloat(l.taxBase) < 0 || parseFloat(l.vatAmount) < 0 || parseFloat(l.equivalenceSurchargeAmount) < 0));
+  // La misma regla que el servidor y el export (anyNegativeAmount).
+  const num = (v: string) => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
+  const negativeWithoutRectificative = !isRectificative && anyNegativeAmount({
+    lines: vatLines.map((l) => ({
+      taxBase: num(l.taxBase), vatRate: 0, vatAmount: num(l.vatAmount), equivalenceSurchargeAmount: num(l.equivalenceSurchargeAmount),
+    })),
+    taxBase: null, vatAmount: null, totalAmount: totalNum, irpfAmount: retentionAmount,
+    retentionBase: retentionType ? num(retentionBase) : null,
+  });
   // Incidencias abiertas del OCR sobre el signo (F-012): «Parece
   // rectificativa…» o «importes negativos…». Antes no se pintaban y el gestor
   // no veia por que la factura estaba en «Con incidencias».
