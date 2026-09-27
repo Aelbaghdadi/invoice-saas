@@ -24,7 +24,6 @@ import {
   isPersonaFisica,
   textMentionsRetention,
   RETENTION_DEFAULT_RATE,
-  OPERATION_TYPE_OPTIONS,
   type RetentionTypeName,
 } from "@/lib/validators";
 import {
@@ -35,8 +34,8 @@ import {
 import { textMentionsRectificative, applyRectificativeSign } from "@/lib/rectificative";
 import { routeByCif, clientSideCif, routeByText, detectInvoiceType } from "@/lib/invoiceRouting";
 import { lookupProviderClient } from "@/lib/providerRouting";
-import { accountEntryKey, entryNameMatches } from "@/lib/supplierMatching";
-import { proposeIntracomGoodsType } from "@/lib/intracomGoods";
+import { accountEntryKey } from "@/lib/supplierMatching";
+import { proposeOperationType } from "@/lib/operationTypeProposal";
 import { classifyOcrError, userMessageForOcrError } from "@/lib/ocrErrors";
 
 /**
@@ -405,32 +404,14 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
         }).catch(() => null)
       : null;
     // Lo aprendido (tipo de operacion, retencion) se aplica por NIF aunque el
-    // nombre no coincida: en el plan de A3 los nombres vienen cortados o
-    // escritos de otra forma, y exigirlo dejaba sin aplicar lo aprendido a
-    // muchos terceros reales. La revision avisa del nombre distinto. Lo
-    // asignado "siempre" como bienes/servicios si exige el mismo nombre: con
-    // dos terceros que comparten numero (418306763) seria la eleccion del otro.
+    // nombre no coincida; la revision avisa del nombre distinto. El tipo de
+    // operacion y bienes/servicios, con la misma funcion que al clasificar.
     const knownEntry = foundEntry;
-    const entryIsSameThirdParty = foundEntry != null && entryNameMatches(foundEntry, otherPartyName);
-    // Lo aprendido se guardo en el sentido de aquella factura; una fila
-    // compartida entre compras y ventas puede traer un tipo que aqui no
-    // existe (INTRACOM_SERVICIOS en una emitida exportaria un 8 que en
-    // expedidas significa otra cosa).
-    const learnedOperationType = knownEntry?.defaultOperationType ?? null;
-    const baseOperationType =
-      learnedOperationType && OPERATION_TYPE_OPTIONS[invoice.type].includes(learnedOperationType)
-        ? learnedOperationType
-        : otherParty.operationType;
-
-    // Bienes o servicios en intracomunitarias: lo asignado "siempre" a este
-    // tercero manda y, si no hay, lo que diga la IA. En compras decide el
-    // codigo (3 bienes / 8 servicios); en ventas va aparte (cuenta 700/705).
-    const intracomProposal = proposeIntracomGoodsType({
+    const intracomProposal = proposeOperationType({
       direction: invoice.type,
-      operationType: baseOperationType,
-      thirdParty: entryIsSameThirdParty
-        ? (invoice.type === "SALE" ? knownEntry?.intracomGoodsTypeSale : knownEntry?.intracomGoodsTypePurchase) ?? null
-        : null,
+      prefixOperationType: otherParty.operationType,
+      otherPartyName,
+      entry: knownEntry,
       ai: extracted.supplyType,
     });
     const operationType = intracomProposal.operationType;

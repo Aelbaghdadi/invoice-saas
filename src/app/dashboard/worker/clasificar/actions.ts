@@ -8,6 +8,9 @@ import { learnProviderRule } from "@/lib/providerRouting";
 import { detectInvoiceType } from "@/lib/invoiceRouting";
 import { DUPLICATE_SELECT, describeExisting } from "@/lib/issueDetector";
 import { mathIssues } from "@/lib/mathIssues";
+import { proposeOperationType } from "@/lib/operationTypeProposal";
+import { parseTaxId, taxIdWithCountry } from "@/lib/validators";
+import { accountEntryKey } from "@/lib/supplierMatching";
 import { revalidatePath } from "next/cache";
 
 export type ClassifyState = { ok?: boolean; error?: string } | null;
@@ -106,6 +109,27 @@ export async function classifyInvoice(invoiceId: string, clientId: string): Prom
     }
   }
 
+  // Tipo de operacion con lo aprendido del tercero en el cliente elegido,
+  // como en el OCR: el que habia se calculo con el cliente buzon (INTERIOR)
+  // y con el una inversion del sujeto pasivo salia como desglose descuadrado.
+  const otherCountry = isPurchase ? invoice.issuerCountry : invoice.receiverCountry;
+  const otherName = isPurchase ? invoice.issuerName : invoice.receiverName;
+  const otherParsed = parseTaxId(taxIdWithCountry(otherCif, otherCountry));
+  const entryKey = accountEntryKey(otherParsed.clean, otherName, otherParsed.countryCode);
+  const entry = entryKey
+    ? await prisma.accountEntry.findUnique({
+        where: { clientId_nif: { clientId, nif: entryKey } },
+        select: { nif: true, name: true, defaultOperationType: true, intracomGoodsTypePurchase: true, intracomGoodsTypeSale: true },
+      })
+    : null;
+  const proposal = proposeOperationType({
+    direction: effectiveType,
+    prefixOperationType: otherParsed.operationType,
+    otherPartyName: otherName,
+    entry,
+    ai: invoice.intracomGoodsSource === "IA" ? invoice.intracomGoodsType : null,
+  });
+
   // Cuadre del total y cuota por linea, como en el OCR (que no las mira en
   // «Por clasificar»). Antes se usaba isValid a secas: con un centimo de
   // descuadre quedaba en «Requiere atención» sin incidencia que resolver.
@@ -121,7 +145,7 @@ export async function classifyInvoice(invoiceId: string, clientId: string): Prom
     vatAmount: invoice.vatAmount == null ? null : Number(invoice.vatAmount),
     totalAmount: invoice.totalAmount == null ? null : Number(invoice.totalAmount),
     irpfAmount: invoice.irpfAmount == null ? null : Number(invoice.irpfAmount),
-    operationType: invoice.operationType,
+    operationType: proposal.operationType,
   });
   if (mathProblems.length > 0) {
     await prisma.invoiceIssue.createMany({ data: mathProblems.map((p) => ({ invoiceId, ...p })) });
@@ -136,6 +160,9 @@ export async function classifyInvoice(invoiceId: string, clientId: string): Prom
       ...clientSide,
       type: effectiveType,
       typeUnconfirmed: typeStillUnconfirmed,
+      operationType: proposal.operationType,
+      intracomGoodsType: proposal.goodsType,
+      intracomGoodsSource: proposal.source,
       status: targetStatus,
       routingCandidateIds: [],
       routingReason: null,

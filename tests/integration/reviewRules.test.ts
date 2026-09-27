@@ -351,6 +351,18 @@ describe("«Por clasificar»: al clasificar se miran también el cuadre y el des
     expect((await issuesOf(inv)).map(([, d]) => d)).toEqual([expect.stringMatching(/^El desglose por tipo no cuadra\. Línea 1/)]);
   });
 
+  it("con el tipo aprendido en el cliente elegido: una ISP con cuota 0 no es desglose descuadrado", async () => {
+    await prisma.accountEntry.create({
+      data: { clientId: w.client.id, nif: "B12345674", name: "Proveedor SL", defaultOperationType: "INVERSION_SP" },
+    });
+    const inv = await routed([[100, 21, 0]], 100);
+    await classifyInvoice(inv, w.client.id);
+    const after = await prisma.invoice.findUniqueOrThrow({ where: { id: inv } });
+    expect(after.operationType).toBe("INVERSION_SP");
+    expect(after.status).toBe("PENDING_REVIEW");
+    expect(await issuesOf(inv)).toEqual([]);
+  });
+
   it("cuadrada: a revisión normal y sin incidencias", async () => {
     const inv = await routed([[100, 21, 21]], 121);
     await classifyInvoice(inv, w.client.id);
