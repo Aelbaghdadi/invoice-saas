@@ -127,7 +127,12 @@ export function missingDataProblems(inv: RuleInvoice): RuleProblem[] {
     ? inv.lines.length > 0
     : inv.lines.some((l) => Math.abs(l.taxBase) >= 0.005);
   if (!hasLines) {
-    problems.push({ rule: "sin_lineas", message: "Falta al menos una línea de IVA con base distinta de 0." });
+    problems.push({
+      rule: "sin_lineas",
+      message: inv.isRectificative
+        ? "Falta al menos una línea de IVA (en una rectificativa puede ir a 0)."
+        : "Falta al menos una línea de IVA con base distinta de 0.",
+    });
   }
   if (inv.totalAmount === null || Number.isNaN(inv.totalAmount)) {
     problems.push({ rule: "sin_total", message: "Falta el total de la factura." });

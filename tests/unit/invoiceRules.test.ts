@@ -47,6 +47,8 @@ describe("validationProblems (F-009, F-014)", () => {
   it("una rectificativa a cero no se bloquea si tiene su línea", () => {
     expect(rules({ isRectificative: true, lines: [{ taxBase: 0, vatAmount: 0 }], totalAmount: 0 })).toEqual([]);
     expect(rules({ isRectificative: true, lines: [], totalAmount: 0 })).toEqual(["sin_lineas"]);
+    expect(validationProblems({ ...ok, isRectificative: true, lines: [], totalAmount: 0 })[0].message)
+      .toBe("Falta al menos una línea de IVA (en una rectificativa puede ir a 0).");
   });
 
   it("descuadre con la tolerancia común (0 céntimos), contando recargo e IRPF", () => {
