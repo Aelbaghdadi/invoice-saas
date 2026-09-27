@@ -7,7 +7,6 @@ import { holdLock, sessionsWaitingForLock } from "./helpers/locks";
 import { inFlight } from "./helpers/inflight";
 import { signInAs } from "./helpers/session";
 import { reject, reviewForm, validate } from "./helpers/reviewForm";
-import { reviewTargetWhere } from "@/lib/invoiceStatuses";
 
 let w: FirmWorld;
 let id: string;
@@ -72,17 +71,29 @@ describe("«Reabrir y validar»", () => {
     expect(audit.find((x) => x.field === "rejectionCategory")?.oldValue).toBe("ILLEGIBLE");
   });
 
-  it("con una versión corregida del cliente: no se reabre (también en el propio UPDATE)", async () => {
-    const b = await makeInvoice(w.client, { status: "VALIDATED", replacesId: id });
+  it("con una versión corregida del cliente: no se reabre", async () => {
+    await makeInvoice(w.client, { status: "VALIDATED", replacesId: id });
     expect((await reopenA()).error).toBe("El cliente ya subió una versión corregida de esta factura: valida esa en su lugar.");
     expect((await A()).status).toBe("REJECTED");
-    const where = { id, ...reviewTargetWhere("validate", { reopen: true }) };
-    expect((await prisma.invoice.updateMany({ where, data: { status: "VALIDATED" } })).count).toBe(0);
-    await prisma.invoice.delete({ where: { id: b.id } });
-    expect((await prisma.invoice.updateMany({ where, data: { status: "VALIDATED" } })).count).toBe(1);
   });
 
-  it("una descartada al clasificar («Sin clasificar») no se valida (también en el propio UPDATE)", async () => {
+  it("la sustituta llega entre la lectura y la escritura: lo para el propio UPDATE", async () => {
+    // La accion se para al leer los cierres de periodo, despues de sus
+    // comprobaciones previas y antes de escribir.
+    const lock = await holdLock(`LOCK TABLE "PeriodClosure" IN ACCESS EXCLUSIVE MODE`);
+    const pending = inFlight(reopenA());
+    await vi.waitFor(async () => expect(await sessionsWaitingForLock()).toBe(1), { timeout: 10_000 });
+    // La sustituta no toca el updatedAt de la rechazada: solo la condicion
+    // replacedBy del UPDATE puede pararla.
+    await makeInvoice(w.client, { status: "VALIDATED", replacesId: id });
+    await lock.release();
+    expect((await pending).error).toBe("El cliente ya subió una versión corregida de esta factura: valida esa en su lugar.");
+    const a = await A();
+    expect(a.status).toBe("REJECTED");
+    expect(a.rejectionReason).toBe("Ilegible");
+  });
+
+  it("una descartada al clasificar («Sin clasificar») no se valida", async () => {
     const bucket = await prisma.client.create({
       data: { name: "Sin clasificar", cif: "X0000000X", advisoryFirmId: w.firm.id, isUnclassifiedBucket: true },
     });
@@ -90,8 +101,21 @@ describe("«Reabrir y validar»", () => {
     signInAs(w.admin);
     expect((await reopenA()).error).toBe("Esta factura está en «Sin clasificar» y no tiene cliente: no se puede validar.");
     expect((await A()).status).toBe("REJECTED");
-    const where = { id, ...reviewTargetWhere("validate", { reopen: true }) };
-    expect((await prisma.invoice.updateMany({ where, data: { status: "VALIDATED" } })).count).toBe(0);
+  });
+
+  it("pasa al buzón entre la lectura y la escritura: lo para el propio UPDATE", async () => {
+    const bucket = await prisma.client.create({
+      data: { name: "Sin clasificar", cif: "X0000000X", advisoryFirmId: w.firm.id, isUnclassifiedBucket: true },
+    });
+    signInAs(w.admin);
+    const lock = await holdLock(`LOCK TABLE "PeriodClosure" IN ACCESS EXCLUSIVE MODE`);
+    const pending = inFlight(reopenA());
+    await vi.waitFor(async () => expect(await sessionsWaitingForLock()).toBe(1), { timeout: 10_000 });
+    // SQL crudo: sin tocar updatedAt, para que solo cuente la condicion del cliente.
+    await prisma.$executeRawUnsafe(`UPDATE "Invoice" SET "clientId" = $1 WHERE id = $2`, bucket.id, id);
+    await lock.release();
+    expect((await pending).error).toBe("Esta factura está en «Sin clasificar» y no tiene cliente: no se puede validar.");
+    expect((await A()).status).toBe("REJECTED");
   });
 
   it("si la auditoría falla, no queda reabierta a medias", async () => {

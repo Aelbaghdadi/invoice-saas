@@ -8,7 +8,6 @@ import { holdLock, sessionsWaitingForLock } from "./helpers/locks";
 import { inFlight } from "./helpers/inflight";
 import { signInAs } from "./helpers/session";
 import { splitInvoice, splitPdfInvoice } from "@/app/dashboard/worker/review/[id]/actions";
-import { reviewTargetWhere } from "@/lib/invoiceStatuses";
 
 let w: FirmWorld;
 let id: string;
@@ -99,14 +98,28 @@ describe("dividir reserva antes la original", () => {
     expect(await prisma.invoiceStatusHistory.count({ where: { invoiceId: id } })).toBe(0);
   });
 
-  it("una original VALIDATED que ya tiene hijas no se vuelve a dividir (también en la reserva)", async () => {
+  it("una original VALIDATED que ya tiene hijas no se vuelve a dividir", async () => {
     await prisma.invoice.update({ where: { id }, data: { status: "VALIDATED" } });
     await makeInvoice(w.client, { status: "VALIDATED", splitFromId: id });
     expect((await run()).error).toBe("Esta factura ya se dividió: trabaja con las facturas que salieron de ella.");
     expect(await children()).toBe(1);
     expect(splitKeys()).toHaveLength(0);
-    const r = await prisma.invoice.updateMany({ where: { id, ...reviewTargetWhere("split") }, data: { status: "SPLIT_SOURCE" } });
-    expect(r.count).toBe(0);
+  });
+
+  it("le sale una hija entre la comprobación y la reserva: lo para la propia reserva", async () => {
+    await prisma.invoice.update({ where: { id }, data: { status: "VALIDATED" } });
+    // La division se para al leer los cierres de periodo, despues de las
+    // comprobaciones previas y antes de subir las partes y reservar.
+    const lock = await holdLock(`LOCK TABLE "PeriodClosure" IN ACCESS EXCLUSIVE MODE`);
+    const pending = inFlight(run());
+    await vi.waitFor(async () => expect(await sessionsWaitingForLock()).toBe(1), { timeout: 10_000 });
+    // La hija no toca la original: solo la condicion splitInvoices de la reserva puede pararla.
+    await makeInvoice(w.client, { status: "VALIDATED", splitFromId: id });
+    await lock.release();
+    expect((await pending).error).toBe("Esta factura ya se dividió: trabaja con las facturas que salieron de ella.");
+    expect(await status()).toBe("VALIDATED");
+    expect(await children()).toBe(1);
+    expect(splitKeys()).toHaveLength(0);
   });
 
   it("las hijas heredan typeUnconfirmed y periodType", async () => {

@@ -49,13 +49,19 @@ describe("resubida del cliente contra «Reabrir y validar»", () => {
     expect(reuploadKeys()).toHaveLength(0);
   });
 
-  it("la resubida llega antes: la reapertura con el updatedAt viejo no valida la rechazada", async () => {
-    const leido = (await A()).updatedAt;
-    expect(await reupload()).toEqual({ success: true });
+  it("la resubida llega entera mientras el gestor reabre: la reapertura no valida la rechazada", async () => {
     signInAs(w.worker);
-    const r = await validate(reviewForm(id, leido, w.client, { reopen: "1" }));
-    expect(r.error).toBe("El cliente ya subió una versión corregida de esta factura: valida esa en su lugar.");
+    const leido = (await A()).updatedAt;
+    // La reapertura se para al leer los cierres de periodo, despues de sus
+    // comprobaciones previas (aun no hay sustituta) y antes de escribir.
+    const lock = await holdLock(`LOCK TABLE "PeriodClosure" IN ACCESS EXCLUSIVE MODE`);
+    const reopening = inFlight(validate(reviewForm(id, leido, w.client, { reopen: "1" })));
+    await vi.waitFor(async () => expect(await sessionsWaitingForLock()).toBe(1), { timeout: 10_000 });
+    expect(await reupload()).toEqual({ success: true });
+    await lock.release();
+    expect((await reopening).error).toBe("El cliente ya subió una versión corregida de esta factura: valida esa en su lugar.");
     expect((await A()).status).toBe("REJECTED");
+    expect(await prisma.invoice.count({ where: { replacesId: id } })).toBe(1);
   });
 
   it("el cliente de otra asesoría no puede resubirla", async () => {
