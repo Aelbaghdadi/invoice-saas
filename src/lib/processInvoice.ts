@@ -421,19 +421,6 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     const operationType = intracomProposal.operationType;
     const goods = isUnclassified ? unclassifiedGoodsType(intracomProposal, extracted.supplyType) : intracomProposal;
 
-    // Detect issues (duplicates, low confidence, math mismatch, IVA no-cero
-    // en intracomunitarias, etc.). En las "Por clasificar" no tiene sentido
-    // (aún no hay cliente real). Va despues de decidir el tipo de operacion
-    // final (el aprendido del tercero incluido): con la pista del prefijo del
-    // NIF, una inversion del sujeto pasivo con cuota 0 salia como desglose
-    // descuadrado (revision 1 del PR #7).
-    const issues = isUnclassified
-      ? []
-      : await detectIssues(invoiceId, extracted, invoice, operationType, { persist: false });
-    const targetStatus: InvoiceStatus = isUnclassified
-      ? "PENDING_ROUTING"
-      : issues.length > 0 ? "NEEDS_ATTENTION" : "PENDING_REVIEW";
-
     // ── Deteccion de retencion IRPF ────────────────────────────────────
     //
     // Heuristica conservadora: solo sugerimos retencion si el emisor
@@ -499,6 +486,22 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       : (extracted.irpfAmount ?? null);
     const finalIrpfRate = retentionRate ?? extracted.irpfRate ?? null;
     const finalIrpfAmount = computedIrpfAmount;
+
+    // Detect issues (duplicates, low confidence, math mismatch, IVA no-cero
+    // en intracomunitarias, etc.). En las "Por clasificar" no tiene sentido
+    // (aún no hay cliente real). Va despues de decidir el tipo de operacion
+    // final (el aprendido del tercero incluido): con la pista del prefijo del
+    // NIF, una inversion del sujeto pasivo con cuota 0 salia como desglose
+    // descuadrado (revision 1 del PR #7). Y despues de la retencion: el
+    // cuadre tiene que hacerse con el IRPF que se va a guardar (recalculado
+    // con el % redondeado), no con el leido; si no, quedaba isValid=false
+    // sin ninguna incidencia (revision 1 del PR #8).
+    const issues = isUnclassified
+      ? []
+      : await detectIssues(invoiceId, { ...extracted, irpfAmount: finalIrpfAmount }, invoice, operationType, { persist: false });
+    const targetStatus: InvoiceStatus = isUnclassified
+      ? "PENDING_ROUTING"
+      : issues.length > 0 ? "NEEDS_ATTENTION" : "PENDING_REVIEW";
 
     // ── Rectificativa / abono: solo poner el importe en NEGATIVO ───────
     //

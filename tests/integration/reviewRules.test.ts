@@ -588,6 +588,12 @@ describe("OCR: los % también se redondean a 2 decimales", () => {
     await processInvoice(inv, w.worker.id);
     const after = await prisma.invoice.findUniqueOrThrow({ where: { id: inv } });
     expect([Number(after.irpfRate), Number(after.irpfAmount), Number(after.vatRate)]).toEqual([7.01, 70.1, 21]);
+    // Con la cuota guardada (70,10) ya no cuadra con el total impreso: se dice,
+    // en vez de quedar isValid=false sin ninguna incidencia.
+    expect(after.isValid).toBe(false);
+    expect(after.status).toBe("NEEDS_ATTENTION");
+    const issues = await prisma.invoiceIssue.findMany({ where: { invoiceId: inv } });
+    expect(issues.map((i) => i.description)).toEqual([expect.stringContaining("Diferencia: 0,05 €")]);
   });
 });
 
