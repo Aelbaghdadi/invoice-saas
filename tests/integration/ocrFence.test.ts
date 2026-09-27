@@ -51,6 +51,9 @@ describe("valla del OCR (ocrAttempts)", () => {
   });
 
   it("rechazada mientras analizaba: sigue rechazada, sin nada del OCR", async () => {
+    // Una factura que SI produce incidencias (100 al 10 % con cuota 21): si
+    // no, «sin incidencias» no probaria nada de la valla.
+    fakeS3().put("k-xml", facturaeXml({ buyerCif: w.client.cif, taxRate: "10.00" }));
     fakeS3().setMode("hold");
     const run = inFlight(processInvoice(id, w.worker.id));
     // Reclamada y descargando el fichero: se rechaza en ese momento.

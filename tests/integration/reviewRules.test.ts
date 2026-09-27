@@ -224,6 +224,21 @@ describe("cuota = base × % por línea (F-022)", () => {
     ]]);
   });
 
+  it("un céntimo de descuadre en el OCR: «Requiere atención» con «Diferencia: 0,01 €»", async () => {
+    fakeS3().put("k-cent", facturaeXml({ buyerCif: w.client.cif, total: "121.01" }));
+    const { id: cent } = await makeInvoice(w.client, {
+      filename: "cent.xml", storageKey: "k-cent", fileType: "application/xml", status: "UPLOADED",
+      invoiceNumber: null, invoiceDate: null, issuerName: null, issuerCif: null,
+      taxBase: null, vatRate: null, vatAmount: null, totalAmount: null,
+    });
+    await processInvoice(cent, w.worker.id);
+    const inv = await prisma.invoice.findUniqueOrThrow({ where: { id: cent }, include: { issues: true } });
+    expect(inv.status).toBe("NEEDS_ATTENTION");
+    expect(inv.issues.map((i) => i.description)).toEqual([
+      "El total (121,01 €) no coincide con Base + IVA (121,00 €). Diferencia: 0,01 €.",
+    ]);
+  });
+
   it("con el tipo aprendido del tercero: una inversión del sujeto pasivo con cuota 0 no es un desglose descuadrado", async () => {
     // El prefijo del NIF (B...) dice INTERIOR; lo aprendido, INVERSION_SP.
     await prisma.accountEntry.create({
