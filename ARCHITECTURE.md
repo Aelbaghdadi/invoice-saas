@@ -302,8 +302,9 @@ correspondiente).
 **Qué hace el harness.**
 - `globalSetup` aplica las migraciones con `prisma migrate deploy` contra
   `TEST_DATABASE_URL` (las mismas que en producción; nunca `reset`).
-- Antes de cada test se vacían todas las tablas menos `_prisma_migrations`
-  (TRUNCATE). Los ficheros corren uno detrás de otro: comparten la BD.
+- Antes de cada test se vacían (TRUNCATE) solo las tablas de los modelos de
+  Prisma (`Prisma.ModelName`), tras comprobar otra vez el marcador. Los
+  ficheros corren uno detrás de otro: comparten la BD.
 - Solo se simulan la sesión (`@/lib/auth`, con `signInAs`), `next/cache`,
   `next/navigation`, `after()` (se encola; el test lo ejecuta con
   `runAfterCallbacks`), el OCR (Document AI y Gemini, con `stubOcr`; el
@@ -315,7 +316,20 @@ correspondiente).
   dos, para los tests de aislamiento entre asesorías.
 - Carreras: `holdLock(sql)` (`helpers/locks.ts`) abre una transacción que
   bloquea (`LOCK TABLE`, `SELECT … FOR UPDATE`) y la mantiene hasta
-  `release()`, para parar una acción a mitad y cruzarle otra.
+  `release()`, para parar una acción a mitad y cruzarle otra. Para parar una
+  acción entre su lectura y su escritura sirve
+  `LOCK TABLE "PeriodClosure" IN ACCESS EXCLUSIVE MODE` (la comprobación de
+  periodo cerrado va justo antes del UPDATE). Nada de esperas por tiempo: se
+  espera con `vi.waitFor` a algo observable (`sessionsWaitingForLock()`, las
+  claves del S3 falso, el estado), y el S3 falso retiene lecturas con
+  `setMode("hold")` hasta `releaseGets()`.
+- Lo que se lanza sin `await` va envuelto en `inFlight(...)`
+  (`helpers/inflight.ts`). Al acabar cada test, pase o falle, se sueltan los
+  bloqueos (la transacción caduca sola a los 20 s) y se espera a lo que quedó
+  en vuelo, para que nada escriba en los datos del test siguiente.
+- Cada carrera se ha comprobado con un mutante: quitando del código la
+  condición que protege (el `updatedAt` del rechazo, `reviewTargetWhere`,
+  el token `ocrAttempts`, `assertInvoiceAccess`...), su test falla.
 
 ## Limitaciones conocidas / deuda
 
