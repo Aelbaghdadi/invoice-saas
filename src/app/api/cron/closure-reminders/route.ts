@@ -1,21 +1,13 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { sendClosureReminder } from "@/lib/email";
-import { timingSafeEqual } from "crypto";
-
-function verifyCronSecret(header: string | null): boolean {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return false;
-  const expected = `Bearer ${secret}`;
-  if (!header || header.length !== expected.length) return false;
-  return timingSafeEqual(Buffer.from(header), Buffer.from(expected));
-}
+import { verifyCronSecret } from "@/lib/cronAuth";
 
 /**
  * Monthly cron: sends reminders to clients whose previous month is not yet closed.
  * Runs on the 5th of each month (configured in vercel.json).
  */
-export async function GET(req: Request) {
+async function handle(req: Request) {
   if (!verifyCronSecret(req.headers.get("authorization"))) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -62,3 +54,9 @@ export async function GET(req: Request) {
 
   return NextResponse.json({ sent, month: targetMonth, year: targetYear });
 }
+
+// GET y POST con el mismo handler y la misma comprobacion del secreto: la
+// Scheduled Task de Coolify (o un cron externo) puede llamar con cualquiera
+// de los dos (F-007; antes un POST daba 405).
+export const GET = handle;
+export const POST = handle;

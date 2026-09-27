@@ -80,15 +80,32 @@ Hay dos endpoints que en Vercel disparaba Vercel Cron y aquí hay que disparar
 con una **Scheduled Task** de Coolify (o cron externo) con la cabecera
 `Authorization: Bearer <CRON_SECRET>`:
 
-- `GET /api/cron/retry-stuck` — reintenta facturas atascadas y pasa a «Error OCR» las que ya agotaron los reintentos (p. ej. cada 15 min).
-- `GET /api/cron/closure-reminders` — recordatorios de cierre (p. ej. diario).
+- `GET` o `POST /api/cron/retry-stuck` — reintenta facturas atascadas y pasa a «Error OCR» las que ya agotaron los reintentos (p. ej. cada 15 min).
+- `GET` o `POST /api/cron/closure-reminders` — recordatorios de cierre (p. ej. diario).
 
-Los dos solo aceptan GET: un POST da 405.
+Los dos aceptan GET y POST con la misma comprobación del secreto: usa el que
+permita la Scheduled Task.
 
 Si no configuras los crons, la app funciona; solo no se ejecutan esas tareas
 periódicas. Una factura con el análisis parado (un redeploy a mitad del OCR)
 no se relanza sola: en la revisión sale «El análisis se ha parado» con un
 botón «Reprocesar».
+
+## 5 bis. Parada y Redeploy: periodo de gracia de al menos 120 s
+
+El OCR de las facturas recién subidas corre en segundo plano (`after()`)
+dentro del propio proceso de Next. Al parar el contenedor (Redeploy,
+reinicio), Coolify manda SIGTERM y, pasado el periodo de gracia, SIGKILL.
+Con SIGTERM, Next deja de aceptar peticiones y espera a que terminen los
+`after()` en curso; con SIGKILL se cortan a medias y esas facturas se quedan
+«analizándose» hasta que alguien pulse «Reprocesar» o pase el cron.
+
+- En Coolify, en la configuración de la aplicación, pon el periodo de gracia
+  al parar (stop grace period / timeout) en **120 s como mínimo**. Un OCR
+  con reintentos puede tardar más de un minuto.
+- `docker-entrypoint.sh` arranca con `exec node node_modules/next/dist/bin/next start`
+  para que el SIGTERM le llegue a Node directamente. Con `npx next start`
+  se lo llevaba npm y Node no tenía margen.
 
 ## 6. Almacenamiento (Garage)
 

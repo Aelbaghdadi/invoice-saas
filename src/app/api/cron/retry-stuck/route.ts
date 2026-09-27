@@ -9,17 +9,9 @@ import {
   stuckAnalyzingCutoff,
   stuckAnalyzingWhere,
 } from "@/lib/invoiceStatuses";
-import { timingSafeEqual } from "crypto";
+import { verifyCronSecret } from "@/lib/cronAuth";
 
-function verifyCronSecret(header: string | null): boolean {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return false;
-  const expected = `Bearer ${secret}`;
-  if (!header || header.length !== expected.length) return false;
-  return timingSafeEqual(Buffer.from(header), Buffer.from(expected));
-}
-
-export async function GET(req: Request) {
+async function handle(req: Request) {
   if (!verifyCronSecret(req.headers.get("authorization"))) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -111,3 +103,9 @@ export async function GET(req: Request) {
     exhausted: exhaustedCount,
   });
 }
+
+// GET y POST con el mismo handler y la misma comprobacion del secreto: la
+// Scheduled Task de Coolify (o un cron externo) puede llamar con cualquiera
+// de los dos (F-007; antes un POST daba 405).
+export const GET = handle;
+export const POST = handle;
