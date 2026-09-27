@@ -9,7 +9,7 @@
 import { isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { formatEur } from "@/lib/format";
 import { isForeignCurrency } from "@/lib/currency";
-import { padAccountingAccount } from "@/lib/accountingAccount";
+import { padAccountingAccount, partyAccountMatchesType, resultAccountMatchesType } from "@/lib/accountingAccount";
 
 export type RuleLine = {
   taxBase: number;
@@ -49,6 +49,7 @@ export type RuleCode =
   | "sin_nif"
   | "sin_nif_iva"
   | "moneda"
+  | "cuenta_sentido"
   | "descuadre";
 
 export type RuleProblem = { rule: RuleCode; message: string };
@@ -153,6 +154,37 @@ export function currencyProblem(inv: Pick<RuleInvoice, "currency">): RuleProblem
   };
 }
 
+/**
+ * Cuentas del sentido contrario: una venta con cuenta de proveedor (40x/41x)
+ * o de gasto (6xx), o una compra con cuenta de cliente (43x) o de ingreso
+ * (7xx). Pasaba con una «No lo sé» abierta como recibida, con «Usar cuenta
+ * genérica» (400/629) y cambiada despues a emitida (revision 2 del PR #7).
+ */
+export function accountDirectionProblem(
+  inv: Pick<RuleInvoice, "type" | "supplierAccount" | "expenseAccount">,
+): RuleProblem | null {
+  const isSale = inv.type === "SALE";
+  const party = inv.supplierAccount?.trim();
+  const result = inv.expenseAccount?.trim();
+  if (party && !partyAccountMatchesType(party, inv.type)) {
+    return {
+      rule: "cuenta_sentido",
+      message: isSale
+        ? `La cuenta ${party} es de proveedor y esta factura es emitida: usa una cuenta de cliente (43x).`
+        : `La cuenta ${party} es de cliente y esta factura es recibida: usa una cuenta de proveedor (40x o 41x).`,
+    };
+  }
+  if (result && !resultAccountMatchesType(result, inv.type)) {
+    return {
+      rule: "cuenta_sentido",
+      message: isSale
+        ? `La cuenta ${result} es de gasto y esta factura es emitida: usa una cuenta de ingreso (7xx).`
+        : `La cuenta ${result} es de ingreso y esta factura es recibida: usa una cuenta de gasto (6xx).`,
+    };
+  }
+  return null;
+}
+
 /** Descuadre con la tolerancia comun (F-058), o null. Sin total o sin lineas
  *  no se calcula: eso ya lo dice missingDataProblems. */
 export function balanceProblem(inv: Pick<RuleInvoice, "lines" | "totalAmount" | "irpfAmount">): RuleProblem | null {
@@ -177,6 +209,8 @@ export function validationProblems(inv: RuleInvoice): RuleProblem[] {
   const problems = missingDataProblems(inv);
   const currency = currencyProblem(inv);
   if (currency) problems.push(currency);
+  const direction = accountDirectionProblem(inv);
+  if (direction) problems.push(direction);
   const balance = balanceProblem(inv);
   if (balance) problems.push(balance);
   return problems;

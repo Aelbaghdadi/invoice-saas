@@ -1734,6 +1734,13 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                       } else if (!OPERATION_TYPE_OPTIONS[next].includes(operationType)) {
                         setOperationType(OPERATION_TYPE_OPTIONS[next][0]);
                       }
+                      // Las genericas son de proveedor y gasto: en una emitida
+                      // no valen (y el servidor las rechaza), asi que se vacian.
+                      if (next === "SALE" && genericAccounts?.supplier
+                        && padAccountingAccount(supplierAccountVal.trim()) === padAccountingAccount(genericAccounts.supplier.trim())) {
+                        setSupplierAccount("");
+                        if (genericAccounts.expense && expenseAccountVal.trim() === genericAccounts.expense.trim()) setExpenseAccount("");
+                      }
                     }}
                   />
                   {invoice.typeUnconfirmed && (

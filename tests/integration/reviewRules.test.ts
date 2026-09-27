@@ -226,6 +226,13 @@ describe("validar exige lo mínimo en el servidor (F-009)", () => {
     expect(after.receiverCif).toBeNull();
   });
 
+  it("una venta con las cuentas genéricas de proveedor (400/629) no se valida", async () => {
+    await prisma.invoice.update({ where: { id }, data: { type: "SALE" } });
+    const r = await validate(await form({ type: "SALE", receiverCif: "", supplierAccount: "40099999", expenseAccount: "62900000" }));
+    expect(r.error).toBe("La cuenta 40099999 es de proveedor y esta factura es emitida: usa una cuenta de cliente (43x).");
+    expect((await row()).status).toBe("PENDING_REVIEW");
+  });
+
   it("una importación de un proveedor sin NIF español se valida", async () => {
     const r = await validate(await form({ issuerCif: "", operationType: "IMPORTACION" }));
     expect(r.error).toBeNull();

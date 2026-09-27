@@ -68,6 +68,20 @@ describe("validationProblems (F-009, F-014)", () => {
     expect(rules({ currency: "" })).toEqual([]);
   });
 
+  it("cuentas del sentido contrario (revisión 2 del PR #7)", () => {
+    // Venta con las genéricas de proveedor (400/629).
+    expect(validationProblems({ ...ok, type: "SALE", supplierAccount: "40099999", expenseAccount: "62900000" })[0]).toEqual({
+      rule: "cuenta_sentido",
+      message: "La cuenta 40099999 es de proveedor y esta factura es emitida: usa una cuenta de cliente (43x).",
+    });
+    expect(rules({ type: "SALE", supplierAccount: "43000001", expenseAccount: "62900000" })).toEqual(["cuenta_sentido"]);
+    expect(rules({ type: "SALE", supplierAccount: "43000001", expenseAccount: "70000001" })).toEqual([]);
+    expect(rules({ supplierAccount: "43000001" })).toEqual(["cuenta_sentido"]);
+    expect(rules({ expenseAccount: "70000001" })).toEqual(["cuenta_sentido"]);
+    // 44x o 2xx son contrapartidas legítimas.
+    expect(rules({ type: "SALE", supplierAccount: "44000001", expenseAccount: "20000001" })).toEqual([]);
+  });
+
   it("sin cuentas", () => {
     expect(rules({ supplierAccount: "" })).toEqual(["sin_cuentas"]);
     expect(rules({ expenseAccount: null })).toEqual(["sin_cuentas"]);
@@ -94,8 +108,9 @@ describe("NIF del tercero", () => {
   });
 
   it("en ventas nacionales no: no hay genérica de clientes (revisión 1 del PR #7)", () => {
-    expect(rules({ type: "SALE", thirdPartyTaxId: null })).toEqual([]);
-    expect(rules({ type: "SALE", thirdPartyTaxId: null, operationType: "INTRACOM" })).toEqual(["sin_nif"]);
+    const venta = { type: "SALE" as const, supplierAccount: "43000001", expenseAccount: "70000001" };
+    expect(rules({ ...venta, thirdPartyTaxId: null })).toEqual([]);
+    expect(rules({ ...venta, thirdPartyTaxId: null, operationType: "INTRACOM" })).toEqual(["sin_nif"]);
   });
 
   it("la genérica se compara completada: una antigua de 7 dígitos sigue valiendo", () => {
