@@ -70,7 +70,7 @@ describe("resubida del cliente contra «Reabrir y validar»", () => {
     const fd = new FormData();
     fd.set("rejectedId", id);
     fd.set("file", new File([new Uint8Array(await blankPdf(1))], "x.pdf", { type: "application/pdf" }));
-    expect((await reuploadInvoiceAction(null, fd))?.error).toBeTruthy();
+    expect((await reuploadInvoiceAction(null, fd))?.error).toBe("Factura no encontrada.");
     expect(await prisma.invoice.count({ where: { replacesId: id } })).toBe(0);
     expect(reuploadKeys()).toHaveLength(0);
   });

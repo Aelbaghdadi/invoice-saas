@@ -134,7 +134,7 @@ describe("«Reabrir y validar»", () => {
   it("el gestor de otra asesoría no la puede reabrir", async () => {
     const b = await makeFirm("B");
     signInAs(b.worker);
-    expect((await reopenA()).error).toBeTruthy();
+    expect((await reopenA()).error).toBe("No tienes acceso a esta factura.");
     expect((await A()).status).toBe("REJECTED");
   });
 });

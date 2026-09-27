@@ -143,7 +143,7 @@ describe("dividir reserva antes la original", () => {
   it("el gestor de otra asesoría no puede dividirla", async () => {
     const b = await makeFirm("B");
     signInAs(b.worker);
-    expect((await run()).error).toBeTruthy();
+    expect((await run()).error).toBe("No tienes acceso a esta factura.");
     expect(await status()).toBe("PENDING_REVIEW");
     expect(await children()).toBe(0);
     expect(splitKeys()).toHaveLength(0);
