@@ -100,9 +100,14 @@ Con SIGTERM, Next deja de aceptar peticiones y espera a que terminen los
 `after()` en curso; con SIGKILL se cortan a medias y esas facturas se quedan
 «analizándose» hasta que alguien pulse «Reprocesar» o pase el cron.
 
-- En Coolify, en la configuración de la aplicación, pon el periodo de gracia
-  al parar (stop grace period / timeout) en **120 s como mínimo**. Un OCR
-  con reintentos puede tardar más de un minuto.
+- **Dónde:** en Coolify 4.1.0 o posterior, la aplicación → *Advanced* →
+  *Operations* → **«Stop Grace Period»** (por defecto, 30 s). Ponlo en
+  **120 s como mínimo**: un OCR con reintentos puede tardar más de un
+  minuto. En versiones anteriores de Coolify la parada son 30 s fijos.
+- **Qué cubre:** 120 s bastan para terminar un OCR en curso, no un lote
+  entero: el Reprocesar masivo y `retry-stuck` procesan las facturas en
+  serie. Lo que quede sin terminar lo recoge `retry-stuck` en su siguiente
+  ejecución, así que conviene tenerlo programado (§5).
 - `docker-entrypoint.sh` arranca con `exec node node_modules/next/dist/bin/next start`:
   Node es el PID 1 y recibe el SIGTERM sin depender de que npm lo reenvíe
   (con `npx next start` npm también lo reenviaba y esperaba; no era lo que
