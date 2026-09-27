@@ -60,6 +60,18 @@ const EXPORT_ORDER_BY = [
 /** Cuantas facturas con avisos (o que no van al Excel) se mandan a la vista
  *  previa. Las bloqueantes van todas. */
 const PREVIEW_WARNING_LIMIT = 50;
+/** De esos, como mucho estos saltos de numeracion: con 60 saltos los 50 eran
+ *  todos saltos y desaparecian los demas avisos que solo calcula el export. */
+const PREVIEW_GAP_LIMIT = 25;
+
+/** Avisos de la vista previa: los saltos primero (solo los calcula el
+ *  export), hasta PREVIEW_GAP_LIMIT, y el resto del recorte para los demas.
+ *  Con 400 emitidas salteadas se mandaban 399 entradas. */
+function previewWarnings<T extends { numberingGap?: boolean }>(avisos: T[]): T[] {
+  const gaps = avisos.filter((w) => w.numberingGap).slice(0, PREVIEW_GAP_LIMIT);
+  const others = avisos.filter((w) => !w.numberingGap).slice(0, PREVIEW_WARNING_LIMIT - gaps.length);
+  return [...gaps, ...others];
+}
 
 /**
  * Vista previa: recuento y avisos. Solo lectura; la descarga es por POST
@@ -124,12 +136,7 @@ export async function GET(req: NextRequest) {
     // entera pesaba 1 MB en cada cambio de filtro.
     warnings: [
       ...bySeverity.bloqueante,
-      // Los saltos de numeracion primero, que solo los calcula el export,
-      // pero dentro del recorte: con 400 emitidas salteadas se mandaban 399.
-      ...[
-        ...bySeverity.aviso.filter((w) => w.numberingGap),
-        ...bySeverity.aviso.filter((w) => !w.numberingGap),
-      ].slice(0, PREVIEW_WARNING_LIMIT),
+      ...previewWarnings(bySeverity.aviso),
       ...bySeverity.fuera.slice(0, PREVIEW_WARNING_LIMIT),
     ],
   });

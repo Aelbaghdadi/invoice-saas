@@ -298,15 +298,17 @@ describe("bloqueantes en el export (F-025)", () => {
     expect(avisos[0]).toBe(gap);
   });
 
-  it("con muchos saltos de numeración, también el recorte de 50", async () => {
+  it("con muchos saltos de numeración: como mucho 25, y el resto del recorte para los demás avisos", async () => {
+    for (let i = 0; i < 40; i++) await makeInvoice(w.client, { ...april, invoiceNumber: `DESCUADRE-${i}`, totalAmount: 130 });
     // 1, 3, 5... 121: 60 saltos.
     const venta = { ...april, type: "SALE" as const, issuerCif: w.client.cif, issuerName: w.client.name, receiverCif: "B12345674", receiverName: "Cliente final SL", supplierAccount: "43000001", expenseAccount: "70000001" };
     for (let n = 1; n <= 121; n += 2) await makeInvoice(w.client, { ...venta, invoiceNumber: String(n) });
     const body = await preview();
-    expect(body.warningCountBySeverity.aviso).toBe(60);
+    expect(body.warningCountBySeverity.aviso).toBe(100);
     const avisos = body.warnings.filter((x: { severity: string }) => x.severity === "aviso");
     expect(avisos).toHaveLength(50);
-    expect(avisos.every((x: { numberingGap?: boolean }) => x.numberingGap)).toBe(true);
+    expect(avisos.filter((x: { numberingGap?: boolean }) => x.numberingGap)).toHaveLength(25);
+    expect(avisos.slice(0, 25).every((x: { numberingGap?: boolean }) => x.numberingGap)).toBe(true);
   });
 
   it("orden estable: con la misma fecha desempata el id", async () => {
