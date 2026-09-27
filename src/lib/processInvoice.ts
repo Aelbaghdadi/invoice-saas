@@ -140,8 +140,9 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     extracted.vatAmount = roundCents(extracted.vatAmount);
     extracted.totalAmount = roundCents(extracted.totalAmount);
     // La retencion siempre en positivo: una factura que imprime «IRPF −15 %»
-    // guardaba −15 y la pantalla ya no dejaba ni guardar el borrador. El
-    // signo de una rectificativa se pone despues (applyRectificativeSign).
+    // guardaba −15 y la pantalla ya no dejaba ni guardar el borrador. El OCR
+    // no pone el signo de una rectificativa (F-012): lo pone la revision al
+    // marcar la casilla.
     const positive = (v: number | null) => (v == null ? v : Math.abs(v));
     extracted.irpfAmount = roundCents(positive(extracted.irpfAmount));
     // Los % tambien: con 7,005 % la cuota se calculaba con el % sin redondear
@@ -516,8 +517,9 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     // "factura de abono" se negaban todos los importes sin marcar
     // isRectificative: daba positivo con «no es rectificativa» y una compra
     // ordinaria pasaba a IVA soportado negativo. Ahora se guardan como se
-    // leyeron y la incidencia de arriba (rectificativeSignHint) avisa.
-    const signed = {
+    // leyeron y la incidencia de arriba (rectificativeSignHint) avisa. Estos
+    // son los importes que se guardan (con la retencion ya recalculada).
+    const amounts = {
       lines: vatLines,
       taxBase: extracted.taxBase,
       vatAmount: extracted.vatAmount,
@@ -537,38 +539,38 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     // (Client.equivalenceSurchargeCustomer).
     //
     // Por cada linea:
-    // 1) Lo que el OCR/IA leyo en el documento para ESA linea manda, y viene
-    //    ya firmado si es un abono (applyRectificativeSign tambien niega el
-    //    recargo).
+    // 1) Lo que el OCR/IA leyo en el documento para ESA linea manda, con el
+    //    signo impreso (el OCR no lo cambia).
     // 2) Si el cliente esta en RE y la factura no llega a su total por si
     //    sola, se propone el recargo SOLO en las lineas cuya suma explique esa
     //    diferencia, ajustando el ultimo centimo. Asi no se le cuelga recargo
     //    a los portes ni nos desviamos del importe impreso, que es lo que
     //    pasaba al aplicar el mapeo a ciegas linea por linea.
-    const lineSurcharges: { rate: number | null; amount: number | null }[] = signed.lines.map((l) => ({
+    const lineSurcharges: { rate: number | null; amount: number | null }[] = amounts.lines.map((l) => ({
       rate: l.equivalenceSurchargeRate ?? null,
       amount: l.equivalenceSurchargeAmount ?? null,
     }));
-    // Segunda pasada sobre los importes YA FIRMADOS. Normalmente no hace nada
-    // (la propuesta de antes de detectIssues ya dejo el recargo puesto): solo
-    // entra cuando el signo del abono cambia lo que falta para el total.
+    // Segunda pasada con la retencion final. Normalmente no hace nada (la
+    // propuesta de antes de detectIssues ya dejo el recargo puesto): solo
+    // entra cuando la retencion recalculada cambia lo que falta para el total.
     if (clientRecord?.equivalenceSurchargeCustomer) {
-      for (const p of proposeSurchargesFromTotal(signed.lines, signed.totalAmount, signed.irpfAmount)) {
+      for (const p of proposeSurchargesFromTotal(amounts.lines, amounts.totalAmount, amounts.irpfAmount)) {
         lineSurcharges[p.index] = { rate: p.rate, amount: p.amount };
       }
     }
     const totalSurchargeAmount = lineSurcharges.reduce((s, ls) => s + (ls.amount ?? 0), 0);
 
     // isValid final: Σ(bases) + Σ(cuotas) + Σ(recargo) - IRPF = Total, con
-    // los importes YA FIRMADOS (el `isValid` de mas arriba es un diagnostico
-    // de la extraccion cruda del OCR, previo al signo y al recargo).
+    // los importes que se guardan (el `isValid` de mas arriba es un
+    // diagnostico de la extraccion cruda, antes de la retencion recalculada y
+    // del recargo).
     let finalIsValid: boolean | null = null;
-    if (signed.lines.length > 0 && signed.totalAmount !== null) {
-      const sBase = signed.lines.reduce((s, l) => s + l.taxBase, 0);
-      const sAmount = signed.lines.reduce((s, l) => s + l.vatAmount, 0);
+    if (amounts.lines.length > 0 && amounts.totalAmount !== null) {
+      const sBase = amounts.lines.reduce((s, l) => s + l.taxBase, 0);
+      const sAmount = amounts.lines.reduce((s, l) => s + l.vatAmount, 0);
       finalIsValid = isInvoiceBalanced({
         sumBase: sBase, sumAmount: sAmount, sumSurcharge: totalSurchargeAmount,
-        irpf: signed.irpfAmount ?? 0, total: signed.totalAmount,
+        irpf: amounts.irpfAmount ?? 0, total: amounts.totalAmount,
       });
     } else {
       finalIsValid = isValid;
@@ -607,14 +609,14 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
           receiverCountry: finalReceiverCountry,
           invoiceNumber: extracted.invoiceNumber,
           invoiceDate:   safeParseDate(extracted.invoiceDate),
-          taxBase:       signed.taxBase,
+          taxBase:       amounts.taxBase,
           vatRate:       extracted.vatRate ?? denormVatRate,
-          vatAmount:     signed.vatAmount,
+          vatAmount:     amounts.vatAmount,
           irpfRate:      finalIrpfRate,
-          irpfAmount:    signed.irpfAmount,
+          irpfAmount:    amounts.irpfAmount,
           retentionType,
-          retentionBase: signed.retentionBase,
-          totalAmount:   signed.totalAmount,
+          retentionBase: amounts.retentionBase,
+          totalAmount:   amounts.totalAmount,
           // Si este OCR no ve la moneda se conserva la que ya tenia (p.ej. la
           // heredada de la factura madre al dividir un PDF en USD).
           currency:      extracted.currency ?? invoice.currency,
@@ -632,9 +634,9 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
 
       // Reemplazar lineas previas (idempotente: si reproceso, borra y mete).
       await tx.invoiceVatLine.deleteMany({ where: { invoiceId } });
-      if (signed.lines.length > 0) {
+      if (amounts.lines.length > 0) {
         await tx.invoiceVatLine.createMany({
-          data: signed.lines.map((l, i) => ({
+          data: amounts.lines.map((l, i) => ({
             invoiceId,
             position:  i,
             taxBase:   l.taxBase,
