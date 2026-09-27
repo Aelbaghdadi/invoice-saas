@@ -209,9 +209,12 @@ describe("originales divididas en el export (PR #4)", () => {
     const body = await preview.json();
     expect(body.count).toBe(2);
     expect(body.excludedByReason).toEqual({ total_cero: 1, dividida: 1, bloqueante: 0 });
+    // Por caja: la de total 0 (no rectificativa) hay que corregirla; la dividida no va a A3.
+    expect(body.excludedByBox).toEqual({ corregir: 1, fuera: 1 });
     const download = await exportDownload(downloadRequest());
     expect(download.status).toBe(200);
     expect(JSON.parse(download.headers.get("X-Export-Excluded-Detail")!)).toEqual({ total_cero: 1, dividida: 1, bloqueante: 0 });
+    expect(JSON.parse(download.headers.get("X-Export-Excluded-Boxes")!)).toEqual({ corregir: 1, fuera: 1 });
     const marked = await prisma.invoice.findMany({ where: { exportBatchId: { not: null } }, select: { invoiceNumber: true } });
     expect(marked.map((i) => i.invoiceNumber).sort()).toEqual(["H1", "H2"]);
   });

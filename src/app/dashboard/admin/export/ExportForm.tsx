@@ -13,7 +13,7 @@ import { ErrorBox } from "@/components/ui/ErrorBox";
 import type { AppError } from "@/lib/errorCodes";
 import { quarterStartMonth, periodLabel, MONTH_OPTIONS, QUARTER_OPTIONS } from "@/lib/period";
 import { filenameFromContentDisposition } from "@/lib/contentDisposition";
-import { describeExportExclusions, parseExportExclusionCounts, type ExportExclusionCounts } from "@/lib/exportExclusions";
+import { describeExportExclusionBoxes, parseExportExclusionBoxes, type ExportExclusionBoxCounts } from "@/lib/exportExclusions";
 
 type ClientOption = { id: string; name: string; cif: string };
 
@@ -63,7 +63,7 @@ export function ExportForm({ clients }: Props) {
   const [downloading, setDownloading] = useState(false);
   // Tras descargar: cuantas se quedaron fuera del fichero y el lote, si se
   // guardo su copia (null = sin exito).
-  const [success,  setSuccess]  = useState<{ excluded: number; detail: string | null; batchId: string | null } | null>(null);
+  const [success,  setSuccess]  = useState<{ excluded: number; boxes: Partial<ExportExclusionBoxCounts>; batchId: string | null } | null>(null);
   const [error,    setError]    = useState<AppError | string | null>(null);
 
   // ── fetch preview count ─────────────────────────────────────────────────
@@ -117,7 +117,7 @@ export function ExportForm({ clients }: Props) {
       setSeverityCounts(data.warningCountBySeverity ?? {});
       setAlreadyExported(data.alreadyExported ?? 0);
       setExcluded(data.excluded ?? 0);
-      setExcludedDetail(describeExportExclusions((data.excludedByReason ?? {}) as Partial<ExportExclusionCounts>));
+      setExcludedDetail(describeExportExclusionBoxes((data.excludedByBox ?? {}) as Partial<ExportExclusionBoxCounts>));
     } catch {
       if (stale()) return;
       // Todo a cero: si no, seguian los avisos de "N con total 0" del filtro
@@ -186,7 +186,7 @@ export function ExportForm({ clients }: Props) {
       setTimeout(() => URL.revokeObjectURL(url), 60_000);
       setSuccess({
         excluded: Number(res.headers.get("X-Export-Excluded")) || 0,
-        detail: describeExportExclusions(parseExportExclusionCounts(res.headers.get("X-Export-Excluded-Detail"))),
+        boxes: parseExportExclusionBoxes(res.headers.get("X-Export-Excluded-Boxes")),
         batchId: res.headers.get("X-Export-Batch-Id"),
       });
       // Las descargadas ya constan exportadas: se refresca el recuento ya,
@@ -441,11 +441,7 @@ export function ExportForm({ clients }: Props) {
               <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
               <span>
                 Exportación completada. Las facturas del Excel han quedado marcadas como exportadas.
-                {success.excluded > 0 && (
-                  success.excluded === 1
-                    ? ` 1 factura se ha quedado fuera y sigue pendiente${detailSuffix(success.detail)}.`
-                    : ` ${success.excluded} facturas se han quedado fuera y siguen pendientes${detailSuffix(success.detail)}.`
-                )}
+                {successExclusionText(success)}
                 {/* Enlace propio: router.refresh() no siempre llega a pintar el
                     historial (Next 16 aborta a veces el refresco entre los
                     prefetch), y este fichero tiene que poder bajarse otra vez. */}
@@ -512,7 +508,7 @@ async function readApiError(res: Response, fallback: string): Promise<AppError |
   return fallback;
 }
 
-// " (2 con total 0 y 1 dividida en otras facturas)", o nada sin desglose.
+// " (2 que hay que corregir y 1 que no va a A3)", o nada sin desglose.
 function detailSuffix(detail: string | null) {
   return detail ? ` (${detail})` : "";
 }
@@ -594,4 +590,22 @@ function WarningList({ tone, title, note, items, total }: {
       )}
     </div>
   );
+}
+
+/** Lo que se quedo fuera, por caja: solo las que hay que corregir «siguen
+ *  pendientes»; las que no van a A3 no tienen nada pendiente. Sin la
+ *  cabecera por caja (version anterior del servidor), el total a secas. */
+function successExclusionText(success: { excluded: number; boxes: Partial<ExportExclusionBoxCounts> }): string {
+  if (success.excluded <= 0) return "";
+  const fix = success.boxes.corregir ?? 0;
+  const out = success.boxes.fuera ?? 0;
+  if (fix + out === 0) {
+    return success.excluded === 1
+      ? " 1 factura se ha quedado fuera del Excel."
+      : ` ${success.excluded} facturas se han quedado fuera del Excel.`;
+  }
+  const parts: string[] = [];
+  if (fix > 0) parts.push(fix === 1 ? " 1 factura sigue pendiente hasta que la corrijas." : ` ${fix} facturas siguen pendientes hasta que las corrijas.`);
+  if (out > 0) parts.push(out === 1 ? " 1 no va a A3 y no hay nada que hacer con ella." : ` ${out} no van a A3 y no hay nada que hacer con ellas.`);
+  return parts.join("");
 }

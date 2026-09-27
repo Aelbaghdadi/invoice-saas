@@ -2,9 +2,9 @@ import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { generateCsv, generateA3Excel, partitionA3Exportable, suggestFilename, validateForA3Export, type ExportFormat, type ExportConfig } from "@/lib/exportFormats";
+import { a3ExclusionBox, generateCsv, generateA3Excel, partitionA3Exportable, suggestFilename, validateForA3Export, type ExportFormat, type ExportConfig } from "@/lib/exportFormats";
 import { attachmentContentDisposition } from "@/lib/contentDisposition";
-import { countExportExclusions, withSplitCounts } from "@/lib/exportExclusions";
+import { countExportExclusionBoxes, countExportExclusions, withSplitCounts } from "@/lib/exportExclusions";
 import { commitExportBatch, committedBatchState, ExportConflictError, exportStorageKey } from "@/lib/exportBatch";
 import { deleteObject, isStorageConfigured, putObject } from "@/lib/storage";
 import { appError } from "@/lib/errorCodes";
@@ -110,6 +110,7 @@ export async function GET(req: NextRequest) {
     count: exportable.length,
     excluded: excluded.length,
     excludedByReason: countExportExclusions(excluded.map((e) => e.reason)),
+    excludedByBox: countExportExclusionBoxes(excluded.map((e) => a3ExclusionBox(e.invoice)!)),
     alreadyExported,
     warningCount: allWarnings.length,
     blockingCount: bySeverity.bloqueante.length,
@@ -304,6 +305,8 @@ export async function POST(req: NextRequest) {
         "X-Export-Excluded": String(excluded.length),
         // Desglose por motivo ({"total_cero":n,"dividida":m}), para el aviso.
         "X-Export-Excluded-Detail": JSON.stringify(countExportExclusions(excluded.map((e) => e.reason))),
+        // Por caja, para el mensaje de exito: las grises no «siguen pendientes».
+        "X-Export-Excluded-Boxes": JSON.stringify(countExportExclusionBoxes(excluded.map((e) => a3ExclusionBox(e.invoice)!))),
         // Solo con copia guardada: la pantalla enlaza "Volver a descargar"
         // sin depender de que el historial se refresque.
         ...(storageKey ? { "X-Export-Batch-Id": batchId } : {}),

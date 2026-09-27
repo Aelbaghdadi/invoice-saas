@@ -89,3 +89,47 @@ export function parseExportExclusionCounts(raw: string | null): Partial<ExportEx
   }
   return counts;
 }
+
+/**
+ * En que caja de la vista previa va una excluida: «corregir» (roja: sigue
+ * pendiente hasta que se corrija) o «fuera» (gris: no va a A3 y no hay nada
+ * que corregir). El resumen se da por caja: por motivo mezclaba las dos
+ * (revision 2 del PR #7).
+ */
+export type ExportExclusionBox = "corregir" | "fuera";
+
+export type ExportExclusionBoxCounts = Record<ExportExclusionBox, number>;
+
+export function countExportExclusionBoxes(boxes: ExportExclusionBox[]): ExportExclusionBoxCounts {
+  const counts: ExportExclusionBoxCounts = { corregir: 0, fuera: 0 };
+  for (const b of boxes) counts[b] += 1;
+  return counts;
+}
+
+/** "2 que hay que corregir y 1 que no va a A3", o null si no hay ninguna. */
+export function describeExportExclusionBoxes(counts: Partial<ExportExclusionBoxCounts>): string | null {
+  const parts: string[] = [];
+  const fix = counts.corregir ?? 0;
+  const out = counts.fuera ?? 0;
+  if (fix > 0) parts.push(`${fix} que hay que corregir`);
+  if (out > 0) parts.push(`${out} que no ${out === 1 ? "va" : "van"} a A3`);
+  return parts.length ? parts.join(" y ") : null;
+}
+
+/** Cabecera X-Export-Excluded-Boxes de la descarga; {} si no se entiende. */
+export function parseExportExclusionBoxes(raw: string | null): Partial<ExportExclusionBoxCounts> {
+  if (!raw) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return {};
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  const counts: Partial<ExportExclusionBoxCounts> = {};
+  for (const key of ["corregir", "fuera"] as const) {
+    const value = (parsed as Record<string, unknown>)[key];
+    if (typeof value === "number" && Number.isInteger(value) && value > 0) counts[key] = value;
+  }
+  return counts;
+}

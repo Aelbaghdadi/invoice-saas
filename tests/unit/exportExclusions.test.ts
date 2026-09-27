@@ -4,6 +4,9 @@ import {
   describeExportExclusions,
   exportExclusionReason,
   parseExportExclusionCounts,
+  countExportExclusionBoxes,
+  describeExportExclusionBoxes,
+  parseExportExclusionBoxes,
   withSplitCounts,
 } from "@/lib/exportExclusions";
 
@@ -60,5 +63,20 @@ describe("withSplitCounts", () => {
     expect(marked.map((r) => r._count.splitInvoices)).toEqual([0, 1]);
     expect(marked.map(exportExclusionReason)).toEqual([null, "dividida"]);
     expect(marked[0]).toMatchObject(rows[0]);
+  });
+});
+
+describe("resumen por caja (revisión 2 del PR #7)", () => {
+  it("cuenta y describe por caja, no por motivo", () => {
+    expect(countExportExclusionBoxes(["corregir", "fuera", "corregir"])).toEqual({ corregir: 2, fuera: 1 });
+    expect(describeExportExclusionBoxes({ corregir: 2, fuera: 1 })).toBe("2 que hay que corregir y 1 que no va a A3");
+    expect(describeExportExclusionBoxes({ fuera: 2 })).toBe("2 que no van a A3");
+    expect(describeExportExclusionBoxes({})).toBeNull();
+  });
+
+  it("lee la cabecera y descarta lo raro", () => {
+    expect(parseExportExclusionBoxes(JSON.stringify({ corregir: 1, fuera: 2 }))).toEqual({ corregir: 1, fuera: 2 });
+    expect(parseExportExclusionBoxes("roto")).toEqual({});
+    expect(parseExportExclusionBoxes(JSON.stringify({ corregir: -1, fuera: "2" }))).toEqual({});
   });
 });

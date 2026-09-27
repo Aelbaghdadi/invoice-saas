@@ -16,7 +16,7 @@ import { toCents } from "@/lib/money";
 import { formatEur } from "@/lib/format";
 import { findNumberingGaps } from "@/lib/invoiceNumbering";
 import { isStandardVatRate, isSurchargeRate } from "@/lib/equivalenceSurcharge";
-import { exportExclusionReason, type ExportExclusionReason } from "@/lib/exportExclusions";
+import { exportExclusionReason, type ExportExclusionBox, type ExportExclusionReason } from "@/lib/exportExclusions";
 
 export type ExportFormat = "sage50" | "contasol" | "a3con" | "a3excel";
 
@@ -411,7 +411,7 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
     // (revision 1 del PR #7): la original de una division (van sus hijas) y
     // una rectificativa a cero (A3 no acepta importes cero).
     const outside = a3ExclusionReason(inv);
-    if (outside === "dividida" || (outside === "total_cero" && inv.isRectificative && allAmountsZero(inv))) {
+    if (a3ExclusionBox(inv) === "fuera") {
       results.push({
         invoiceId: inv.id, invoiceNumber: inv.invoiceNumber, severity: "fuera", blockers: [],
         warnings: [outside === "dividida"
@@ -631,6 +631,17 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
  */
 export function a3ExclusionReason(inv: InvoiceWithClient): ExportExclusionReason | null {
   return exportExclusionReason(inv) ?? (a3BlockingProblems(inv).length > 0 ? "bloqueante" : null);
+}
+
+/** En que caja va una excluida (ver ExportExclusionBox), o null si entra en
+ *  el fichero. Es la misma decision que da severidad «fuera» en
+ *  validateForA3Export. */
+export function a3ExclusionBox(inv: InvoiceWithClient): ExportExclusionBox | null {
+  const reason = a3ExclusionReason(inv);
+  if (!reason) return null;
+  if (reason === "dividida") return "fuera";
+  if (reason === "total_cero" && inv.isRectificative && allAmountsZero(inv)) return "fuera";
+  return "corregir";
 }
 
 /**
