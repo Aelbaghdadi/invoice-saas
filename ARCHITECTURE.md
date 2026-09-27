@@ -299,6 +299,9 @@ npm run test:integration
 (o con un Postgres instalado: `createdb facturocr_test` y la URL
 correspondiente).
 
+Cuánto tarda depende de la máquina: de unos 25-30 s en Linux a unos 100 s en
+Windows con un Postgres local. Lo que más pesa es el lote de 3.000 facturas.
+
 **Qué hace el harness.**
 - `globalSetup` aplica las migraciones con `prisma migrate deploy` contra
   `TEST_DATABASE_URL` (las mismas que en producción; nunca `reset`).
