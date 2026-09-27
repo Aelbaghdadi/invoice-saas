@@ -173,8 +173,10 @@ export function accountDirectionProblem(
   inv: Pick<RuleInvoice, "type" | "supplierAccount" | "expenseAccount">,
 ): RuleProblem | null {
   const isSale = inv.type === "SALE";
-  const party = inv.supplierAccount?.trim();
-  const result = inv.expenseAccount?.trim();
+  // Completadas, como se guardan: «4.1» (Ctrl+Enter sin salir del campo) no
+  // empieza por 40 hasta que se completa a 40000001.
+  const party = padAccountingAccount(inv.supplierAccount?.trim() ?? "");
+  const result = padAccountingAccount(inv.expenseAccount?.trim() ?? "");
   if (party && !partyAccountMatchesType(party, inv.type)) {
     return {
       rule: "cuenta_sentido",

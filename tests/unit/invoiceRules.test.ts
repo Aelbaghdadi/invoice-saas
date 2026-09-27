@@ -82,6 +82,13 @@ describe("validationProblems (F-009, F-014)", () => {
     expect(rules({ type: "SALE", supplierAccount: "44000001", expenseAccount: "20000001" })).toEqual([]);
   });
 
+  it("compara las cuentas completadas: «4.1» es la 40000001", () => {
+    expect(validationProblems({ ...ok, type: "SALE", supplierAccount: "4.1", expenseAccount: "70000001" })[0]?.message).toBe(
+      "La cuenta 40000001 es de proveedor y esta factura es emitida: usa una cuenta de cliente (43x).",
+    );
+    expect(rules({ supplierAccount: "4.1", expenseAccount: "6.1" })).toEqual([]);
+  });
+
   it("las cuentas que minoran no son del sentido contrario (rappels, devoluciones, descuentos)", () => {
     for (const account of ["60600000", "60800000", "60900001"]) {
       expect(rules({ type: "SALE", supplierAccount: "43000001", expenseAccount: account })).toEqual([]);

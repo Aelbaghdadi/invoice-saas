@@ -576,3 +576,19 @@ describe("OCR: los % también se redondean a 2 decimales", () => {
     expect([Number(after.irpfRate), Number(after.irpfAmount), Number(after.vatRate)]).toEqual([7.01, 70.1, 21]);
   });
 });
+
+describe("cuentas completadas en el servidor", () => {
+  it("«4.1» y «6.22» sin salir del campo se guardan completadas", async () => {
+    expect((await save({ supplierAccount: "4.1", expenseAccount: "6.22" })).error).toBeNull();
+    const after = await row();
+    expect([after.supplierAccount, after.expenseAccount]).toEqual(["40000001", "60000022"]);
+  });
+
+  it("una venta con «4.1» no pasa la regla del sentido", async () => {
+    await prisma.invoice.update({ where: { id }, data: { type: "SALE" } });
+    const r = await validate(await form({
+      type: "SALE", receiverCif: "A58818501", receiverName: "Cliente SA", supplierAccount: "4.1", expenseAccount: "70000001",
+    }));
+    expect(r.error).toBe("La cuenta 40000001 es de proveedor y esta factura es emitida: usa una cuenta de cliente (43x).");
+  });
+});
