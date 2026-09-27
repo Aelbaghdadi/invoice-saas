@@ -3,10 +3,11 @@ import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 // Solo se simula Resend (servicio externo). Resend no lanza: devuelve
 // { data, error }.
 // Lo que responde el send de Resend en cada test.
-let resendReply: () => Promise<unknown> = async () => ({ data: null, error: null });
+let resendReply: (payload: unknown, options?: { signal?: AbortSignal }) => Promise<unknown> =
+  async () => ({ data: null, error: null });
 vi.mock("resend", () => ({
   Resend: class {
-    emails = { send: () => resendReply() };
+    emails = { send: (payload: unknown, options?: { signal?: AbortSignal }) => resendReply(payload, options) };
   },
 }));
 
@@ -62,6 +63,27 @@ describe("envío con Resend", () => {
     expect(await email.sendPasswordResetEmail(reset)).toEqual({ ok: false });
     expect(String(log.mock.calls[0][0])).toContain("restablecer-contrasena");
     log.mockRestore();
+  });
+
+  it("si Resend no responde, a los 10 s devuelve ok: false (la invitación no se queda colgada)", async () => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | undefined;
+    resendReply = (_payload, options) => {
+      signal = options?.signal;
+      return new Promise(() => {}); // acepta la conexión y no contesta
+    };
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const pending = email.sendClientInvitationEmail({ to: "ana@dominio.es", clientName: "Ana", inviteUrl: "https://x" });
+      await vi.advanceTimersByTimeAsync(email.EMAIL_TIMEOUT_MS);
+      expect(await pending).toEqual({ ok: false });
+      expect(String(log.mock.calls[0][0])).toContain("timeout");
+      // Se le pasa a Resend un signal para que cancele la petición.
+      expect(signal).toBeInstanceOf(AbortSignal);
+    } finally {
+      log.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it("el resto de correos solo registran el fallo, sin lanzar", async () => {

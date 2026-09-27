@@ -40,14 +40,35 @@ export function maskEmail(email: string): string {
  * enmascarado y devuelve { ok: false } si falla; quien necesite saberlo
  * (invitacion, restablecer contraseña) mira el resultado.
  */
+/** Tope de espera de un envio (Resend no pone ninguno). */
+export const EMAIL_TIMEOUT_MS = 10_000;
+
 async function send(template: string, to: string, subject: string, html: string): Promise<EmailResult> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
   if (!resend) {
     console.log(`[EMAIL-DEV] ${template} | To: ${to} | Subject: ${subject}`);
     return { ok: true };
   }
 
   try {
-    const { error } = await resend.emails.send({ from: FROM, to, subject, html });
+    // Tope de EMAIL_TIMEOUT_MS: Resend no pone timeout, y la invitacion se
+    // espera antes de volver (un servidor que acepta y no responde dejaba al
+    // administrador en «Creando...» unos 5 minutos). El signal cancela la
+    // peticion (Resend 6.9 lo pasa a fetch aunque su tipo no lo declare); la
+    // carrera garantiza el tope aunque una version futura lo ignore.
+    const timeout = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), EMAIL_TIMEOUT_MS);
+    });
+    const request = resend.emails.send(
+      { from: FROM, to, subject, html },
+      { signal: AbortSignal.timeout(EMAIL_TIMEOUT_MS) } as Parameters<typeof resend.emails.send>[1],
+    );
+    const result = await Promise.race([request, timeout]);
+    if (result === "timeout") {
+      console.error(`[EMAIL] No se ha enviado «${template}» a ${maskEmail(to)}: timeout (${EMAIL_TIMEOUT_MS / 1000} s sin respuesta)`);
+      return { ok: false };
+    }
+    const { error } = result;
     if (error) {
       console.error(`[EMAIL] No se ha enviado «${template}» a ${maskEmail(to)}: ${error.name}: ${error.message}`);
       return { ok: false };
@@ -57,6 +78,8 @@ async function send(template: string, to: string, subject: string, html: string)
     const detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
     console.error(`[EMAIL] No se ha enviado «${template}» a ${maskEmail(to)}: ${detail}`);
     return { ok: false };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
