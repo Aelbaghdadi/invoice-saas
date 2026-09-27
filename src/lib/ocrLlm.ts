@@ -70,6 +70,9 @@ export async function extractPdfTextAndItems(
   base64: string,
   budgetMs: number = TEXT_BUDGET_MS,
 ): Promise<{ text: string; items: PdfTextItem[]; timedOut?: boolean }> {
+  // Se destruye siempre, tambien si falla o se pasa del tiempo: libera el
+  // documento y el worker de ese PDF.
+  let loadingTask: { promise: Promise<any>; destroy(): Promise<void> } | null = null;
   try {
     // En Node pdfjs usa un «fake worker» que carga pdf.worker.mjs. Antes se
     // ponia GlobalWorkerOptions.workerSrc = "", que pisa su valor por defecto:
@@ -83,7 +86,8 @@ export async function extractPdfTextAndItems(
     const buffer = Buffer.from(base64, "base64");
     // verbosity 0: solo errores. Sin las fuentes estandar (standardFontDataUrl)
     // avisa en cada PDF, y para sacar el texto no hacen falta.
-    const pdf = await (pdfjsLib as any).getDocument({ data: new Uint8Array(buffer), verbosity: 0 }).promise;
+    loadingTask = (pdfjsLib as any).getDocument({ data: new Uint8Array(buffer), verbosity: 0 });
+    const pdf = await loadingTask!.promise;
 
     let text = "";
     const items: PdfTextItem[] = [];
@@ -137,6 +141,8 @@ export async function extractPdfTextAndItems(
     // quede en el log, antes fallaba siempre sin que nadie lo viera.
     console.error("extractPdfTextAndItems: no se pudo leer el texto del PDF", err);
     return { text: "", items: [] };
+  } finally {
+    await loadingTask?.destroy().catch(() => {});
   }
 }
 
