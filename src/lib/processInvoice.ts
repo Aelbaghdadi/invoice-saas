@@ -35,7 +35,7 @@ import { textMentionsRectificative, applyRectificativeSign } from "@/lib/rectifi
 import { routeByCif, clientSideCif, routeByText, detectInvoiceType } from "@/lib/invoiceRouting";
 import { lookupProviderClient } from "@/lib/providerRouting";
 import { accountEntryKey } from "@/lib/supplierMatching";
-import { proposeOperationType } from "@/lib/operationTypeProposal";
+import { proposeOperationType, unclassifiedGoodsType } from "@/lib/operationTypeProposal";
 import { classifyOcrError, userMessageForOcrError } from "@/lib/ocrErrors";
 
 /**
@@ -415,6 +415,7 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       ai: extracted.supplyType,
     });
     const operationType = intracomProposal.operationType;
+    const goods = isUnclassified ? unclassifiedGoodsType(intracomProposal, extracted.supplyType) : intracomProposal;
 
     // Detect issues (duplicates, low confidence, math mismatch, IVA no-cero
     // en intracomunitarias, etc.). En las "Por clasificar" no tiene sentido
@@ -602,8 +603,8 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
           issuerCif:     finalIssuerCif,
           issuerCountry: finalIssuerCountry,
           operationType,
-          intracomGoodsType:   intracomProposal.goodsType,
-          intracomGoodsSource: intracomProposal.source,
+          intracomGoodsType:   goods.goodsType,
+          intracomGoodsSource: goods.source,
           receiverName:    finalReceiverName,
           receiverCif:     finalReceiverCif,
           receiverCountry: finalReceiverCountry,

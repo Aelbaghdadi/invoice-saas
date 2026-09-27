@@ -48,3 +48,19 @@ export function proposeOperationType(input: {
     ai: input.ai,
   });
 }
+
+/**
+ * Bienes o servicios que se guardan en una factura que queda «Por
+ * clasificar». Su tipo es el del cliente buzon y, si no es intracomunitario,
+ * la propuesta no lleva bienes/servicios: se guarda lo que dijo la IA, con
+ * origen IA, para que classifyInvoice lo recoja con el tipo del cliente
+ * elegido. Antes se perdia y una compra de servicios de la UE clasificada a
+ * mano salia con codigo 3 en vez de 8.
+ */
+export function unclassifiedGoodsType(
+  proposal: Pick<ReturnType<typeof proposeIntracomGoodsType>, "goodsType" | "source">,
+  ai: IntracomGoodsTypeName | null,
+): Pick<ReturnType<typeof proposeIntracomGoodsType>, "goodsType" | "source"> {
+  if (proposal.goodsType != null || ai == null) return { goodsType: proposal.goodsType, source: proposal.source };
+  return { goodsType: ai, source: "IA" };
+}

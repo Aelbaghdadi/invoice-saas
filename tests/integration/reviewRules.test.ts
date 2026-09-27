@@ -8,6 +8,9 @@ import { reviewForm, settleAction, validate } from "./helpers/reviewForm";
 import { saveInvoiceFields } from "@/app/dashboard/worker/review/[id]/actions";
 import { fakeS3 } from "./helpers/fakeS3";
 import { facturaeXml } from "./helpers/fixtures";
+import { stubOcr } from "./helpers/ocr";
+import { parseTaxId } from "@/lib/validators";
+import { accountEntryKey } from "@/lib/supplierMatching";
 import { processInvoice } from "@/lib/processInvoice";
 import { detectIssues } from "@/lib/issueDetector";
 import type { ExtractedInvoice } from "@/lib/ocr";
@@ -397,6 +400,46 @@ describe("«Por clasificar»: al clasificar se miran también el cuadre y el des
     expect(await issuesOf(inv)).toEqual([[
       "MANUAL", "Operación intracomunitaria con IVA declarado (21%): las intracomunitarias suelen ir con IVA 0%. Revisa el desglose antes de exportar.",
     ]]);
+  });
+
+  it("servicios de la UE según la IA: el buzón lo guarda y al clasificar sale con el código de servicios", async () => {
+    // Sin el CIF del cliente en la factura: queda «Por clasificar». El NIF
+    // portugués viene sin prefijo, así que en el buzón es INTERIOR; el
+    // cliente real ya lo tiene aprendido como intracomunitario. Lo que dijo
+    // la IA tiene que llegar a la clasificación.
+    const real = await prisma.client.create({
+      data: { name: "Cliente Real SL", cif: "B87654321", email: "real@pruebas.es", advisoryFirmId: w.firm.id },
+    });
+    await prisma.workerClientAssignment.create({ data: { workerId: w.worker.id, clientId: real.id } });
+    const nif = parseTaxId("515160873");
+    await prisma.accountEntry.create({
+      data: {
+        clientId: real.id, nif: accountEntryKey(nif.clean, "Serviços Lda", nif.countryCode),
+        name: "Serviços Lda", defaultOperationType: "INTRACOM",
+      },
+    });
+    stubOcr(async () => ({
+      rawJson: "{}",
+      extracted: {
+        issuerName: "Serviços Lda", issuerCif: "515160873", receiverName: null, receiverCif: null,
+        invoiceNumber: "PT-1", invoiceDate: "2026-09-10", taxBase: 100, vatRate: 0, vatAmount: 0,
+        irpfRate: null, irpfAmount: null, totalAmount: 100, currency: "EUR", supplyType: "SERVICIOS",
+        vatLines: [{ taxBase: 100, vatRate: 0, vatAmount: 0 }], confidence: null,
+      } as ExtractedInvoice,
+    }));
+    fakeS3().put("k-ue", "%PDF-1.4");
+    const { id: ue } = await makeInvoice(w.client, {
+      filename: "ue.pdf", storageKey: "k-ue", fileType: "application/pdf", status: "UPLOADED",
+      routingCandidateIds: [w.client.id, real.id], invoiceNumber: null, issuerCif: null, totalAmount: null,
+    });
+    await processInvoice(ue, w.worker.id);
+    const routed = await prisma.invoice.findUniqueOrThrow({ where: { id: ue } });
+    expect([routed.status, routed.operationType]).toEqual(["PENDING_ROUTING", "INTERIOR"]);
+    expect([routed.intracomGoodsType, routed.intracomGoodsSource]).toEqual(["SERVICIOS", "IA"]);
+
+    expect(await classifyInvoice(ue, real.id)).toEqual({ ok: true });
+    const after = await prisma.invoice.findUniqueOrThrow({ where: { id: ue } });
+    expect([after.operationType, after.intracomGoodsType]).toEqual(["INTRACOM_SERVICIOS", "SERVICIOS"]);
   });
 
   it("cliente en recargo: se propone el recargo desde el total, como en el OCR", async () => {
