@@ -29,6 +29,7 @@ async function seedValidated(n: number, opts: { zeroTotals?: number } = {}) {
     periodMonth: 4, periodYear: 2026, clientId: w.client.id, status: "VALIDATED" as const,
     invoiceNumber: `F-${i}`, invoiceDate: new Date("2026-04-15"), issuerName: "Prov", issuerCif: "B12345674",
     taxBase: 100, vatRate: 21, vatAmount: 21, totalAmount: i < (opts.zeroTotals ?? 0) ? 0 : 121,
+    supplierAccount: "40000001", expenseAccount: "60000001",
   }));
   for (let i = 0; i < rows.length; i += 1000) await prisma.invoice.createMany({ data: rows.slice(i, i + 1000) });
   const invoices = await prisma.invoice.findMany({ where: { clientId: w.client.id, periodMonth: 4 }, select: { id: true } });
@@ -207,10 +208,10 @@ describe("originales divididas en el export (PR #4)", () => {
     ));
     const body = await preview.json();
     expect(body.count).toBe(2);
-    expect(body.excludedByReason).toEqual({ total_cero: 1, dividida: 1 });
+    expect(body.excludedByReason).toEqual({ total_cero: 1, dividida: 1, bloqueante: 0 });
     const download = await exportDownload(downloadRequest());
     expect(download.status).toBe(200);
-    expect(JSON.parse(download.headers.get("X-Export-Excluded-Detail")!)).toEqual({ total_cero: 1, dividida: 1 });
+    expect(JSON.parse(download.headers.get("X-Export-Excluded-Detail")!)).toEqual({ total_cero: 1, dividida: 1, bloqueante: 0 });
     const marked = await prisma.invoice.findMany({ where: { exportBatchId: { not: null } }, select: { invoiceNumber: true } });
     expect(marked.map((i) => i.invoiceNumber).sort()).toEqual(["H1", "H2"]);
   });
@@ -231,5 +232,66 @@ describe("aislamiento entre asesorías", () => {
     expect((await download.json()).error).toMatchObject({ code: "ERR-EXPORT-001" });
     expect(await prisma.invoice.count({ where: { exportBatchId: { not: null } } })).toBe(0);
     expect(await prisma.exportBatch.count()).toBe(0);
+  });
+});
+
+describe("bloqueantes en el export (F-025)", () => {
+  const april = { status: "VALIDATED" as const, periodMonth: 4, invoiceDate: new Date("2026-04-15") };
+  const preview = async () => {
+    signInAs(w.admin);
+    const res = await exportPreview(new NextRequest(
+      `http://app.local/api/export?clientId=${w.client.id}&periodType=MONTHLY&month=4&year=2026&preview=1`,
+    ));
+    expect(res.status).toBe(200);
+    return res.json();
+  };
+
+  it("se quedan fuera del fichero y sin marcar, con el mismo recuento y desglose", async () => {
+    await makeInvoice(w.client, { ...april, invoiceNumber: "BUENA" });
+    const sinNif = await makeInvoice(w.client, { ...april, invoiceNumber: "SIN-NIF", issuerCif: null });
+    const usd = await makeInvoice(w.client, { ...april, invoiceNumber: "USD", currency: "USD" });
+
+    const body = await preview();
+    expect(body.count).toBe(1);
+    expect(body.excludedByReason).toEqual({ total_cero: 0, dividida: 0, bloqueante: 2 });
+    expect(body.blockingCount).toBe(2);
+    expect(body.warnings.map((x: { invoiceNumber: string; severity: string; blockers: string[] }) =>
+      [x.invoiceNumber, x.severity, x.blockers])).toEqual([
+      ["SIN-NIF", "bloqueante", ["NIF vacío"]],
+      ["USD", "bloqueante", ["Importes en USD: A3 solo admite euros. Conviértelos y márcala en euros en la revisión"]],
+    ]);
+
+    const download = await exportDownload(downloadRequest());
+    expect(download.status).toBe(200);
+    expect(download.headers.get("X-Export-Excluded")).toBe("2");
+    expect(JSON.parse(download.headers.get("X-Export-Excluded-Detail")!)).toEqual({ total_cero: 0, dividida: 0, bloqueante: 2 });
+    const marked = await prisma.invoice.findMany({ where: { exportBatchId: { not: null } }, select: { invoiceNumber: true } });
+    expect(marked.map((i) => i.invoiceNumber)).toEqual(["BUENA"]);
+    for (const { id } of [sinNif, usd]) {
+      const inv = await prisma.invoice.findUniqueOrThrow({ where: { id } });
+      expect(inv.status).toBe("VALIDATED");
+      expect(inv.exportBatchId).toBeNull();
+      expect(await prisma.exportBatchItem.count({ where: { invoiceId: id } })).toBe(0);
+    }
+  });
+
+  it("si todas son bloqueantes: 422 ERR-EXPORT-004 y no se marca nada", async () => {
+    await makeInvoice(w.client, { ...april, supplierAccount: null });
+    signInAs(w.admin);
+    const download = await exportDownload(downloadRequest());
+    expect(download.status).toBe(422);
+    expect((await download.json()).error).toMatchObject({ code: "ERR-EXPORT-004" });
+    expect(await prisma.exportBatch.count()).toBe(0);
+    expect(await prisma.invoice.count({ where: { exportBatchId: { not: null } } })).toBe(0);
+  });
+
+  it("la vista previa las da todas, las bloqueantes primero (antes recortaba a 20)", async () => {
+    for (let i = 0; i < 25; i++) await makeInvoice(w.client, { ...april, invoiceNumber: `DESCUADRE-${i}`, totalAmount: 130 });
+    await makeInvoice(w.client, { ...april, invoiceNumber: "SIN-FECHA", invoiceDate: null });
+    const body = await preview();
+    expect(body.warningCount).toBe(26);
+    expect(body.warnings).toHaveLength(26);
+    expect(body.warnings[0]).toMatchObject({ invoiceNumber: "SIN-FECHA", severity: "bloqueante", blockers: ["Fecha vacía"] });
+    expect(body.warnings.slice(1).every((x: { severity: string }) => x.severity === "aviso")).toBe(true);
   });
 });

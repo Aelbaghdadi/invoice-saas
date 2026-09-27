@@ -157,3 +157,23 @@ describe("cuota = base × % por línea (F-022)", () => {
     expect((await row()).status).toBe("VALIDATED");
   });
 });
+
+describe("moneda extranjera sin convertir (F-025)", () => {
+  beforeEach(async () => {
+    await prisma.invoice.update({ where: { id }, data: { currency: "USD" } });
+  });
+
+  it("no se valida", async () => {
+    const r = await validate(await form({}));
+    expect(r.error).toBe("Los importes están en USD: A3 solo admite euros. Conviértelos a euros y pulsa «Ya están en euros» antes de validar.");
+    expect((await row()).status).toBe("PENDING_REVIEW");
+  });
+
+  it("con «Ya están en euros» sí, y queda en EUR", async () => {
+    const r = await validate(await form({ currency: "EUR" }));
+    expect(r.error).toBeNull();
+    const after = await row();
+    expect(after.status).toBe("VALIDATED");
+    expect(after.currency).toBe("EUR");
+  });
+});

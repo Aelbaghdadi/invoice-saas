@@ -8,6 +8,7 @@
  */
 import { isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { formatEur } from "@/lib/format";
+import { isForeignCurrency } from "@/lib/currency";
 
 export type RuleLine = {
   taxBase: number;
@@ -32,6 +33,8 @@ export type RuleInvoice = {
   /** Cuenta generica del cliente para simplificadas y tickets
    *  (Client.simplifiedSupplierAccount), o null si no tiene. */
   simplifiedSupplierAccount: string | null;
+  /** ISO 4217; null se da por euros. */
+  currency: string | null;
 };
 
 export type RuleCode =
@@ -41,6 +44,7 @@ export type RuleCode =
   | "sin_lineas"
   | "sin_cuentas"
   | "sin_nif"
+  | "moneda"
   | "descuadre";
 
 export type RuleProblem = { rule: RuleCode; message: string };
@@ -104,6 +108,16 @@ export function missingDataProblems(inv: RuleInvoice): RuleProblem[] {
   return problems;
 }
 
+/** Importes en otra moneda sin convertir (F-025): A3 los tomaria por euros.
+ *  «Ya están en euros» en la revision la deja en EUR. */
+export function currencyProblem(inv: Pick<RuleInvoice, "currency">): RuleProblem | null {
+  if (!isForeignCurrency(inv.currency)) return null;
+  return {
+    rule: "moneda",
+    message: `Los importes están en ${inv.currency}: A3 solo admite euros. Conviértelos a euros y pulsa «Ya están en euros» antes de validar.`,
+  };
+}
+
 /** Descuadre con la tolerancia comun (F-058), o null. Sin total o sin lineas
  *  no se calcula: eso ya lo dice missingDataProblems. */
 export function balanceProblem(inv: Pick<RuleInvoice, "lines" | "totalAmount" | "irpfAmount">): RuleProblem | null {
@@ -126,6 +140,8 @@ export function balanceProblem(inv: Pick<RuleInvoice, "lines" | "totalAmount" | 
 /** Todo lo que impide validar, en orden. Vacio si se puede. */
 export function validationProblems(inv: RuleInvoice): RuleProblem[] {
   const problems = missingDataProblems(inv);
+  const currency = currencyProblem(inv);
+  if (currency) problems.push(currency);
   const balance = balanceProblem(inv);
   if (balance) problems.push(balance);
   return problems;

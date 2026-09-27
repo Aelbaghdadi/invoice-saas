@@ -70,6 +70,9 @@ export async function makeInvoice(
       vatRate: 21,
       vatAmount: 21,
       totalAmount: 121,
+      // Una factura completa: sin cuentas, el export la deja fuera (F-025).
+      supplierAccount: "40000001",
+      expenseAccount: "60000001",
       ...overrides,
     },
   });

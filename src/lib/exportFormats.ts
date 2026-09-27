@@ -8,7 +8,7 @@ import {
   taxIdWithCountry,
   type OperationTypeName,
 } from "@/lib/validators";
-import { isForeignCurrency } from "@/lib/currency";
+import { currencyProblem, missingDataProblems, type RuleInvoice } from "@/lib/invoiceRules";
 import { goodsTypeFromSaleAccount } from "@/lib/intracomGoods";
 import { invoiceBalanceDiffCents, isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { describeVatLineMismatch, vatLineMismatches } from "@/lib/vatLineChecks";
@@ -291,23 +291,91 @@ function buildA3Row(
   ];
 }
 
+export type A3Severity = "bloqueante" | "aviso";
+
 export type A3ValidationWarning = {
   invoiceId: string;
   invoiceNumber: string | null;
+  /** bloqueante: no entra en el fichero ni se marca como exportada. */
+  severity: A3Severity;
+  /** Por que se queda fuera (vacio si solo tiene avisos). */
+  blockers: string[];
+  /** Lo que conviene mirar pero no impide exportarla. */
   warnings: string[];
 };
 
-/** Validate invoices before A3 export, returns warnings (non-blocking) */
+function ruleInvoice(inv: InvoiceWithClient): RuleInvoice {
+  const isPurchase = inv.type === "PURCHASE";
+  return {
+    type: isPurchase ? "PURCHASE" : "SALE",
+    invoiceNumber: inv.invoiceNumber,
+    invoiceDate: inv.invoiceDate,
+    totalAmount: inv.totalAmount == null ? null : Number(inv.totalAmount),
+    irpfAmount: inv.irpfAmount == null ? null : Number(inv.irpfAmount),
+    lines: getExportLines(inv),
+    isRectificative: Boolean(inv.isRectificative),
+    thirdPartyTaxId: isPurchase ? inv.issuerCif : inv.receiverCif,
+    operationType: inv.operationType ?? null,
+    supplierAccount: inv.supplierAccount,
+    expenseAccount: inv.expenseAccount,
+    simplifiedSupplierAccount: inv.client?.simplifiedSupplierAccount ?? null,
+    currency: inv.currency ?? null,
+  };
+}
+
+/**
+ * Lo que impide exportar una factura (F-025): los mismos datos minimos que
+ * exige validar (invoiceRules), con los textos del export. Una validada antes
+ * de estas reglas puede no tenerlos: se queda fuera del fichero y sin marcar,
+ * igual que las de total 0, hasta que se corrija.
+ */
+export function a3BlockingProblems(inv: InvoiceWithClient): string[] {
+  const rule = ruleInvoice(inv);
+  const isPurchase = rule.type === "PURCHASE";
+  const blockers: string[] = [];
+  const currency = currencyProblem(rule);
+  if (currency) blockers.push(`Importes en ${inv.currency}: A3 solo admite euros. Conviértelos y márcala en euros en la revisión`);
+  for (const problem of missingDataProblems(rule)) {
+    switch (problem.rule) {
+      case "sin_nif":
+        blockers.push("NIF vacío");
+        break;
+      case "sin_numero":
+        blockers.push("Número de factura vacío");
+        break;
+      case "sin_fecha":
+        blockers.push("Fecha vacía");
+        break;
+      case "sin_lineas":
+        blockers.push("Sin líneas de IVA con base distinta de 0");
+        break;
+      case "sin_total":
+        blockers.push("Total vacío");
+        break;
+      case "sin_cuentas":
+        if (!inv.supplierAccount?.trim()) blockers.push(isPurchase ? "Sin cuenta proveedor" : "Sin cuenta cliente");
+        if (!inv.expenseAccount?.trim()) blockers.push(isPurchase ? "Sin cuenta gasto" : "Sin cuenta ingreso");
+        break;
+    }
+  }
+  return blockers;
+}
+
+/** Revisa las facturas antes de exportar. Primero las que tienen algo
+ *  bloqueante, despues las que solo tienen avisos; sin recortar. */
 export function validateForA3Export(invoices: InvoiceWithClient[]): A3ValidationWarning[] {
   const results: A3ValidationWarning[] = [];
 
   for (const inv of invoices) {
+    const blockers = a3BlockingProblems(inv);
     const warnings: string[] = [];
     const isPurchase = inv.type === "PURCHASE";
     const nif = isPurchase ? inv.issuerCif : inv.receiverCif;
     const country = isPurchase ? inv.issuerCountry : inv.receiverCountry;
 
-    if (!nif) warnings.push("NIF vacío");
+    // Sin NIF en una operacion no nacional (importacion, intracomunitaria...)
+    // no bloquea: puede ser un proveedor extranjero sin NIF espanol.
+    if (!nif && !blockers.includes("NIF vacío")) warnings.push("NIF vacío");
 
     // El codigo de la columna G sale de un mapa unico compartido por las dos
     // hojas, pero en expedidas los codigos significan otra cosa: el 4 es
@@ -322,9 +390,6 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
         + `(exportaría el código ${OPERATION_TYPE_CODE[inv.operationType as OperationTypeName]}, que en expedidas significa otra cosa)`,
       );
     }
-    if (!inv.invoiceDate) warnings.push("Fecha vacía");
-    if (!inv.supplierAccount) warnings.push(isPurchase ? "Sin cuenta proveedor" : "Sin cuenta cliente");
-    if (!inv.expenseAccount) warnings.push(isPurchase ? "Sin cuenta gasto" : "Sin cuenta ingreso");
 
     // Intracomunitaria con IVA declarado: mismo aviso que en revision, pero
     // aqui es la ultima linea de defensa antes de que el fichero salga hacia
@@ -379,18 +444,14 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
       }
     }
 
-    if (isForeignCurrency(inv.currency)) {
-      warnings.push(`Importes en ${inv.currency}: A3 solo admite euros. Conviértelos y márcala en euros en la revisión`);
-    }
-
     // Se queda fuera del fichero (ver a3ExclusionReason): no se marca como
     // exportada y sigue pendiente hasta que se corrija.
     const totalNum = Number(inv.totalAmount ?? 0);
     const exclusion = a3ExclusionReason(inv);
     if (exclusion === "total_cero") {
-      warnings.push("Total = 0: no entra en el Excel ni se marca como exportada (A3 no acepta importes cero). Corrígela en la revisión");
+      blockers.unshift("Total = 0: no entra en el Excel ni se marca como exportada (A3 no acepta importes cero). Corrígela en la revisión");
     } else if (exclusion === "dividida") {
-      warnings.push("Es la original de una división: se exportan las facturas que salieron de ella, no esta");
+      blockers.unshift("Es la original de una división: se exportan las facturas que salieron de ella, no esta");
     }
 
     // Un "tipo de IVA" que en realidad es el del recargo (5,2 / 1,4 / 0,5)
@@ -430,8 +491,12 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
       }
     }
 
-    if (warnings.length > 0) {
-      results.push({ invoiceId: inv.id, invoiceNumber: inv.invoiceNumber, warnings });
+    if (blockers.length > 0 || warnings.length > 0) {
+      results.push({
+        invoiceId: inv.id, invoiceNumber: inv.invoiceNumber,
+        severity: blockers.length > 0 ? "bloqueante" : "aviso",
+        blockers, warnings,
+      });
     }
   }
 
@@ -472,23 +537,27 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
         + `Revisa si falta subirla o si se saltó el número al emitirla`;
       const existing = results.find((r) => r.invoiceId === invoiceId);
       if (existing) existing.warnings.push(warning);
-      else results.push({ invoiceId, invoiceNumber: inv.invoiceNumber, warnings: [warning] });
+      else results.push({ invoiceId, invoiceNumber: inv.invoiceNumber, severity: "aviso", blockers: [], warnings: [warning] });
     }
   }
 
-  return results;
+  // Estable: dentro de cada gravedad se mantiene el orden de las facturas.
+  return [
+    ...results.filter((r) => r.severity === "bloqueante"),
+    ...results.filter((r) => r.severity === "aviso"),
+  ];
 }
 
 /**
- * Por que una factura se queda fuera del Excel de A3, o null si entra (la
- * regla esta en exportExclusionReason):
+ * Por que una factura se queda fuera del Excel de A3, o null si entra:
  *  - total_cero: A3 rechaza asientos de importe cero (puede pasar cuando una
  *    rectificativa anula exactamente a la original y se exportan juntas).
  *  - dividida: es la original de una division; van las facturas que
  *    salieron de ella, o contaria dos veces.
+ *  - bloqueante: le falta algo de a3BlockingProblems (F-025).
  */
-export function a3ExclusionReason(inv: Pick<InvoiceWithClient, "totalAmount" | "_count">): ExportExclusionReason | null {
-  return exportExclusionReason(inv);
+export function a3ExclusionReason(inv: InvoiceWithClient): ExportExclusionReason | null {
+  return exportExclusionReason(inv) ?? (a3BlockingProblems(inv).length > 0 ? "bloqueante" : null);
 }
 
 /**
@@ -496,7 +565,7 @@ export function a3ExclusionReason(inv: Pick<InvoiceWithClient, "totalAmount" | "
  * ruta de exportacion: solo lo que va en el fichero se marca como exportado
  * y entra en el lote (F-009).
  */
-export function partitionA3Exportable<T extends Pick<InvoiceWithClient, "totalAmount" | "_count">>(
+export function partitionA3Exportable<T extends InvoiceWithClient>(
   invoices: T[],
 ): { exportable: T[]; excluded: { invoice: T; reason: ExportExclusionReason }[] } {
   const exportable: T[] = [];

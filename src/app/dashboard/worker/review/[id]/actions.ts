@@ -523,6 +523,7 @@ async function parseAndSave(
       supplierAccount: newData.supplierAccount,
       expenseAccount: newData.expenseAccount,
       simplifiedSupplierAccount: invoice.client.simplifiedSupplierAccount,
+      currency: newData.currency,
     });
     if (problem) return { error: problem.message };
   }

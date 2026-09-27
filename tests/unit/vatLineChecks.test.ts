@@ -82,7 +82,7 @@ describe("validateForA3Export avisa de las cuotas cruzadas", () => {
 
   it("antes devolvía []; ahora un aviso por línea", () => {
     expect(validateForA3Export([inv])).toEqual([{
-      invoiceId: "inv-1", invoiceNumber: "F-001",
+      invoiceId: "inv-1", invoiceNumber: "F-001", severity: "aviso", blockers: [],
       warnings: [
         "Línea 1: la cuota de IVA es 20,00 € y la base × 21 % da 21,00 €",
         "Línea 2: la cuota de IVA es 21,00 € y la base × 10 % da 20,00 €",

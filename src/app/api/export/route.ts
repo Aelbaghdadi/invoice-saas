@@ -93,9 +93,10 @@ export async function GET(req: NextRequest) {
     excludedByReason: countExportExclusions(excluded.map((e) => e.reason)),
     alreadyExported,
     warningCount: allWarnings.length,
-    // Se recorta la lista: con un lote grande no tiene sentido volcar
-    // cientos de avisos al navegador, el gestor arranca por los primeros.
-    warnings: allWarnings.slice(0, 20),
+    blockingCount: allWarnings.filter((w) => w.severity === "bloqueante").length,
+    // Todas, las bloqueantes primero (F-025). Antes se recortaban a 20 sin
+    // mirar la gravedad y una bloqueante podia quedar fuera de la lista.
+    warnings: allWarnings,
   });
 }
 

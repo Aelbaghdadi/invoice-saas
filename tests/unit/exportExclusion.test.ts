@@ -71,11 +71,12 @@ describe("partitionA3Exportable", () => {
 describe("aviso de factura excluida", () => {
   it("dice que no entra en el Excel ni se marca como exportada", () => {
     const [warning] = validateForA3Export([mkInvoice("b", 0)]);
-    expect(warning.warnings.join(" ")).toContain("no entra en el Excel ni se marca como exportada");
+    expect(warning.severity).toBe("bloqueante");
+    expect(warning.blockers.join(" ")).toContain("no entra en el Excel ni se marca como exportada");
   });
 
   it("la original dividida lo dice con su motivo", () => {
     const [warning] = validateForA3Export([mkInvoice("d", 121, 2)]);
-    expect(warning.warnings.join(" ")).toContain("Es la original de una división: se exportan las facturas que salieron de ella, no esta");
+    expect(warning.blockers.join(" ")).toContain("Es la original de una división: se exportan las facturas que salieron de ella, no esta");
   });
 });

@@ -16,6 +16,7 @@ const ok: RuleInvoice = {
   supplierAccount: "40000001",
   expenseAccount: "60000001",
   simplifiedSupplierAccount: "40099999",
+  currency: null,
 };
 const rules = (over: Partial<RuleInvoice>) => validationProblems({ ...ok, ...over }).map((p) => p.rule);
 
@@ -52,6 +53,15 @@ describe("validationProblems (F-009, F-014)", () => {
       .toBe("El importe no cuadra: las líneas suman 121,00 € y el total es 120,00 €.");
     expect(rules({ lines: [{ taxBase: 100, vatAmount: 21, equivalenceSurchargeAmount: 5.2 }], irpfAmount: 15, totalAmount: 111.2 }))
       .toEqual([]);
+  });
+
+  it("en otra moneda sin convertir (F-025)", () => {
+    expect(rules({ currency: "USD" })).toEqual(["moneda"]);
+    expect(validationProblems({ ...ok, currency: "USD" })[0].message).toBe(
+      "Los importes están en USD: A3 solo admite euros. Conviértelos a euros y pulsa «Ya están en euros» antes de validar.",
+    );
+    expect(rules({ currency: "EUR" })).toEqual([]);
+    expect(rules({ currency: "" })).toEqual([]);
   });
 
   it("sin cuentas", () => {

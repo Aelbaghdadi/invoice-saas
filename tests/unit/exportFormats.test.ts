@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import * as XLSX from "xlsx";
+import { Prisma } from "@prisma/client";
 import {
   generateCsv,
   generateA3Excel,
@@ -180,19 +181,53 @@ describe("validateForA3Export", () => {
     expect(validateForA3Export([mkInvoice()])).toEqual([]);
   });
 
-  it("warns on missing NIF (purchase → issuerCif)", () => {
+  it("sin NIF en una operación nacional: bloqueante (F-025)", () => {
     const res = validateForA3Export([mkInvoice({ issuerCif: null })]);
     expect(res).toHaveLength(1);
-    expect(res[0].warnings).toContain("NIF vacío");
+    expect(res[0].severity).toBe("bloqueante");
+    expect(res[0].blockers).toContain("NIF vacío");
   });
 
-  it("warns on missing supplier/expense accounts", () => {
+  it("sin NIF en una importación: solo aviso (puede ser un proveedor extranjero)", () => {
+    const [res] = validateForA3Export([mkInvoice({ issuerCif: null, operationType: "IMPORTACION" })]);
+    expect(res.severity).toBe("aviso");
+    expect(res.warnings).toContain("NIF vacío");
+  });
+
+  it("sin NIF con la cuenta genérica de simplificadas: aviso, no bloquea", () => {
+    const [res] = validateForA3Export([mkInvoice({
+      issuerCif: null, supplierAccount: "4009999",
+      client: { id: "c1", name: "ACME SL", simplifiedSupplierAccount: "4009999" } as InvoiceWithClient["client"],
+    })]);
+    expect(res).toMatchObject({ severity: "aviso", blockers: [], warnings: ["NIF vacío"] });
+  });
+
+  it("sin cuentas: bloqueante", () => {
     const res = validateForA3Export([
       mkInvoice({ supplierAccount: null, expenseAccount: null }),
     ]);
-    expect(res[0].warnings).toEqual(
-      expect.arrayContaining(["Sin cuenta proveedor", "Sin cuenta gasto"]),
-    );
+    expect(res[0].severity).toBe("bloqueante");
+    expect(res[0].blockers).toEqual(["Sin cuenta proveedor", "Sin cuenta gasto"]);
+  });
+
+  it("sin número, fecha, total o líneas: bloqueante", () => {
+    expect(validateForA3Export([mkInvoice({ invoiceNumber: null })])[0].blockers).toEqual(["Número de factura vacío"]);
+    expect(validateForA3Export([mkInvoice({ invoiceDate: null })])[0].blockers).toEqual(["Fecha vacía"]);
+    // Sin líneas y con total 121: antes salía una fila 0/0/0 sin aviso.
+    const sinLineas = validateForA3Export([mkInvoice({ taxBase: null, vatAmount: null, vatRate: null })])[0];
+    expect(sinLineas.blockers).toEqual(["Sin líneas de IVA con base distinta de 0"]);
+  });
+
+  it("las bloqueantes van primero y no se recorta la lista", () => {
+    const invoices = [
+      ...Array.from({ length: 25 }, (_, i) => mkInvoice({ id: `aviso-${i}`, totalAmount: new Prisma.Decimal(130) })),
+      mkInvoice({ id: "bloq", issuerCif: null }),
+    ];
+    const res = validateForA3Export(invoices);
+    expect(res).toHaveLength(26);
+    expect(res[0]).toMatchObject({ invoiceId: "bloq", severity: "bloqueante" });
+    expect(res.slice(1).every((r) => r.severity === "aviso")).toBe(true);
+    expect(res.slice(1).map((r) => r.invoiceId)).toEqual(invoices.slice(0, 25).map((i) => i.id));
   });
 
   it("warns on Base+IVA mismatch vs Total", () => {
@@ -284,13 +319,13 @@ describe("validateForA3Export — facturas emitidas y moneda", () => {
     const res = validateForA3Export([
       mkInvoice({ type: "SALE", supplierAccount: null, expenseAccount: null }),
     ]);
-    expect(res[0].warnings).toEqual(expect.arrayContaining(["Sin cuenta cliente", "Sin cuenta ingreso"]));
-    expect(res[0].warnings).not.toContain("Sin cuenta proveedor");
+    expect(res[0].blockers).toEqual(["Sin cuenta cliente", "Sin cuenta ingreso"]);
   });
 
-  it("avisa si los importes no están en euros", () => {
+  it("importes en otra moneda: bloqueante", () => {
     const res = validateForA3Export([mkInvoice({ currency: "USD" })]);
-    expect(res[0].warnings.some((w) => w.includes("USD"))).toBe(true);
+    expect(res[0].severity).toBe("bloqueante");
+    expect(res[0].blockers).toEqual(["Importes en USD: A3 solo admite euros. Conviértelos y márcala en euros en la revisión"]);
   });
 
   it("no avisa en euros ni cuando la moneda no se detectó", () => {
@@ -602,9 +637,8 @@ describe("validateForA3Export — huecos en la numeración (solo emitidas)", () 
       emitida({ id: "inv-3", invoiceNumber: "3", supplierAccount: null }),
     ]);
     const hit = res.find((r) => r.invoiceId === "inv-3");
-    expect(hit?.warnings).toEqual(
-      expect.arrayContaining(["Sin cuenta cliente", expect.stringContaining("Salto de numeración")]),
-    );
+    expect(hit?.blockers).toEqual(["Sin cuenta cliente"]);
+    expect(hit?.warnings).toEqual([expect.stringContaining("Salto de numeración")]);
   });
 });
 

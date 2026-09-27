@@ -1050,6 +1050,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       supplierAccount: supplierAccountVal,
       expenseAccount: expenseAccountVal,
       simplifiedSupplierAccount: genericAccounts?.supplier ?? null,
+      currency: markedEuro ? "EUR" : invoice.currency,
     });
     if (problem) {
       if (problem.rule === "descuadre") triggerShake("math");

@@ -45,8 +45,8 @@ export function ExportForm({ clients }: Props) {
   const [format,     setFormat]     = useState("a3excel");
 
   const [count,    setCount]    = useState<number | null>(null);
-  // Avisos de validacion A3 (NIF vacio, descuadres, tipo de operacion que no
-  // corresponde al sentido...). Se recortan a 20 en el servidor.
+  // Avisos de validacion A3, todos, las bloqueantes primero (F-025): las
+  // bloqueantes no entran en el Excel; los avisos no impiden exportar.
   const [warnings,     setWarnings]     = useState<A3Warning[]>([]);
   const [warningCount, setWarningCount] = useState(0);
   // Facturas del periodo que ya salieron en un Excel anterior: no se vuelven
@@ -402,34 +402,21 @@ export function ExportForm({ clients }: Props) {
           {/* Avisos de validación A3: la última oportunidad de ver un error
               antes de que el fichero entre en la contabilidad del cliente. */}
           {warningCount > 0 && !counting && (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
-              <p className="flex items-center gap-2 text-[13px] font-semibold text-amber-800">
-                <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-                {warningCount === 1
-                  ? "1 factura con avisos"
-                  : `${warningCount} facturas con avisos`}
-              </p>
-              <ul className="mt-2 space-y-1.5">
-                {warnings.map((w) => (
-                  <li key={w.invoiceId} className="text-[12px] text-amber-700">
-                    {/* Enlace a la revision: una validada se puede corregir mientras
-                        el periodo no este cerrado, y sin enlace habia que buscarla a mano. */}
-                    <Link
-                      href={`/dashboard/worker/review/${w.invoiceId}`}
-                      className="font-medium underline decoration-amber-300 underline-offset-2 hover:text-amber-900"
-                    >
-                      {w.invoiceNumber || "Sin número"}
-                    </Link>
-                    {" — "}
-                    {w.warnings.join("; ")}
-                  </li>
-                ))}
-              </ul>
-              {warningCount > warnings.length && (
-                <p className="mt-2 text-[11px] text-amber-600">
-                  Y {warningCount - warnings.length} más. Se exportan igualmente: los avisos no bloquean.
-                </p>
-              )}
+            <div className="space-y-3">
+              <WarningList
+                tone="red"
+                title={(n) => n === 1
+                  ? "1 factura no se puede exportar"
+                  : `${n} facturas no se pueden exportar`}
+                note="No entran en el Excel ni se marcan como exportadas: siguen pendientes hasta que las corrijas en la revisión."
+                items={warnings.filter((w) => w.severity === "bloqueante")}
+              />
+              <WarningList
+                tone="amber"
+                title={(n) => n === 1 ? "1 factura con avisos" : `${n} facturas con avisos`}
+                note="Se exportan igualmente: los avisos no bloquean, pero conviene mirarlos."
+                items={warnings.filter((w) => w.severity === "aviso")}
+              />
             </div>
           )}
 
@@ -520,6 +507,60 @@ function Row({ label, value }: { label: string; value: string }) {
     <div className="flex items-center justify-between">
       <span className="text-slate-400">{label}</span>
       <span className="font-medium text-slate-700 truncate max-w-[160px]">{value}</span>
+    </div>
+  );
+}
+
+const WARNING_TONES = {
+  red: {
+    box: "border-red-200 bg-red-50",
+    title: "text-red-800",
+    item: "text-red-700",
+    link: "decoration-red-300 hover:text-red-900",
+    note: "text-red-600",
+  },
+  amber: {
+    box: "border-amber-200 bg-amber-50",
+    title: "text-amber-800",
+    item: "text-amber-700",
+    link: "decoration-amber-300 hover:text-amber-900",
+    note: "text-amber-600",
+  },
+} as const;
+
+/** Una caja por gravedad, con todas las facturas (F-025): con muchas se
+ *  desplaza dentro de la caja en vez de recortar la lista. */
+function WarningList({ tone, title, note, items }: {
+  tone: keyof typeof WARNING_TONES;
+  title: (count: number) => string;
+  note: string;
+  items: A3Warning[];
+}) {
+  if (items.length === 0) return null;
+  const c = WARNING_TONES[tone];
+  return (
+    <div className={`rounded-xl border px-4 py-3 ${c.box}`}>
+      <p className={`flex items-center gap-2 text-[13px] font-semibold ${c.title}`}>
+        <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+        {title(items.length)}
+      </p>
+      <p className={`mt-1 text-[11px] ${c.note}`}>{note}</p>
+      <ul className="mt-2 max-h-72 space-y-1.5 overflow-y-auto pr-1">
+        {items.map((w) => (
+          <li key={w.invoiceId} className={`text-[12px] ${c.item}`}>
+            {/* Enlace a la revision: una validada se puede corregir mientras
+                el periodo no este cerrado, y sin enlace habia que buscarla a mano. */}
+            <Link
+              href={`/dashboard/worker/review/${w.invoiceId}`}
+              className={`font-medium underline underline-offset-2 ${c.link}`}
+            >
+              {w.invoiceNumber || "Sin número"}
+            </Link>
+            {" — "}
+            {[...w.blockers, ...w.warnings].join("; ")}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

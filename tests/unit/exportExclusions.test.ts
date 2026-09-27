@@ -25,14 +25,17 @@ describe("exportExclusionReason", () => {
 
 describe("countExportExclusions y describeExportExclusions", () => {
   it("cuenta por motivo", () => {
-    expect(countExportExclusions(["total_cero", "dividida", "total_cero"])).toEqual({ total_cero: 2, dividida: 1 });
-    expect(countExportExclusions([])).toEqual({ total_cero: 0, dividida: 0 });
+    expect(countExportExclusions(["total_cero", "dividida", "total_cero", "bloqueante"])).toEqual({ total_cero: 2, dividida: 1, bloqueante: 1 });
+    expect(countExportExclusions([])).toEqual({ total_cero: 0, dividida: 0, bloqueante: 0 });
   });
 
   it("describe el desglose en singular y plural", () => {
     expect(describeExportExclusions({ total_cero: 2, dividida: 1 })).toBe("2 con total 0 y 1 dividida en otras facturas");
     expect(describeExportExclusions({ dividida: 2 })).toBe("2 divididas en otras facturas");
     expect(describeExportExclusions({ total_cero: 1, dividida: 0 })).toBe("1 con total 0");
+    expect(describeExportExclusions({ bloqueante: 1 })).toBe("1 con errores que impiden exportarla");
+    expect(describeExportExclusions({ total_cero: 2, dividida: 1, bloqueante: 3 }))
+      .toBe("2 con total 0, 1 dividida en otras facturas y 3 con errores que impiden exportarlas");
     expect(describeExportExclusions({})).toBeNull();
   });
 });
