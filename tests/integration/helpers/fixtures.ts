@@ -33,7 +33,6 @@ export async function blankPdf(pages: number): Promise<Buffer> {
 export const PNG_DATA_URL =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 
-export const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * SQL para «hace n minutos» en las columnas de fecha de Prisma: son

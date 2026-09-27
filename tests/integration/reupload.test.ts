@@ -1,10 +1,10 @@
 // «Reabrir y validar» frente a la resubida del cliente (PR #4, revision 2).
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { prisma } from "./helpers/db";
 import { fakeS3 } from "./helpers/fakeS3";
 import { makeFirm, makeInvoice, type FirmWorld } from "./helpers/factories";
-import { blankPdf, utcMinutesAgoSql, wait } from "./helpers/fixtures";
-import { holdLock } from "./helpers/locks";
+import { blankPdf, utcMinutesAgoSql } from "./helpers/fixtures";
+import { holdLock, sessionsWaitingForLock } from "./helpers/locks";
 import { inFlight } from "./helpers/inflight";
 import { signInAs } from "./helpers/session";
 import { reviewForm, validate } from "./helpers/reviewForm";
@@ -38,8 +38,11 @@ describe("resubida del cliente contra «Reabrir y validar»", () => {
   it("el gestor reabre y valida mientras el cliente sube: no se crea la sustituta y se borra el fichero", async () => {
     const lock = await holdLock(`SELECT 1 FROM "Invoice" WHERE id = $1 FOR UPDATE`, id);
     const pending = inFlight(reupload());
-    await wait(1500); // fichero subido; la transaccion de la resubida espera la fila
-    expect(reuploadKeys()).toHaveLength(1);
+    // Fichero subido y la transaccion de la resubida esperando la fila.
+    await vi.waitFor(async () => {
+      expect(reuploadKeys()).toHaveLength(1);
+      expect(await sessionsWaitingForLock()).toBe(1);
+    }, { timeout: 10_000 });
     await lock.release(`UPDATE "Invoice" SET status = 'VALIDATED', "rejectionReason" = NULL, "updatedAt" = ${utcMinutesAgoSql(0)} WHERE id = $1`);
     expect(await pending).toEqual({ error: "Esta factura ya no está rechazada. Recarga la página." });
     expect(await prisma.invoice.count({ where: { replacesId: id } })).toBe(0);

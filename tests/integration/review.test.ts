@@ -1,12 +1,11 @@
 // Revision (PR #4, F-015/F-008): estados de origen en el propio UPDATE y
 // «Reabrir y validar».
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { prisma } from "./helpers/db";
 import { makeFirm, makeInvoice, type FirmWorld } from "./helpers/factories";
-import { holdLock } from "./helpers/locks";
+import { holdLock, sessionsWaitingForLock } from "./helpers/locks";
 import { inFlight } from "./helpers/inflight";
 import { signInAs } from "./helpers/session";
-import { wait } from "./helpers/fixtures";
 import { reject, reviewForm, validate } from "./helpers/reviewForm";
 import { reviewTargetWhere } from "@/lib/invoiceStatuses";
 
@@ -34,7 +33,8 @@ describe("estados de origen en guardar, validar y rechazar", () => {
     const leido = (await A()).updatedAt;
     const lock = await holdLock(`SELECT 1 FROM "Invoice" WHERE id = $1 FOR UPDATE`, id);
     const pending = inFlight(validate(reviewForm(id, leido, w.client)));
-    await wait(1500);
+    // La comprobacion previa ya paso (era PENDING_REVIEW) y el UPDATE espera la fila.
+    await vi.waitFor(async () => expect(await sessionsWaitingForLock()).toBe(1), { timeout: 10_000 });
     await lock.release(`UPDATE "Invoice" SET status = 'SPLIT_SOURCE' WHERE id = $1`);
     const r = await pending;
     expect(String(r.error)).toMatch(/dividió en otras/);
@@ -45,7 +45,7 @@ describe("estados de origen en guardar, validar y rechazar", () => {
     await prisma.invoice.update({ where: { id }, data: { status: "PENDING_REVIEW", rejectionReason: null } });
     const lock = await holdLock(`SELECT 1 FROM "Invoice" WHERE id = $1 FOR UPDATE`, id);
     const pending = inFlight(reject(id));
-    await wait(1500);
+    await vi.waitFor(async () => expect(await sessionsWaitingForLock()).toBe(1), { timeout: 10_000 });
     await lock.release(`UPDATE "Invoice" SET status = 'ANALYZING' WHERE id = $1`);
     const r = await pending;
     expect(String(r.error)).toMatch(/analizando/);

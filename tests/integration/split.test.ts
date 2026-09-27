@@ -1,10 +1,10 @@
 // Dividir (PR #4, F-056): se reserva la original antes de crear las hijas.
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { prisma } from "./helpers/db";
 import { fakeS3 } from "./helpers/fakeS3";
 import { makeFirm, makeInvoice, type FirmWorld } from "./helpers/factories";
-import { blankPdf, PNG_DATA_URL, wait } from "./helpers/fixtures";
-import { holdLock } from "./helpers/locks";
+import { blankPdf, PNG_DATA_URL } from "./helpers/fixtures";
+import { holdLock, sessionsWaitingForLock } from "./helpers/locks";
 import { inFlight } from "./helpers/inflight";
 import { signInAs } from "./helpers/session";
 import { splitInvoice, splitPdfInvoice } from "@/app/dashboard/worker/review/[id]/actions";
@@ -71,8 +71,11 @@ describe("dividir reserva antes la original", () => {
   it("rechazada entre la comprobación y la reserva: no reserva, sin hijas ni ficheros", async () => {
     const lock = await holdLock(`SELECT 1 FROM "Invoice" WHERE id = $1 FOR UPDATE`, id);
     const pending = inFlight(run());
-    await wait(1500); // comprobacion previa hecha, ficheros subidos, reserva esperando
-    expect(splitKeys()).toHaveLength(2);
+    // Comprobacion previa hecha, partes subidas y la reserva esperando la fila.
+    await vi.waitFor(async () => {
+      expect(splitKeys()).toHaveLength(2);
+      expect(await sessionsWaitingForLock()).toBe(1);
+    }, { timeout: 10_000 });
     await lock.release(`UPDATE "Invoice" SET status = 'REJECTED' WHERE id = $1`);
     const r = await pending;
     expect(String(r.error)).toMatch(/rechazada/);
@@ -82,10 +85,12 @@ describe("dividir reserva antes la original", () => {
   });
 
   it("validada mientras se preparaban las partes: no reserva con un estado de origen viejo", async () => {
-    fakeS3().setMode("slow:1500");
+    fakeS3().setMode("hold");
     const pending = inFlight(run());
-    await wait(500); // comprobacion previa hecha, descargando el PDF
+    // Comprobacion previa hecha y descargando el PDF: se valida en ese momento.
+    await vi.waitFor(() => expect(fakeS3().heldGets()).toBe(1));
     await prisma.invoice.update({ where: { id }, data: { status: "VALIDATED" } });
+    fakeS3().releaseGets();
     const r = await pending;
     expect(String(r.error)).toMatch(/ha cambiado/);
     expect(await status()).toBe("VALIDATED");

@@ -64,6 +64,10 @@ const { settleInFlight } = await import("../helpers/inflight");
 // Bloqueos que un test fallido dejo abiertos y acciones a medias: se cierran
 // antes del TRUNCATE del siguiente test.
 afterEach(async () => {
+  // GET que el test dejo retenidos en el S3 simulado ("hold"): fallan, para
+  // que las acciones que esperan por ellos terminen.
+  fakeS3.setMode("ok");
+  fakeS3.releaseGets({ fail: true });
   await settleInFlight();
 });
 

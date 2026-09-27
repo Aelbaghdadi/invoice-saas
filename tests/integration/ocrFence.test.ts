@@ -1,11 +1,11 @@
 // F-008 (PR #4): el final del OCR no pisa lo que se hizo mientras analizaba.
 // processInvoice real por el camino Facturae (sin proveedor de OCR), con un
 // S3 que puede tardar o fallar a proposito.
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { prisma } from "./helpers/db";
 import { fakeS3 } from "./helpers/fakeS3";
 import { makeFirm, makeInvoice, type FirmWorld } from "./helpers/factories";
-import { facturaeXml, wait } from "./helpers/fixtures";
+import { facturaeXml } from "./helpers/fixtures";
 import { inFlight } from "./helpers/inflight";
 import { processInvoice } from "@/lib/processInvoice";
 
@@ -51,11 +51,13 @@ describe("valla del OCR (ocrAttempts)", () => {
   });
 
   it("rechazada mientras analizaba: sigue rechazada, sin nada del OCR", async () => {
-    fakeS3().setMode("slow:1500");
+    fakeS3().setMode("hold");
     const run = inFlight(processInvoice(id, w.worker.id));
-    await wait(500);
+    // Reclamada y descargando el fichero: se rechaza en ese momento.
+    await vi.waitFor(() => expect(fakeS3().heldGets()).toBe(1));
     expect((await state()).status).toBe("ANALYZING");
     await prisma.invoice.updateMany({ where: { id }, data: { status: "REJECTED", rejectionReason: "Ilegible" } });
+    fakeS3().releaseGets();
     await run;
     const s = await state();
     expect(s.status).toBe("REJECTED");
@@ -68,10 +70,15 @@ describe("valla del OCR (ocrAttempts)", () => {
   });
 
   it("el error de una ejecución que ya no es la dueña no pasa a OCR_ERROR una rechazada", async () => {
-    fakeS3().setMode("slowdown:1500");
+    fakeS3().setMode("hold");
     const run = inFlight(processInvoice(id, w.worker.id));
-    await wait(500);
+    await vi.waitFor(() => expect(fakeS3().heldGets()).toBe(1));
     await prisma.invoice.updateMany({ where: { id }, data: { status: "REJECTED" } });
+    // La descarga falla: el OCR va al catch. "down" antes de soltar, porque
+    // el cliente de S3 reintenta los 500 y los reintentos no deben quedarse
+    // retenidos.
+    fakeS3().setMode("down");
+    fakeS3().releaseGets({ fail: true });
     await run;
     const s = await state();
     expect(s.status).toBe("REJECTED");
@@ -79,21 +86,22 @@ describe("valla del OCR (ocrAttempts)", () => {
   });
 
   it("sin cruce, el error sí deja OCR_ERROR", async () => {
-    fakeS3().setMode("slowdown:10");
+    fakeS3().setMode("down");
     await processInvoice(id, w.worker.id);
     expect((await state()).status).toBe("OCR_ERROR");
   });
 
   it("relanzada: la ejecución colgada no pisa a la nueva (ni su extracción)", async () => {
-    fakeS3().setMode("slow:2500");
+    fakeS3().setMode("hold");
     const colgada = inFlight(processInvoice(id, w.worker.id)); // ocrAttempts 1
-    await wait(500);
+    await vi.waitFor(() => expect(fakeS3().heldGets()).toBe(1));
     // Lo que hace el cron: devolverla a UPLOADED y relanzar.
     await prisma.invoice.updateMany({ where: { id, status: "ANALYZING" }, data: { status: "UPLOADED" } });
     fakeS3().setMode("ok");
     await processInvoice(id, w.worker.id); // ocrAttempts 2, termina
     const trasLaNueva = await state();
-    await colgada; // termina despues con ocrAttempts 1
+    fakeS3().releaseGets(); // la colgada termina despues, con ocrAttempts 1
+    await colgada;
     const s = await state();
     expect(s.ocrAttempts).toBe(2);
     expect(s).toEqual(trasLaNueva);

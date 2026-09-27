@@ -1,11 +1,10 @@
 // Export a A3 (PR #3, F-001/F-049; PR #4, originales divididas): reserva
 // transaccional, exports simultaneos, correccion cruzada y aislamiento.
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { prisma } from "./helpers/db";
 import { makeFirm, makeInvoice, type FirmWorld } from "./helpers/factories";
 import { signInAs } from "./helpers/session";
-import { wait } from "./helpers/fixtures";
 import { holdLock, sessionsWaitingForLock } from "./helpers/locks";
 import { inFlight } from "./helpers/inflight";
 import { commitExportBatch, ExportConflictError, type ExportInvoice } from "@/lib/exportBatch";
@@ -132,8 +131,8 @@ describe("corrección cruzada con un export (F-049)", () => {
     const lock = await holdLock('LOCK TABLE "ExportBatchItem" IN SHARE MODE');
     signInAs(w.admin);
     const exporting = inFlight(exportDownload(downloadRequest()));
-    await wait(1500);
-    expect(await sessionsWaitingForLock()).toBeGreaterThan(0);
+    // El export ha reservado la factura y espera el bloqueo.
+    await vi.waitFor(async () => expect(await sessionsWaitingForLock()).toBe(1), { timeout: 10_000 });
     // El gestor guarda una correccion con lo que leyo antes del export.
     signInAs(w.worker);
     const fd = new FormData();
@@ -146,7 +145,9 @@ describe("corrección cruzada con un export (F-049)", () => {
       accountingPeriodMonth: "4", accountingPeriodYear: "2026",
     })) fd.set(k, v);
     const correcting = inFlight(validateInvoice(null, fd).catch((e) => (e?.message === "NEXT_REDIRECT" ? null : Promise.reject(e))));
-    await wait(1500);
+    // La escritura condicionada de la correccion tambien espera (la fila la
+    // tiene el export): se cruzan de verdad.
+    await vi.waitFor(async () => expect(await sessionsWaitingForLock()).toBe(2), { timeout: 10_000 });
     await lock.release();
     const res = await exporting;
     const corrected = await correcting;
