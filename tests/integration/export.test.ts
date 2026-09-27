@@ -7,6 +7,7 @@ import { makeFirm, makeInvoice, type FirmWorld } from "./helpers/factories";
 import { signInAs } from "./helpers/session";
 import { holdLock, sessionsWaitingForLock } from "./helpers/locks";
 import { inFlight } from "./helpers/inflight";
+import { reject } from "./helpers/reviewForm";
 import { commitExportBatch, ExportConflictError, type ExportInvoice } from "@/lib/exportBatch";
 import { appendAuditLogs, verifyFirmAuditChains } from "@/lib/auditLog";
 import { partitionA3Exportable } from "@/lib/exportFormats";
@@ -157,6 +158,35 @@ describe("corrección cruzada con un export (F-049)", () => {
     const item = await prisma.exportBatchItem.findFirstOrThrow({ where: { invoiceId: inv.id } });
     expect(row.invoiceNumber).toBe("F-001");
     expect(JSON.parse(item.snapshot).invoiceNumber).toBe(row.invoiceNumber);
+  });
+});
+
+describe("rechazo cruzado con un export (F-049)", () => {
+  it("con el export reservando, el rechazo no se cuela: ERR-VALIDATE-003 y sigue VALIDATED y exportada", async () => {
+    const inv = await makeInvoice(w.client, {
+      status: "VALIDATED", periodMonth: 4, invoiceNumber: "F-001", invoiceDate: new Date("2026-04-10"),
+      receiverName: w.client.name, receiverCif: w.client.cif, supplierAccount: "40000001", expenseAccount: "60000001",
+    });
+    const lock = await holdLock('LOCK TABLE "ExportBatchItem" IN SHARE MODE');
+    signInAs(w.admin);
+    const exporting = inFlight(exportDownload(downloadRequest()));
+    await vi.waitFor(async () => expect(await sessionsWaitingForLock()).toBe(1), { timeout: 10_000 });
+    // El rechazo lee la factura sin exportar (el export no ha confirmado) y su
+    // UPDATE condicionado espera la fila. Solo lo para el updatedAt que cambia
+    // la reserva del export: el estado sigue siendo VALIDATED.
+    signInAs(w.worker);
+    const rejecting = inFlight(reject(inv.id));
+    await vi.waitFor(async () => expect(await sessionsWaitingForLock()).toBe(2), { timeout: 10_000 });
+    await lock.release();
+    expect((await exporting).status).toBe(200);
+    expect((await rejecting).error).toMatchObject({ code: "ERR-VALIDATE-003" });
+    const row = await prisma.invoice.findUniqueOrThrow({ where: { id: inv.id } });
+    expect(row.status).toBe("VALIDATED");
+    expect(row.rejectionReason).toBeNull();
+    expect(row.exportBatchId).not.toBeNull();
+    expect(await prisma.exportBatchItem.count({ where: { invoiceId: inv.id } })).toBe(1);
+    expect(await prisma.invoiceStatusHistory.count({ where: { invoiceId: inv.id, toStatus: "REJECTED" } })).toBe(0);
+    expect(await prisma.auditLog.count({ where: { invoiceId: inv.id, newValue: "REJECTED" } })).toBe(0);
   });
 });
 
