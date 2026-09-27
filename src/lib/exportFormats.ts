@@ -378,7 +378,11 @@ export function a3BlockingProblems(inv: InvoiceWithClient): string[] {
     switch (problem.rule) {
       case "sin_nif":
       case "sin_nif_iva":
-        blockers.push(problem.message.replace(/\.$/, ""));
+        // El export solo lo usa un administrador: no puede mandarle a
+        // «pedir a un administrador» que configure la generica.
+        blockers.push(problem.message
+          .replace("pide a un administrador que configure la cuenta genérica del cliente", "configura la cuenta genérica en la ficha del cliente")
+          .replace(/\.$/, ""));
         break;
       case "sin_numero":
         blockers.push("Número de factura vacío");
