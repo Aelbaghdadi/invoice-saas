@@ -26,8 +26,9 @@ function mkInvoice(overrides: Partial<InvoiceWithClient> = {}): InvoiceWithClien
     irpfRate: 0 as any,
     irpfAmount: 0 as any,
     totalAmount: 121 as any,
-    supplierAccount: "4000001",
-    expenseAccount: "6000001",
+    // Cuentas del sentido de la factura: en una venta, cliente e ingreso.
+    supplierAccount: overrides.type === "SALE" ? "4300001" : "4000001",
+    expenseAccount: overrides.type === "SALE" ? "7000001" : "6000001",
     client: { id: "c1", name: "ACME SL" } as any,
     ...overrides,
   } as InvoiceWithClient;
@@ -341,6 +342,19 @@ describe("validateForA3Export — facturas emitidas y moneda", () => {
       mkInvoice({ id: "inv-2", currency: null }),
     ]);
     expect(res.flatMap((r) => r.warnings).filter((w) => w.includes("euros"))).toEqual([]);
+  });
+});
+
+describe("validateForA3Export — cuentas del sentido contrario", () => {
+  it("una validada con cuentas al revés: aviso, no bloqueante", () => {
+    const res = validateForA3Export([mkInvoice({ supplierAccount: "43000001" })]);
+    expect(res[0].severity).toBe("aviso");
+    expect(res[0].warnings).toContain("La cuenta 43000001 es de cliente y esta factura es recibida: usa una cuenta de proveedor (40x o 41x).");
+  });
+
+  it("un rappel no avisa", () => {
+    const res = validateForA3Export([mkInvoice({ expenseAccount: "70900000" })]);
+    expect(res.flatMap((r) => r.warnings).filter((w) => w.startsWith("La cuenta"))).toEqual([]);
   });
 });
 

@@ -8,7 +8,7 @@ import {
   taxIdWithCountry,
   type OperationTypeName,
 } from "@/lib/validators";
-import { currencyProblem, missingDataProblems, type RuleInvoice } from "@/lib/invoiceRules";
+import { accountDirectionProblem, currencyProblem, missingDataProblems, type RuleInvoice } from "@/lib/invoiceRules";
 import { goodsTypeFromSaleAccount } from "@/lib/intracomGoods";
 import { invoiceBalanceDiffCents, isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { describeVatLineMismatch, vatLineMismatches, type CheckedLine } from "@/lib/vatLineChecks";
@@ -543,6 +543,12 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
         warnings.push(`Línea ${i + 1}: cuota de recargo sin %: A3 recibirá 0 %`);
       }
     });
+
+    // Cuentas del sentido contrario: validar ya no lo deja, pero una validada
+    // antes de la regla pasaria sin que nadie lo vea. Aviso, no bloqueo: en
+    // produccion no hay ninguna y el asiento puede ser intencionado.
+    const direction = accountDirectionProblem(ruleInvoice(inv));
+    if (direction) warnings.push(direction.message);
 
     // Base + IVA + Recargo - IRPF = Total. Suma sobre las lineas si las hay.
     if (inv.totalAmount && Math.abs(totalNum) >= 0.005) {
