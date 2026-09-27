@@ -102,6 +102,14 @@ describe("validar exige lo mínimo en el servidor (F-009)", () => {
     expect(Number((await row()).totalAmount)).toBe(121);
   });
 
+  it.each(["VALIDATED", "EXPORTED"] as const)("guardar sin validar una %s tampoco se salta las reglas", async (status) => {
+    await prisma.invoice.update({ where: { id }, data: { status } });
+    const antes = await row();
+    expect((await save({ totalAmount: "" })).error).toBe("Falta el total de la factura.");
+    expect((await save({ totalAmount: "130" })).error).toMatch(/^El importe no cuadra/);
+    expect(await row()).toEqual(antes);
+  });
+
   it("un ticket con la cuenta genérica se valida sin NIF", async () => {
     await prisma.client.update({ where: { id: w.client.id }, data: { simplifiedSupplierAccount: "40099999", simplifiedExpenseAccount: "62900000" } });
     const r = await validate(await form({ issuerCif: "", issuerName: "", supplierAccount: "40099999", expenseAccount: "62900000" }));

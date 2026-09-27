@@ -509,7 +509,10 @@ async function parseAndSave(
 
   // Lo minimo para validar, tambien al guardar la correccion de una ya
   // validada (F-009, F-014). La pantalla lo avisa antes, con la misma funcion.
-  if (validate) {
+  // Guardar sin validar tambien llega a una VALIDATED o a una EXPORTED legacy
+  // (reviewAllowedFrom("save")): la pantalla no lo ofrece, pero una llamada
+  // directa dejaria una validada sin total o descuadrada.
+  if (validate || invoice.status === "VALIDATED" || invoice.status === "EXPORTED") {
     const [problem] = validationProblems({
       type: effectiveType,
       invoiceNumber: newData.invoiceNumber,
