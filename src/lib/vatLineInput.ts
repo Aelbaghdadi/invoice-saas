@@ -7,7 +7,7 @@
  * ([50 / "" / 5]) y el semaforo sumaba lo que pudiera leer de ella: la
  * pantalla salia en verde y se guardaba una factura con una linea de menos.
  */
-import { hasMoreThanTwoDecimals } from "@/lib/money";
+import { hasMoreThanTwoDecimals, toCents } from "@/lib/money";
 
 export type VatLineText = {
   taxBase?: unknown;
@@ -126,10 +126,18 @@ export function vatLineProblem(line: VatLineText, position: number): string | nu
     return `La línea ${position} de IVA está incompleta: tiene % de recargo de equivalencia pero falta su cuota.`;
   }
   // Y al reves: a A3 llegaria un 0 % con la cuota (revision 2 del PR #7).
-  if (text(line.equivalenceSurchargeAmount) && !text(line.equivalenceSurchargeRate)) {
+  // Una cuota 0 cuenta como vacia, igual que en el export: no hay nada que
+  // mandar y el error obligaba a corregir un campo que la pantalla escondia.
+  if (hasSurchargeAmount(line) && !text(line.equivalenceSurchargeRate)) {
     return `La línea ${position} de IVA está incompleta: tiene cuota de recargo de equivalencia pero falta su %.`;
   }
   return null;
+}
+
+/** ¿Trae cuota de recargo distinta de 0? */
+function hasSurchargeAmount(line: VatLineText): boolean {
+  const amount = parseDecimal(text(line.equivalenceSurchargeAmount));
+  return amount !== null && toCents(amount) !== 0;
 }
 
 /** El primer problema de la lista, o null si todas estan completas o vacias. */
@@ -172,7 +180,8 @@ export function parseVatLineInputs(raw: string): { lines: ParsedVatLineInput[] }
       vatRate: parseDecimal(text(line.vatRate))!,
       vatAmount: parseDecimal(text(line.vatAmount))!,
       equivalenceSurchargeRate: surchargeRate,
-      equivalenceSurchargeAmount: surchargeAmount,
+      // Sin % y con cuota 0: la linea no lleva recargo.
+      equivalenceSurchargeAmount: surchargeRate === null && !hasSurchargeAmount(line) ? null : surchargeAmount,
     });
   }
   return { lines };

@@ -28,6 +28,13 @@ describe("vatLineProblem (F-014)", () => {
       .toContain("falta la base, el % de IVA y la cuota");
   });
 
+  it("cuota de recargo 0 sin %: cuenta como vacía, como en el export", () => {
+    expect(vatLineProblem(line("100", "21", "21", { equivalenceSurchargeAmount: "0" }), 1)).toBeNull();
+    expect(vatLineProblem(line("100", "21", "21", { equivalenceSurchargeAmount: "0,00" }), 1)).toBeNull();
+    const parsed = parseVatLineInputs(JSON.stringify([line("100", "21", "21", { equivalenceSurchargeAmount: "0" })]));
+    expect(parsed).toEqual({ lines: [{ taxBase: 100, vatRate: 21, vatAmount: 21, equivalenceSurchargeRate: null, equivalenceSurchargeAmount: null }] });
+  });
+
   it("cuota de recargo sin su %: también incompleta", () => {
     expect(vatLineProblem(line("100", "21", "21", { equivalenceSurchargeAmount: "5.2" }), 1)).toBe(
       "La línea 1 de IVA está incompleta: tiene cuota de recargo de equivalencia pero falta su %.",

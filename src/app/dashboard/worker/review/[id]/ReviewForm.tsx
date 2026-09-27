@@ -423,9 +423,10 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   // Recargo de equivalencia: va por linea de IVA (ver vatLines), no aqui.
   // Solo relevante en compras de clientes minoristas acogidos a RE
   // (sessionContext.equivalenceSurchargeCustomer). Panel plegable, expandido
-  // si ya venia con recargo en alguna linea.
+  // si ya venia con recargo en alguna linea (el % o solo la cuota: si no, el
+  // error de «cuota sin %» pedia corregir un campo escondido).
   const [showSurchargePanel, setShowSurchargePanel] = useState<boolean>(
-    initialVatLines.some((l) => l.equivalenceSurchargeRate != null),
+    initialVatLines.some((l) => l.equivalenceSurchargeRate != null || l.equivalenceSurchargeAmount != null),
   );
 
   // Tipo emitida/recibida — editable en la revisión. Si la factura se subió
@@ -2344,7 +2345,9 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                 {showSurchargePanel && (
                   <div className="mt-2 space-y-2">
                     {vatLines.map((line, idx) => {
-                      const hasSurcharge = line.equivalenceSurchargeRate !== "" || openSurchargeLines.has(idx);
+                      const hasSurcharge = line.equivalenceSurchargeRate !== ""
+                        || line.equivalenceSurchargeAmount !== ""
+                        || openSurchargeLines.has(idx);
                       return (
                         <div key={idx} className="flex items-center gap-2 rounded-lg border border-slate-200 p-2">
                           <label className="flex w-24 flex-shrink-0 items-center gap-1.5 text-[12px] font-medium text-slate-600">
