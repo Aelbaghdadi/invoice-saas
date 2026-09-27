@@ -32,8 +32,15 @@ function mkInvoice(id: string, totalAmount: number | null, splitInvoices?: numbe
 }
 
 describe("a3ExclusionReason", () => {
-  it.each([0, 0.004, -0.004, null])("excluye total %j", (total) => {
+  it.each([0, 0.004, -0.004])("excluye total %j", (total) => {
     expect(a3ExclusionReason(mkInvoice("x", total))).toBe("total_cero");
+  });
+
+  it("un total vacío no es total 0: es bloqueante (sin_total), con un solo texto", () => {
+    expect(a3ExclusionReason(mkInvoice("x", null))).toBe("bloqueante");
+    const [warning] = validateForA3Export([mkInvoice("x", null)]);
+    expect(warning.blockers).toContain("Total vacío");
+    expect(warning.blockers.filter((b) => b.startsWith("Total = 0"))).toEqual([]);
   });
 
   it.each([0.01, -121, 121])("deja pasar total %j", (total) => {

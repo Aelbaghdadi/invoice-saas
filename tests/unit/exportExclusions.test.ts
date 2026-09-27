@@ -17,9 +17,9 @@ describe("exportExclusionReason", () => {
     expect(exportExclusionReason({ totalAmount: 121, _count: { splitInvoices: 3 } })).toBe("dividida");
   });
 
-  it("total 0 (o nulo) se queda fuera", () => {
+  it("total 0 se queda fuera; un total vacío no es «total 0» (lo decide sin_total)", () => {
     expect(exportExclusionReason({ totalAmount: 0 })).toBe("total_cero");
-    expect(exportExclusionReason({ totalAmount: null })).toBe("total_cero");
+    expect(exportExclusionReason({ totalAmount: null })).toBeNull();
   });
 });
 

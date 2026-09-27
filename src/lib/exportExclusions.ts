@@ -25,7 +25,10 @@ export function exportExclusionReason(inv: {
   _count?: { splitInvoices?: number };
 }): ExportExclusionReason | null {
   if ((inv._count?.splitInvoices ?? 0) > 0) return "dividida";
-  if (Math.abs(Number(inv.totalAmount ?? 0)) < 0.005) return "total_cero";
+  // Un total vacio no es un total 0: es un dato que falta (bloqueante,
+  // sin_total), y salian los dos textos a la vez.
+  if (inv.totalAmount == null) return null;
+  if (Math.abs(Number(inv.totalAmount)) < 0.005) return "total_cero";
   return null;
 }
 
