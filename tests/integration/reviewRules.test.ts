@@ -166,6 +166,19 @@ describe("validar exige lo mínimo en el servidor (F-009)", () => {
     expect((await row()).status).toBe("VALIDATED");
   });
 
+  it("guardar una VALIDATED tampoco se salta las demás comprobaciones de validar", async () => {
+    await prisma.invoice.update({ where: { id }, data: { status: "VALIDATED" } });
+    const antes = await row();
+    // Emisor igual al cliente (ERR-VALIDATE-001).
+    expect((await save({ issuerCif: w.client.cif })).error).toMatchObject({ code: "ERR-VALIDATE-001" });
+    // Intracomunitaria de venta sin marcar bienes o servicios.
+    await prisma.invoice.update({ where: { id }, data: { type: "SALE" } });
+    const venta = { type: "SALE", receiverCif: "PT515160873", receiverName: "Cliente PT", operationType: "INTRACOM",
+      vatLines: JSON.stringify([{ taxBase: "100", vatRate: "0", vatAmount: "0" }]), totalAmount: "100", intracomGoodsType: "" };
+    expect((await save(venta)).error).toBe("Marca si la entrega intracomunitaria es de bienes o de servicios antes de validar.");
+    expect((await row()).receiverCif).toBe(antes.receiverCif);
+  });
+
   it("un ticket con la cuenta genérica se valida sin NIF", async () => {
     await prisma.client.update({ where: { id: w.client.id }, data: { simplifiedSupplierAccount: "40099999", simplifiedExpenseAccount: "62900000" } });
     const r = await validate(await form({ issuerCif: "", issuerName: "", supplierAccount: "40099999", expenseAccount: "62900000" }));

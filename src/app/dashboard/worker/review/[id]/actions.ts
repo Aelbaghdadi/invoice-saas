@@ -316,7 +316,11 @@ async function parseAndSave(
   // Tipo confirmado en la revisión (desplegable). Si la factura se subió como
   // "No lo sé", aquí queda fijado; al validar exigimos un tipo concreto.
   const submittedType = data.type === "PURCHASE" || data.type === "SALE" ? data.type : null;
-  if (validate && !submittedType && invoice.typeUnconfirmed) {
+  // Las comprobaciones de validar se aplican tambien al guardar una VALIDATED
+  // o una EXPORTED legacy (reviewAllowedFrom("save") las admite): la pantalla
+  // no ofrece Guardar ahi, pero una llamada directa las saltaba.
+  const enforceRules = validate || invoice.status === "VALIDATED" || invoice.status === "EXPORTED";
+  if (enforceRules && !submittedType && invoice.typeUnconfirmed) {
     return { error: "Indica si la factura es emitida o recibida." };
   }
   const effectiveType: "PURCHASE" | "SALE" =
@@ -339,7 +343,7 @@ async function parseAndSave(
   // OCR confunde los dos cuadros de la factura. Solo bloqueamos al
   // validar — guardar borrador con el conflicto se permite para que el
   // gestor pueda corregirlo en pasos.
-  if (validate && finalIssuerCif && finalReceiverCif && finalIssuerCif === finalReceiverCif) {
+  if (enforceRules && finalIssuerCif && finalReceiverCif && finalIssuerCif === finalReceiverCif) {
     return { error: appError("ERR-VALIDATE-001", `cif=${finalIssuerCif}`) };
   }
 
@@ -386,7 +390,7 @@ async function parseAndSave(
     : effectiveType === "PURCHASE"
       ? goodsTypeFromOperationType(submittedOperationType)
       : normalizeGoodsType(data.intracomGoodsType);
-  if (validate && isIntracom && !intracomGoodsType) {
+  if (enforceRules && isIntracom && !intracomGoodsType) {
     return { error: "Marca si la entrega intracomunitaria es de bienes o de servicios antes de validar." };
   }
   const intracomGoodsSource = intracomGoodsType ? normalizeGoodsSource(data.intracomGoodsSource) : null;
@@ -517,10 +521,9 @@ async function parseAndSave(
 
   // Lo minimo para validar, tambien al guardar la correccion de una ya
   // validada (F-009, F-014). La pantalla lo avisa antes, con la misma funcion.
-  // Guardar sin validar tambien llega a una VALIDATED o a una EXPORTED legacy
-  // (reviewAllowedFrom("save")): la pantalla no lo ofrece, pero una llamada
-  // directa dejaria una validada sin total o descuadrada.
-  if (validate || invoice.status === "VALIDATED" || invoice.status === "EXPORTED") {
+  // Tambien al guardar una VALIDATED o una EXPORTED (enforceRules): una
+  // llamada directa dejaria una validada sin total o descuadrada.
+  if (enforceRules) {
     const [problem] = validationProblems({
       type: effectiveType,
       invoiceNumber: newData.invoiceNumber,
