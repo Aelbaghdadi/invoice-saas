@@ -251,18 +251,53 @@ Ambos requieren header `Authorization: Bearer $CRON_SECRET`.
   Docker** (`RUN npx vitest run tests/unit`, F-032), sin `.env` ni base de
   datos: si uno falla, no hay imagen. Por eso en `tests/unit` no puede haber
   tests que necesiten Postgres, variables de entorno o red.
-- **Integración contra Postgres**: van en otra carpeta (por ejemplo
-  `tests/integration/`), fuera de la barrera del build y del `include` de
-  `vitest.config.ts`, que solo recoge `tests/unit/**`. Se lanzan aparte, con
-  una `DATABASE_URL` de test.
+- **Integración contra Postgres (F-033)**: en `tests/integration/`, fuera de
+  la barrera del build y del `include` de `vitest.config.ts`, que solo recoge
+  `tests/unit/**`. Tienen su propia config (`vitest.integration.config.ts`) y
+  se lanzan con `npm run test:integration` (ver abajo).
 - **E2E (Playwright)**: en `tests/e2e/`. Flujos críticos: login,
   subir factura, validar, exportar.
 
 Convención: tests **no mockean Prisma**. Los que usan Prisma van contra
-una DB Postgres de test (Supabase tier gratis o local), y por eso fuera de
-`tests/unit`. Si añades tests que pasan en
-local pero fallan en CI, lo más probable es que tengas datos
-sucios; siempre limpia con `prisma.$transaction` o seed específico.
+una DB Postgres de test y por eso fuera de `tests/unit`.
+
+### Tests de integración
+
+**Base de datos.** Solo usan `TEST_DATABASE_URL`, nunca `DATABASE_URL` (en
+local apunta a Supabase). La guarda (`tests/integration/setup/guard.ts`) no
+arranca si falta, si no es Postgres o si no es claramente de pruebas: tiene
+que estar en esta máquina (`localhost`, `127.0.0.1`, `::1`) o llevar «test»
+en el nombre de la base de datos. Cada test la vacía.
+
+Un Postgres local, por ejemplo con Docker:
+
+```bash
+docker run -d --name facturocr-test -p 55432:5432 \
+  -e POSTGRES_PASSWORD=test -e POSTGRES_DB=facturocr_test postgres:16
+export TEST_DATABASE_URL=postgresql://postgres:test@127.0.0.1:55432/facturocr_test
+npm run test:integration
+```
+
+(o con un Postgres instalado: `createdb facturocr_test` y la URL
+correspondiente).
+
+**Qué hace el harness.**
+- `globalSetup` aplica las migraciones con `prisma migrate deploy` contra
+  `TEST_DATABASE_URL` (las mismas que en producción; nunca `reset`).
+- Antes de cada test se vacían todas las tablas menos `_prisma_migrations`
+  (TRUNCATE). Los ficheros corren uno detrás de otro: comparten la BD.
+- Solo se simulan la sesión (`@/lib/auth`, con `signInAs`), `next/cache`,
+  `next/navigation`, `after()` (se encola; el test lo ejecuta con
+  `runAfterCallbacks`), el OCR (Document AI y Gemini, con `stubOcr`; el
+  parser Facturae es el real) y S3 (un servidor en memoria por fichero, que
+  puede ir lento o caerse con `fakeS3().setMode(...)`). Prisma y Postgres son
+  los reales. Sin `RESEND_API_KEY`, el correo no sale.
+- Factorías (`helpers/factories.ts`): `makeFirm("A")` crea una asesoría con
+  admin, gestor asignado, cliente con portal y facturas; `makeTwoFirms()`,
+  dos, para los tests de aislamiento entre asesorías.
+- Carreras: `holdLock(sql)` (`helpers/locks.ts`) abre una transacción que
+  bloquea (`LOCK TABLE`, `SELECT … FOR UPDATE`) y la mantiene hasta
+  `release()`, para parar una acción a mitad y cruzarle otra.
 
 ## Limitaciones conocidas / deuda
 
