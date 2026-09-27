@@ -366,7 +366,8 @@ function ruleInvoice(inv: InvoiceWithClient): RuleInvoice {
  * bien. Se queda como aviso.
  *
  * El NIF usa el mismo texto que validar (con la pista de la cuenta generica),
- * para no confundirlo con el aviso de «NIF vacío» de las que pueden ir sin el.
+ * para no confundirlo con el aviso «Sin NIF: en esta operación no es
+ * obligatorio...» de las que pueden ir sin el.
  */
 export function a3BlockingProblems(inv: InvoiceWithClient): string[] {
   const rule = ruleInvoice(inv);
@@ -405,8 +406,15 @@ export function a3BlockingProblems(inv: InvoiceWithClient): string[] {
   return blockers;
 }
 
-/** Revisa las facturas antes de exportar. Primero las que tienen algo
- *  bloqueante, despues las que solo tienen avisos; sin recortar. */
+/**
+ * Revisa las facturas antes de exportar. Una entrada por factura con algo
+ * que decir, con su severidad: «bloqueante» (no entra en el fichero hasta
+ * que se corrija), «aviso» (entra) o «fuera» (no entra y no hay nada que
+ * corregir: la original de una division, una rectificativa todo a cero).
+ * Primero las bloqueantes, luego los avisos y al final las de fuera; dentro
+ * de cada una, en el orden de las facturas. Sin recortar: eso lo hace la
+ * vista previa.
+ */
 export function validateForA3Export(invoices: InvoiceWithClient[]): A3ValidationWarning[] {
   const results: A3ValidationWarning[] = [];
 
@@ -430,8 +438,9 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
     const nif = isPurchase ? inv.issuerCif : inv.receiverCif;
     const country = isPurchase ? inv.issuerCountry : inv.receiverCountry;
 
-    // Sin NIF en una operacion no nacional (importacion, intracomunitaria...)
-    // no bloquea: puede ser un proveedor extranjero sin NIF espanol.
+    // Sin NIF donde no es obligatorio (ventas nacionales, importaciones,
+    // inversion del sujeto pasivo, tickets con la cuenta generica) no
+    // bloquea: se avisa. En intracomunitarias si bloquea (NIF-IVA, arriba).
     if (!nif && !blockers.some((b) => b.includes("NIF"))) {
       warnings.push("Sin NIF: en esta operación no es obligatorio, pero irá a A3 sin NIF");
     }
@@ -571,7 +580,7 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
   //
   // Se agrupa por emisor, que en emitidas es el propio cliente: una asesoria
   // exporta varios clientes a la vez y cada uno lleva su numeracion. Sin NIF
-  // no hay grupo fiable (ya avisa "NIF vacío" por separado).
+  // no hay grupo fiable (la falta de NIF ya se avisa o bloquea por separado).
   // Map en vez de results.find: con miles de facturas era cuadratico.
   const byInvoiceId = new Map(results.map((r) => [r.invoiceId, r]));
   const bySeries = new Map<string, InvoiceWithClient[]>();

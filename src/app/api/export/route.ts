@@ -47,15 +47,6 @@ async function splitParentIds(invoices: { id: string }[]): Promise<Set<string>> 
   return new Set(children.map((c) => c.splitFromId).filter((id): id is string => id != null));
 }
 
-/**
- * Vista previa: recuento y avisos. Solo lectura; la descarga es por POST
- * (F-071): un GET con efectos se dispara con un enlace o una precarga.
- *
- * validateForA3Export existia pero no la llamaba nadie: se calculaban los
- * avisos (NIF vacio, descuadres, total cero, tipo de operacion incompatible
- * con el sentido) y se tiraban. Es el unico punto donde un error fiscal se
- * puede ver ANTES de que el fichero entre en la contabilidad del cliente.
- */
 /** Mismo orden en la vista previa y en el fichero. El id desempata: con dos
  *  facturas del mismo dia el orden cambiaba de una consulta a otra, y con el
  *  la lista de avisos y las filas del Excel. */
@@ -70,6 +61,15 @@ const EXPORT_ORDER_BY = [
  *  previa. Las bloqueantes van todas. */
 const PREVIEW_WARNING_LIMIT = 50;
 
+/**
+ * Vista previa: recuento y avisos. Solo lectura; la descarga es por POST
+ * (F-071): un GET con efectos se dispara con un enlace o una precarga.
+ *
+ * validateForA3Export existia pero no la llamaba nadie: se calculaban los
+ * avisos (NIF vacio, descuadres, total cero, tipo de operacion incompatible
+ * con el sentido) y se tiraban. Es el unico punto donde un error fiscal se
+ * puede ver ANTES de que el fichero entre en la contabilidad del cliente.
+ */
 export async function GET(req: NextRequest) {
   const admin = await requireAdmin();
   if (admin instanceof NextResponse) return admin;
