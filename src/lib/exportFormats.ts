@@ -10,7 +10,7 @@ import {
 } from "@/lib/validators";
 import { isForeignCurrency } from "@/lib/currency";
 import { goodsTypeFromSaleAccount } from "@/lib/intracomGoods";
-import { invoiceBalanceDiffCents } from "@/lib/invoiceBalance";
+import { invoiceBalanceDiffCents, isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { formatEur } from "@/lib/format";
 import { findNumberingGaps } from "@/lib/invoiceNumbering";
 import { isStandardVatRate, isSurchargeRate } from "@/lib/equivalenceSurcharge";
@@ -416,10 +416,10 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
       const sumSurcharge = lines.reduce((s, l) => s + l.equivalenceSurchargeAmount, 0);
       const irpf    = inv.irpfAmount ? Number(inv.irpfAmount) : 0;
       if (Math.abs(sumBase) > 0 || Math.abs(sumAmt) > 0) {
-        const diff = Math.abs(invoiceBalanceDiffCents({
-          sumBase, sumAmount: sumAmt, sumSurcharge, irpf, total: totalNum,
-        }));
-        if (diff > 0) warnings.push(`Descuadre Base+IVA vs Total: ${formatEur(diff / 100)}`);
+        const balance = { sumBase, sumAmount: sumAmt, sumSurcharge, irpf, total: totalNum };
+        if (!isInvoiceBalanced(balance)) {
+          warnings.push(`Descuadre Base+IVA vs Total: ${formatEur(Math.abs(invoiceBalanceDiffCents(balance)) / 100)}`);
+        }
       }
     }
 

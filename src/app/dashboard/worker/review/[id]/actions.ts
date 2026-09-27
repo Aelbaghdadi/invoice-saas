@@ -31,6 +31,7 @@ import {
   goodsTypeLearning,
 } from "@/lib/intracomGoods";
 import { normalizeCurrency } from "@/lib/currency";
+import { isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { applyRectificativeSign } from "@/lib/rectificative";
 import { foldSurchargeLines, completeReadSurcharges, surchargeAuditValue } from "@/lib/equivalenceSurcharge";
 import { exportFingerprint, type FingerprintInvoice } from "@/lib/exportFingerprint";
@@ -480,11 +481,9 @@ async function parseAndSave(
   if (signedLines.lines.length > 0 && newData.totalAmount !== null) {
     const sBase = signedLines.lines.reduce((s, l) => s + l.taxBase, 0);
     const sAmount = signedLines.lines.reduce((s, l) => s + l.vatAmount, 0);
-    const expected = sBase + sAmount + sumSurcharge - (newData.irpfAmount ?? 0);
-    const diff = Math.abs(
-      Math.round(expected * 100) - Math.round(newData.totalAmount * 100)
-    );
-    isValid = diff <= 2;
+    isValid = isInvoiceBalanced({
+      sumBase: sBase, sumAmount: sAmount, sumSurcharge, irpf: newData.irpfAmount ?? 0, total: newData.totalAmount,
+    });
   }
 
   // Build audit log entries for changed fields

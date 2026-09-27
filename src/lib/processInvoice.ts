@@ -13,6 +13,7 @@ import {
 import { detectIssues } from "@/lib/issueDetector";
 import { appendAuditLogs } from "@/lib/auditLog";
 import { ocrFenceWhere } from "@/lib/invoiceStatuses";
+import { isInvoiceBalanced } from "@/lib/invoiceBalance";
 
 // La escritura final son unas pocas consultas; 15 s por si espera un bloqueo
 // de fila (los 5 s por defecto dejaban el resultado en OCR_ERROR).
@@ -158,11 +159,7 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     const { taxBase, vatAmount, totalAmount, irpfAmount, vatLines } = extracted;
     let isValid: boolean | null = null;
     if (taxBase !== null && vatAmount !== null && totalAmount !== null) {
-      const expected = taxBase + vatAmount - (irpfAmount ?? 0);
-      const diff = Math.abs(
-        Math.round(expected * 100) - Math.round(totalAmount * 100)
-      );
-      isValid = diff <= 2;
+      isValid = isInvoiceBalanced({ sumBase: taxBase, sumAmount: vatAmount, irpf: irpfAmount ?? 0, total: totalAmount });
     }
 
     // Save extraction as separate record (datos brutos OCR + job tracking)
@@ -571,11 +568,10 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     if (signed.lines.length > 0 && signed.totalAmount !== null) {
       const sBase = signed.lines.reduce((s, l) => s + l.taxBase, 0);
       const sAmount = signed.lines.reduce((s, l) => s + l.vatAmount, 0);
-      const expected = sBase + sAmount + totalSurchargeAmount - (signed.irpfAmount ?? 0);
-      const diff = Math.abs(
-        Math.round(expected * 100) - Math.round(signed.totalAmount * 100)
-      );
-      finalIsValid = diff <= 2;
+      finalIsValid = isInvoiceBalanced({
+        sumBase: sBase, sumAmount: sAmount, sumSurcharge: totalSurchargeAmount,
+        irpf: signed.irpfAmount ?? 0, total: signed.totalAmount,
+      });
     } else {
       finalIsValid = isValid;
     }

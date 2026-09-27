@@ -40,7 +40,7 @@ import {
   reviewLockReason,
 } from "@/lib/invoiceStatuses";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
-import { invoiceBalanceDiffCents } from "@/lib/invoiceBalance";
+import { invoiceBalanceDiffCents, isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { sanitizeAccountingAccountInput, padAccountingAccount } from "@/lib/accountingAccount";
 import {
   isIntracomOperation,
@@ -733,14 +733,15 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   // Math semaphore: Total = Σ Bases + Σ Cuotas + Σ Recargo - Retencion IRPF
   const totalNum   = parseFloat(totalAmount) || 0;
   const hasValues  = vatTotals.anyFilled && totalAmount;
-  const balanceDiffCents = invoiceBalanceDiffCents({
+  const balanceInput = {
     sumBase: vatTotals.sumBase,
     sumAmount: vatTotals.sumAmount,
     sumSurcharge: vatTotals.sumSurcharge,
     irpf: retentionAmount,
     total: totalNum,
-  });
-  const mathOk = hasValues ? balanceDiffCents === 0 : null;
+  };
+  const balanceDiffCents = invoiceBalanceDiffCents(balanceInput);
+  const mathOk = hasValues ? isInvoiceBalanced(balanceInput) : null;
   // Lo que suman las lineas, para ensenarlo junto al total cuando no cuadra.
   const calculado = vatTotals.sumBase + vatTotals.sumAmount + vatTotals.sumSurcharge - retentionAmount;
 

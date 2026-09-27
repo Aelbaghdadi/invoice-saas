@@ -3,6 +3,7 @@ import type { ExtractedInvoice } from "@/lib/ocr";
 import type { Invoice, IssueType } from "@prisma/client";
 import type { OperationTypeName } from "@/lib/validators";
 import { formatEur } from "@/lib/format";
+import { invoiceBalanceDiffCents, isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { formatDateEs } from "@/lib/dates";
 import { periodLabel } from "@/lib/period";
 
@@ -115,8 +116,12 @@ export async function detectIssues(
     const sumSurcharge = extraction.vatLines.reduce(
       (s, l) => s + (l.equivalenceSurchargeAmount ?? 0), 0);
     const expected = sumBases + sumAmounts + sumSurcharge - (extraction.irpfAmount ?? 0);
-    const diff = Math.abs(Math.round(expected * 100) - Math.round(extraction.totalAmount * 100));
-    if (diff > 2) {
+    const balance = {
+      sumBase: sumBases, sumAmount: sumAmounts, sumSurcharge,
+      irpf: extraction.irpfAmount ?? 0, total: extraction.totalAmount,
+    };
+    if (!isInvoiceBalanced(balance)) {
+      const diff = Math.abs(invoiceBalanceDiffCents(balance));
       const formula = `Base + IVA${sumSurcharge ? " + Rec. Equiv." : ""}${extraction.irpfAmount ? " - IRPF" : ""}`;
       issues.push({
         type: "MATH_MISMATCH",
