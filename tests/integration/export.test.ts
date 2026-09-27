@@ -281,6 +281,14 @@ describe("bloqueantes en el export (F-025)", () => {
     }
   });
 
+  it("orden estable: con la misma fecha desempata el id", async () => {
+    for (const id of ["orden-z", "orden-a", "orden-m"]) {
+      await makeInvoice(w.client, { ...april, id, invoiceNumber: null });
+    }
+    const body = await preview();
+    expect(body.warnings.map((x: { invoiceId: string }) => x.invoiceId)).toEqual(["orden-a", "orden-m", "orden-z"]);
+  });
+
   it("si todas son bloqueantes: 422 ERR-EXPORT-004 y no se marca nada", async () => {
     await makeInvoice(w.client, { ...april, supplierAccount: null });
     signInAs(w.admin);

@@ -56,6 +56,16 @@ async function splitParentIds(invoices: { id: string }[]): Promise<Set<string>> 
  * con el sentido) y se tiraban. Es el unico punto donde un error fiscal se
  * puede ver ANTES de que el fichero entre en la contabilidad del cliente.
  */
+/** Mismo orden en la vista previa y en el fichero. El id desempata: con dos
+ *  facturas del mismo dia el orden cambiaba de una consulta a otra, y con el
+ *  la lista de avisos y las filas del Excel. */
+const EXPORT_ORDER_BY = [
+  { periodYear: "asc" as const },
+  { periodMonth: "asc" as const },
+  { invoiceDate: "asc" as const },
+  { id: "asc" as const },
+];
+
 /** Cuantas facturas con avisos (o que no van al Excel) se mandan a la vista
  *  previa. Las bloqueantes van todas. */
 const PREVIEW_WARNING_LIMIT = 50;
@@ -78,7 +88,7 @@ export async function GET(req: NextRequest) {
       client: true,
       vatLines: { orderBy: { position: "asc" } },
     },
-    orderBy: [{ periodYear: "asc" }, { periodMonth: "asc" }, { invoiceDate: "asc" }],
+    orderBy: EXPORT_ORDER_BY,
   });
   const previewInvoices = withSplitCounts(previewRows, await splitParentIds(previewRows));
   const allWarnings = validateForA3Export(previewInvoices);
@@ -160,11 +170,7 @@ export async function POST(req: NextRequest) {
       client: true,
       vatLines: { orderBy: { position: "asc" } },
     },
-    orderBy: [
-      { periodYear:  "asc" },
-      { periodMonth: "asc" },
-      { invoiceDate: "asc" },
-    ],
+    orderBy: EXPORT_ORDER_BY,
   });
 
   const candidates = withSplitCounts(candidateRows, await splitParentIds(candidateRows));
