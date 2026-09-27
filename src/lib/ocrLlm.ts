@@ -76,8 +76,17 @@ type PdfTextItem = {
 const MAX_FIRST_PAGES = 5;
 /** Tiempo maximo leyendo texto; si se pasa, el PDF va por la imagen. */
 const TEXT_BUDGET_MS = 2_000;
-/** Texto maximo que se manda a Gemini (antes, hasta 1,9 M caracteres). */
-const MAX_TEXT_FOR_GEMINI = 40_000;
+/** Texto maximo que se manda a Gemini (antes, hasta 1,9 M caracteres): el
+ *  principio y el final, que es donde suelen ir los totales. */
+const GEMINI_TEXT_HEAD = 30_000;
+const GEMINI_TEXT_TAIL = 10_000;
+
+/** El texto para Gemini: entero si cabe; si no, cabeza y cola con una marca.
+ *  Con slice(0, 40000) se perdia la ultima pagina, la de los totales. */
+export function textForGemini(text: string): string {
+  if (text.length <= GEMINI_TEXT_HEAD + GEMINI_TEXT_TAIL) return text;
+  return `${text.slice(0, GEMINI_TEXT_HEAD)}\n[… texto recortado …]\n${text.slice(-GEMINI_TEXT_TAIL)}`;
+}
 /** Texto que se guarda en el JSON crudo de la extraccion. */
 const RAW_TEXT_EXCERPT = 4_000;
 
@@ -117,6 +126,11 @@ export async function extractPdfTextAndItems(
 
     for (const pageNum of pagesToRead(pdf.numPages)) {
       if (Date.now() - startedAt > budgetMs) return { text: "", items: [], timedOut: true };
+      // Las paginas que no se leen se marcan, para que Gemini devuelva null
+      // en lo que no ve en vez de inventarlo.
+      if (pageNum === pdf.numPages && pdf.numPages > MAX_FIRST_PAGES + 1) {
+        text += `[… páginas ${MAX_FIRST_PAGES + 1} a ${pdf.numPages - 1} omitidas …]\n`;
+      }
       const page = await pdf.getPage(pageNum);
 
       // viewport a escala 1: convierte coordenadas PDF (origen abajo-izquierda)
@@ -581,7 +595,7 @@ export async function extractFromPdfTextWithGemini(base64: string): Promise<{ re
   }
 
   const { extracted } = await callGemini([
-    { text: `Extrae los campos de esta factura:\n\n${text.slice(0, MAX_TEXT_FOR_GEMINI)}` },
+    { text: `Extrae los campos de esta factura:\n\n${textForGemini(text)}` },
   ]);
   const bboxes = findBboxesInPdf(extracted, items);
 

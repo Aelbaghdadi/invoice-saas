@@ -185,9 +185,15 @@ describe("límites de la extracción (revisión 1 del PR #9, punto 2)", () => {
     expect(pagesToRead(50)).toEqual([1, 2, 3, 4, 5, 50]);
   });
 
-  it("un PDF de 30 páginas: solo el texto de esas 6", async () => {
+  it("un PDF de 30 páginas: solo el texto de esas 6, con las demás marcadas como omitidas", async () => {
     const { text } = await extractPdfTextAndItems(await pdfWithText(["Pagina {p} de la factura"], 30));
     expect(text.match(/Pagina \d+/g)).toEqual(["Pagina 1", "Pagina 2", "Pagina 3", "Pagina 4", "Pagina 5", "Pagina 30"]);
+    expect(text).toContain("[… páginas 6 a 29 omitidas …]\nPagina 30");
+  });
+
+  it("con 6 páginas o menos no hay nada que marcar", async () => {
+    const { text } = await extractPdfTextAndItems(await pdfWithText(["Pagina {p} de la factura"], 6));
+    expect(text).not.toContain("omitidas");
   });
 
   it("si se pasa del tiempo, texto vacío (y va por la imagen)", async () => {
@@ -195,16 +201,28 @@ describe("límites de la extracción (revisión 1 del PR #9, punto 2)", () => {
     expect(await extractPdfTextAndItems(pdf, -1)).toEqual({ text: "", items: [], timedOut: true });
   });
 
-  it("a Gemini le llegan como mucho 40.000 caracteres", async () => {
+  it("a Gemini le llegan como mucho 40.000 caracteres, con el principio y el final", async () => {
     let sent = 0;
+    let sentText = "";
     vi.stubGlobal("fetch", vi.fn(async (_url: string, init: { body: string }) => {
-      sent = JSON.parse(init.body).contents[0].parts[0].text.length;
+      sentText = JSON.parse(init.body).contents[0].parts[0].text;
+      sent = sentText.length;
       return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify(factura) }] } }] }));
     }));
     const line = "Concepto 0042 Servicio de mantenimiento mensual de la instalacion B12345674 importe 121,00 EUR ".repeat(2);
-    await extractPdfWithGemini(await pdfWithText(Array.from({ length: 70 }, () => line), 6));
+    const doc = await PDFDocument.create();
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    for (let p = 0; p < 6; p++) {
+      const page = doc.addPage([595, 842]);
+      for (let i = 0; i < 70; i++) page.drawText(line, { x: 20, y: 820 - i * 11, size: 5, font });
+      if (p === 5) page.drawText("TOTAL ULTIMA PAGINA 999,99", { x: 20, y: 20, size: 5, font });
+    }
+    await extractPdfWithGemini(Buffer.from(await doc.save()).toString("base64"));
     expect(sent).toBeGreaterThan(39_000);
-    expect(sent).toBeLessThanOrEqual(40_000 + "Extrae los campos de esta factura:\n\n".length);
+    expect(sent).toBeLessThanOrEqual(40_000 + "Extrae los campos de esta factura:\n\n".length + "\n[… texto recortado …]\n".length);
+    expect(sentText).toContain("[… texto recortado …]");
+    // La última página (la de los totales) llega.
+    expect(sentText).toContain("TOTAL ULTIMA PAGINA 999,99");
   });
 });
 
