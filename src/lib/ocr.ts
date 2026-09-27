@@ -496,6 +496,9 @@ async function parseFacturaeXml(xml: string): Promise<ExtractedInvoice> {
 
   // Invoice header
   const header = inv?.InvoiceHeader ?? inv?.invoiceHeader;
+  // En Facturae 3.2 / 3.2.2 la fecha de emision va en InvoiceIssueData; solo
+  // se buscaba en InvoiceHeader y la de un XML real no se leia.
+  const issueData = inv?.InvoiceIssueData ?? inv?.invoiceIssueData;
   const totals = inv?.InvoiceTotals ?? inv?.invoiceTotals;
 
   // Tax lines (IVA repercutido). Facturae permite multiples tipos.
@@ -550,7 +553,7 @@ async function parseFacturaeXml(xml: string): Promise<ExtractedInvoice> {
     receiverCif:   safeStr(buyerTax?.TaxIdentificationNumber ?? buyerTax?.taxIdentificationNumber),
     invoiceNumber: safeStr(header?.InvoiceNumber ?? header?.invoiceNumber
                      ?? header?.InvoiceSeriesCode ?? header?.invoiceSeriesCode),
-    invoiceDate:   safeStr(header?.IssueDate ?? header?.issueDate),
+    invoiceDate:   safeStr(issueData?.IssueDate ?? issueData?.issueDate ?? header?.IssueDate ?? header?.issueDate),
     taxBase:       sumBases ?? safeNum(totals?.TotalGrossAmountBeforeTaxes ?? totals?.totalGrossAmountBeforeTaxes
                      ?? firstTax?.TaxableBase?.TotalAmount ?? firstTax?.taxableBase?.totalAmount),
     vatRate:       vatLines.length === 1 ? vatLines[0].vatRate : safeNum(firstTax?.TaxRate ?? firstTax?.taxRate),
@@ -560,7 +563,7 @@ async function parseFacturaeXml(xml: string): Promise<ExtractedInvoice> {
                      ?? totals?.TotalTaxesWithheld ?? totals?.totalTaxesWithheld),
     totalAmount:   safeNum(totals?.InvoiceTotal ?? totals?.invoiceTotal),
     currency:      normalizeCurrency(
-      inv?.InvoiceIssueData?.InvoiceCurrencyCode ?? inv?.invoiceIssueData?.invoiceCurrencyCode
+      issueData?.InvoiceCurrencyCode ?? issueData?.invoiceCurrencyCode
       ?? facturae?.FileHeader?.Batch?.InvoiceCurrencyCode ?? facturae?.fileHeader?.batch?.invoiceCurrencyCode,
     ),
     // El recargo de equivalencia en Facturae iria como una linea de impuesto

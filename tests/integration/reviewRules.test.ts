@@ -249,8 +249,9 @@ describe("validar exige lo mínimo en el servidor (F-009)", () => {
 
 describe("cuota = base × % por línea (F-022)", () => {
   it("el OCR la manda a «Requiere atención» con el aviso, aunque el total cuadre", async () => {
-    // Facturae con 100 al 10 % y cuota 21: el total (121) cuadra.
-    fakeS3().put("k-xml", facturaeXml({ buyerCif: w.client.cif, taxRate: "10.00" }));
+    // Facturae con 200 al 10 % y cuota 42: el total (242) cuadra. Otro total
+    // que la factura del beforeEach: con la fecha leida seria un duplicado.
+    fakeS3().put("k-xml", facturaeXml({ buyerCif: w.client.cif, base: "200.00", taxRate: "10.00", taxAmount: "42.00", total: "242.00" }));
     const { id: nueva } = await makeInvoice(w.client, {
       filename: "f.xml", storageKey: "k-xml", fileType: "application/xml", status: "UPLOADED",
       invoiceNumber: null, invoiceDate: null, issuerName: null, issuerCif: null,
@@ -261,7 +262,7 @@ describe("cuota = base × % por línea (F-022)", () => {
     expect(inv.status).toBe("NEEDS_ATTENTION");
     expect(inv.issues.map((i) => [i.type, i.field, i.description])).toEqual([[
       "MATH_MISMATCH", "vatLines",
-      "El desglose por tipo no cuadra. Línea 1: la cuota de IVA es 21,00 € y la base × 10 % da 10,00 €.",
+      "El desglose por tipo no cuadra. Línea 1: la cuota de IVA es 42,00 € y la base × 10 % da 20,00 €.",
     ]]);
   });
 
@@ -513,9 +514,8 @@ describe("«Por clasificar»: al clasificar se miran también el cuadre y el des
 });
 
 describe("duplicados en ventas (estrategia B): se compara el destinatario", () => {
-  // detectIssues directo: el parser Facturae no lee la fecha de la fixture
-  // (IssueDate va en InvoiceIssueData y lo busca en InvoiceHeader), y la
-  // estrategia B necesita fecha.
+  // detectIssues directo, para controlar lo que se ha leido (la estrategia B
+  // necesita fecha, importe y destinatario).
   async function saleDuplicates(
     buyerCif: string | null,
     read: { issuerCif?: string | null; invoiceNumber?: string | null; receiverName?: string | null } = {},
