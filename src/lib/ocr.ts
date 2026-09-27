@@ -474,6 +474,11 @@ export async function extractInvoiceFromXml(xml: string): Promise<OcrResult> {
   return { extracted, rawJson: xml };
 }
 
+/** «2026-09-14», «2026-09-14+02:00» o «2026-09-14T10:00:00Z» -> «2026-09-14». */
+function calendarDay(value: string | null): string | null {
+  return value?.match(/^\s*(\d{4}-\d{2}-\d{2})/)?.[1] ?? value;
+}
+
 async function parseFacturaeXml(xml: string): Promise<ExtractedInvoice> {
   // parseTagValue: false deja los valores como texto. Si no, «0042» se leia
   // como 42, «1.10» como 1.1 y «12E4» como 120000: el numero de factura
@@ -562,7 +567,9 @@ async function parseFacturaeXml(xml: string): Promise<ExtractedInvoice> {
     receiverCif:   safeStr(buyerTax?.TaxIdentificationNumber ?? buyerTax?.taxIdentificationNumber),
     invoiceNumber: safeStr(header?.InvoiceNumber ?? header?.invoiceNumber
                      ?? header?.InvoiceSeriesCode ?? header?.invoiceSeriesCode),
-    invoiceDate:   safeStr(issueData?.IssueDate ?? issueData?.issueDate ?? header?.IssueDate ?? header?.issueDate),
+    // Solo el dia del calendario: con zona («2026-09-14+02:00») daba Invalid
+    // Date y la factura se guardaba sin fecha.
+    invoiceDate:   calendarDay(safeStr(issueData?.IssueDate ?? issueData?.issueDate ?? header?.IssueDate ?? header?.issueDate)),
     taxBase:       sumBases ?? safeNum(totals?.TotalGrossAmountBeforeTaxes ?? totals?.totalGrossAmountBeforeTaxes
                      ?? firstTax?.TaxableBase?.TotalAmount ?? firstTax?.taxableBase?.totalAmount),
     vatRate:       vatLines.length === 1 ? vatLines[0].vatRate : safeNum(firstTax?.TaxRate ?? firstTax?.taxRate),

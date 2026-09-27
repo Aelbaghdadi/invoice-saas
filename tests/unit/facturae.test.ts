@@ -41,3 +41,12 @@ describe("Facturae: lote con varias facturas", () => {
     await expect(extractInvoiceFromXml(lote)).rejects.toThrow("El XML trae 2 facturas (lote): súbelas por separado.");
   });
 });
+
+describe("Facturae: fecha con zona (revisión 1 del PR #9, punto 13)", () => {
+  it("se queda con el día del calendario", async () => {
+    for (const date of ["2026-09-14+02:00", "2026-09-14Z", "2026-09-14T10:00:00+02:00"]) {
+      const { extracted } = await extractInvoiceFromXml(facturae322.replace("2026-09-14", date));
+      expect(extracted.invoiceDate, date).toBe("2026-09-14");
+    }
+  });
+});
