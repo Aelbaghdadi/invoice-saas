@@ -617,11 +617,10 @@ async function parseFacturaeXml(xml: string): Promise<ExtractedInvoice> {
       ?? facturae?.FileHeader?.Batch?.InvoiceCurrencyCode ?? facturae?.fileHeader?.batch?.invoiceCurrencyCode,
     ),
     isCorrective: facturaeInvoiceIsCorrective(inv),
-    // El recargo de equivalencia en Facturae iria como una linea de impuesto
-    // adicional dentro de TaxesOutputs con un TaxTypeCode distinto de IVA;
-    // no lo mapeamos aqui (fuera de alcance) para no inventar una lectura
-    // sin confirmar el formato real. Las lineas quedan sin ese dato; el
-    // gestor lo introduce a mano si aplica.
+    // El recargo de equivalencia va dentro del mismo Tax de IVA
+    // (EquivalenceSurcharge y EquivalenceSurchargeAmount), no como otra
+    // linea. Todavia no se mapea (tarea aparte): las lineas quedan sin ese
+    // dato y el gestor lo introduce a mano si aplica.
     // Facturae no marca si las lineas son bienes o servicios.
     supplyType: null,
     vatLines,
