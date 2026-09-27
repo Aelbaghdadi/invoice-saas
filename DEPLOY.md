@@ -81,7 +81,7 @@ con una **Scheduled Task** de Coolify (o cron externo) con la cabecera
 `Authorization: Bearer <CRON_SECRET>`:
 
 - `GET` o `POST /api/cron/retry-stuck` — reintenta facturas atascadas y pasa a «Error OCR» las que ya agotaron los reintentos (p. ej. cada 15 min).
-- `GET` o `POST /api/cron/closure-reminders` — recordatorios de cierre (p. ej. diario).
+- `GET` o `POST /api/cron/closure-reminders` — recordatorios de cierre: **una vez al mes** (p. ej. el día 5 a las 9:00, como estaba en `vercel.json`). No lleva la cuenta de lo enviado: cada ejecución vuelve a mandar el recordatorio a todos los clientes con el mes anterior sin cerrar, así que programado a diario les llegaría un correo al día.
 
 Los dos aceptan GET y POST con la misma comprobación del secreto: usa el que
 permita la Scheduled Task.

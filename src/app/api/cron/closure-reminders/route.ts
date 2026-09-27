@@ -39,7 +39,8 @@ async function handle(req: Request) {
       },
     });
 
-    // Skip if already closed (and not reopened), or reminder already sent
+    // Skip if already closed (and not reopened). No se guarda si ya se
+    // mando el recordatorio: cada ejecucion lo reenvia (una vez al mes).
     if (closure && !closure.reopenedAt) continue;
 
     await sendClosureReminder({
