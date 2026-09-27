@@ -737,6 +737,10 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
 
   // Math semaphore: Total = Σ Bases + Σ Cuotas + Σ Recargo - Retencion IRPF
   const totalNum   = parseFloat(totalAmount) || 0;
+  // Importes negativos sin la casilla de rectificativa (F-012): el OCR ya no
+  // cambia signos, asi que o es un abono sin marcar o un signo mal leido.
+  const negativeWithoutRectificative = !isRectificative && (totalNum < 0 || vatLines.some((l) =>
+    parseFloat(l.taxBase) < 0 || parseFloat(l.vatAmount) < 0 || parseFloat(l.equivalenceSurchargeAmount) < 0));
   const hasValues  = vatTotals.anyFilled && totalAmount;
   const balanceInput = {
     sumBase: vatTotals.sumBase,
@@ -1946,6 +1950,16 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                   }`}
                 />
               </button>
+              {negativeWithoutRectificative && (
+                <button
+                  type="button"
+                  onClick={() => setShowRectificativePanel(true)}
+                  className="mx-3 mb-2 flex w-[calc(100%-1.5rem)] items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-left text-[12px] text-amber-700"
+                >
+                  <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
+                  Hay importes negativos y no está marcada como rectificativa: si es un abono, márcala; si no, corrige el signo.
+                </button>
+              )}
               {showRectificativePanel && (
                 <div className="space-y-2 border-t border-slate-100 p-3 pt-2">
                   <label className="flex items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2 cursor-pointer">

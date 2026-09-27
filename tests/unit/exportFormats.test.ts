@@ -345,6 +345,21 @@ describe("validateForA3Export — facturas emitidas y moneda", () => {
   });
 });
 
+describe("validateForA3Export — negativos sin marcar como rectificativa (F-012)", () => {
+  const negativos = { taxBase: -100 as never, vatAmount: -21 as never, totalAmount: -121 as never };
+
+  it("avisa si no está marcada", () => {
+    const [res] = validateForA3Export([mkInvoice(negativos)]);
+    expect(res.severity).toBe("aviso");
+    expect(res.warnings).toContain("Importes negativos sin marcar como rectificativa: si es un abono, márcala en la revisión; si no, corrige el signo");
+  });
+
+  it("marcada, o en positivo: no", () => {
+    const res = validateForA3Export([mkInvoice({ ...negativos, isRectificative: true }), mkInvoice({ id: "inv-2" })]);
+    expect(res.flatMap((r) => r.warnings).filter((w) => w.startsWith("Importes negativos"))).toEqual([]);
+  });
+});
+
 describe("validateForA3Export — cuentas del sentido contrario", () => {
   it("una validada con cuentas al revés: aviso, no bloqueante", () => {
     const res = validateForA3Export([mkInvoice({ supplierAccount: "43000001" })]);

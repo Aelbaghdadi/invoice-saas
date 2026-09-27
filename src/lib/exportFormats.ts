@@ -556,6 +556,14 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
       }
     });
 
+    // Negativos sin la casilla de rectificativa (F-012): el OCR ya no cambia
+    // signos. O es un abono sin marcar (sin serie ni tipo en A3) o un signo
+    // mal leido.
+    if (!inv.isRectificative
+        && (Number(inv.totalAmount ?? 0) < 0 || checkedLines(inv).some((l) => l.taxBase < 0 || l.vatAmount < 0))) {
+      warnings.push("Importes negativos sin marcar como rectificativa: si es un abono, márcala en la revisión; si no, corrige el signo");
+    }
+
     // Cuentas del sentido contrario: validar ya no lo deja, pero una validada
     // antes de la regla pasaria sin que nadie lo vea. Aviso, no bloqueo: en
     // produccion no hay ninguna y el asiento puede ser intencionado.
