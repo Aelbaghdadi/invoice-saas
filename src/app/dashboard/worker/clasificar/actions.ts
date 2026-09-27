@@ -8,6 +8,7 @@ import { learnProviderRule } from "@/lib/providerRouting";
 import { detectInvoiceType } from "@/lib/invoiceRouting";
 import { DUPLICATE_SELECT, describeExisting } from "@/lib/issueDetector";
 import { mathIssues } from "@/lib/mathIssues";
+import { proposeSurchargesFromTotal } from "@/lib/equivalenceSurcharge";
 import { proposeOperationType } from "@/lib/operationTypeProposal";
 import { parseTaxId, taxIdWithCountry } from "@/lib/validators";
 import { accountEntryKey } from "@/lib/supplierMatching";
@@ -53,7 +54,7 @@ export async function classifyInvoice(invoiceId: string, clientId: string): Prom
 
   const client = await prisma.client.findUnique({
     where: { id: clientId },
-    select: { name: true, cif: true, advisoryFirmId: true },
+    select: { name: true, cif: true, advisoryFirmId: true, equivalenceSurchargeCustomer: true },
   });
   if (!client) return { error: "Cliente no encontrado" };
 
@@ -133,14 +134,30 @@ export async function classifyInvoice(invoiceId: string, clientId: string): Prom
   // Cuadre del total y cuota por linea, como en el OCR (que no las mira en
   // «Por clasificar»). Antes se usaba isValid a secas: con un centimo de
   // descuadre quedaba en «Requiere atención» sin incidencia que resolver.
+  const lines = invoice.vatLines.map((l) => ({
+    id: l.id,
+    taxBase: Number(l.taxBase),
+    vatRate: Number(l.vatRate),
+    vatAmount: Number(l.vatAmount),
+    equivalenceSurchargeRate: l.equivalenceSurchargeRate == null ? null : Number(l.equivalenceSurchargeRate),
+    equivalenceSurchargeAmount: l.equivalenceSurchargeAmount == null ? null : Number(l.equivalenceSurchargeAmount),
+  }));
+  // Cliente en recargo de equivalencia: se propone el recargo desde el total,
+  // como hace el OCR con los clientes que ya conoce. Sin esto salia «Error
+  // matemático: diferencia 5,20 €» donde el OCR habria puesto el recargo.
+  const surchargeProposals = client.equivalenceSurchargeCustomer
+    ? proposeSurchargesFromTotal(
+        lines,
+        invoice.totalAmount == null ? null : Number(invoice.totalAmount),
+        invoice.irpfAmount == null ? null : Number(invoice.irpfAmount),
+      )
+    : [];
+  for (const p of surchargeProposals) {
+    lines[p.index].equivalenceSurchargeRate = p.rate;
+    lines[p.index].equivalenceSurchargeAmount = p.amount;
+  }
   const mathProblems = mathIssues({
-    lines: invoice.vatLines.map((l) => ({
-      taxBase: Number(l.taxBase),
-      vatRate: Number(l.vatRate),
-      vatAmount: Number(l.vatAmount),
-      equivalenceSurchargeRate: l.equivalenceSurchargeRate == null ? null : Number(l.equivalenceSurchargeRate),
-      equivalenceSurchargeAmount: l.equivalenceSurchargeAmount == null ? null : Number(l.equivalenceSurchargeAmount),
-    })),
+    lines,
     taxBase: invoice.taxBase == null ? null : Number(invoice.taxBase),
     vatAmount: invoice.vatAmount == null ? null : Number(invoice.vatAmount),
     totalAmount: invoice.totalAmount == null ? null : Number(invoice.totalAmount),
@@ -168,6 +185,13 @@ export async function classifyInvoice(invoiceId: string, clientId: string): Prom
       routingReason: null,
     },
   });
+
+  for (const p of surchargeProposals) {
+    await prisma.invoiceVatLine.update({
+      where: { id: lines[p.index].id },
+      data: { equivalenceSurchargeRate: p.rate, equivalenceSurchargeAmount: p.amount },
+    });
+  }
 
   await prisma.invoiceStatusHistory.create({
     data: {

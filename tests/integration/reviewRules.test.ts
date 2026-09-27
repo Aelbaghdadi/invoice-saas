@@ -363,6 +363,16 @@ describe("«Por clasificar»: al clasificar se miran también el cuadre y el des
     expect(await issuesOf(inv)).toEqual([]);
   });
 
+  it("cliente en recargo: se propone el recargo desde el total, como en el OCR", async () => {
+    await prisma.client.update({ where: { id: w.client.id }, data: { equivalenceSurchargeCustomer: true } });
+    const inv = await routed([[100, 21, 21]], 126.2);
+    await classifyInvoice(inv, w.client.id);
+    const after = await prisma.invoice.findUniqueOrThrow({ where: { id: inv }, include: { vatLines: true } });
+    expect(after.status).toBe("PENDING_REVIEW");
+    expect(await issuesOf(inv)).toEqual([]);
+    expect(after.vatLines.map((l) => [Number(l.equivalenceSurchargeRate), Number(l.equivalenceSurchargeAmount)])).toEqual([[5.2, 5.2]]);
+  });
+
   it("cuadrada: a revisión normal y sin incidencias", async () => {
     const inv = await routed([[100, 21, 21]], 121);
     await classifyInvoice(inv, w.client.id);
