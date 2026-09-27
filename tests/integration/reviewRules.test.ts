@@ -346,7 +346,7 @@ describe("moneda extranjera sin convertir (F-025)", () => {
 describe("«Por clasificar»: al clasificar se miran también el cuadre y el desglose", () => {
   async function routed(lines: [number, number, number][], total: number) {
     const inv = await makeInvoice(w.client, {
-      status: "PENDING_ROUTING", routingCandidateIds: [w.client.id], totalAmount: total,
+      status: "PENDING_ROUTING", routingCandidateIds: [w.client.id], totalAmount: total, isValid: false,
       taxBase: lines.reduce((s, l) => s + l[0], 0), vatAmount: lines.reduce((s, l) => s + l[2], 0),
     });
     for (const [i, [taxBase, vatRate, vatAmount]] of lines.entries()) {
@@ -391,6 +391,7 @@ describe("«Por clasificar»: al clasificar se miran también el cuadre y el des
     await classifyInvoice(inv, w.client.id);
     const after = await prisma.invoice.findUniqueOrThrow({ where: { id: inv }, include: { vatLines: true } });
     expect(after.status).toBe("PENDING_REVIEW");
+    expect(after.isValid).toBe(true);
     expect(await issuesOf(inv)).toEqual([]);
     expect(after.vatLines.map((l) => [Number(l.equivalenceSurchargeRate), Number(l.equivalenceSurchargeAmount)])).toEqual([[5.2, 5.2]]);
   });

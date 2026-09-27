@@ -8,6 +8,7 @@ import { learnProviderRule } from "@/lib/providerRouting";
 import { detectInvoiceType } from "@/lib/invoiceRouting";
 import { DUPLICATE_SELECT, describeExisting } from "@/lib/issueDetector";
 import { mathIssues } from "@/lib/mathIssues";
+import { isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { proposeSurchargesFromTotal } from "@/lib/equivalenceSurcharge";
 import { proposeOperationType } from "@/lib/operationTypeProposal";
 import { parseTaxId, taxIdWithCountry } from "@/lib/validators";
@@ -151,14 +152,27 @@ export async function classifyInvoice(invoiceId: string, clientId: string): Prom
     lines[p.index].equivalenceSurchargeRate = p.rate;
     lines[p.index].equivalenceSurchargeAmount = p.amount;
   }
+  const totalAmount = invoice.totalAmount == null ? null : Number(invoice.totalAmount);
+  const irpfAmount = invoice.irpfAmount == null ? null : Number(invoice.irpfAmount);
   const mathProblems = mathIssues({
     lines,
     taxBase: invoice.taxBase == null ? null : Number(invoice.taxBase),
     vatAmount: invoice.vatAmount == null ? null : Number(invoice.vatAmount),
-    totalAmount: invoice.totalAmount == null ? null : Number(invoice.totalAmount),
-    irpfAmount: invoice.irpfAmount == null ? null : Number(invoice.irpfAmount),
+    totalAmount,
+    irpfAmount,
     operationType: proposal.operationType,
   });
+  // isValid con el recargo ya propuesto, como `finalIsValid` en el OCR: el
+  // del buzon se calculo sin recargo y la ficha lo pintaba en rojo.
+  const isValid = lines.length > 0 && totalAmount != null
+    ? isInvoiceBalanced({
+        sumBase: lines.reduce((s, l) => s + l.taxBase, 0),
+        sumAmount: lines.reduce((s, l) => s + l.vatAmount, 0),
+        sumSurcharge: lines.reduce((s, l) => s + (l.equivalenceSurchargeAmount ?? 0), 0),
+        irpf: irpfAmount ?? 0,
+        total: totalAmount,
+      })
+    : invoice.isValid;
   const targetStatus = isDuplicate || mathProblems.length > 0 ? "NEEDS_ATTENTION" : "PENDING_REVIEW";
 
   // Todo en una transaccion que empieza por reclamar la factura: si dos
@@ -175,6 +189,7 @@ export async function classifyInvoice(invoiceId: string, clientId: string): Prom
         operationType: proposal.operationType,
         intracomGoodsType: proposal.goodsType,
         intracomGoodsSource: proposal.source,
+        isValid,
         status: targetStatus,
         routingCandidateIds: [],
         routingReason: null,
