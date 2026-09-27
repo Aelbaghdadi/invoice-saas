@@ -12,6 +12,7 @@ import { currencyProblem, missingDataProblems, type RuleInvoice } from "@/lib/in
 import { goodsTypeFromSaleAccount } from "@/lib/intracomGoods";
 import { invoiceBalanceDiffCents, isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { describeVatLineMismatch, vatLineMismatches, type CheckedLine } from "@/lib/vatLineChecks";
+import { toCents } from "@/lib/money";
 import { formatEur } from "@/lib/format";
 import { findNumberingGaps } from "@/lib/invoiceNumbering";
 import { isStandardVatRate, isSurchargeRate } from "@/lib/equivalenceSurcharge";
@@ -67,6 +68,15 @@ function getExportLines(inv: InvoiceWithClient): ExportVatLine[] {
     equivalenceSurchargeRate: 0,
     equivalenceSurchargeAmount: 0,
   }];
+}
+
+/** ¿Todo a 0? Bases, cuotas, recargo y retencion. Solo asi una rectificativa
+ *  a cero no tiene nada que llevar a A3 (revision 2 del PR #7). */
+function allAmountsZero(inv: InvoiceWithClient): boolean {
+  const zero = (v: number | null | undefined) => v == null || toCents(Number(v)) === 0;
+  return checkedLines(inv).every((l) =>
+    zero(l.taxBase) && zero(l.vatAmount) && zero(l.equivalenceSurchargeAmount))
+    && zero(inv.irpfAmount == null ? null : Number(inv.irpfAmount));
 }
 
 /** Lineas para vatLineMismatches: como getExportLines, pero sin convertir
@@ -398,7 +408,7 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
     // (revision 1 del PR #7): la original de una division (van sus hijas) y
     // una rectificativa a cero (A3 no acepta importes cero).
     const outside = a3ExclusionReason(inv);
-    if (outside === "dividida" || (outside === "total_cero" && inv.isRectificative)) {
+    if (outside === "dividida" || (outside === "total_cero" && inv.isRectificative && allAmountsZero(inv))) {
       results.push({
         invoiceId: inv.id, invoiceNumber: inv.invoiceNumber, severity: "fuera", blockers: [],
         warnings: [outside === "dividida"
@@ -482,7 +492,11 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
     // exportada y sigue pendiente hasta que se corrija.
     const totalNum = Number(inv.totalAmount ?? 0);
     if (outside === "total_cero") {
-      blockers.unshift("Total = 0: no entra en el Excel ni se marca como exportada (A3 no acepta importes cero). Corrígela en la revisión");
+      // Una rectificativa a cero con importes (-100 al 21 % y +110 al 10 %)
+      // cuadra, pero A3 nunca recibiria esos importes del 303.
+      blockers.unshift(inv.isRectificative
+        ? "Rectificativa con total 0 pero con importes en las líneas: revísala"
+        : "Total = 0: no entra en el Excel ni se marca como exportada (A3 no acepta importes cero). Corrígela en la revisión");
     }
 
     // Un "tipo de IVA" que en realidad es el del recargo (5,2 / 1,4 / 0,5)
