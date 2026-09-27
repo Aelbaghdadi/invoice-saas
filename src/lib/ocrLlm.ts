@@ -18,18 +18,27 @@ type PdfTextItem = {
 };
 
 /**
- * Extrae texto e items con posición de cada página del PDF.
+ * Extrae texto e items con posición de cada página del PDF. Exportada para
+ * los tests.
  * La posición está normalizada a 0-1 (y desde arriba, al contrario que PDF space).
  */
-async function extractPdfTextAndItems(
+export async function extractPdfTextAndItems(
   base64: string,
 ): Promise<{ text: string; items: PdfTextItem[] }> {
   try {
+    // En Node pdfjs usa un «fake worker» que carga pdf.worker.mjs. Antes se
+    // ponia GlobalWorkerOptions.workerSrc = "", que pisa su valor por defecto:
+    // getDocument lanzaba, el catch devolvia texto vacio y todo PDF digital
+    // se trataba como escaneado (F-013). Con el worker cargado en
+    // globalThis.pdfjsWorker no hace falta workerSrc, y Next lo empaqueta.
+    const globals = globalThis as { pdfjsWorker?: unknown };
+    globals.pdfjsWorker ??= await import("pdfjs-dist/legacy/build/pdf.worker.mjs");
     const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
-    (pdfjsLib as any).GlobalWorkerOptions.workerSrc = "";
 
     const buffer = Buffer.from(base64, "base64");
-    const pdf = await (pdfjsLib as any).getDocument({ data: new Uint8Array(buffer) }).promise;
+    // verbosity 0: solo errores. Sin las fuentes estandar (standardFontDataUrl)
+    // avisa en cada PDF, y para sacar el texto no hacen falta.
+    const pdf = await (pdfjsLib as any).getDocument({ data: new Uint8Array(buffer), verbosity: 0 }).promise;
 
     let text = "";
     const items: PdfTextItem[] = [];
@@ -76,7 +85,10 @@ async function extractPdfTextAndItems(
       text += "\n";
     }
     return { text: text.trim(), items };
-  } catch {
+  } catch (err) {
+    // Sin texto el PDF va por la via multimodal como si fuera escaneado: que
+    // quede en el log, antes fallaba siempre sin que nadie lo viera.
+    console.error("extractPdfTextAndItems: no se pudo leer el texto del PDF", err);
     return { text: "", items: [] };
   }
 }
