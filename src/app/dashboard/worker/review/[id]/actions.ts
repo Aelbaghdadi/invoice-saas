@@ -292,14 +292,9 @@ async function parseAndSave(
   if (amountsError) return { error: amountsError };
   const isRectificativeFlag = data.isRectificative === "1";
 
-  // Validacion de cada linea de IVA antes de calcular nada. Permitimos
-  // importes negativos (abonos / rectificativas) sin exigir marcar el check:
-  // una rectificativa es, de momento, simplemente una factura en negativo.
-  for (const line of vatLines) {
-    if (line.vatRate < 0 || line.vatRate > 100) {
-      return { error: "El % IVA debe estar entre 0 y 100 en todas las lineas" };
-    }
-  }
+  // Importes negativos (abonos / rectificativas) sin exigir marcar el check:
+  // una rectificativa es, de momento, simplemente una factura en negativo. El
+  // % de cada linea (0-100) ya lo comprueba vatLineProblem.
 
   // Totales denormalizados sobre Invoice. vatRate solo tiene sentido cuando
   // hay una unica linea; multi-IVA -> null.

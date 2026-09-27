@@ -349,7 +349,7 @@ describe("validateForA3Export — cuentas del sentido contrario", () => {
   it("una validada con cuentas al revés: aviso, no bloqueante", () => {
     const res = validateForA3Export([mkInvoice({ supplierAccount: "43000001" })]);
     expect(res[0].severity).toBe("aviso");
-    expect(res[0].warnings).toContain("La cuenta 43000001 es de cliente y esta factura es recibida: usa una cuenta de proveedor (40x o 41x).");
+    expect(res[0].warnings).toContain("La cuenta 43000001 es de cliente y esta factura es recibida: usa una cuenta de proveedor (40x o 41x)");
   });
 
   it("un rappel no avisa", () => {

@@ -560,7 +560,8 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
     // antes de la regla pasaria sin que nadie lo vea. Aviso, no bloqueo: en
     // produccion no hay ninguna y el asiento puede ser intencionado.
     const direction = accountDirectionProblem(ruleInvoice(inv));
-    if (direction) warnings.push(direction.message);
+    // Sin el punto final, como los demas avisos: se unen con «; ».
+    if (direction) warnings.push(direction.message.replace(/\.$/, ""));
 
     // Base + IVA + Recargo - IRPF = Total. Suma sobre las lineas si las hay.
     if (inv.totalAmount && Math.abs(totalNum) >= 0.005) {
