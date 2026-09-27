@@ -247,12 +247,20 @@ Ambos requieren header `Authorization: Bearer $CRON_SECRET`.
 ## Testing
 
 - **Unit (Vitest)**: en `tests/unit/`. Foco en `lib/`: validators,
-  exportFormats, auditLog, reviewQueue.
+  exportFormats, auditLog, reviewQueue. **Corren en el build de la imagen
+  Docker** (`RUN npx vitest run tests/unit`, F-032), sin `.env` ni base de
+  datos: si uno falla, no hay imagen. Por eso en `tests/unit` no puede haber
+  tests que necesiten Postgres, variables de entorno o red.
+- **Integración contra Postgres**: van en otra carpeta (por ejemplo
+  `tests/integration/`), fuera de la barrera del build y del `include` de
+  `vitest.config.ts`, que solo recoge `tests/unit/**`. Se lanzan aparte, con
+  una `DATABASE_URL` de test.
 - **E2E (Playwright)**: en `tests/e2e/`. Flujos críticos: login,
   subir factura, validar, exportar.
 
-Convención: tests **no mockean Prisma**. Usan una DB Postgres de
-test (Supabase tier gratis o local). Si añades tests que pasan en
+Convención: tests **no mockean Prisma**. Los que usan Prisma van contra
+una DB Postgres de test (Supabase tier gratis o local), y por eso fuera de
+`tests/unit`. Si añades tests que pasan en
 local pero fallan en CI, lo más probable es que tengas datos
 sucios; siempre limpia con `prisma.$transaction` o seed específico.
 
