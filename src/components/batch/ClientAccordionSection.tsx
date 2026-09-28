@@ -14,6 +14,8 @@ type Props = {
   allDone?: boolean;
   /** Lotes terminados con algo por exportar: en vez de «Completado». */
   readyCount?: number;
+  /** Lotes con validadas que no van al Excel hasta corregirlas. */
+  blockedCount?: number;
   defaultOpen?: boolean;
   /** Si se pasa (el id del cliente), la sección recuerda en la sesión del
    *  navegador si estaba abierta. */
@@ -52,7 +54,7 @@ function readStored(storageKey: string | undefined): boolean | null {
  * renderiza el server y se pasan como children (no se duplica markup).
  */
 export function ClientAccordionSection({
-  name, cif, loteCount, invoiceCount, attentionCount = 0, allDone = false, readyCount = 0, defaultOpen = false, storageKey, children,
+  name, cif, loteCount, invoiceCount, attentionCount = 0, allDone = false, readyCount = 0, blockedCount = 0, defaultOpen = false, storageKey, children,
 }: Props) {
   const [localOpen, setLocalOpen] = useState(defaultOpen);
   const stored = useSyncExternalStore(subscribe, () => readStored(storageKey), () => null);
@@ -96,7 +98,12 @@ export function ClientAccordionSection({
               {readyCount === 1 ? "1 lote listo para exportar" : `${readyCount} lotes listos para exportar`}
             </span>
           )}
-          {attentionCount === 0 && allDone && readyCount === 0 && (
+          {blockedCount > 0 && (
+            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
+              {blockedCount === 1 ? "1 lote por corregir antes de exportar" : `${blockedCount} lotes por corregir antes de exportar`}
+            </span>
+          )}
+          {attentionCount === 0 && allDone && readyCount === 0 && blockedCount === 0 && (
             <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
               Completado
             </span>

@@ -183,11 +183,13 @@ export default async function BatchPage({
     lotes: typeof visibleGroups; attentionSum: number; invoiceSum: number; allDone: boolean;
     /** Lotes terminados con algo por exportar. */
     readySum: number;
+    /** Lotes con bloqueantes (validadas que no van al Excel sin corregir). */
+    blockedSum: number;
   }>();
   for (const g of visibleGroups) {
     let cg = clientGroupsMap.get(g.clientId);
     if (!cg) {
-      cg = { clientId: g.clientId, clientName: g.clientName, clientCif: g.clientCif, lotes: [], attentionSum: 0, invoiceSum: 0, allDone: true, readySum: 0 };
+      cg = { clientId: g.clientId, clientName: g.clientName, clientCif: g.clientCif, lotes: [], attentionSum: 0, invoiceSum: 0, allDone: true, readySum: 0, blockedSum: 0 };
       clientGroupsMap.set(g.clientId, cg);
     }
     cg.lotes.push(g);
@@ -195,6 +197,7 @@ export default async function BatchPage({
     cg.invoiceSum += g.total;
     if (g.validated + g.rejected + g.exported !== g.total) cg.allDone = false;
     else if (g.pendingExport > 0) cg.readySum++;
+    if (g.blockedExport > 0) cg.blockedSum++;
   }
   const clientGroups = Array.from(clientGroupsMap.values());
   clientGroups.sort((a, b) =>
@@ -268,7 +271,8 @@ export default async function BatchPage({
               attentionCount={cg.attentionSum}
               allDone={cg.allDone}
               readyCount={cg.readySum}
-              defaultOpen={singleClient || cg.attentionSum > 0 || cg.readySum > 0}
+              blockedCount={cg.blockedSum}
+              defaultOpen={singleClient || cg.attentionSum > 0 || cg.readySum > 0 || cg.blockedSum > 0}
               storageKey={singleClient ? undefined : cg.clientId}
             >
           {cg.lotes.map((g) => {
@@ -310,7 +314,7 @@ export default async function BatchPage({
                       )}
                       {closed ? (
                         <Badge variant="slate">Periodo cerrado</Badge>
-                      ) : allDone ? (
+                      ) : allDone && g.blockedExport === 0 ? (
                         <Badge variant="green">Completado</Badge>
                       ) : hasWork ? (
                         <Badge variant={g.attentionCount > 0 ? "yellow" : "blue"}>
