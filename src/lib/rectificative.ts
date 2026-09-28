@@ -97,6 +97,11 @@ export function applyRectificativeSign(a: RectificativeAmounts): RectificativeAm
   };
 }
 
+/** Texto de la incidencia de importes negativos (se cierra sola al guardar
+ *  cuando ya no quedan negativos). */
+export const NEGATIVE_AMOUNTS_HINT =
+  "La factura trae importes negativos: si es un abono, marca «Es una rectificativa» en la revisión; si no, corrige el signo.";
+
 /**
  * Incidencia del OCR sobre el signo, o null. El OCR no toca los signos: con
  * importes negativos hay que marcar la casilla (si es un abono) o corregirlos;
@@ -109,9 +114,7 @@ export function rectificativeSignHint(
   /** Ya se sabe que el documento lo menciona (guardado en el buzon). */
   mentioned = false,
 ): string | null {
-  if (anyNegativeAmount(a)) {
-    return "La factura trae importes negativos: si es un abono, marca «Es una rectificativa» en la revisión; si no, corrige el signo.";
-  }
+  if (anyNegativeAmount(a)) return NEGATIVE_AMOUNTS_HINT;
   if (mentioned || textMentionsRectificative(rawText)) {
     return "Parece rectificativa: revisa el signo. El documento habla de rectificativa, nota de crédito o factura de abono, "
       + "pero los importes vienen en positivo y no se han cambiado.";

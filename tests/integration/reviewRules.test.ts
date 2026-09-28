@@ -9,6 +9,7 @@ import { saveInvoiceFields } from "@/app/dashboard/worker/review/[id]/actions";
 import { fakeS3 } from "./helpers/fakeS3";
 import { facturaeXml } from "./helpers/fixtures";
 import { stubOcr } from "./helpers/ocr";
+import { NEGATIVE_AMOUNTS_HINT } from "@/lib/rectificative";
 import { parseTaxId } from "@/lib/validators";
 import { accountEntryKey } from "@/lib/supplierMatching";
 import { processInvoice } from "@/lib/processInvoice";
@@ -839,5 +840,33 @@ describe("Facturae rectificativa: la incidencia del signo (revisión 1 del PR #9
     expect((await prisma.invoice.findUniqueOrThrow({ where: { id: inv } })).status).toBe("PENDING_ROUTING");
     expect(await classifyInvoice(inv, w.client.id)).toEqual({ ok: true });
     expect(await issuesOf(inv)).toEqual([expect.stringMatching(/^Parece rectificativa: revisa el signo/)]);
+  });
+});
+
+describe("incidencias del signo al guardar (revisión 2 del PR #9, punto 9)", () => {
+  const issue = (description: string) => prisma.invoiceIssue.create({
+    data: { invoiceId: id, type: "MANUAL", field: "isRectificative", description },
+  });
+  const statusOf = async (issueId: string) => (await prisma.invoiceIssue.findUniqueOrThrow({ where: { id: issueId } })).status;
+
+  it("con la casilla marcada se cierran las dos", async () => {
+    const mention = await issue("Parece rectificativa: revisa el signo.");
+    const negative = await issue(NEGATIVE_AMOUNTS_HINT);
+    expect((await save({ isRectificative: "1", rectificativeType: "BY_DIFFERENCE" })).error).toBeNull();
+    expect([await statusOf(mention.id), await statusOf(negative.id)]).toEqual(["RESOLVED", "RESOLVED"]);
+  });
+
+  it("sin marcar: la de negativos se cierra si ya no quedan; la de la mención sigue", async () => {
+    const mention = await issue("Parece rectificativa: revisa el signo.");
+    const negative = await issue(NEGATIVE_AMOUNTS_HINT);
+    expect((await save({})).error).toBeNull();
+    expect([await statusOf(mention.id), await statusOf(negative.id)]).toEqual(["OPEN", "RESOLVED"]);
+  });
+
+  it("sin marcar y con negativos: sigue abierta", async () => {
+    const negative = await issue(NEGATIVE_AMOUNTS_HINT);
+    const negativos = { vatLines: JSON.stringify([{ taxBase: "-100", vatRate: "21", vatAmount: "-21" }]), totalAmount: "-121" };
+    expect((await save(negativos)).error).toBeNull();
+    expect(await statusOf(negative.id)).toBe("OPEN");
   });
 });

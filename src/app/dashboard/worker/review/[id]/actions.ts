@@ -35,7 +35,7 @@ import { isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { amountFieldsProblem, parseVatLineInputs } from "@/lib/vatLineInput";
 import { validationProblems } from "@/lib/invoiceRules";
 import { percentOf } from "@/lib/money";
-import { applyRectificativeSign } from "@/lib/rectificative";
+import { anyNegativeAmount, applyRectificativeSign, NEGATIVE_AMOUNTS_HINT } from "@/lib/rectificative";
 import { foldSurchargeLines, completeReadSurcharges, surchargeAuditValue } from "@/lib/equivalenceSurcharge";
 import { exportFingerprint, type FingerprintInvoice } from "@/lib/exportFingerprint";
 import { appError, type AppError } from "@/lib/errorCodes";
@@ -672,6 +672,18 @@ async function parseAndSave(
             toStatus: "VALIDATED",
             changedBy: userId,
           },
+        });
+      }
+      // Incidencias del signo (F-012): se cierran al guardar con la casilla
+      // marcada, y la de negativos tambien cuando ya no queda ninguno. Si no,
+      // seguian diciendo «márcala» junto a una rectificativa ya marcada.
+      const signIssuesToResolve = isRectificativeFlag ? {}
+        : !anyNegativeAmount(signedLines) ? { description: NEGATIVE_AMOUNTS_HINT }
+        : null;
+      if (signIssuesToResolve) {
+        await tx.invoiceIssue.updateMany({
+          where: { invoiceId, field: "isRectificative", status: "OPEN", ...signIssuesToResolve },
+          data: { status: "RESOLVED", resolvedBy: userId, resolvedAt: new Date() },
         });
       }
       if (auditEntries.length > 0) {

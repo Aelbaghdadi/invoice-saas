@@ -752,7 +752,10 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   // Incidencias abiertas del OCR sobre el signo (F-012): «Parece
   // rectificativa…» o «importes negativos…». Antes no se pintaban y el gestor
   // no veia por que la factura estaba en «Con incidencias».
-  const rectificativeIssues = issues.filter((i) => i.field === "isRectificative" && i.status === "OPEN");
+  // Solo mientras no esta marcada: con la casilla ya marcada decian «márcala».
+  const rectificativeIssues = isRectificative
+    ? []
+    : issues.filter((i) => i.field === "isRectificative" && i.status === "OPEN");
   const hasValues  = vatTotals.anyFilled && totalAmount;
   const balanceInput = {
     sumBase: vatTotals.sumBase,
