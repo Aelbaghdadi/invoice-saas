@@ -1,6 +1,6 @@
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { duplicateOriginalId } from "@/lib/duplicates";
+import { duplicateOriginalId, duplicateRejectionReason, findDuplicateOriginal } from "@/lib/duplicates";
 import { canAccessClient } from "@/lib/accessibleClients";
 import { accountsForDirection } from "@/lib/accountingAccount";
 import { redirect, notFound } from "next/navigation";
@@ -187,13 +187,19 @@ export default async function ReviewPage({
       }
     : null;
 
-  const issuesData = issues.map((i) => ({
-    id: i.id,
-    type: i.type,
-    status: i.status,
-    description: i.description,
-    field: i.field,
-    duplicateOf: i.type === "POSSIBLE_DUPLICATE" ? duplicateOriginalId(i.field) : null,
+  // En los duplicados abiertos, el motivo que recibiria el cliente con «Es
+  // duplicada» (nombra la original), no la descripcion interna.
+  const issuesData = await Promise.all(issues.map(async (i) => {
+    const duplicate = i.type === "POSSIBLE_DUPLICATE" && i.status === "OPEN";
+    return {
+      id: i.id,
+      type: i.type,
+      status: i.status,
+      description: i.description,
+      field: i.field,
+      duplicateOf: duplicate ? duplicateOriginalId(i.field) : null,
+      rejectionReason: duplicate ? duplicateRejectionReason(await findDuplicateOriginal(i.field, invoice.clientId)) : null,
+    };
   }));
 
   // Si la factura aun no tiene lineas de IVA pero si tiene base/cuota

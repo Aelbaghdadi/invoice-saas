@@ -107,6 +107,23 @@ export function describeExisting(existing: Omit<ExistingInvoice, "id">): string 
   return `la factura ${ref} subida el ${formatDateEs(existing.createdAt)} (${period})`;
 }
 
+/** Motivo del rechazo como duplicada, que le llega al cliente por correo. No
+ *  es la descripcion de la incidencia («Posible duplicado de… mismo CIF
+ *  emisor»), que es para el gestor. */
+export function duplicateRejectionReason(original: Omit<ExistingInvoice, "id"> | null): string {
+  return original
+    ? `Factura duplicada: ya recibimos ${describeExisting(original)}.`
+    : "Factura duplicada: ya la habíamos recibido.";
+}
+
+/** La original de una incidencia de duplicado, si la guarda y es del mismo
+ *  cliente (el filtro por cliente evita leer una factura de otra asesoria). */
+export async function findDuplicateOriginal(field: string | null, clientId: string): Promise<ExistingInvoice | null> {
+  const originalId = duplicateOriginalId(field);
+  if (!originalId) return null;
+  return prisma.invoice.findFirst({ where: { id: originalId, clientId }, select: DUPLICATE_SELECT });
+}
+
 /** El `field` de una incidencia POSSIBLE_DUPLICATE guarda la factura original
  *  (sin migracion), para enlazarla desde la revision. */
 const DUPLICATE_FIELD_PREFIX = "duplicateOf:";

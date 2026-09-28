@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { canAccessClient } from "@/lib/accessibleClients";
 import { notifyRejection, rejectInvoiceCore } from "@/lib/invoiceRejection";
+import { duplicateRejectionReason, findDuplicateOriginal } from "@/lib/duplicates";
 
 export type InvoiceQuickAction = { ok?: boolean; error?: string } | null;
 
@@ -28,8 +29,8 @@ async function assertAccess(
  * Rechazo rapido como duplicado desde el listado. No abre el modal: un
  * clic y listo, porque un duplicado no necesita revision.
  *
- * Usa rejectionCategory=DUPLICATE y un motivo autogenerado que incluye
- * el nombre del fichero duplicado original si se conoce.
+ * Usa rejectionCategory=DUPLICATE y un motivo para el cliente que nombra la
+ * factura original si la incidencia la guarda.
  */
 export async function quickRejectDuplicate(
   _prev: InvoiceQuickAction,
@@ -46,11 +47,14 @@ export async function quickRejectDuplicate(
   const access = await assertAccess(session, invoiceId);
   if (access) return access;
 
-  // Construye motivo a partir del issue POSSIBLE_DUPLICATE si existe
+  // Motivo para el cliente (le llega por correo), con la original si la
+  // incidencia la guarda. La descripcion de la incidencia es para el gestor.
   const dupIssue = await prisma.invoiceIssue.findFirst({
     where: { invoiceId, type: "POSSIBLE_DUPLICATE", status: "OPEN" },
+    select: { field: true, invoice: { select: { clientId: true } } },
   });
-  const reason = dupIssue?.description ?? "Factura duplicada detectada desde el listado";
+  const original = dupIssue ? await findDuplicateOriginal(dupIssue.field, dupIssue.invoice.clientId) : null;
+  const reason = duplicateRejectionReason(original);
 
   // El mismo flujo que rechazar desde la revision: exportada, estado,
   // periodo cerrado y escritura condicionada (F-057: cierra todas las

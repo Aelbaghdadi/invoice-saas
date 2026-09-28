@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { duplicateField, duplicateOriginalId, normalizeInvoiceNumber } from "@/lib/duplicates";
+import { duplicateField, duplicateOriginalId, duplicateRejectionReason, normalizeInvoiceNumber } from "@/lib/duplicates";
 
 describe("normalizeInvoiceNumber (F-010)", () => {
   it("mayúsculas, sin espacios ni separadores", () => {
@@ -35,5 +35,18 @@ describe("duplicateField / duplicateOriginalId", () => {
     expect(duplicateOriginalId(duplicateField("inv-7"))).toBe("inv-7");
     expect(duplicateOriginalId("taxBase")).toBeNull();
     expect(duplicateOriginalId(null)).toBeNull();
+  });
+});
+
+describe("duplicateRejectionReason (el motivo que recibe el cliente)", () => {
+  it("con la original: la nombra", () => {
+    expect(duplicateRejectionReason({
+      invoiceNumber: "F-100", filename: "a.pdf", createdAt: new Date("2026-09-10T10:00:00Z"),
+      periodType: "MONTHLY", periodMonth: 9, periodYear: 2026,
+    })).toMatch(/^Factura duplicada: ya recibimos la factura F-100 subida el 10\/09\/2026 \(/);
+  });
+
+  it("sin la original", () => {
+    expect(duplicateRejectionReason(null)).toBe("Factura duplicada: ya la habíamos recibido.");
   });
 });

@@ -123,6 +123,9 @@ type IssueData = {
   field: string | null;
   /** POSSIBLE_DUPLICATE: la factura original, si la incidencia la guarda. */
   duplicateOf: string | null;
+  /** POSSIBLE_DUPLICATE abierta: el motivo que recibe el cliente con «Es
+   *  duplicada». */
+  rejectionReason: string | null;
 };
 
 type SuggestedAccount = {
@@ -1212,16 +1215,18 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   };
 
   // Posible duplicado (F-016). «Es duplicada» la rechaza con la categoria
-  // DUPLICATE y el aviso como motivo (le llega al cliente): se confirma antes.
+  // DUPLICATE y un motivo para el cliente (le llega por correo): se
+  // confirma antes.
   const [isPendingDismiss, startDismiss] = useTransition();
   const handleIsDuplicate = async (issue: IssueData) => {
+    const reason = issue.rejectionReason ?? "Factura duplicada: ya la habíamos recibido.";
     const ok = await confirm({
       title: "¿Rechazar como duplicada?",
-      message: <>Se rechaza con este motivo, que le llega al cliente: «{issue.description}»</>,
+      message: <>Se rechaza con este motivo, que le llega al cliente: «{reason}»</>,
       confirmLabel: "Rechazar",
       tone: "danger",
     });
-    if (ok) submitReject(issue.description, "DUPLICATE");
+    if (ok) submitReject(reason, "DUPLICATE");
   };
   const handleNotDuplicate = (issue: IssueData) => {
     startDismiss(async () => {

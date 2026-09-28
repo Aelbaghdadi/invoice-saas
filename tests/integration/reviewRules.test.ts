@@ -1152,7 +1152,7 @@ describe("revisión con un posible duplicado abierto (F-016)", () => {
   it("validar sin confirmar no valida y devuelve la incidencia con la original", async () => {
     const r = await validateInvoice(null, await form({}));
     expect(r?.duplicateOf).toEqual([{ kind: "openIssue", id: originalId, label: "Posible duplicado de la factura OTRA-1." }]);
-    expect(r?.error).toBe("Esta factura tiene abierto un posible duplicado: Posible duplicado de la factura OTRA-1. Si no es la misma, confírmalo para validarla.");
+    expect(r?.error).toBe("Esta factura tiene abierto un aviso de duplicado. Si no es la misma, confírmalo para validarla.");
     expect((await row()).status).toBe("NEEDS_ATTENTION");
     expect(await issueStatus()).toBe("OPEN");
   });
@@ -1161,7 +1161,7 @@ describe("revisión con un posible duplicado abierto (F-016)", () => {
     const validada = await makeInvoice(w.client, { status: "VALIDATED", issuerCif: "B12345674", invoiceNumber: "F-77" });
     const r = await validateInvoice(null, await form({ invoiceNumber: "F-77" }));
     expect(r?.duplicateOf?.map((d) => [d.kind, d.id])).toEqual([["openIssue", originalId], ["validated", validada.id]]);
-    expect(r?.error).toMatch(/^Esta factura tiene abierto un posible duplicado: .* Ya hay otra factura validada con este número y este emisor: la factura F-77/);
+    expect(r?.error).toMatch(/^Esta factura tiene abierto un aviso de duplicado\. Ya hay otra factura validada con este número y este emisor: la factura F-77/);
     expect((await row()).status).toBe("NEEDS_ATTENTION");
   });
 
@@ -1242,9 +1242,16 @@ describe("«Es duplicada» del listado: el mismo flujo que rechazar (revisión 1
   it("pendiente: rechaza con DUPLICATE, cierra la incidencia y encola el correo", async () => {
     expect(await quickReject()).toEqual({ ok: true });
     const r = await row();
-    expect([r.status, r.rejectionCategory, r.rejectionReason]).toEqual(["REJECTED", "DUPLICATE", "Posible duplicado."]);
+    expect([r.status, r.rejectionCategory, r.rejectionReason]).toEqual(["REJECTED", "DUPLICATE", "Factura duplicada: ya la habíamos recibido."]);
     expect(await prisma.invoiceIssue.count({ where: { invoiceId: id, status: "OPEN" } })).toBe(0);
     expect(pendingAfterCallbacks()).toBe(1);
+  });
+
+  it("el motivo para el cliente nombra la original, no la descripción interna", async () => {
+    const original = await makeInvoice(w.client, { invoiceNumber: "F-100", status: "VALIDATED" });
+    await prisma.invoiceIssue.updateMany({ where: { invoiceId: id }, data: { field: `duplicateOf:${original.id}` } });
+    expect(await quickReject()).toEqual({ ok: true });
+    expect((await row()).rejectionReason).toMatch(/^Factura duplicada: ya recibimos la factura F-100 subida el \d{2}\/\d{2}\/\d{4} \(/);
   });
 
   it("con el periodo cerrado: no", async () => {

@@ -557,7 +557,7 @@ async function parseAndSave(
     if (duplicates.length > 0) {
       const texts = duplicates.map((d) => d.kind === "validated"
         ? `Ya hay otra factura validada con este número y este emisor: ${d.label}.`
-        : `Esta factura tiene abierto un posible duplicado: ${d.label}`);
+        : "Esta factura tiene abierto un aviso de duplicado.");
       return { error: `${texts.join(" ")} Si no es la misma, confírmalo para validarla.`, duplicateOf: duplicates };
     }
   }
