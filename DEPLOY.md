@@ -175,10 +175,15 @@ detalle va al log del contenedor con el prefijo `[health]`).
 [`src/instrumentation.ts`](src/instrumentation.ts) (`onRequestError`) escribe
 cada error del servidor (páginas, route handlers, server actions) como una
 línea JSON en el log: `level`, `time`, `path` (sin la query), `method`,
-`routePath`, `routeType`, `digest`, `name` y `message`. El mensaje se limpia de
-correos, NIF/CIF/NIE, IBAN y números largos, y no se guardan cabeceras ni
-cookies. El `digest` es el que ve el usuario en la pantalla de error: con él se
-encuentra la línea en el log.
+`routePath`, `routeType`, `digest`, `name` y `message`. El mensaje se limpia
+(lo entrecomillado, correos, NIF/CIF/NIE, IBAN, teléfonos y números largos) y
+no se guardan cabeceras ni cookies. El `digest` es el que ve el usuario en la
+pantalla de error: con él se encuentra la línea en el log.
+
+> La limpieza protege lo que sale **fuera** (el webhook). El log del
+> contenedor no queda limpio: Next escribe además el error completo con
+> `console.error`, con los datos que lleve. Trata el log como dato personal
+> (acceso restringido, retención limitada).
 
 - **`ALERT_WEBHOOK_URL`** (opcional): si está, cada error se manda también por
   POST a esa URL, como mucho 10 cada 5 minutos por proceso (los que se callan

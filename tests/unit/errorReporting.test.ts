@@ -12,6 +12,25 @@ describe("scrubMessage (F-034): sin datos personales", () => {
     expect(scrubMessage("teléfono 612345678901")).toBe("teléfono [num]");
   });
 
+  it("NIF con prefijo ES y separadores, IBAN con guiones o en minúsculas, teléfonos con espacios", () => {
+    expect(scrubMessage("ESB12345674 B-12345674 12345678-Z X-1234567-L es 12345678z")).toBe("[nif] [nif] [nif] [nif] [nif]");
+    expect(scrubMessage("iban es91-2100-0418-4502-0005-1332")).toBe("iban [iban]");
+    expect(scrubMessage("tel 612 345 678 o +34 612 34 56 78")).toBe("tel [tel] o [tel]");
+  });
+
+  it("un PrismaClientValidationError real no deja pasar los argumentos", () => {
+    const prisma = [
+      "Invalid `prisma.invoice.update()` invocation:",
+      "{", '  where: { id: "cmg1abc" },', "  data: {",
+      '    issuerName: "Ana Pérez García",', '    issuerCif: "ESB12345674",', '    receiverName: "O\'Brien \\"Pepe\\" SL",',
+      "    totalAmount: \"121,00\"", "  }", "}",
+      "Argument `totalAmount`: Invalid value provided. Expected Decimal, provided String.",
+    ].join("\n");
+    const out = scrubMessage(prisma);
+    expect(out).not.toMatch(/Ana|Pérez|B12345674|Brien|Pepe|121,00/);
+    expect(out).toContain("Invalid `prisma.invoice.update()` invocation");
+  });
+
   it("recorta los mensajes largos", () => {
     expect(scrubMessage("x".repeat(1000))).toHaveLength(300);
   });

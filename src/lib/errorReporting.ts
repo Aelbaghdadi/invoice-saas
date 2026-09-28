@@ -26,12 +26,21 @@ export type ErrorReport = {
 
 const MAX_MESSAGE = 300;
 
-/** Quita del mensaje lo que puede ser un dato personal. */
+/**
+ * Quita del mensaje lo que puede ser un dato personal. Primero todo lo
+ * entrecomillado: un PrismaClientValidationError vuelca los argumentos
+ * (`issuerName: "Ana Pérez García"`, `issuerCif: "ESB12345674"`). Despues,
+ * lo que quede suelto: correos, IBAN, NIF/CIF/NIE (con prefijo ES y
+ * separadores), telefonos y numeros largos.
+ */
 export function scrubMessage(message: string): string {
   return message
+    .replace(/"(?:[^"\\\n]|\\.)*"/g, '"…"')
+    .replace(/'(?:[^'\\\n]|\\.)*'/g, "'…'")
     .replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, "[email]")
-    .replace(/\b[A-Z]{2}\d{2}[ ]?(?:\d{4}[ ]?){4,7}\d{0,4}\b/g, "[iban]")
-    .replace(/\b(?:[XYZ]\d{7}|\d{8}|[ABCDEFGHJNPQRSUVW]\d{7})[A-Z0-9]\b/gi, "[nif]")
+    .replace(/\b[A-Z]{2}\d{2}(?:[ -]?[A-Z0-9]{4}){3,7}(?:[ -]?[A-Z0-9]{1,4})?\b/gi, "[iban]")
+    .replace(/\b(?:ES[ .-]?)?(?:[XYZ][ .-]?\d{7}[ .-]?[A-Z]|\d{8}[ .-]?[A-Z]|[ABCDEFGHJNPQRSUVW][ .-]?\d{7}[ .-]?[0-9A-J])\b/gi, "[nif]")
+    .replace(/(?:\+\d{1,3} ?)?\b\d{2,3}(?: \d{2,3}){2,4}\b/g, "[tel]")
     .replace(/\d{9,}/g, "[num]")
     .slice(0, MAX_MESSAGE);
 }
