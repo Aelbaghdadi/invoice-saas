@@ -169,6 +169,9 @@ describe("resumen del periodo al cliente (F-040)", () => {
     expect(sent!.html).toContain("F-9");
     expect(sent!.html).toContain("Ilegible &lt;script&gt;");
     expect(sent!.html).not.toContain("<script>");
+    // Preheader: «Resumen de tus facturas: T3 2026.», no «de el T3».
+    expect(sent!.html).toContain("Resumen de tus facturas: T3 2026.");
+    expect(sent!.html).not.toContain("de el T3");
   });
 });
 

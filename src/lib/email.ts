@@ -335,7 +335,7 @@ export async function notifyClientPeriodSummary(params: {
     params.clientEmail,
     `Resumen de ${period}: ${n(params.validated, "validada", "validadas")}, ${n(params.rejected.length, "rechazada", "rechazadas")}`,
     wrap({
-      preheader: `Resumen de tus facturas de ${periodText}.`,
+      preheader: `Resumen de tus facturas: ${period}.`,
       heroIcon: "&#128203;",
       heroColor: "#2563eb",
       heroBg: "#eff6ff",
