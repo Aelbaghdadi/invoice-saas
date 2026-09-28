@@ -22,8 +22,8 @@ import type { ExportChange } from "@/lib/reexportChanges";
 /** Una reexportada tal como llega en el JSON de la vista previa. */
 type ReexportPreview = {
   invoiceId: string;
-  invoiceNumber: string | null;
-  thirdPartyName: string;
+  a3InvoiceNumber: string;
+  a3Name: string;
   previousExportAt: string;
   previousExportBy: string | null;
   changes: ExportChange[] | null;
@@ -600,7 +600,7 @@ function ReexportList({ items, total }: { items: ReexportPreview[]; total: numbe
         {total === 1 ? "1 factura corregida después de exportarse" : `${total} facturas corregidas después de exportarse`}
       </p>
       <p className="mt-1 text-[11px] text-violet-600">
-        Ya están en A3 con el mismo NIF y número. Salen otra vez en el Excel y, aparte, en la hoja «Reexportadas — revisar en A3»: en A3 hay que borrar o corregir la anterior antes de importar.
+        Ya están en A3. Si ha cambiado el número o el NIF, la anterior sigue allí con los datos viejos. Salen otra vez en el Excel y, aparte, en la hoja «Reexportadas — revisar en A3»: en A3 hay que borrar o corregir la anterior antes de importar.
       </p>
       <ul className="mt-2 max-h-72 space-y-2 overflow-y-auto pr-1">
         {items.map((r) => (
@@ -610,9 +610,9 @@ function ReexportList({ items, total }: { items: ReexportPreview[]; total: numbe
               prefetch={false}
               className="font-medium underline decoration-violet-300 underline-offset-2 hover:text-violet-900"
             >
-              {r.invoiceNumber || "Sin número"}
+              {r.a3InvoiceNumber || "Sin número"}
             </Link>
-            {r.thirdPartyName ? ` — ${r.thirdPartyName}` : ""}
+            {r.a3Name ? ` — ${r.a3Name}` : ""}
             <span className="block text-[11px] text-violet-500">
               Exportada el {formatDateTimeEs(r.previousExportAt)}{r.previousExportBy ? ` por ${r.previousExportBy}` : ""}
             </span>

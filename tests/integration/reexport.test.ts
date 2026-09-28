@@ -56,7 +56,8 @@ describe("vista previa (F-018)", () => {
     expect(body.reexportCount).toBe(1);
     expect(body.reexportIds).toEqual([corrected]);
     const [r] = body.reexports;
-    expect(r).toMatchObject({ invoiceId: corrected, invoiceNumber: "F-1B", thirdPartyName: "Proveedor SL", previousExportBy: adminName });
+    // En A3 está como F-1: es la que hay que buscar allí.
+    expect(r).toMatchObject({ invoiceId: corrected, a3InvoiceNumber: "F-1", a3Nif: "B12345674", a3Name: "Proveedor SL", previousExportBy: adminName });
     expect(new Date(r.previousExportAt).getTime()).toBeGreaterThan(0);
     expect(r.changes).toEqual([
       { field: "Nº factura", before: "F-1", after: "F-1B" },
@@ -93,10 +94,10 @@ describe("descarga con reexportadas (F-018)", () => {
     expect(Object.keys(book)).toEqual(["Facturas recibidas", REEXPORT_SHEET_NAME]);
     expect(book["Facturas recibidas"]).toEqual(expected);
     const [header, ...rows] = book[REEXPORT_SHEET_NAME];
-    expect(header).toEqual(["Nº factura", "NIF", "Nombre", "Exportada antes el", "Exportada por", "Campo", "Antes", "Ahora"]);
+    expect(header).toEqual(["Nº factura en A3", "NIF en A3", "Nombre en A3", "Exportada antes el", "Exportada por", "Campo", "Antes", "Ahora"]);
     expect(rows.map((row) => [row[0], row[1], row[2], row[4], row[5], row[6], row[7]])).toEqual([
-      ["F-1B", "B12345674", "Proveedor SL", adminName, "Nº factura", "F-1", "F-1B"],
-      ["F-1B", "B12345674", "Proveedor SL", adminName, "Total", "121,00", "120,00"],
+      ["F-1", "B12345674", "Proveedor SL", adminName, "Nº factura", "F-1", "F-1B"],
+      ["F-1", "B12345674", "Proveedor SL", adminName, "Total", "121,00", "120,00"],
     ]);
     expect(await prisma.invoice.count({ where: { id: { in: [corrected, fresh] }, exportBatchId: { not: null } } })).toBe(2);
   });

@@ -3,8 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { appendAuditLogs } from "@/lib/auditLog";
 import { exportFingerprint, type FingerprintInvoice } from "@/lib/exportFingerprint";
 import { exportExtension, type ExportFormat, type InvoiceWithClient } from "@/lib/exportFormats";
-import { reexportChanges, type Reexport } from "@/lib/reexportChanges";
-import { taxIdWithCountry } from "@/lib/validators";
+import { a3Identity, reexportChanges, type Reexport } from "@/lib/reexportChanges";
 
 /**
  * Registro de una exportacion a A3: lote, items con snapshot, puntero
@@ -262,12 +261,12 @@ export async function findReexports(invoices: ExportInvoice[], firmId: string): 
   return invoices.flatMap((inv) => {
     const item = lastItem.get(inv.id);
     if (!item) return [];
-    const isSale = inv.type === "SALE";
+    const inA3 = a3Identity(item.snapshot, inv);
     return [{
       invoiceId: inv.id,
-      invoiceNumber: inv.invoiceNumber,
-      thirdPartyNif: taxIdWithCountry(isSale ? inv.receiverCif : inv.issuerCif, isSale ? inv.receiverCountry : inv.issuerCountry),
-      thirdPartyName: (isSale ? inv.receiverName : inv.issuerName) ?? "",
+      a3InvoiceNumber: inA3.invoiceNumber,
+      a3Nif: inA3.nif,
+      a3Name: inA3.name,
       previousExportAt: item.exportBatch.createdAt,
       previousExportBy: userName.get(item.exportBatch.userId) ?? null,
       changes: reexportChanges(item.snapshot, inv),

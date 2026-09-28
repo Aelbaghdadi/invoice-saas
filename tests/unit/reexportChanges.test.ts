@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { reexportChanges, reexportSheetRows } from "@/lib/reexportChanges";
+import { a3Identity, reexportChanges, reexportSheetRows } from "@/lib/reexportChanges";
 import { exportFingerprint } from "@/lib/exportFingerprint";
 
 const exported = {
@@ -102,9 +102,29 @@ describe("reexportChanges (F-018)", () => {
   });
 });
 
+describe("a3Identity (revisión 1 del PR #13, punto 2)", () => {
+  it("el número, el NIF y el nombre del último Excel, no los de ahora", () => {
+    expect(a3Identity(snapshot, { ...exported, invoiceNumber: "F-1B", issuerCif: "A58818501", issuerName: "Otro SL" }))
+      .toEqual({ invoiceNumber: "F-1", nif: "B12345674", name: "Proveedor SL" });
+  });
+
+  it("una rectificativa está en A3 con «_R»", () => {
+    expect(a3Identity(JSON.stringify({ ...exported, isRectificative: true }), exported).invoiceNumber).toBe("F-1_R");
+  });
+
+  it("en una emitida, el receptor; un extranjero, con su país", () => {
+    const sale = { ...exported, type: "SALE", receiverName: "Comprador", receiverCif: "515160873", receiverCountry: "PT" };
+    expect(a3Identity(JSON.stringify(sale), exported)).toEqual({ invoiceNumber: "F-1", nif: "PT515160873", name: "Comprador" });
+  });
+
+  it("sin snapshot legible, los actuales", () => {
+    expect(a3Identity("{roto", { ...exported, invoiceNumber: "F-9" }).invoiceNumber).toBe("F-9");
+  });
+});
+
 describe("reexportSheetRows (F-018)", () => {
   const base = {
-    invoiceId: "i1", invoiceNumber: "F-1", thirdPartyNif: "B12345674", thirdPartyName: "Proveedor SL",
+    invoiceId: "i1", a3InvoiceNumber: "F-1", a3Nif: "B12345674", a3Name: "Proveedor SL",
     previousExportAt: new Date("2026-05-02T08:30:00Z"), previousExportBy: "Ana",
   };
 
@@ -113,7 +133,7 @@ describe("reexportSheetRows (F-018)", () => {
       { field: "Total", before: "121,00", after: "120,00" },
       { field: "Fecha", before: "15/04/2026", after: "16/04/2026" },
     ] }])).toEqual([
-      ["Nº factura", "NIF", "Nombre", "Exportada antes el", "Exportada por", "Campo", "Antes", "Ahora"],
+      ["Nº factura en A3", "NIF en A3", "Nombre en A3", "Exportada antes el", "Exportada por", "Campo", "Antes", "Ahora"],
       ["F-1", "B12345674", "Proveedor SL", "02/05/2026 10:30", "Ana", "Total", "121,00", "120,00"],
       ["F-1", "B12345674", "Proveedor SL", "02/05/2026 10:30", "Ana", "Fecha", "15/04/2026", "16/04/2026"],
     ]);

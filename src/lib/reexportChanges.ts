@@ -17,9 +17,12 @@ export type ExportChange = { field: string; before: string; after: string };
 /** Una factura que vuelve al Excel tras corregirse despues de exportarse. */
 export type Reexport = {
   invoiceId: string;
-  invoiceNumber: string | null;
-  thirdPartyNif: string;
-  thirdPartyName: string;
+  /** Como esta en A3 (del ultimo Excel): el numero con «_R» en una
+   *  rectificativa, y el de antes si se ha corregido. Es la que hay que
+   *  buscar alli para borrarla o corregirla. */
+  a3InvoiceNumber: string;
+  a3Nif: string;
+  a3Name: string;
   previousExportAt: Date;
   /** Quien la exporto la ultima vez; null si ese usuario ya no esta. */
   previousExportBy: string | null;
@@ -29,7 +32,7 @@ export type Reexport = {
 
 export const REEXPORT_SHEET_NAME = "Reexportadas — revisar en A3";
 
-const REEXPORT_SHEET_HEADERS = ["Nº factura", "NIF", "Nombre", "Exportada antes el", "Exportada por", "Campo", "Antes", "Ahora"];
+const REEXPORT_SHEET_HEADERS = ["Nº factura en A3", "NIF en A3", "Nombre en A3", "Exportada antes el", "Exportada por", "Campo", "Antes", "Ahora"];
 
 /**
  * Filas de la hoja de reexportadas: una por cambio, con los datos de la
@@ -38,7 +41,7 @@ const REEXPORT_SHEET_HEADERS = ["Nº factura", "NIF", "Nombre", "Exportada antes
 export function reexportSheetRows(reexports: Reexport[]): string[][] {
   const rows = [REEXPORT_SHEET_HEADERS];
   for (const r of reexports) {
-    const invoice = [r.invoiceNumber ?? "", r.thirdPartyNif, r.thirdPartyName, formatDateTimeEs(r.previousExportAt), r.previousExportBy ?? "—"];
+    const invoice = [r.a3InvoiceNumber, r.a3Nif, r.a3Name, formatDateTimeEs(r.previousExportAt), r.previousExportBy ?? "—"];
     if (r.changes == null || r.changes.length === 0) {
       rows.push([...invoice, "—", "No se puede comparar con el Excel anterior", ""]);
       continue;
@@ -84,15 +87,31 @@ function shownLine(line: string): string {
 }
 
 /** null si el snapshot no se puede leer: no hay con que comparar. */
-export function reexportChanges(snapshot: string, current: FingerprintInvoice): ExportChange[] | null {
-  let before: FingerprintInvoice;
+/** El snapshot de ExportBatchItem, o null si no se puede leer. */
+function parseSnapshot(snapshot: string): FingerprintInvoice | null {
   try {
     const parsed: unknown = JSON.parse(snapshot);
     if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-    before = parsed as FingerprintInvoice;
+    return parsed as FingerprintInvoice;
   } catch {
     return null;
   }
+}
+
+/**
+ * Numero, NIF y nombre con los que la factura esta en A3: los del ultimo
+ * Excel, no los de ahora. Si se corrigio el numero (F-1 → F-1B), en A3 sigue
+ * F-1. Sin snapshot legible, los actuales.
+ */
+export function a3Identity(snapshot: string, current: FingerprintInvoice): { invoiceNumber: string; nif: string; name: string } {
+  const { header } = exportedColumns(parseSnapshot(snapshot) ?? current);
+  const value = (key: ExportedColumn["key"]) => header.find((c) => c.key === key)!.value;
+  return { invoiceNumber: value("invoiceNumber"), nif: value("thirdPartyNif"), name: value("thirdPartyName") };
+}
+
+export function reexportChanges(snapshot: string, current: FingerprintInvoice): ExportChange[] | null {
+  const before = parseSnapshot(snapshot);
+  if (!before) return null;
   const old = exportedColumns(before);
   const now = exportedColumns(current);
   const isSale = now.header[0].value === "SALE";
