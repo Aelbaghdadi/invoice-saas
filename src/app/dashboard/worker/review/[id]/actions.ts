@@ -544,7 +544,10 @@ async function parseAndSave(
     || normalizeInvoiceNumber(newData.invoiceNumber) !== normalizeInvoiceNumber(invoice.invoiceNumber)
     || (newData.type !== "SALE" && newData.issuerCif !== invoice.issuerCif)
     || yearOf(newData.invoiceDate) !== yearOf(invoice.invoiceDate);
-  const checkValidated = firstValidation || (validate && duplicateKeyChanged);
+  // enforceRules y no validate: guardar una VALIDATED/EXPORTED (el «Guardar»
+  // del aviso de cambios sin guardar, o una llamada directa) tambien mira las
+  // validadas si cambia la clave; si no, se colaba un duplicado en el Excel.
+  const checkValidated = firstValidation || (enforceRules && duplicateKeyChanged);
   //
   // confirmDuplicate lleva las claves de lo que el gestor vio y confirmo: si
   // con el dialogo abierto aparece otro (otro gestor valida una tercera

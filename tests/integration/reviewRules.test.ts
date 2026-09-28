@@ -1073,6 +1073,17 @@ describe("al validar, confirmación si ya hay otra validada con el mismo número
       expect((await row()).invoiceDate?.toISOString().slice(0, 10)).toBe("2025-12-20");
     });
 
+    it("guardar (sin validar) una validada con el número de otra validada: { error, duplicateOf } y no escribe (PR #11, punto 1)", async () => {
+      const original = await otra("VALIDATED");
+      await prisma.invoice.update({ where: { id }, data: { status: "VALIDATED", invoiceNumber: "F-OTRO", issuerCif: "B12345674" } });
+      const r = await saveInvoiceFields(null, await form({ invoiceNumber: "F-2026-001" }));
+      expect(r?.duplicateOf?.map((d) => d.id)).toEqual([original.id]);
+      expect((await row()).invoiceNumber).toBe("F-OTRO");
+      // Una pendiente se sigue guardando sin preguntar: el aviso es al validar.
+      await prisma.invoice.update({ where: { id }, data: { status: "PENDING_REVIEW" } });
+      expect((await save({ invoiceNumber: "F-2026-001" })).error).toBeNull();
+    });
+
     it("cambiando el número a uno ya validado: pregunta y no guarda sin confirmar", async () => {
       const original = await otra("VALIDATED");
       await prisma.invoice.update({ where: { id }, data: { status: "VALIDATED", invoiceNumber: "F-OTRO", issuerCif: "B12345674" } });

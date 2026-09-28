@@ -1029,9 +1029,23 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     if (choice === "discard") {
       markClean();
       leave();
-    } else if (choice === "save" && (await saveNow())) {
+    } else if (choice === "save" && (await (isValidated ? saveCorrectionNow() : saveNow()))) {
       leave();
     }
+  };
+  // En una validada, «Guardar» es «Guardar corrección» (validar): pasa por
+  // las mismas comprobaciones, el aviso de duplicado (F-010) y el aprendizaje
+  // de cuentas. Con saveInvoiceFields se lo saltaba. Si hace falta una
+  // pregunta (bienes/servicios o duplicado), el gestor se queda en la
+  // factura con la pregunta normal de la pagina.
+  const saveCorrectionNow = async (): Promise<boolean> => {
+    if (!validateChecksPass(false)) return false;
+    const question = pendingGoodsQuestion();
+    if (question) {
+      setGoodsQuestion(question);
+      return false;
+    }
+    return (await validateNow("", false)) === "ok";
   };
   // Para los Link: con cambios, se para la navegacion y se pregunta. Con
   // Ctrl/Cmd/Shift o boton central (pestaña nueva) no se sale de esta.
@@ -1056,95 +1070,106 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   // sale la pregunta de bienes/servicios). Enter nunca lo pone.
   const reopenRef = useRef(false);
 
+  // Valida (o guarda la correccion de una ya validada) y dice como ha ido:
+  // "ok", "error", o "asked" si ha hecho falta una confirmacion de duplicado
+  // (el aviso de cambios sin guardar no navega entonces: el gestor se queda
+  // en la factura).
+  const validateNow = async (goodsTypeScope: GoodsTypeScope, reopen: boolean): Promise<"ok" | "error" | "asked"> => {
+    let asked = false;
+    const fields = {
+      nextId: nextPendingId ?? "",
+      goodsTypeScope,
+      goodsTypeAssignedSeen: assignedGoodsType ?? "",
+      ...(reopen ? { reopen: "1" } : {}),
+    };
+    let res = await validateInvoice(null, buildFormData(fields));
+    // Posibles duplicados (F-010, F-016): otra ya validada con este numero
+    // y emisor, o un aviso de duplicado abierto. El servidor no valida sin
+    // que el gestor los confirme, todos en una sola confirmacion. Si con el
+    // dialogo abierto aparece otro, vuelve a preguntar con la lista nueva
+    // (con tope, por si acaso).
+    for (let round = 0; round < 3 && res?.duplicateOf?.length; round++) {
+      const duplicates = res.duplicateOf;
+      // En una ya validada es una correccion: se pregunta por guardarla.
+      const again = isValidated ? "¿Guardar la corrección igualmente?" : "¿Validar igualmente?";
+      const ok = await confirm({
+        title: again,
+        message: (
+          <>
+            <ul className="space-y-2">
+              {duplicates.map((dup, i) => (
+                <li key={i}>
+                  {dup.kind === "validated" ? (
+                    <>
+                      Ya hay otra factura con este número y este emisor:{" "}
+                      <Link href={`/dashboard/worker/review/${dup.id}`} target="_blank" className="font-medium underline">
+                        {dup.label}<span className="sr-only"> (se abre en una pestaña nueva)</span>
+                      </Link>
+                      .
+                    </>
+                  ) : (
+                    <>
+                      {dup.label}{" "}
+                      {dup.id && (
+                        <Link href={`/dashboard/worker/review/${dup.id}`} target="_blank" className="font-medium underline">
+                          Ver la original<span className="sr-only"> (se abre en una pestaña nueva)</span>
+                        </Link>
+                      )}
+                    </>
+                  )}
+                </li>
+              ))}
+            </ul>
+            <p className="mt-2">
+              {duplicates.some((d) => d.kind === "openIssue") && "Al validarla, el aviso se cierra. "}
+              {again}
+            </p>
+          </>
+        ),
+        confirmLabel: isValidated ? "Guardar igualmente" : "Validar igualmente",
+        tone: "primary",
+        // Se llega aqui validando con Enter: un segundo Enter no confirma.
+        focusCancel: true,
+      });
+      asked = true;
+      if (!ok) {
+        setValidateState(null);
+        return "asked";
+      }
+      res = await validateInvoice(null, buildFormData({ ...fields, confirmDuplicate: duplicates.map((d) => d.key).join(",") }));
+    }
+    setValidateState(res);
+    if (res?.error) {
+      error(isValidated
+        ? `No se ha guardado la corrección: ${errorText(res.error)}`
+        : `No se ha podido validar: ${errorText(res.error)}`);
+      return "error";
+    }
+    // Una ya validada no salta a otra: se queda en ella con la correccion.
+    success(isValidated ? "Corrección guardada" : "Factura validada");
+    if (isValidated) markClean();
+    return asked ? "asked" : "ok";
+  };
+
   const runValidate = (goodsTypeScope: GoodsTypeScope) => {
     setGoodsQuestion(null);
     const reopen = reopenRef.current;
     reopenRef.current = false;
-    startValidate(async () => {
-      const fields = {
-        nextId: nextPendingId ?? "",
-        goodsTypeScope,
-        goodsTypeAssignedSeen: assignedGoodsType ?? "",
-        ...(reopen ? { reopen: "1" } : {}),
-      };
-      let res = await validateInvoice(null, buildFormData(fields));
-      // Posibles duplicados (F-010, F-016): otra ya validada con este numero
-      // y emisor, o un aviso de duplicado abierto. El servidor no valida sin
-      // que el gestor los confirme, todos en una sola confirmacion. Si con el
-      // dialogo abierto aparece otro, vuelve a preguntar con la lista nueva
-      // (con tope, por si acaso).
-      for (let round = 0; round < 3 && res?.duplicateOf?.length; round++) {
-        const duplicates = res.duplicateOf;
-        // En una ya validada es una correccion: se pregunta por guardarla.
-        const again = isValidated ? "¿Guardar la corrección igualmente?" : "¿Validar igualmente?";
-        const ok = await confirm({
-          title: again,
-          message: (
-            <>
-              <ul className="space-y-2">
-                {duplicates.map((dup, i) => (
-                  <li key={i}>
-                    {dup.kind === "validated" ? (
-                      <>
-                        Ya hay otra factura con este número y este emisor:{" "}
-                        <Link href={`/dashboard/worker/review/${dup.id}`} target="_blank" className="font-medium underline">
-                          {dup.label}<span className="sr-only"> (se abre en una pestaña nueva)</span>
-                        </Link>
-                        .
-                      </>
-                    ) : (
-                      <>
-                        {dup.label}{" "}
-                        {dup.id && (
-                          <Link href={`/dashboard/worker/review/${dup.id}`} target="_blank" className="font-medium underline">
-                            Ver la original<span className="sr-only"> (se abre en una pestaña nueva)</span>
-                          </Link>
-                        )}
-                      </>
-                    )}
-                  </li>
-                ))}
-              </ul>
-              <p className="mt-2">
-                {duplicates.some((d) => d.kind === "openIssue") && "Al validarla, el aviso se cierra. "}
-                {again}
-              </p>
-            </>
-          ),
-          confirmLabel: isValidated ? "Guardar igualmente" : "Validar igualmente",
-          tone: "primary",
-          // Se llega aqui validando con Enter: un segundo Enter no confirma.
-          focusCancel: true,
-        });
-        if (!ok) {
-          setValidateState(null);
-          return;
-        }
-        res = await validateInvoice(null, buildFormData({ ...fields, confirmDuplicate: duplicates.map((d) => d.key).join(",") }));
-      }
-      setValidateState(res);
-      if (res?.error) {
-        error(isValidated
-          ? `No se ha guardado la corrección: ${errorText(res.error)}`
-          : `No se ha podido validar: ${errorText(res.error)}`);
-      } else {
-        // Una ya validada no salta a otra: se queda en ella con la correccion.
-        success(isValidated ? "Corrección guardada" : "Factura validada");
-      }
-    });
+    startValidate(async () => { await validateNow(goodsTypeScope, reopen); });
   };
 
   // En una intracomunitaria se pregunta antes si el tercero va siempre como
   // bienes o como servicios. Validar redirige a la siguiente factura, asi
   // que la respuesta tiene que viajar con la propia validacion.
+  const pendingGoodsQuestion = () => goodsTypeQuestion({
+    direction: type,
+    operationType,
+    goodsType: goodsTypeShown,
+    thirdParty: assignedGoodsType,
+    canRemember: counterpartyChanged ? Boolean(counterpartyNif) : canRememberGoodsType,
+  });
   const handleValidate = () => {
-    const question = goodsTypeQuestion({
-      direction: type,
-      operationType,
-      goodsType: goodsTypeShown,
-      thirdParty: assignedGoodsType,
-      canRemember: counterpartyChanged ? Boolean(counterpartyNif) : canRememberGoodsType,
-    });
+    const question = pendingGoodsQuestion();
     if (question) {
       setGoodsQuestion(question);
       return;
