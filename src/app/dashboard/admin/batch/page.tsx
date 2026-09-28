@@ -254,17 +254,20 @@ export default async function BatchPage({
   const clientGroupsMap = new Map<string, {
     clientId: string; clientName: string; clientCif: string;
     lotes: typeof visibleGroups; attentionSum: number; invoiceSum: number; allDone: boolean;
+    /** Lotes terminados con algo por exportar. */
+    readySum: number;
   }>();
   for (const g of visibleGroups) {
     let cg = clientGroupsMap.get(g.clientId);
     if (!cg) {
-      cg = { clientId: g.clientId, clientName: g.clientName, clientCif: g.clientCif, lotes: [], attentionSum: 0, invoiceSum: 0, allDone: true };
+      cg = { clientId: g.clientId, clientName: g.clientName, clientCif: g.clientCif, lotes: [], attentionSum: 0, invoiceSum: 0, allDone: true, readySum: 0 };
       clientGroupsMap.set(g.clientId, cg);
     }
     cg.lotes.push(g);
     cg.attentionSum += g.attentionCount;
     cg.invoiceSum += g.total;
     if (g.validated + g.rejected + g.exported !== g.total) cg.allDone = false;
+    else if (g.pendingExport > 0) cg.readySum++;
   }
   const clientGroups = Array.from(clientGroupsMap.values());
   clientGroups.sort((a, b) =>
@@ -332,7 +335,8 @@ export default async function BatchPage({
               invoiceCount={cg.invoiceSum}
               attentionCount={cg.attentionSum}
               allDone={cg.allDone}
-              defaultOpen={singleClient || cg.attentionSum > 0}
+              readyCount={cg.readySum}
+              defaultOpen={singleClient || cg.attentionSum > 0 || cg.readySum > 0}
               storageKey={singleClient ? undefined : cg.clientId}
             >
           {cg.lotes.map((g) => {
