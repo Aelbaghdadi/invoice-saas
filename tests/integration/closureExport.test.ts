@@ -28,6 +28,13 @@ describe("closureExportSelections", () => {
     expect(result.map((s) => s.periodType)).toEqual(["MONTHLY", "MONTHLY", "MONTHLY"]);
   });
 
+  it("una trimestral rechazada no cuenta: con una mensual validada, mensual", async () => {
+    await makeInvoice(w.client, { periodType: "QUARTERLY", periodMonth: 7, periodYear: 2026, status: "REJECTED" });
+    await makeInvoice(w.client, { periodType: "MONTHLY", periodMonth: 7, periodYear: 2026, status: "VALIDATED", totalAmount: 242 });
+    const [selection] = await closureExportSelections([{ clientId: w.client.id, month: 7, year: 2026 }], w.firm.id);
+    expect(selection.periodType).toBe("MONTHLY");
+  });
+
   it("las facturas de otra asesoría no cuentan", async () => {
     const b = await makeFirm("B");
     await makeInvoice(b.client, { periodType: "QUARTERLY", periodMonth: 7, periodYear: 2026 });
