@@ -1237,6 +1237,17 @@ describe("revisión con un posible duplicado abierto (F-016)", () => {
     expect((await row()).status).toBe("NEEDS_ATTENTION");
   });
 
+  it("«No es duplicada» con la factura ya validada o con el periodo cerrado: no (revisión 2, punto 5)", async () => {
+    await prisma.invoice.update({ where: { id }, data: { status: "VALIDATED" } });
+    expect(await dismiss()).toEqual({ error: "Esta factura ya no está por revisar. Recarga la página." });
+    expect(await issueStatus()).toBe("OPEN");
+    await prisma.invoice.update({ where: { id }, data: { status: "NEEDS_ATTENTION" } });
+    const r = await row();
+    await prisma.periodClosure.create({ data: { clientId: w.client.id, month: r.accountingPeriodMonth ?? r.periodMonth, year: r.accountingPeriodYear ?? r.periodYear, closedBy: w.admin.id } });
+    expect((await dismiss())?.error).toMatch(/está cerrado/);
+    expect(await issueStatus()).toBe("OPEN");
+  });
+
   it("«No es duplicada» desde otra asesoría: no se toca", async () => {
     const otra = await makeFirm("B");
     for (const user of [otra.admin, otra.worker]) {

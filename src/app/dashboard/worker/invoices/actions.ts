@@ -8,6 +8,7 @@ import { canAccessClient } from "@/lib/accessibleClients";
 import { notifyRejection, rejectInvoiceCore } from "@/lib/invoiceRejection";
 import { duplicateRejectionReason, findDuplicateOriginal } from "@/lib/duplicates";
 import { REVIEWABLE } from "@/lib/invoiceStatuses";
+import { closedPeriodError, invoicePeriod } from "@/lib/reviewGuards";
 
 export type InvoiceQuickAction = { ok?: boolean; error?: string } | null;
 
@@ -108,6 +109,16 @@ export async function dismissDuplicateIssue(
 
   const access = await assertAccess(session, invoiceId);
   if (access) return access;
+
+  // Lo mismo que la pantalla: solo por revisar y con el periodo abierto.
+  const invoice = await prisma.invoice.findUnique({
+    where: { id: invoiceId },
+    select: { status: true, clientId: true, periodMonth: true, periodYear: true, accountingPeriodMonth: true, accountingPeriodYear: true },
+  });
+  if (!invoice) return { error: "Factura no encontrada" };
+  if (!REVIEWABLE.includes(invoice.status)) return { error: "Esta factura ya no está por revisar. Recarga la página." };
+  const periodErr = await closedPeriodError(invoice.clientId, [invoicePeriod(invoice)], "descartar el aviso de");
+  if (periodErr) return periodErr;
 
   // Incidencias, estado e historial juntos: si falla a medias no queda en
   // «Con incidencias» sin ninguna abierta.
