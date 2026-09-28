@@ -9,8 +9,9 @@ Los secretos van en Coolify (Environment Variables), nunca en el repo.
 - **Port:** `3000`.
 - **Connect To Predefined Network: ON** — para que la app resuelva por nombre
   a Postgres y (cuando se migre) a Garage en la red interna de Docker.
-- **Health check:** path `/api/health`, puerto 3000 (ver §8). Antes era
-  `/login`, que responde 200 aunque la base de datos o Garage estén caídos.
+- **Health check:** path `/api/health/live`, puerto 3000, con un *start
+  period* generoso (60–120 s: el contenedor corre `prisma migrate deploy`
+  antes de `next start`). Ver §8: no uses `/api/health` aquí.
 
 ## 2. Variables de entorno
 
@@ -156,12 +157,18 @@ cada uno con un timeout de 2 s, y responde:
 No pide sesión y no dice nada interno (ni hosts ni mensajes de error; el
 detalle va al log del contenedor con el prefijo `[health]`).
 
-- **En Coolify:** el health check del recurso (§1) apunta a `/api/health`. Con
-  la BD caída el contenedor sale como no sano, en vez de verde con `/login`.
-- **Monitor externo** (Uptime Kuma, UptimeRobot, Better Stack…): un chequeo
-  HTTP cada 1–5 min a `https://<dominio>/api/health` que avise si no es 200.
-  Es lo único que avisa si se cae el servidor entero, porque entonces Coolify
-  tampoco puede avisar.
+- **En Coolify, `/api/health/live`** (§1): solo el proceso y Postgres
+  (`{"db":true}`). Con el health check activo, Traefik deja de enrutar a un
+  contenedor *unhealthy*: todo el dominio da 404, `/login` incluido, y un
+  Redeploy que no pasa el health check se revierte. Por eso Coolify no mira
+  Garage: una caída o lentitud de Garage (compartido entre dev y prod en el
+  mismo servidor) tumbaría la app entera, también las pantallas que no lo
+  usan. Antes era `/login`, que responde 200 aunque la BD esté caída.
+- **Monitor externo, `/api/health`** (Uptime Kuma, UptimeRobot, Better
+  Stack…): el completo, BD y Garage. Un chequeo HTTP cada 1–5 min a
+  `https://<dominio>/api/health` que avise si no es 200. Avisa de Garage sin
+  sacar la app de Traefik, y es lo único que avisa si se cae el servidor
+  entero, porque entonces Coolify tampoco puede avisar.
 
 ### Errores del servidor
 

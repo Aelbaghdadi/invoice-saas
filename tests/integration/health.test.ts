@@ -2,6 +2,7 @@
 // nada interno.
 import { describe, it, expect } from "vitest";
 import { GET } from "@/app/api/health/route";
+import { GET as live } from "@/app/api/health/live/route";
 import { fakeS3 } from "./helpers/fakeS3";
 import { signOut } from "./helpers/session";
 
@@ -30,5 +31,14 @@ describe("/api/health", () => {
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({ db: true, storage: false });
     expect(Date.now() - t0).toBeLessThan(4_000);
+  });
+});
+
+describe("/api/health/live (Coolify)", () => {
+  it("con el almacenamiento caído sigue en 200: una caída de Garage no tumba el dominio", async () => {
+    fakeS3().setMode("down");
+    const res = await live();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ db: true });
   });
 });

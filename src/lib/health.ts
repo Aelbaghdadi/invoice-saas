@@ -11,9 +11,20 @@ export type HealthStatus = { db: boolean; storage: boolean };
 
 export const HEALTH_TIMEOUT_MS = 2_000;
 
+/** Completo, para el monitor externo: Postgres y almacenamiento. */
 export async function checkHealth(timeoutMs = HEALTH_TIMEOUT_MS): Promise<HealthStatus> {
   const [db, storage] = await Promise.all([databaseReachable(timeoutMs), storageReachable(timeoutMs)]);
   return { db, storage };
+}
+
+/**
+ * Vida, para el health check de Coolify: el proceso responde y llega a
+ * Postgres. Sin el almacenamiento: con el health check activo, Traefik deja
+ * de enrutar a un contenedor «unhealthy», y una caida de Garage (compartido
+ * entre dev y prod) tumbaria el dominio entero, /login incluido.
+ */
+export async function checkLiveness(timeoutMs = HEALTH_TIMEOUT_MS): Promise<{ db: boolean }> {
+  return { db: await databaseReachable(timeoutMs) };
 }
 
 async function databaseReachable(timeoutMs: number): Promise<boolean> {
