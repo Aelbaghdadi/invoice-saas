@@ -5,8 +5,12 @@
  * log).
  *
  * Una sola comprobacion de cada cosa en curso a la vez, y su resultado vale
- * HEALTH_CACHE_MS: con la BD colgada, cada llamada del monitor y de Coolify
- * dejaba otro SELECT 1 ocupando el pool.
+ * HEALTH_CACHE_MS: asi las llamadas del monitor y de Coolify no lanzan cada
+ * una su SELECT 1. Eso no impide que el pool se llene con la BD colgada: el
+ * timeout solo deja de esperar, y el SELECT 1 sigue ocupando su conexion
+ * hasta que Postgres o la red lo sueltan; pasada la cache, la siguiente
+ * comprobacion lanza otro. Lo que acota la espera de las demas consultas es
+ * connectionTimeoutMillis del pool (src/lib/prisma.ts).
  */
 import { prisma } from "@/lib/prisma";
 import { storageReachable } from "@/lib/storage";
@@ -27,12 +31,18 @@ export async function withTimeout<T>(promise: Promise<T>, ms: number, onTimeout:
   }
 }
 
-/** `fn` con una sola llamada en curso a la vez y el resultado guardado `ttlMs`. */
-export function singleFlight<T>(fn: () => Promise<T>, ttlMs: number, now: () => number = Date.now): (() => Promise<T>) & { reset: () => void } {
+/**
+ * `fn` con una sola llamada en curso a la vez y el resultado guardado `ttlMs`.
+ * Con reloj monotono: con Date.now, un ajuste de hora hacia atras (NTP)
+ * dejaba el resultado guardado mientras durara el salto. Una edad negativa
+ * (un reloj inyectado que retrocede) cuenta como caducado.
+ */
+export function singleFlight<T>(fn: () => Promise<T>, ttlMs: number, now: () => number = () => performance.now()): (() => Promise<T>) & { reset: () => void } {
   let inFlight: Promise<T> | null = null;
   let cached: { at: number; value: T } | null = null;
   const check = () => {
-    if (cached && now() - cached.at < ttlMs) return Promise.resolve(cached.value);
+    const age = cached ? now() - cached.at : -1;
+    if (cached && age >= 0 && age < ttlMs) return Promise.resolve(cached.value);
     if (!inFlight) {
       inFlight = fn()
         .then((value) => {

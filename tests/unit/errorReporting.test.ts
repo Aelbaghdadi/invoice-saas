@@ -68,6 +68,13 @@ describe("createAlertLimiter", () => {
     for (let t = 299_000; t < 301_000; t += 100) if (l.take(t)) sent++;
     expect(sent).toBe(10);
   });
+
+  it("si el reloj retrocede, no se quedan bloqueados los avisos", () => {
+    const l = createAlertLimiter(2, 60_000);
+    l.take(1_000_000);
+    l.take(1_000_001);
+    expect(l.take(5)).toEqual({ suppressedBefore: 0 });
+  });
 });
 
 describe("reportRequestError", () => {

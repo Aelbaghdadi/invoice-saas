@@ -36,4 +36,14 @@ describe("singleFlight", () => {
     expect(await check()).toBe(1600);
     expect(fn).toHaveBeenCalledTimes(2);
   });
+
+  it("si el reloj retrocede, el resultado guardado cuenta como caducado", async () => {
+    let t = 1_000_000;
+    const fn = vi.fn(async () => t);
+    const check = singleFlight(fn, 1500, () => t);
+    await check();
+    t = 0; // la hora se ajusta una hora y pico hacia atrás
+    expect(await check()).toBe(0);
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
 });

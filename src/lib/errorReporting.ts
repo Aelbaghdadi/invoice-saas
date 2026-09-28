@@ -64,7 +64,9 @@ export function buildErrorReport(error: unknown, request: ErrorRequest, context:
 /**
  * Como mucho `max` avisos en cualquier ventana de `windowMs` (deslizante: con
  * una ventana fija podian salir casi el doble en el cambio de ventana). Los
- * que no pasan se cuentan y se dicen en el siguiente que pase.
+ * que no pasan se cuentan y se dicen en el siguiente que pase. `now` es de un
+ * reloj monotono (performance.now()); si aun asi retrocede, los envios «del
+ * futuro» se olvidan en vez de bloquear los avisos mientras dure el salto.
  */
 export function createAlertLimiter(max: number, windowMs: number) {
   const sentAt: number[] = [];
@@ -72,6 +74,7 @@ export function createAlertLimiter(max: number, windowMs: number) {
   return {
     /** null si no toca avisar; si toca, cuantos se callaron antes. */
     take(now: number): { suppressedBefore: number } | null {
+      if (sentAt.length > 0 && now < sentAt[sentAt.length - 1]) sentAt.length = 0;
       while (sentAt.length > 0 && now - sentAt[0] >= windowMs) sentAt.shift();
       if (sentAt.length >= max) {
         suppressed++;
@@ -93,7 +96,10 @@ type Deps = {
   log?: (line: string) => void;
   fetchFn?: typeof fetch;
   limiter?: ReturnType<typeof createAlertLimiter>;
+  /** Hora del informe. */
   now?: Date;
+  /** Reloj del limite de avisos (monotono). */
+  clock?: () => number;
 };
 
 /** Para Slack: «&», «<» y «>» escapados, asi «<!channel>» o un enlace
@@ -119,7 +125,7 @@ export async function reportRequestError(
 
   const webhookUrl = deps.webhookUrl ?? process.env.ALERT_WEBHOOK_URL;
   if (!webhookUrl) return { delivery: Promise.resolve() };
-  const allowed = (deps.limiter ?? limiter).take((deps.now ?? new Date()).getTime());
+  const allowed = (deps.limiter ?? limiter).take((deps.clock ?? (() => performance.now()))());
   if (!allowed) return { delivery: Promise.resolve() };
   const extra = allowed.suppressedBefore > 0 ? ` (+${allowed.suppressedBefore} errores sin avisar por el límite)` : "";
   const text = escapeForChat(`Error en FacturOCR: ${report.method} ${report.path} — ${report.name}: ${report.message}${report.digest ? ` [${report.digest}]` : ""}${extra}`);
