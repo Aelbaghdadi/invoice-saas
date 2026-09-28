@@ -1,6 +1,7 @@
 import type { Invoice, Client, InvoiceVatLine } from "@prisma/client";
 import * as XLSX from "xlsx";
 import { REEXPORT_SHEET_NAME, reexportSheetRows, type Reexport } from "@/lib/reexportChanges";
+import { quarterFromMonth, type PeriodTypeName } from "@/lib/period";
 import {
   OPERATION_TYPE_CODE,
   OPERATION_TYPE_LABEL,
@@ -216,8 +217,9 @@ export function suggestFilename(
   format: ExportFormat,
   month: number,
   year: number,
+  periodType: PeriodTypeName = "MONTHLY",
 ): string {
-  return exportFilename(invoices[0]?.client.name ?? null, format, month, year);
+  return exportFilename(invoices[0]?.client.name ?? null, format, month, year, periodType);
 }
 
 /** Nombre del fichero de un export a partir del cliente y el periodo. Lo usa
@@ -227,10 +229,12 @@ export function exportFilename(
   format: ExportFormat,
   month: number,
   year: number,
+  periodType: PeriodTypeName = "MONTHLY",
 ): string {
   const name = clientName?.replace(/\s+/g, "_") ?? "cliente";
-  const mm = String(month).padStart(2, "0");
-  return `facturas_${name}_${year}-${mm}_${format}.${exportExtension(format)}`;
+  // Trimestral: «2026-T3», no el primer mes («2026-07» parecia solo julio).
+  const period = periodType === "QUARTERLY" ? `T${quarterFromMonth(month)}` : String(month).padStart(2, "0");
+  return `facturas_${name}_${year}-${period}_${format}.${exportExtension(format)}`;
 }
 
 export function exportExtension(format: ExportFormat): "xlsx" | "csv" {

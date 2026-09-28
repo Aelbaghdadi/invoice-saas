@@ -5,12 +5,13 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Badge } from "@/components/ui/Badge";
 import {
-  Layers, ArrowRight, PenLine, Loader2,
+  Layers, ArrowRight, PenLine, Loader2, Download,
 } from "lucide-react";
 import Link from "next/link";
 import type { InvoiceType, PeriodType } from "@prisma/client";
 import { completionPercent, isBatchRejectable } from "@/lib/invoiceStatuses";
 import { periodLabel } from "@/lib/period";
+import { exportPageHref } from "@/lib/exportPage";
 import { QUEUE_ORDER } from "@/lib/reviewQueue";
 import { reviewHref } from "@/lib/reviewNavigation";
 import { AutoRefresh } from "@/components/ui/AutoRefresh";
@@ -48,6 +49,9 @@ type BatchGroup = {
   /** Lo que tocaria "Rechazar lote" (mismo criterio que la accion). */
   rejectable: number;
   rejectableValidated: number;
+  /** Validadas que aun no estan en ningun Excel (tambien las corregidas
+   *  despues de exportarse): lo que se llevaria «Exportar». */
+  pendingExport: number;
   /** Primera pendiente del lote en el orden de la cola (QUEUE_ORDER). */
   firstPendingId: string | null;
 };
@@ -143,11 +147,13 @@ export default async function BatchPage({
         ocrError: 0,
         rejectable: 0,
         rejectableValidated: 0,
+        pendingExport: 0,
         firstPendingId: null,
       };
       groupMap.set(key, g);
     }
     g.total++;
+    if (inv.status === "VALIDATED" && inv.exportBatchId == null) g.pendingExport++;
     const hasOpenIssue = inv.issues.length > 0;
 
     // Exportar no cambia el estado. Sin mirar el historial las exportadas
@@ -377,6 +383,15 @@ export default async function BatchPage({
                       >
                         <PenLine className="h-3.5 w-3.5" />
                         Revisar ({g.attentionCount + g.cleanCount})
+                      </Link>
+                    )}
+                    {g.pendingExport > 0 && (
+                      <Link
+                        href={exportPageHref({ clientId: g.clientId, periodType: g.periodType, month: g.periodMonth, year: g.periodYear, type: g.type })}
+                        className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-[12px] font-semibold text-slate-700 hover:bg-slate-50 transition-colors"
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                        Exportar ({g.pendingExport})
                       </Link>
                     )}
                     <Link

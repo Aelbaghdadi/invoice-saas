@@ -11,7 +11,8 @@ import type { A3ValidationWarning as A3Warning } from "@/lib/exportFormats";
 import { Select } from "@/components/ui/Select";
 import { ErrorBox } from "@/components/ui/ErrorBox";
 import type { AppError } from "@/lib/errorCodes";
-import { quarterStartMonth, periodLabel, MONTH_OPTIONS, QUARTER_OPTIONS } from "@/lib/period";
+import { quarterFromMonth, quarterStartMonth, periodLabel, MONTH_OPTIONS, QUARTER_OPTIONS, type PeriodTypeName } from "@/lib/period";
+import type { ExportSelection } from "@/lib/exportPage";
 import { filenameFromContentDisposition } from "@/lib/contentDisposition";
 import { describeExportExclusionBoxes, exportSuccessExclusionText, parseExportExclusionBoxes, type ExportExclusionBoxCounts } from "@/lib/exportExclusions";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
@@ -30,7 +31,17 @@ type ReexportPreview = {
 
 type ClientOption = { id: string; name: string; cif: string };
 
-type Props = { clients: ClientOption[] };
+type PeriodDefault = { month: number; year: number };
+
+type Props = {
+  clients: ClientOption[];
+  /** Lo elegido al abrir: la URL o el periodo anterior (F-041). */
+  initial: ExportSelection;
+  /** El periodo anterior de cada tipo, para cambiar de mensual a trimestral
+   *  sin quedarse en un mes que no toca. */
+  previous: Record<PeriodTypeName, PeriodDefault>;
+  years: number[];
+};
 
 const FORMATS = [
   { v: "a3excel",  l: "A3 Excel",  desc: "A3 Asesor — Excel con cuentas contables (.xlsx)" },
@@ -42,20 +53,26 @@ const TYPES = [
   { v: "SALE",     l: "Emitidas (ventas)" },
 ];
 
-const now = new Date();
-const THIS_YEAR  = now.getFullYear();
-const YEARS      = Array.from({ length: 5 }, (_, i) => THIS_YEAR - i);
-
-
-export function ExportForm({ clients }: Props) {
+export function ExportForm({ clients, initial, previous, years }: Props) {
   const router = useRouter();
   const { confirm, dialog } = useConfirm();
-  const [clientId,   setClientId]   = useState(clients[0]?.id ?? "");
-  const [periodType, setPeriodType] = useState<"MONTHLY" | "QUARTERLY">("MONTHLY");
-  const [month,      setMonth]      = useState(now.getMonth() + 1);
-  const [quarter,    setQuarter]    = useState(Math.ceil((now.getMonth() + 1) / 3));
-  const [year,       setYear]       = useState(THIS_YEAR);
-  const [type,       setType]       = useState("ALL");
+  const [clientId,   setClientId]   = useState(initial.clientId);
+  const [periodType, setPeriodType] = useState<PeriodTypeName>(initial.periodType);
+  const [month,      setMonth]      = useState(initial.periodType === "MONTHLY" ? initial.month : previous.MONTHLY.month);
+  const [quarter,    setQuarter]    = useState(quarterFromMonth(initial.periodType === "QUARTERLY" ? initial.month : previous.QUARTERLY.month));
+  const [year,       setYear]       = useState(initial.year);
+  const [type,       setType]       = useState<string>(initial.type);
+  // Mientras no se toque el periodo, cambiar de mensual a trimestral lleva
+  // al periodo anterior del otro tipo (en febrero: enero, pero T4 del año
+  // pasado), no al mismo año con otro selector.
+  // Un periodo que llega en la URL cuenta como tocado.
+  const [periodTouched, setPeriodTouched] = useState(
+    initial.month !== previous[initial.periodType].month || initial.year !== previous[initial.periodType].year,
+  );
+  const changePeriodType = (pt: PeriodTypeName) => {
+    setPeriodType(pt);
+    if (!periodTouched) setYear(previous[pt].year);
+  };
   const [format,     setFormat]     = useState("a3excel");
 
   const [count,    setCount]    = useState<number | null>(null);
@@ -79,6 +96,8 @@ export function ExportForm({ clients }: Props) {
   // y todos los ids, que la descarga manda como confirmados.
   const [reexports, setReexports] = useState<ReexportPreview[]>([]);
   const [reexportIds, setReexportIds] = useState<string[]>([]);
+  // Del periodo, las que aun no estan validadas: no entran en el Excel.
+  const [notValidated, setNotValidated] = useState(0);
   const [counting, setCounting] = useState(false);
   const [downloading, setDownloading] = useState(false);
   // Tras descargar: cuantas se quedaron fuera del fichero y el lote, si se
@@ -130,6 +149,7 @@ export function ExportForm({ clients }: Props) {
         setManualCount(0);
         setReexports([]);
         setReexportIds([]);
+        setNotValidated(0);
         return;
       }
       const data = await res.json();
@@ -144,6 +164,7 @@ export function ExportForm({ clients }: Props) {
       setManualCount(data.excludedByBox?.a_mano ?? 0);
       setReexports(data.reexports ?? []);
       setReexportIds(data.reexportIds ?? []);
+      setNotValidated(data.notValidated ?? 0);
     } catch {
       if (stale()) return;
       // Todo a cero: si no, seguian los avisos de "N con total 0" del filtro
@@ -158,6 +179,7 @@ export function ExportForm({ clients }: Props) {
       setManualCount(0);
       setReexports([]);
       setReexportIds([]);
+      setNotValidated(0);
     } finally {
       if (!stale()) setCounting(false);
     }
@@ -173,6 +195,12 @@ export function ExportForm({ clients }: Props) {
     // Sin este freno, un doble clic creaba dos lotes con las mismas facturas
     // (asientos duplicados en A3) o sacaba el error de "nada que exportar".
     if (!count || downloading) return;
+    if (notValidated > 0 && !(await confirm({
+      title: notValidated === 1 ? "1 factura sin validar en este periodo" : `${notValidated} facturas sin validar en este periodo`,
+      message: "No entran en este Excel: cuando las valides, saldrán en otro. ¿Exportar ya las validadas?",
+      confirmLabel: "Exportar sin ellas",
+      focusCancel: true,
+    }))) return;
     // Ya estan en A3 con el mismo NIF y numero: sin confirmar, no se exporta.
     const n = reexportIds.length;
     if (n > 0 && !(await confirm({
@@ -274,7 +302,7 @@ export function ExportForm({ clients }: Props) {
               <button
                 key={pt}
                 type="button"
-                onClick={() => setPeriodType(pt)}
+                onClick={() => changePeriodType(pt)}
                 disabled={downloading}
                 aria-pressed={periodType === pt}
                 className={`flex-1 rounded-lg border px-3 py-2 text-[12px] font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${
@@ -293,7 +321,7 @@ export function ExportForm({ clients }: Props) {
                 id="export-month"
                 aria-label="Mes"
                 value={String(month)}
-                onChange={(v) => setMonth(Number(v))}
+                onChange={(v) => { setMonth(Number(v)); setPeriodTouched(true); }}
                 disabled={downloading}
                 options={MONTH_OPTIONS}
               />
@@ -302,7 +330,7 @@ export function ExportForm({ clients }: Props) {
                 id="export-quarter"
                 aria-label="Trimestre"
                 value={String(quarter)}
-                onChange={(v) => setQuarter(Number(v))}
+                onChange={(v) => { setQuarter(Number(v)); setPeriodTouched(true); }}
                 disabled={downloading}
                 options={QUARTER_OPTIONS.map((q) => ({ value: String(q.value), label: q.label }))}
               />
@@ -311,9 +339,9 @@ export function ExportForm({ clients }: Props) {
               id="export-year"
               aria-label="Año"
               value={String(year)}
-              onChange={(v) => setYear(Number(v))}
+              onChange={(v) => { setYear(Number(v)); setPeriodTouched(true); }}
               disabled={downloading}
-              options={YEARS.map((y) => ({ value: String(y), label: String(y) }))}
+              options={years.map((y) => ({ value: String(y), label: String(y) }))}
             />
           </div>
         </div>
@@ -432,6 +460,13 @@ export function ExportForm({ clients }: Props) {
                 {excluded === 1
                   ? `1 factura se queda fuera del Excel y no se marca como exportada${detailSuffix(excludedDetail)}.`
                   : `${excluded} facturas se quedan fuera del Excel y no se marcan como exportadas${detailSuffix(excludedDetail)}.`}
+              </p>
+            )}
+            {notValidated > 0 && !counting && (
+              <p className="mt-2 text-center text-[12px] text-amber-600">
+                {notValidated === 1
+                  ? "1 factura de este periodo está sin validar y no entra en el Excel."
+                  : `${notValidated} facturas de este periodo están sin validar y no entran en el Excel.`}
               </p>
             )}
             {count !== 0 && alreadyExported > 0 && !counting && (

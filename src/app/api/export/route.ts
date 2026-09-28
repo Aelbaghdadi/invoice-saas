@@ -8,7 +8,8 @@ import { countExportExclusionBoxes, withSplitCounts } from "@/lib/exportExclusio
 import { commitExportBatch, committedBatchState, ExportConflictError, exportStorageKey, findReexports } from "@/lib/exportBatch";
 import { deleteObject, isStorageConfigured, putObject } from "@/lib/storage";
 import { appError } from "@/lib/errorCodes";
-import { exportInvoiceWhere, exportPostHeadersError, parseExportRequest } from "@/lib/exportRequest";
+import { exportInvoiceWhere, exportPeriodWhere, exportPostHeadersError, parseExportRequest } from "@/lib/exportRequest";
+import { PENDING_WORK } from "@/lib/invoiceStatuses";
 
 type AdminContext = { userId: string; firmId: string };
 
@@ -115,6 +116,11 @@ export async function GET(req: NextRequest) {
   const alreadyExported = await prisma.invoice.count({
     where: { ...where, exportBatchId: { not: null } },
   });
+  // Las del periodo que aun no estan validadas (F-041): no entran en este
+  // Excel, y exportar sin saberlo deja el periodo a medias en A3.
+  const notValidated = await prisma.invoice.count({
+    where: { ...exportPeriodWhere(parsed.request, admin.firmId), status: { in: PENDING_WORK } },
+  });
   // Las que el Excel deja fuera (total 0 u original de una division) no
   // cuentan como exportables: no se van a marcar.
   const { exportable, excluded } = partitionA3Exportable(previewInvoices);
@@ -123,6 +129,7 @@ export async function GET(req: NextRequest) {
   const reexports = await findReexports(exportable, admin.firmId);
   return NextResponse.json({
     count: exportable.length,
+    notValidated,
     reexportCount: reexports.length,
     reexports: reexports.slice(0, PREVIEW_WARNING_LIMIT),
     // Todos los ids: la descarga los manda de vuelta como confirmados.
@@ -232,7 +239,7 @@ export async function POST(req: NextRequest) {
 
   // Primero el fichero, en memoria. Hasta que exista no se escribe nada en
   // la BD: un fallo aqui no deja ninguna factura marcada (F-001).
-  const filename = suggestFilename(invoices, format, month, year);
+  const filename = suggestFilename(invoices, format, month, year, periodType);
   let body: Uint8Array<ArrayBuffer>;
   let contentType: string;
   try {

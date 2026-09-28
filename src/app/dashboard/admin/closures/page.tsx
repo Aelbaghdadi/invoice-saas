@@ -5,9 +5,11 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Badge } from "@/components/ui/Badge";
 import { Pagination } from "@/components/ui/Pagination";
-import { Lock, Unlock, CalendarCheck } from "lucide-react";
+import Link from "next/link";
+import { Lock, Unlock, CalendarCheck, Download } from "lucide-react";
 import { formatDateTimeEs } from "@/lib/dates";
 import { MONTH_NAMES } from "@/lib/period";
+import { exportPageHref } from "@/lib/exportPage";
 import { PAGE_SIZE, pageWindow, parsePage } from "@/lib/listing";
 import { ClosuresClient } from "./ClosuresClient";
 import { ReopenButton } from "./ReopenButton";
@@ -148,10 +150,20 @@ export default async function ClosuresPage({ searchParams }: Props) {
                         )}
                       </td>
                       <td className="px-5 py-3">
-                        <ReopenButton
-                          closureId={c.id}
-                          label={`${c.client.name} · ${periodText(c.month, c.year)}`}
-                        />
+                        <div className="flex flex-wrap items-center gap-2">
+                          {/* Cerrado el mes, lo siguiente es llevarlo a A3 (F-041). */}
+                          <Link
+                            href={exportPageHref({ clientId: c.clientId, periodType: "MONTHLY", month: c.month, year: c.year, type: "ALL" })}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1 text-[12px] font-medium text-slate-700 hover:bg-slate-50"
+                          >
+                            <Download className="h-3.5 w-3.5" />
+                            Exportar
+                          </Link>
+                          <ReopenButton
+                            closureId={c.id}
+                            label={`${c.client.name} · ${periodText(c.month, c.year)}`}
+                          />
+                        </div>
                       </td>
                     </tr>
                   ))}

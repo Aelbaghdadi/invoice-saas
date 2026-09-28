@@ -5,7 +5,8 @@ import { ExportForm } from "./ExportForm";
 import { Download, History } from "lucide-react";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Pagination } from "@/components/ui/Pagination";
-import { formatDateTimeEs } from "@/lib/dates";
+import { formatDateTimeEs, yearMonthInMadrid } from "@/lib/dates";
+import { parseExportPageParams, previousPeriod } from "@/lib/exportPage";
 import { periodLabel } from "@/lib/period";
 import { PAGE_SIZE, pageWindow, parsePage } from "@/lib/listing";
 import { exportStorageKey } from "@/lib/exportBatch";
@@ -21,7 +22,8 @@ const INVOICE_TYPE_LABELS: Record<string, string> = {
 };
 
 type Props = {
-  searchParams: Promise<{ page?: string }>;
+  /** page: la del historial; el resto, la selección inicial (F-041). */
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
 
 export default async function ExportPage({ searchParams }: Props) {
@@ -29,7 +31,7 @@ export default async function ExportPage({ searchParams }: Props) {
   if (!session?.user || session.user.role !== "ADMIN") redirect("/login");
 
   const params = await searchParams;
-  const requestedPage = parsePage(params.page);
+  const requestedPage = parsePage(typeof params.page === "string" ? params.page : undefined);
 
   // ExportBatch no tiene firma: la asesoria sale de las facturas del lote.
   // Por clientId no vale, los lotes de "Todos" lo tienen a null. Sin firma no
@@ -40,11 +42,13 @@ export default async function ExportPage({ searchParams }: Props) {
     : null;
 
   const [clients, historyTotal] = await Promise.all([
-    prisma.client.findMany({
-      where: { isUnclassifiedBucket: false },
+    // Solo los de la asesoria: sin el filtro, el desplegable enseñaba los
+    // clientes de todas (la API ya rechazaba exportarlos).
+    firmId ? prisma.client.findMany({
+      where: { advisoryFirmId: firmId, isUnclassifiedBucket: false },
       orderBy: { name: "asc" },
       select: { id: true, name: true, cif: true },
-    }),
+    }) : Promise.resolve([]),
     historyWhere ? prisma.exportBatch.count({ where: historyWhere }) : Promise.resolve(0),
   ]);
 
@@ -94,6 +98,13 @@ export default async function ExportPage({ searchParams }: Props) {
     for (const id of stored) if (id) storedFiles.add(id);
   }
 
+  // Selección inicial: la de la URL (el botón «Exportar» de Lotes y Cierres)
+  // o el periodo anterior (F-041). Se calcula aquí y no en el navegador: la
+  // fecha del servidor y la del cliente podían dar meses distintos.
+  const initial = parseExportPageParams(params, clients.map((c) => c.id));
+  const { year: thisYear } = yearMonthInMadrid();
+  const years = [...new Set([...Array.from({ length: 5 }, (_, i) => thisYear - i), initial.year])].sort((a, b) => b - a);
+
   const header = (
     <PageHeader
       title="Exportar facturas"
@@ -118,7 +129,12 @@ export default async function ExportPage({ searchParams }: Props) {
     <div>
       {header}
 
-      <ExportForm clients={clients} />
+      <ExportForm
+        clients={clients}
+        initial={initial}
+        previous={{ MONTHLY: previousPeriod("MONTHLY"), QUARTERLY: previousPeriod("QUARTERLY") }}
+        years={years}
+      />
 
       {/* Export history */}
       {historyTotal > 0 && (

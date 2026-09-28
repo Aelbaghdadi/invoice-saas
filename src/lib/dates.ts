@@ -69,6 +69,12 @@ export function startOfDayInMadrid(year: number, month: number, day: number): Da
   return madridParts(summer).hour === "00" ? summer : new Date(utcMidnight - 3600_000);
 }
 
+/** Año y mes (1-12) de hoy en Madrid: el 1 a las 00:30 ya es el mes nuevo. */
+export function yearMonthInMadrid(now = new Date()): { year: number; month: number } {
+  const today = madridParts(now);
+  return { year: Number(today.year), month: Number(today.month) };
+}
+
 /** Las 00:00 de hoy en Madrid. Con el dia en UTC, de 00:00 a 02:00 se
  *  contaba el dia anterior. */
 export function startOfTodayInMadrid(now = new Date()): Date {
