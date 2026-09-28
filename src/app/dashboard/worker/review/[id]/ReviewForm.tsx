@@ -1731,7 +1731,9 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                         )}
                       </span>
                     </p>
-                    {issue.type === "POSSIBLE_DUPLICATE" && !isValidated && lockReason == null && (
+                    {/* Solo con la factura por revisar y el periodo abierto:
+                        con el periodo cerrado no se toca nada. */}
+                    {issue.type === "POSSIBLE_DUPLICATE" && NEEDS_REVIEW.includes(invoice.status) && !periodClosed && (
                       <div className="flex flex-shrink-0 gap-1.5">
                         <button
                           type="button"
@@ -1744,8 +1746,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                         <button
                           type="button"
                           onClick={() => handleIsDuplicate(issue)}
-                          disabled={isPendingDismiss || isPendingReject || isExported}
-                          title={isExported ? "Ya se exportó a A3: no se puede rechazar" : undefined}
+                          disabled={isPendingDismiss || isPendingReject || rejectBlock != null || isExported}
+                          title={rejectBlock ?? (isExported ? "Ya se exportó a A3: no se puede rechazar" : undefined)}
                           className="rounded-lg bg-red-600 px-2.5 py-1 text-[12px] font-medium text-white hover:bg-red-700 disabled:opacity-50"
                         >
                           Es duplicada
