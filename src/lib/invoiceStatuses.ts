@@ -203,17 +203,25 @@ export function isAutoAuditField(field: string): boolean {
   return field.startsWith("auto:");
 }
 
-/** ¿La escribe el sistema? Las auto:* y el estado que deja el analisis del
- *  OCR al terminar (desde «Subida»), que va en la misma transaccion. */
-export function isAutoAuditEntry(field: string, oldValue?: string | null): boolean {
-  return isAutoAuditField(field) || (field === "status" && oldValue === "UPLOADED");
+/** Estados en los que deja una factura el analisis del OCR. */
+const OCR_RESULT_STATUSES = new Set(["PENDING_REVIEW", "NEEDS_ATTENTION", "PENDING_ROUTING", "ANALYZED", "OCR_ERROR"]);
+
+/**
+ * ¿La escribe el sistema? Las auto:* y el estado que deja el analisis del
+ * OCR al terminar (de «Subida» a uno de sus resultados), que va en la misma
+ * transaccion. Desde «Subida» tambien se ha podido rechazar, dividir o
+ * validar a mano (en produccion, antes de F-015): esas son de la persona.
+ */
+export function isAutoAuditEntry(field: string, oldValue?: string | null, newValue?: string | null): boolean {
+  if (isAutoAuditField(field)) return true;
+  return field === "status" && oldValue === "UPLOADED" && newValue != null && OCR_RESULT_STATUSES.has(newValue);
 }
 
 /** Quien hizo el cambio, para la auditoria: las entradas automaticas no las
  *  hace la persona (en una subida desde el portal seria el propio cliente),
  *  solo las lanza. */
-export function auditActor(field: string, userName: string | null | undefined, oldValue?: string | null): string {
-  return isAutoAuditEntry(field, oldValue) ? `Automático (lanzado por ${userName ?? "—"})` : userName ?? "—";
+export function auditActor(field: string, userName: string | null | undefined, oldValue?: string | null, newValue?: string | null): string {
+  return isAutoAuditEntry(field, oldValue, newValue) ? `Automático (lanzado por ${userName ?? "—"})` : userName ?? "—";
 }
 
 /** Nombre legible de un campo de la auditoria (el propio nombre si no se conoce). */

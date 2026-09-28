@@ -308,7 +308,7 @@ export default async function AdminDashboard() {
                       <div className="flex items-baseline justify-between gap-3">
                         {/* Sin truncate: cortaba el numero de factura. */}
                         <p className="min-w-0 break-words text-[13px] text-slate-800">
-                          <span className="font-semibold">{auditActor(log.field, log.user.name, log.oldValue)}</span>
+                          <span className="font-semibold">{auditActor(log.field, log.user.name, log.oldValue, log.newValue)}</span>
                           {" "}cambió{" "}
                           <span className="font-semibold text-slate-600">{auditFieldLabelInline(log.field)}</span>
                           {" "}en{" "}

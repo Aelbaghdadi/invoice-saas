@@ -154,8 +154,18 @@ describe("presentación de la auditoría (revisión 1 del PR #11, punto 14)", ()
   });
 
   it("el estado que deja el análisis del OCR (desde «Subida») también es automático", () => {
-    expect(auditActor("status", "Cliente", "UPLOADED")).toBe("Automático (lanzado por Cliente)");
-    expect(auditActor("status", "Ana", "PENDING_REVIEW")).toBe("Ana");
+    for (const to of ["PENDING_REVIEW", "NEEDS_ATTENTION", "PENDING_ROUTING", "ANALYZED", "OCR_ERROR"]) {
+      expect(auditActor("status", "Cliente", "UPLOADED", to)).toBe("Automático (lanzado por Cliente)");
+    }
+    expect(auditActor("status", "Ana", "PENDING_REVIEW", "VALIDATED")).toBe("Ana");
+  });
+
+  it("rechazar, dividir o validar a mano desde «Subida» es de la persona", () => {
+    expect(auditActor("status", "Ana", "UPLOADED", "REJECTED")).toBe("Ana");
+    expect(auditActor("status", "Ana", "UPLOADED", "SPLIT_SOURCE")).toBe("Ana");
+    expect(auditActor("status", "Ana", "UPLOADED", "VALIDATED")).toBe("Ana");
+    // Sin el valor nuevo no se sabe: de la persona.
+    expect(auditActor("status", "Ana", "UPLOADED")).toBe("Ana");
   });
 
   it("importes con más de dos decimales, en crudo (si no, «30,30 → 30,30» parece que no cambia)", () => {
