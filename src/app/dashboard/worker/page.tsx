@@ -417,7 +417,9 @@ function BatchCard({
       {firstId && (
         <Link
           href={reviewHref(firstId, { bucket: kind, back: "/dashboard/worker" })}
-          prefetch
+          // Sin precarga: con prefetch se traía la revisión entera de cada
+          // tarjeta visible (F-081). loading.tsx da la respuesta inmediata.
+          prefetch={false}
           className={`mt-3 inline-flex w-full items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-[12px] font-semibold ${btnClass}`}
         >
           <Icon className="h-3.5 w-3.5" />

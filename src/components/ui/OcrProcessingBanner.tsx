@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { AlertTriangle, Loader2, RefreshCw } from "lucide-react";
 import type { InvoiceStatus } from "@prisma/client";
 import { STUCK_ANALYZING_MS, isOcrStalled } from "@/lib/invoiceStatuses";
+import { useProgressiveRefresh } from "./useProgressiveRefresh";
 
 type Props = {
   /** Cuando arrancó el procesado (createdAt de la Invoice). */
@@ -23,9 +24,9 @@ type Props = {
  * Tiene tres funciones:
  *  1) Comunicar al gestor que el OCR está corriendo (no es una pantalla rota).
  *  2) Dar una estimacion del tiempo (segun media historica de la firma).
- *  3) Auto-refrescar la pagina via `router.refresh()` cada 3s para que
- *     en cuanto el OCR termine, la pantalla cambie sola sin que el gestor
- *     tenga que recargar.
+ *  3) Auto-refrescar la pagina (useProgressiveRefresh: de 5 s a 60 s, en
+ *     pausa con la pestaña oculta) para que en cuanto el OCR termine, la
+ *     pantalla cambie sola sin que el gestor tenga que recargar.
  */
 export function OcrProcessingBanner({ startedAt, avgDurationMs = 10000, invoiceId, status, updatedAt }: Props) {
   const router = useRouter();
@@ -39,14 +40,11 @@ export function OcrProcessingBanner({ startedAt, avgDurationMs = 10000, invoiceI
       setElapsedMs(Date.now() - new Date(startedAt).getTime());
       setNow(Date.now());
     }, 500);
-    const refreshTimer = setInterval(() => {
-      router.refresh();
-    }, 3000);
-    return () => {
-      clearInterval(tickTimer);
-      clearInterval(refreshTimer);
-    };
-  }, [router, startedAt]);
+    return () => clearInterval(tickTimer);
+  }, [startedAt]);
+  // Refresco con ritmo (F-081): antes, cada 3 s sin fin y también con la
+  // pestaña en segundo plano.
+  useProgressiveRefresh(`${status}:${new Date(updatedAt).getTime()}`);
 
   const elapsedSec = Math.max(0, Math.floor(elapsedMs / 1000));
   const avgSec = Math.max(1, Math.floor(avgDurationMs / 1000));

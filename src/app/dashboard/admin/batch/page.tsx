@@ -206,9 +206,13 @@ export default async function BatchPage({
   // una vista a otra (cambiar los search params no la remonta).
   const singleClient = clientGroups.length === 1;
 
+  // Lo que cambia cuando avanza el OCR: con otra firma, el refresco
+  // automático vuelve a su ritmo inicial (F-081).
+  const refreshSignature = groups.map((g) => `${g.processingCount}/${g.attentionCount}/${g.cleanCount}`).join("|");
+
   return (
     <div>
-      {anyProcessing && <AutoRefresh intervalMs={5000} />}
+      {anyProcessing && <AutoRefresh signature={refreshSignature} />}
       <PageHeader
         title="Lotes de facturas"
         description="Facturas agrupadas por cliente y periodo"
@@ -331,6 +335,7 @@ export default async function BatchPage({
                         // incidencias y por las listas, y el numero del boton
                         // es el de facturas que va a recorrer.
                         href={reviewHref(g.firstPendingId, { back: thisListHref })}
+                        prefetch={false}
                         className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-blue-700 transition-colors"
                       >
                         <PenLine className="h-3.5 w-3.5" />
