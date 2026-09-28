@@ -13,6 +13,7 @@ import {
 import { detectIssues } from "@/lib/issueDetector";
 import { appendAuditLogs } from "@/lib/auditLog";
 import { clientPartyAudit, irpfAuditValue, partyAuditValue } from "@/lib/auditValue";
+import { foreignClientPartyIssue, readClientSide } from "@/lib/clientParty";
 import { ocrFenceWhere } from "@/lib/invoiceStatuses";
 import { isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { percentOf, roundCents } from "@/lib/money";
@@ -550,6 +551,12 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
         totalAmount: extracted.totalAmount, irpfAmount: finalIrpfAmount, retentionBase,
       }, ocrResult.rawText, extracted.isCorrective === true);
       if (hint) issues.push({ type: "MANUAL", description: hint, field: "isRectificative" });
+    }
+    // A nombre de otro (F-019): en el lado del cliente se leyo un CIF valido
+    // que no es el suyo. Los datos se sustituyen igual, pero se avisa.
+    if (!isUnclassified && clientRecord) {
+      const foreign = foreignClientPartyIssue(readClientSide(invoice.type, extracted), clientRecord);
+      if (foreign) issues.push(foreign);
     }
     const targetStatus: InvoiceStatus = isUnclassified
       ? "PENDING_ROUTING"

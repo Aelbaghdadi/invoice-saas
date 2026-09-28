@@ -45,6 +45,7 @@ import {
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { useUnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { formSnapshot } from "@/lib/formSnapshot";
+import { foreignClientParty, readClientSide } from "@/lib/clientParty";
 import { invoiceBalanceDiffCents, isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { amountFieldsProblem, parseVatLineInputs, vatLinesProblem } from "@/lib/vatLineInput";
 import { accountsAgainstDirection, validationProblems } from "@/lib/invoiceRules";
@@ -624,6 +625,10 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   // Esa parte queda bloqueada (read-only) porque la fija el sistema, pero
   // sin etiquetas adicionales — el fondo gris ya indica que no se edita.
   const lockedSide: "issuer" | "receiver" = type === "PURCHASE" ? "receiver" : "issuer";
+  // Lo que leyo el OCR en el lado del cliente, si es otra parte (F-019).
+  const foreignParty = extraction && sessionContext
+    ? foreignClientParty(readClientSide(type, extraction), { cif: sessionContext.clientCif })
+    : null;
   const lockedInputClass = "w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-[13px] text-slate-600 cursor-not-allowed";
 
   // Conflicto de CIF: emisor == receptor (despues de normalizar). Tipicamente
@@ -2173,6 +2178,17 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
               id={lockedSide === "issuer" ? "issuerCif" : "receiverCif"}
               defaultValue={lockedSide === "issuer" ? (invoice.issuerCif ?? "") : (invoice.receiverCif ?? "")}
             />
+
+            {/* A nombre de otro (F-019): el lado del cliente lleva siempre sus
+                datos; si el OCR leyo ahi otro CIF valido, se ve aqui sin ir a
+                la auditoria. */}
+            {foreignParty && (
+              <p role="note" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
+                En la factura, el {lockedSide === "receiver" ? "receptor" : "emisor"} es{" "}
+                <span className="font-semibold">{foreignParty.name ? `${foreignParty.name} (${foreignParty.cif})` : foreignParty.cif}</span>
+                , no el cliente. Comprueba que la factura es suya antes de validarla.
+              </p>
+            )}
 
             <div className="grid grid-cols-2 gap-2.5">
               {/* Lado editable: Emisor en PURCHASE, Receptor en SALE.
