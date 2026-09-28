@@ -36,7 +36,7 @@ import { amountFieldsProblem, parseVatLineInputs } from "@/lib/vatLineInput";
 import { validationProblems } from "@/lib/invoiceRules";
 import { percentOf } from "@/lib/money";
 import { anyNegativeAmount, applyRectificativeSign, NEGATIVE_AMOUNTS_HINT } from "@/lib/rectificative";
-import { describeExisting, DUPLICATE_SELECT, duplicateOriginalId, findByInvoiceNumber } from "@/lib/duplicates";
+import { describeExisting, duplicateOriginalId, findByInvoiceNumber } from "@/lib/duplicates";
 import { closeOpenIssues } from "@/lib/invoiceIssues";
 import { foldSurchargeLines, completeReadSurcharges, surchargeAuditValue } from "@/lib/equivalenceSurcharge";
 import { exportFingerprint, type FingerprintInvoice } from "@/lib/exportFingerprint";
@@ -525,7 +525,7 @@ async function parseAndSave(
     }
   }
   if (validate && !alreadyValidated && data.confirmDuplicate !== "1" && newData.invoiceNumber) {
-    const dupId = await findByInvoiceNumber({
+    const dup = await findByInvoiceNumber({
       clientId: invoice.clientId,
       type: newData.type,
       excludeId: invoiceId,
@@ -534,7 +534,6 @@ async function parseAndSave(
       invoiceDate: newData.invoiceDate,
       onlyValidated: true,
     });
-    const dup = dupId ? await prisma.invoice.findUnique({ where: { id: dupId }, select: DUPLICATE_SELECT }) : null;
     if (dup) {
       const label = describeExisting(dup);
       return {

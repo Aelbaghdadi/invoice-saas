@@ -921,7 +921,10 @@ describe("duplicados con el CIF limpio y el número normalizado (F-010)", () => 
     await stored("DE123456789", "A-1");
     await stored("IE6388047V", "B-1");
     await stored("W0184081H", "C-1");
-    expect(await duplicatesFor({ issuerCif: "DE 123456789", invoiceNumber: "A-1" })).toHaveLength(1);
+    // El aviso muestra el VAT con su país, no el CIF guardado sin prefijo.
+    expect(await duplicatesFor({ issuerCif: "DE 123456789", invoiceNumber: "A-1" })).toEqual([
+      expect.stringContaining("mismo número y mismo CIF emisor (DE123456789)"),
+    ]);
     expect(await duplicatesFor({ issuerCif: "IE6388047V", invoiceNumber: "B-1" })).toHaveLength(1);
     expect(await duplicatesFor({ issuerCif: "ESW0184081H", invoiceNumber: "C-1" })).toHaveLength(1);
   });
@@ -932,6 +935,13 @@ describe("duplicados con el CIF limpio y el número normalizado (F-010)", () => 
       expect(await duplicatesFor({ issuerCif: "B12345674", invoiceNumber: n }), n).toHaveLength(1);
     }
     expect(await duplicatesFor({ issuerCif: "B12345674", invoiceNumber: "F-002" })).toEqual([]);
+  });
+
+  it("estrategia B con un VAT extranjero: el aviso lleva el país", async () => {
+    await stored("PT515160873", "OTRO-2", { invoiceDate: new Date("2026-09-10"), totalAmount: 654 });
+    expect(await duplicatesFor({ issuerCif: "PT 515160873", invoiceNumber: null, totalAmount: 654 })).toEqual([
+      expect.stringContaining("mismo CIF emisor (PT515160873), total (654,00 €) y fecha"),
+    ]);
   });
 
   it("estrategia B (total y fecha) con el CIF limpio", async () => {
@@ -1024,21 +1034,21 @@ describe("al validar, confirmación si ya hay otra validada con el mismo número
     const otro = await makeInvoice(w.client, { status: "VALIDATED", issuerCif: "B12345674", invoiceNumber: "1234" });
     const base = { clientId: w.client.id, excludeId: id, invoiceNumber: "1234", onlyValidated: true };
     expect(await findByInvoiceNumber({ ...base, type: "PURCHASE", issuerCif: null })).toBeNull();
-    expect(await findByInvoiceNumber({ ...base, type: "PURCHASE", issuerCif: "B12345674" })).toBe(otro.id);
+    expect((await findByInvoiceNumber({ ...base, type: "PURCHASE", issuerCif: "B12345674" }))?.id).toBe(otro.id);
     // En ventas el CIF no cuenta: el emisor es el propio cliente.
     const venta = await makeInvoice(w.client, { type: "SALE", status: "VALIDATED", invoiceNumber: "V-9" });
-    expect(await findByInvoiceNumber({ ...base, invoiceNumber: "V-9", type: "SALE", issuerCif: "X" })).toBe(venta.id);
+    expect((await findByInvoiceNumber({ ...base, invoiceNumber: "V-9", type: "SALE", issuerCif: "X" }))?.id).toBe(venta.id);
   });
 
   it("con fecha, solo casa en el mismo año (numeración que reinicia cada año)", async () => {
     const del2025 = await makeInvoice(w.client, { status: "VALIDATED", issuerCif: "B12345674", invoiceNumber: "1", invoiceDate: new Date("2025-03-01") });
     const base = { clientId: w.client.id, type: "PURCHASE" as const, excludeId: id, invoiceNumber: "1", issuerCif: "B12345674", onlyValidated: true };
     expect(await findByInvoiceNumber({ ...base, invoiceDate: new Date("2026-03-01") })).toBeNull();
-    expect(await findByInvoiceNumber({ ...base, invoiceDate: new Date("2025-12-31") })).toBe(del2025.id);
+    expect((await findByInvoiceNumber({ ...base, invoiceDate: new Date("2025-12-31") }))?.id).toBe(del2025.id);
     // Sin fecha en cualquiera de los dos lados, se compara igual.
-    expect(await findByInvoiceNumber({ ...base, invoiceDate: null })).toBe(del2025.id);
+    expect((await findByInvoiceNumber({ ...base, invoiceDate: null }))?.id).toBe(del2025.id);
     await prisma.invoice.update({ where: { id: del2025.id }, data: { invoiceDate: null } });
-    expect(await findByInvoiceNumber({ ...base, invoiceDate: new Date("2026-03-01") })).toBe(del2025.id);
+    expect((await findByInvoiceNumber({ ...base, invoiceDate: new Date("2026-03-01") }))?.id).toBe(del2025.id);
   });
 
   it("si la otra aún no está validada, no hace falta confirmar", async () => {

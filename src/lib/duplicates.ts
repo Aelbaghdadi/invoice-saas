@@ -10,7 +10,7 @@ import { prisma } from "@/lib/prisma";
 import { formatEur } from "@/lib/format";
 import { formatDateEs } from "@/lib/dates";
 import { periodLabel } from "@/lib/period";
-import { normalizeBusinessName, parseTaxId } from "@/lib/validators";
+import { normalizeBusinessName, parseTaxId, taxIdWithCountry } from "@/lib/validators";
 
 /** «F-001», «F 001», «f001» y «F/001» son el mismo numero: sin espacios ni
  *  separadores y en mayusculas. Solo ASCII y en este orden (quitar y luego
@@ -54,15 +54,16 @@ export async function findByInvoiceNumber(input: {
   invoiceDate?: Date | null;
   /** Solo las ya validadas o exportadas (la comprobacion al validar). */
   onlyValidated?: boolean;
-}): Promise<string | null> {
+}): Promise<ExistingInvoice | null> {
   const normalized = normalizeInvoiceNumber(input.invoiceNumber);
   if (!normalized) return null;
   const issuerCif = input.type === "SALE" ? null : input.issuerCif;
   if (input.type !== "SALE" && !issuerCif) return null;
   const onlyValidated = input.onlyValidated === true;
   const year = input.invoiceDate && !isNaN(input.invoiceDate.getTime()) ? input.invoiceDate.getUTCFullYear() : null;
-  const rows = await prisma.$queryRaw<{ id: string }[]>`
-    SELECT id FROM "Invoice"
+  // Devuelve ya lo que usa describeExisting: antes un segundo viaje a la BD.
+  const rows = await prisma.$queryRaw<ExistingInvoice[]>`
+    SELECT id, "invoiceNumber", filename, "createdAt", "periodType", "periodMonth", "periodYear" FROM "Invoice"
     WHERE "clientId" = ${input.clientId}
       AND type = ${input.type}::"InvoiceType"
       AND id <> ${input.excludeId}
@@ -73,7 +74,7 @@ export async function findByInvoiceNumber(input: {
       AND ${normalizedNumberSql(Prisma.raw('"invoiceNumber"'))} = ${normalized}
     ORDER BY "createdAt"
     LIMIT 1`;
-  return rows[0]?.id ?? null;
+  return rows[0] ?? null;
 }
 
 export const DUPLICATE_SELECT = {
@@ -86,17 +87,21 @@ export const DUPLICATE_SELECT = {
   periodYear: true,
 } as const;
 
-/** La factura ya registrada en el aviso de duplicado: numero, fecha de subida
- *  y periodo. Con el nombre del fichero a secas, si se subia el mismo PDF dos
- *  veces el aviso repetia el nombre del propio fichero y no decia cual era. */
-export function describeExisting(existing: {
+/** Lo que se lee de la factura ya registrada (DUPLICATE_SELECT). */
+export type ExistingInvoice = {
+  id: string;
   invoiceNumber: string | null;
   filename: string;
   createdAt: Date;
   periodType: "MONTHLY" | "QUARTERLY";
   periodMonth: number;
   periodYear: number;
-}): string {
+};
+
+/** La factura ya registrada en el aviso de duplicado: numero, fecha de subida
+ *  y periodo. Con el nombre del fichero a secas, si se subia el mismo PDF dos
+ *  veces el aviso repetia el nombre del propio fichero y no decia cual era. */
+export function describeExisting(existing: Omit<ExistingInvoice, "id">): string {
   const ref = existing.invoiceNumber ?? `«${existing.filename}»`;
   const period = periodLabel(existing.periodType, existing.periodMonth, existing.periodYear);
   return `la factura ${ref} subida el ${formatDateEs(existing.createdAt)} (${period})`;
@@ -122,6 +127,10 @@ export type DuplicateCheckInput = {
   /** Como se lean o se guarden: se limpian aqui. */
   issuerCif: string | null;
   receiverCif: string | null;
+  /** Pais guardado aparte (el CIF guardado va sin prefijo): solo para el
+   *  texto del aviso, que muestra el VAT extranjero con su pais. */
+  issuerCountry?: string | null;
+  receiverCountry?: string | null;
   receiverName: string | null;
   totalAmount: number | null;
   invoiceDate: string | Date | null;
@@ -160,8 +169,10 @@ export async function findPossibleDuplicate(input: DuplicateCheckInput): Promise
     if (sameFile) return found(sameFile, "es el mismo fichero");
   }
 
-  // CIF limpio, como se guarda (F-010).
-  const issuerCif = parseTaxId(input.issuerCif).clean || null;
+  // CIF limpio, como se guarda (F-010). En el aviso, con su pais delante.
+  const issuer = parseTaxId(input.issuerCif);
+  const issuerCif = issuer.clean || null;
+  const issuerShown = taxIdWithCountry(issuerCif, issuer.countryCode ?? input.issuerCountry);
 
   // Protegemos la fecha: el OCR a veces devuelve un RANGO (facturas de
   // suministros, «14-jul-25 / 10-set-25») que da un Date invalido, y Prisma
@@ -171,12 +182,11 @@ export async function findPossibleDuplicate(input: DuplicateCheckInput): Promise
 
   // A. Numero normalizado (+ CIF del emisor en compras), del mismo año.
   if (input.invoiceNumber) {
-    const dupId = await findByInvoiceNumber({
+    const dup = await findByInvoiceNumber({
       clientId, type, excludeId: invoiceId, invoiceNumber: input.invoiceNumber, issuerCif, invoiceDate: validDate,
     });
-    const dup = dupId ? await prisma.invoice.findUnique({ where: { id: dupId }, select: DUPLICATE_SELECT }) : null;
     if (dup) {
-      return found(dup, isSale ? "mismo número de factura emitida" : `mismo número y mismo CIF emisor (${issuerCif})`);
+      return found(dup, isSale ? "mismo número de factura emitida" : `mismo número y mismo CIF emisor (${issuerShown})`);
     }
   }
 
@@ -188,15 +198,16 @@ export async function findPossibleDuplicate(input: DuplicateCheckInput): Promise
   if (!isSale) {
     if (!issuerCif) return null;
     const dup = await prisma.invoice.findFirst({ where: { ...sameAmountAndDate, issuerCif }, select: DUPLICATE_SELECT });
-    return dup ? found(dup, `mismo CIF emisor (${issuerCif}), total (${total}) y fecha`) : null;
+    return dup ? found(dup, `mismo CIF emisor (${issuerShown}), total (${total}) y fecha`) : null;
   }
 
   // En ventas el emisor es el propio cliente: se compara el destinatario,
   // limpio como se guarda (revision 2 del PR #7).
-  const saleReceiver = parseTaxId(input.receiverCif).clean || null;
+  const receiver = parseTaxId(input.receiverCif);
+  const saleReceiver = receiver.clean || null;
   if (saleReceiver) {
     const dup = await prisma.invoice.findFirst({ where: { ...sameAmountAndDate, receiverCif: saleReceiver }, select: DUPLICATE_SELECT });
-    return dup ? found(dup, `mismo destinatario (${saleReceiver}), total (${total}) y fecha`) : null;
+    return dup ? found(dup, `mismo destinatario (${taxIdWithCountry(saleReceiver, receiver.countryCode ?? input.receiverCountry)}), total (${total}) y fecha`) : null;
   }
   if (input.invoiceNumber) return null;
   // Venta sin NIF ni numero: solo con el nombre del destinatario, no vacio e

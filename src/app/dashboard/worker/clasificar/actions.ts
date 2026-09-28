@@ -106,6 +106,8 @@ async function classify(invoiceId: string, clientId: string): Promise<ClassifySt
     invoiceNumber: invoice.invoiceNumber,
     issuerCif: isPurchase ? invoice.issuerCif : client.cif,
     receiverCif: isPurchase ? client.cif : invoice.receiverCif,
+    issuerCountry: isPurchase ? invoice.issuerCountry : null,
+    receiverCountry: isPurchase ? null : invoice.receiverCountry,
     receiverName: invoice.receiverName,
     totalAmount: invoice.totalAmount == null ? null : Number(invoice.totalAmount),
     invoiceDate: invoice.invoiceDate,
