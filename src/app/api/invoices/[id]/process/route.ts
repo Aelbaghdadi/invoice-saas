@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { canAccessClient } from "@/lib/accessibleClients";
@@ -7,6 +7,18 @@ import { appendAuditLogs } from "@/lib/auditLog";
 import { ERROR_MESSAGES } from "@/lib/errorCodes";
 import { STATUS_LABELS, manualStuckAnalyzingWhere, stuckAnalyzingCutoff } from "@/lib/invoiceStatuses";
 import type { InvoiceStatus } from "@prisma/client";
+
+/**
+ * El analisis, fuera de la peticion y delante de la cola del OCR (revision 1
+ * del PR #14, punto 3): con la cola llena, esperar aqui dejaba el boton
+ * girando minutos. La respuesta sale con la factura en UPLOADED y la
+ * revision la sigue con su aviso de «Analizando».
+ */
+function launch(id: string, userId: string) {
+  after(() => processInvoice(id, userId, { priority: true }).catch((err) => {
+    console.error(`[processInvoice] ${id} fallo:`, err);
+  }));
+}
 
 /** Allowed statuses for (re)processing */
 const PROCESSABLE_STATUSES = ["UPLOADED", "OCR_ERROR", "ANALYZED"] as const;
@@ -71,7 +83,7 @@ export async function POST(
         reason: "Reprocesado manualmente (el análisis se había parado)",
       },
     });
-    await processInvoice(id, userId);
+    launch(id, userId);
     const updated = await prisma.invoice.findUnique({ where: { id } });
     return NextResponse.json({ success: true, invoice: updated });
   }
@@ -117,8 +129,7 @@ export async function POST(
     });
   }
 
-  // processInvoice atomically transitions UPLOADED -> ANALYZING -> ANALYZED/OCR_ERROR
-  await processInvoice(id, userId);
+  launch(id, userId);
 
   const updated = await prisma.invoice.findUnique({ where: { id } });
   return NextResponse.json({ success: true, invoice: updated });

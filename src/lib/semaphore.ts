@@ -1,10 +1,13 @@
+type Waiter = { resume: () => void; key?: string };
+
 /**
  * Semaforo en memoria: como mucho `limit` tareas a la vez; las demas esperan
- * en orden de llegada. Se libera tambien si la tarea falla.
+ * en orden de llegada, salvo las que piden prioridad (van delante). Se libera
+ * tambien si la tarea falla.
  */
 export class Semaphore {
   private running = 0;
-  private readonly queue: (() => void)[] = [];
+  private readonly queue: Waiter[] = [];
 
   constructor(private limit: number) {
     if (!Number.isInteger(limit) || limit < 1) throw new Error(`Límite no válido: ${limit}`);
@@ -25,9 +28,28 @@ export class Semaphore {
     this.drain();
   }
 
-  async run<T>(task: () => Promise<T>): Promise<T> {
+  /** Cuantas esperan delante de la que tiene esa clave, o null si no espera. */
+  position(key: string): number | null {
+    const index = this.queue.findIndex((w) => w.key === key);
+    return index < 0 ? null : index;
+  }
+
+  /** La que espera con esa clave pasa delante de todas. false si no espera. */
+  promote(key: string): boolean {
+    const index = this.queue.findIndex((w) => w.key === key);
+    if (index < 0) return false;
+    const [waiter] = this.queue.splice(index, 1);
+    this.queue.unshift(waiter);
+    return true;
+  }
+
+  async run<T>(task: () => Promise<T>, options: { key?: string; priority?: boolean } = {}): Promise<T> {
     if (this.running >= this.limit) {
-      await new Promise<void>((resolve) => this.queue.push(resolve));
+      await new Promise<void>((resume) => {
+        const waiter = { resume, key: options.key };
+        if (options.priority) this.queue.unshift(waiter);
+        else this.queue.push(waiter);
+      });
     } else {
       this.running++;
     }
@@ -48,7 +70,7 @@ export class Semaphore {
   private drain(): void {
     while (this.running < this.limit && this.queue.length > 0) {
       this.running++;
-      this.queue.shift()!();
+      this.queue.shift()!.resume();
     }
   }
 }

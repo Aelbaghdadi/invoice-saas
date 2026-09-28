@@ -288,6 +288,9 @@ type Props = {
    *  el banner de "procesando" para mostrar una ETA realista. null si
    *  no hay historial todavia o la factura no esta en procesamiento. */
   avgOcrDurationMs?: number | null;
+  /** Cuantas esperan delante en la cola del OCR de este proceso, o null si
+   *  no esta en cola (revision 1 del PR #14, punto 3). */
+  ocrQueueAhead?: number | null;
   /** Cuentas genéricas del cliente para facturas simplificadas (tickets sin
    *  datos). Si hay cuenta proveedor configurada, se muestra el botón "Usar
    *  cuenta genérica" que las vuelca a los campos de cuenta. */
@@ -363,7 +366,7 @@ function fmtDate(d: Date | null | undefined) {
   return new Date(d).toISOString().slice(0, 10);
 }
 
-export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false, initialVatLines, prevId, nextId, nextPendingId = null, position, batchTotal, doneCount = 0, pendingInBucket = 0, periodClosed = false, validateBlockReason = null, splitBlockReason = null, backHref, back = null, extraction, issues, suggestedAccount, accountMatchedByName, accountNameMismatch = false, thirdPartyGoodsType = null, canRememberGoodsType = false, boundingBoxes, queueSuffix = "", bucket = "all", sessionContext, avgOcrDurationMs, genericAccounts }: Props) {
+export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false, initialVatLines, prevId, nextId, nextPendingId = null, position, batchTotal, doneCount = 0, pendingInBucket = 0, periodClosed = false, validateBlockReason = null, splitBlockReason = null, backHref, back = null, extraction, issues, suggestedAccount, accountMatchedByName, accountNameMismatch = false, thirdPartyGoodsType = null, canRememberGoodsType = false, boundingBoxes, queueSuffix = "", bucket = "all", sessionContext, avgOcrDurationMs, ocrQueueAhead = null, genericAccounts }: Props) {
   const { success, error } = useToast();
   const { confirm, dialog: confirmDialog } = useConfirm();
   const { ask: askUnsaved, dialog: unsavedDialog } = useUnsavedChangesDialog();
@@ -2065,6 +2068,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
               <OcrProcessingBanner
                 startedAt={invoice.createdAt}
                 avgDurationMs={avgOcrDurationMs ?? undefined}
+                queueAhead={ocrQueueAhead}
                 invoiceId={invoice.id}
                 status={invoice.status}
                 updatedAt={invoice.updatedAt}

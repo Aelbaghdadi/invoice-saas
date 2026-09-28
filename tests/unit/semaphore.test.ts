@@ -61,6 +61,28 @@ describe("Semaphore (F-029)", () => {
     await expect(late).resolves.toBe("tarde");
   });
 
+  it("con prioridad va delante de las que esperan; promote adelanta a una que ya espera", async () => {
+    const s = new Semaphore(1);
+    const order: string[] = [];
+    let unblock!: () => void;
+    const first = s.run(() => new Promise<void>((r) => { unblock = r; }));
+    const tasks = [
+      s.run(async () => { order.push("a"); }, { key: "a" }),
+      s.run(async () => { order.push("b"); }, { key: "b" }),
+      s.run(async () => { order.push("c"); }, { key: "c" }),
+    ];
+    await tick();
+    expect([s.position("a"), s.position("c"), s.position("x")]).toEqual([0, 2, null]);
+    tasks.push(s.run(async () => { order.push("urgente"); }, { key: "urgente", priority: true }));
+    expect(s.promote("c")).toBe(true);
+    expect(s.promote("x")).toBe(false);
+    await tick();
+    expect(s.position("c")).toBe(0);
+    unblock();
+    await Promise.all([first, ...tasks]);
+    expect(order).toEqual(["c", "urgente", "a", "b"]);
+  });
+
   it("límite no válido: error", () => {
     expect(() => new Semaphore(0)).toThrow();
     expect(() => new Semaphore(1.5)).toThrow();

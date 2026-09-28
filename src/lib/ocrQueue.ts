@@ -33,9 +33,16 @@ const queue: OcrQueue = globalForQueue.__facturocrOcrQueue ??= {
   waiting: new Map(),
 };
 
-/** Corre `task` cuando haya hueco. Si la factura ya espera en la cola, nada. */
-export async function runQueuedOcr(invoiceId: string, task: () => Promise<void>): Promise<void> {
-  if (queue.waiting.has(invoiceId)) return;
+/**
+ * Corre `task` cuando haya hueco. Si la factura ya espera en la cola, no se
+ * encola otra vez; con `priority` (un «Reprocesar» a mano) pasa delante de
+ * las demás, y si ya esperaba, se adelanta.
+ */
+export async function runQueuedOcr(invoiceId: string, task: () => Promise<void>, options: { priority?: boolean } = {}): Promise<void> {
+  if (queue.waiting.has(invoiceId)) {
+    if (options.priority) queue.semaphore.promote(invoiceId);
+    return;
+  }
   // Con su ficha: al terminar, una ejecucion no borra la espera de otra
   // posterior de la misma factura.
   const ticket = Symbol(invoiceId);
@@ -47,10 +54,16 @@ export async function runQueuedOcr(invoiceId: string, task: () => Promise<void>)
     await queue.semaphore.run(() => {
       leaveQueue();
       return task();
-    });
+    }, { key: invoiceId, priority: options.priority });
   } finally {
     leaveQueue();
   }
+}
+
+/** Cuantas esperan delante de esta factura en la cola de este proceso, o
+ *  null si no esta esperando aqui (la revision lo dice en el aviso). */
+export function ocrQueuePosition(invoiceId: string): number | null {
+  return queue.waiting.has(invoiceId) ? queue.semaphore.position(invoiceId) : null;
 }
 
 /** Cuantas corren y cuantas esperan (para los tests). */

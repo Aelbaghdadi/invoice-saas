@@ -8,6 +8,7 @@ import { facturaeXml, utcMinutesAgoSql } from "./helpers/fixtures";
 import { signInAs } from "./helpers/session";
 import { GET as retryStuck, POST as retryStuckPost } from "@/app/api/cron/retry-stuck/route";
 import { POST as closureReminders } from "@/app/api/cron/closure-reminders/route";
+import { runAfterCallbacks } from "./helpers/after";
 import { POST as processRoute } from "@/app/api/invoices/[id]/process/route";
 
 let w: FirmWorld;
@@ -120,6 +121,9 @@ describe("Reprocesar a mano una factura parada", () => {
     await stuck("ANALYZING", 3, 10);
     const res = await reprocess();
     expect(res.status).toBe(200);
+    // El análisis va en un after(): la respuesta sale con la factura en UPLOADED.
+    expect((await res.json()).invoice.status).toBe("UPLOADED");
+    await runAfterCallbacks();
     const i = await inv();
     expect(["PENDING_REVIEW", "NEEDS_ATTENTION"]).toContain(i.status);
     expect(i.ocrAttempts).toBe(4);

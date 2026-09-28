@@ -84,10 +84,13 @@ export const OCR_WAITS = { storageMs: 30_000 };
 /**
  * Analiza una factura cuando haya hueco en la cola del OCR (F-029): como
  * mucho OCR_CONCURRENCY a la vez en este proceso. Mientras espera sigue en
- * UPLOADED. Devuelve al terminar el analisis, no al encolarla.
+ * UPLOADED. La promesa se resuelve al terminar el analisis, no al encolarla:
+ * quien no quiera esperar (el «Reprocesar» de la pantalla) lo lanza en un
+ * after(). Con `priority` pasa delante de la cola; si ya esperaba, se
+ * adelanta. Si ya esperaba sin prioridad, vuelve al momento sin hacer nada.
  */
-export async function processInvoice(invoiceId: string, triggeredByUserId: string) {
-  await runQueuedOcr(invoiceId, () => analyzeInvoice(invoiceId, triggeredByUserId));
+export async function processInvoice(invoiceId: string, triggeredByUserId: string, options: { priority?: boolean } = {}) {
+  await runQueuedOcr(invoiceId, () => analyzeInvoice(invoiceId, triggeredByUserId), options);
 }
 
 async function analyzeInvoice(invoiceId: string, triggeredByUserId: string) {

@@ -6,7 +6,11 @@ import { makeFirm, makeInvoice, type FirmWorld } from "./helpers/factories";
 import { stubOcr } from "./helpers/ocr";
 import { fakeS3 } from "./helpers/fakeS3";
 import { processInvoice, OCR_WAITS } from "@/lib/processInvoice";
-import { ocrQueueState, setOcrConcurrency, DEFAULT_OCR_CONCURRENCY } from "@/lib/ocrQueue";
+import { ocrQueuePosition, ocrQueueState, setOcrConcurrency, DEFAULT_OCR_CONCURRENCY } from "@/lib/ocrQueue";
+import { NextRequest } from "next/server";
+import { POST as processRoute } from "@/app/api/invoices/[id]/process/route";
+import { signInAs } from "./helpers/session";
+import { runAfterCallbacks } from "./helpers/after";
 import { OcrHttpError } from "@/lib/ocrErrors";
 import type { ExtractedInvoice, OcrResult } from "@/lib/ocr";
 
@@ -119,6 +123,45 @@ describe("cola del OCR (F-029)", () => {
     const good = await upload(2);
     await processInvoice(good, w.worker.id);
     expect((await prisma.invoice.findUniqueOrThrow({ where: { id: good } })).status).not.toBe("UPLOADED");
+    expect(ocrQueueState()).toEqual({ active: 0, waiting: 0 });
+  });
+});
+
+describe("Reprocesar con la cola llena (revisión 1 del PR #14, punto 3)", () => {
+  const reprocess = (id: string) => processRoute(new NextRequest("http://x", { method: "POST" }), { params: Promise.resolve({ id }) });
+
+  it("responde al momento y va delante; si ya esperaba, se adelanta", async () => {
+    setOcrConcurrency(1);
+    let open!: () => void;
+    const gate = new Promise<void>((r) => { open = r; });
+    stubOcr(async () => { await gate; return reply(1); });
+    const busy = await upload(1);
+    const queued = [await upload(2), await upload(3), await upload(4)];
+    const running = [processInvoice(busy, w.worker.id), ...queued.map((id) => processInvoice(id, w.worker.id))];
+    try {
+      await waitFor(async () => ocrQueueState().waiting === 3);
+      signInAs(w.admin);
+      // Una en Error OCR: responde sin esperar a la cola, con la factura en UPLOADED.
+      const failed = await upload(5);
+      await prisma.invoice.update({ where: { id: failed }, data: { status: "OCR_ERROR" } });
+      const res = await reprocess(failed);
+      expect(res.status).toBe(200);
+      expect((await res.json()).invoice.status).toBe("UPLOADED");
+      const launched = runAfterCallbacks();
+      await waitFor(async () => ocrQueuePosition(failed) != null);
+      expect(ocrQueuePosition(failed)).toBe(0);
+      expect(ocrQueuePosition(queued[0])).toBe(1);
+      // Una que ya esperaba al final: Reprocesar la adelanta.
+      expect(ocrQueuePosition(queued[2])).toBe(3);
+      expect((await reprocess(queued[2])).status).toBe(200);
+      running.push(runAfterCallbacks());
+      await waitFor(async () => ocrQueuePosition(queued[2]) === 0);
+      expect(ocrQueueState().waiting).toBe(4);
+      running.push(launched);
+    } finally {
+      open();
+      await Promise.all(running);
+    }
     expect(ocrQueueState()).toEqual({ active: 0, waiting: 0 });
   });
 });
