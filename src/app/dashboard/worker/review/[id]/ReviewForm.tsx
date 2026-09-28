@@ -43,6 +43,8 @@ import {
   showsDuplicateWarning,
 } from "@/lib/invoiceStatuses";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
+import { useUnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
+import { formSnapshot } from "@/lib/formSnapshot";
 import { invoiceBalanceDiffCents, isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { amountFieldsProblem, parseVatLineInputs, vatLinesProblem } from "@/lib/vatLineInput";
 import { accountsAgainstDirection, validationProblems } from "@/lib/invoiceRules";
@@ -340,6 +342,7 @@ function fmtDate(d: Date | null | undefined) {
 export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false, initialVatLines, prevId, nextId, nextPendingId = null, position, batchTotal, doneCount = 0, pendingInBucket = 0, periodClosed = false, validateBlockReason = null, splitBlockReason = null, backHref, back = null, extraction, issues, suggestedAccount, accountMatchedByName, accountNameMismatch = false, thirdPartyGoodsType = null, canRememberGoodsType = false, boundingBoxes, queueSuffix = "", bucket = "all", sessionContext, avgOcrDurationMs, genericAccounts }: Props) {
   const { success, error } = useToast();
   const { confirm, dialog: confirmDialog } = useConfirm();
+  const { ask: askUnsaved, dialog: unsavedDialog } = useUnsavedChangesDialog();
   const isImage = invoice.fileType.startsWith("image/");
   const isPdf   = invoice.fileType === "application/pdf";
   const isXml   = invoice.fileType.includes("xml");
@@ -968,26 +971,86 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     return fd;
   }, [type, vatLines, totalAmount, markedEuro, invoiceDateVal, accountingMonth, accountingYear, supplierAccountVal, expenseAccountVal, operationType, goodsTypeShown, shownSource, retentionType, retentionBase, retentionRate, retentionAmount, isRectificative, rectifiedInvoiceSeries, rectifiedInvoiceNumber, rectificativeType, art80Tres, invoice.id, invoice.updatedAt, bucket, back]);
 
-  const handleSave = () => {
+  // Guarda y dice si ha ido bien: lo usan el boton y «Guardar» del aviso de
+  // cambios sin guardar, que solo sigue adelante si se guardo.
+  const saveNow = async (): Promise<boolean> => {
     if (saveBlock) {
       error(saveBlock);
-      return;
+      return false;
     }
     if (vatLineIssue) {
       triggerShake("math");
       error(`No se han guardado los cambios: ${vatLineIssue}`);
-      return;
+      return false;
     }
-    startSave(async () => {
-      const res = await saveInvoiceFields(null, buildFormData());
-      setSaveState(res);
-      if (res?.error) {
-        error(`No se han guardado los cambios: ${errorText(res.error)}`);
-      } else {
-        success("Cambios guardados");
-      }
-    });
+    const res = await saveInvoiceFields(null, buildFormData());
+    setSaveState(res);
+    if (res?.error) {
+      error(`No se han guardado los cambios: ${errorText(res.error)}`);
+      return false;
+    }
+    success("Cambios guardados");
+    markClean();
+    return true;
   };
+  const handleSave = () => {
+    startSave(async () => { await saveNow(); });
+  };
+
+  // ── Cambios sin guardar (F-047) ──────────────────────────────────────────
+  // La instantanea es lo que se enviaria al guardar justo antes de que el
+  // gestor toque nada: el primer pointerdown, keydown, focusin o beforeinput
+  // dentro de la pantalla (este ultimo cubre pegar y el autocompletado, que no
+  // pasan por el teclado). Asi no cuentan como cambios los valores que el
+  // propio formulario ajusta al montarse. Se rehace al cambiar de factura o
+  // de version (tras guardar).
+  const rootRef = useRef<HTMLDivElement>(null);
+  const snapshotRef = useRef<string | null>(null);
+  useEffect(() => { snapshotRef.current = null; }, [invoice.id, invoice.updatedAt]);
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const takeSnapshotOnce = () => {
+      if (snapshotRef.current == null) snapshotRef.current = formSnapshot(buildFormData());
+    };
+    const events = ["pointerdown", "keydown", "focusin", "beforeinput"] as const;
+    for (const ev of events) root.addEventListener(ev, takeSnapshotOnce, true);
+    return () => { for (const ev of events) root.removeEventListener(ev, takeSnapshotOnce, true); };
+  }, [buildFormData]);
+  const markClean = () => { snapshotRef.current = formSnapshot(buildFormData()); };
+  const isDirty = () => snapshotRef.current != null && formSnapshot(buildFormData()) !== snapshotRef.current;
+
+  // Antes de salir de la factura: si hay cambios, Guardar / Descartar /
+  // Cancelar. Tambien al corregir una validada, el caso grave: una
+  // correccion perdida deja en A3 los valores viejos.
+  const guardLeave = async (leave: () => void) => {
+    if (!isDirty()) return leave();
+    const choice = await askUnsaved();
+    if (choice === "discard") {
+      markClean();
+      leave();
+    } else if (choice === "save" && (await saveNow())) {
+      leave();
+    }
+  };
+  // Para los Link: con cambios, se para la navegacion y se pregunta. Con
+  // Ctrl/Cmd/Shift o boton central (pestaña nueva) no se sale de esta.
+  const guardLink = (href: string) => (e: React.MouseEvent) => {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    if (!isDirty()) return;
+    e.preventDefault();
+    void guardLeave(() => router.push(href));
+  };
+  // Cerrar la pestaña o recargar: el aviso del navegador.
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (!isDirty()) return;
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  });
 
   // "Reabrir y validar" en curso: viaja con la validacion (tambien si antes
   // sale la pregunta de bienes/servicios). Enter nunca lo pone.
@@ -1332,12 +1395,12 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       setRejectReason((prev) => prev || "Factura duplicada");
       setShowRejectModal(true);
     },
-    onNext: () => { if (nextId) router.push(`/dashboard/worker/review/${nextId}${queueSuffix}`); },
-    onPrev: () => { if (prevId) router.push(`/dashboard/worker/review/${prevId}${queueSuffix}`); },
+    onNext: () => { if (nextId) void guardLeave(() => router.push(`/dashboard/worker/review/${nextId}${queueSuffix}`)); },
+    onPrev: () => { if (prevId) void guardLeave(() => router.push(`/dashboard/worker/review/${prevId}${queueSuffix}`)); },
     onToggleHelp: () => setShowHelp((s) => !s),
     // Con «¿Reabrir y validar?» abierto, Ctrl+S guardaba por detras y
     // Alt+flechas cambiaba de factura.
-    isBlocked: () => showRejectModal || showHelp || showSplitModal || showSplitPdfModal || goodsQuestion !== null || confirmDialog != null,
+    isBlocked: () => showRejectModal || showHelp || showSplitModal || showSplitPdfModal || goodsQuestion !== null || confirmDialog != null || unsavedDialog != null,
   });
 
   // Etiqueta del bucket activo en la sesion. Ayuda al gestor a saber
@@ -1367,11 +1430,11 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   const closeRejectModal = () => { setShowRejectModal(false); setRejectReason(""); };
 
   return (
-    <div className="flex h-full flex-col overflow-hidden">
+    <div ref={rootRef} className="flex h-full flex-col overflow-hidden">
       {/* Header bar */}
       <div className="flex flex-shrink-0 items-center justify-between border-b border-slate-200 bg-white px-5 py-3">
         <div className="flex items-center gap-3">
-          <Link href={backHref} className="flex items-center gap-1.5 text-[12px] text-slate-500 hover:text-slate-700">
+          <Link href={backHref} onClick={guardLink(backHref)} className="flex items-center gap-1.5 text-[12px] text-slate-500 hover:text-slate-700">
             <ChevronLeft className="h-4 w-4" />
             Volver
           </Link>
@@ -1401,6 +1464,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
           {!canDefer && nextPendingId && (
             <Link
               href={`/dashboard/worker/review/${nextPendingId}${queueSuffix}`}
+              onClick={guardLink(`/dashboard/worker/review/${nextPendingId}${queueSuffix}`)}
               className="flex h-7 items-center gap-1 rounded-lg bg-blue-50 px-2.5 text-[12px] font-medium text-blue-700 hover:bg-blue-100"
             >
               Siguiente pendiente
@@ -1410,6 +1474,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
           <span className="text-[12px] text-slate-400 tabular-nums">{position} de {batchTotal}</span>
           {prevId ? (
             <Link href={`/dashboard/worker/review/${prevId}${queueSuffix}`} prefetch
+              onClick={guardLink(`/dashboard/worker/review/${prevId}${queueSuffix}`)}
               title="Factura anterior del lote (Alt+←)" aria-label="Factura anterior del lote"
               className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50">
               <ChevronLeft className="h-4 w-4" />
@@ -1422,6 +1487,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
           )}
           {nextId ? (
             <Link href={`/dashboard/worker/review/${nextId}${queueSuffix}`} prefetch
+              onClick={guardLink(`/dashboard/worker/review/${nextId}${queueSuffix}`)}
               title="Factura siguiente del lote (Alt+→)" aria-label="Factura siguiente del lote"
               className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50">
               <ChevronRight className="h-4 w-4" />
@@ -1704,7 +1770,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                   </div>
                   <button
                     type="button"
-                    onClick={handleReprocess}
+                    onClick={() => void guardLeave(handleReprocess)}
                     disabled={isPendingReprocess}
                     className="flex flex-shrink-0 items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-red-700 disabled:opacity-50"
                   >
@@ -2830,7 +2896,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
             {canDefer && (
               <button
                 type="button"
-                onClick={handleDefer}
+                onClick={() => void guardLeave(handleDefer)}
                 disabled={isPendingDefer || !nextPendingId}
                 title={!nextPendingId ? "No quedan más facturas por revisar en el lote" : "Posponer: saltar a la siguiente sin tocar esta"}
                 aria-label="Posponer"
@@ -3102,6 +3168,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       </div>
 
       {confirmDialog}
+      {unsavedDialog}
 
       {showSplitModal && previewUrl && (
         <SplitInvoiceModal

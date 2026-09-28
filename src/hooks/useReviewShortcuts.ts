@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { altArrowAction } from "@/lib/reviewKeys";
 
 /**
  * Atajos de teclado globales para la pantalla de revision.
@@ -117,15 +118,13 @@ export function useReviewShortcuts(h: ReviewShortcutHandlers) {
         return;
       }
 
-      // Alt+Left/Right: navegacion prev/next sin validar
-      if (e.altKey && e.key === "ArrowRight" && h.onNext) {
+      // Alt+Left/Right: navegacion prev/next sin validar. Con el foco en un
+      // campo no cambia de factura (ver altArrowAction).
+      const arrow = altArrowAction(e, { inInput, isMac: /Mac|iPhone|iPad/.test(navigator.platform) });
+      if (arrow) {
         e.preventDefault();
-        h.onNext();
-        return;
-      }
-      if (e.altKey && e.key === "ArrowLeft" && h.onPrev) {
-        e.preventDefault();
-        h.onPrev();
+        if (arrow === "next") h.onNext?.();
+        if (arrow === "prev") h.onPrev?.();
         return;
       }
     };
