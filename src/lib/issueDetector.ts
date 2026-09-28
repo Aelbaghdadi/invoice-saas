@@ -4,6 +4,7 @@ import type { Invoice, IssueType } from "@prisma/client";
 import { normalizeBusinessName, parseTaxId, type OperationTypeName } from "@/lib/validators";
 import { formatEur } from "@/lib/format";
 import { intracomVatIssue, mathIssues } from "@/lib/mathIssues";
+import { findByInvoiceNumber } from "@/lib/duplicates";
 import { formatDateEs } from "@/lib/dates";
 import { periodLabel } from "@/lib/period";
 
@@ -154,16 +155,25 @@ export async function detectIssues(
     }
   }
 
-  // Strategy A: CIF + invoice number
-  if (extraction.issuerCif && extraction.invoiceNumber && !issues.some((i) => i.type === "POSSIBLE_DUPLICATE")) {
-    const dupByNumber = await prisma.invoice.findFirst({
-      where: { ...baseWhere, issuerCif: extraction.issuerCif, invoiceNumber: extraction.invoiceNumber },
-      select: DUPLICATE_SELECT,
+  // CIF limpio, como se guarda (F-010): el crudo del OCR («ESB12345678»,
+  // «B-12345678», «b12345678») no casaba con el de la BD.
+  const issuerCif = parseTaxId(extraction.issuerCif).clean || null;
+
+  // Strategy A: CIF + numero normalizado. En ventas basta el numero: el
+  // cliente y el tipo ya fijan al emisor.
+  const isSale = invoice.type === "SALE";
+  if (extraction.invoiceNumber && (isSale || issuerCif) && !issues.some((i) => i.type === "POSSIBLE_DUPLICATE")) {
+    const dupId = await findByInvoiceNumber({
+      clientId: invoice.clientId, type: invoice.type, excludeId: invoiceId,
+      invoiceNumber: extraction.invoiceNumber, issuerCif: isSale ? null : issuerCif,
     });
+    const dupByNumber = dupId ? await prisma.invoice.findUnique({ where: { id: dupId }, select: DUPLICATE_SELECT }) : null;
     if (dupByNumber) {
       issues.push({
         type: "POSSIBLE_DUPLICATE",
-        description: `Posible duplicado de ${describeExisting(dupByNumber)}: mismo número y mismo CIF emisor (${extraction.issuerCif}).`,
+        description: isSale
+          ? `Posible duplicado de ${describeExisting(dupByNumber)}: mismo número de factura emitida.`
+          : `Posible duplicado de ${describeExisting(dupByNumber)}: mismo número y mismo CIF emisor (${issuerCif}).`,
       });
     }
   }
@@ -182,7 +192,7 @@ export async function detectIssues(
   ) {
     const sameAmountAndDate = { ...baseWhere, totalAmount: extraction.totalAmount, invoiceDate: validDate };
     const total = formatEur(extraction.totalAmount);
-    if (invoice.type === "SALE") {
+    if (isSale) {
       // En ventas el emisor es el propio cliente: comparar su CIF sacaba como
       // duplicadas dos ventas del mismo importe y dia a clientes distintos.
       // Ahi se compara el destinatario, limpio como se guarda (revision 2 del
@@ -220,15 +230,15 @@ export async function detectIssues(
           });
         }
       }
-    } else if (extraction.issuerCif) {
+    } else if (issuerCif) {
       const dup = await prisma.invoice.findFirst({
-        where: { ...sameAmountAndDate, issuerCif: extraction.issuerCif },
+        where: { ...sameAmountAndDate, issuerCif },
         select: DUPLICATE_SELECT,
       });
       if (dup) {
         issues.push({
           type: "POSSIBLE_DUPLICATE",
-          description: `Posible duplicado de ${describeExisting(dup)}: mismo CIF emisor (${extraction.issuerCif}), total (${total}) y fecha.`,
+          description: `Posible duplicado de ${describeExisting(dup)}: mismo CIF emisor (${issuerCif}), total (${total}) y fecha.`,
         });
       }
     }

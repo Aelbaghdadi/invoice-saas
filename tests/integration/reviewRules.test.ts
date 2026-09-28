@@ -890,3 +890,55 @@ describe("incidencias del signo al guardar (revisión 2 del PR #9, punto 9)", ()
     expect(await statusOf(negative.id)).toBe("OPEN");
   });
 });
+
+describe("duplicados con el CIF limpio y el número normalizado (F-010)", () => {
+  async function duplicatesFor(read: { issuerCif: string | null; invoiceNumber: string | null; totalAmount?: number }, type: "PURCHASE" | "SALE" = "PURCHASE") {
+    const nueva = await makeInvoice(w.client, { type, invoiceNumber: read.invoiceNumber, totalAmount: 999 });
+    const extraction = {
+      issuerCif: read.issuerCif, receiverCif: null, receiverName: null, invoiceNumber: read.invoiceNumber, invoiceDate: "2026-09-10",
+      taxBase: null, vatAmount: null, totalAmount: read.totalAmount ?? null, irpfAmount: null, vatLines: [], confidence: null,
+    } as unknown as ExtractedInvoice;
+    const issues = await detectIssues(nueva.id, extraction, nueva, "INTERIOR", { persist: false });
+    return issues.filter((i) => i.type === "POSSIBLE_DUPLICATE").map((i) => i.description);
+  }
+  const stored = (issuerCif: string, invoiceNumber = "F-001", extra = {}) =>
+    makeInvoice(w.client, { issuerCif: parseTaxId(issuerCif).clean, invoiceNumber, totalAmount: 500, invoiceDate: new Date("2026-08-01"), ...extra });
+
+  it("el CIF leído con prefijo, separadores o en minúsculas casa con el guardado", async () => {
+    await stored("B12345674");
+    for (const read of ["B-12345674", "ESB12345674", "B.12.345.674", "b12345674"]) {
+      expect(await duplicatesFor({ issuerCif: read, invoiceNumber: "F-001" }), read).toHaveLength(1);
+    }
+  });
+
+  it("VAT extranjeros y el NIF español con prefijo ES", async () => {
+    await stored("DE123456789", "A-1");
+    await stored("IE6388047V", "B-1");
+    await stored("W0184081H", "C-1");
+    expect(await duplicatesFor({ issuerCif: "DE 123456789", invoiceNumber: "A-1" })).toHaveLength(1);
+    expect(await duplicatesFor({ issuerCif: "IE6388047V", invoiceNumber: "B-1" })).toHaveLength(1);
+    expect(await duplicatesFor({ issuerCif: "ESW0184081H", invoiceNumber: "C-1" })).toHaveLength(1);
+  });
+
+  it("el número se compara normalizado: «F 001», «f001», «F/001»", async () => {
+    await stored("B12345674");
+    for (const n of ["F 001", "f001", "F/001"]) {
+      expect(await duplicatesFor({ issuerCif: "B12345674", invoiceNumber: n }), n).toHaveLength(1);
+    }
+    expect(await duplicatesFor({ issuerCif: "B12345674", invoiceNumber: "F-002" })).toEqual([]);
+  });
+
+  it("estrategia B (total y fecha) con el CIF limpio", async () => {
+    await stored("B12345674", "OTRO-1", { invoiceDate: new Date("2026-09-10"), totalAmount: 321 });
+    expect(await duplicatesFor({ issuerCif: "ESB-12345674", invoiceNumber: null, totalAmount: 321 })).toEqual([
+      expect.stringContaining("mismo CIF emisor (B12345674), total (321,00 €) y fecha"),
+    ]);
+  });
+
+  it("en ventas basta el número: el cliente y el tipo fijan al emisor", async () => {
+    await makeInvoice(w.client, { type: "SALE", issuerCif: w.client.cif, invoiceNumber: "V-2026-7" });
+    expect(await duplicatesFor({ issuerCif: null, invoiceNumber: "v 2026/7" }, "SALE")).toEqual([
+      expect.stringContaining("mismo número de factura emitida"),
+    ]);
+  });
+});
