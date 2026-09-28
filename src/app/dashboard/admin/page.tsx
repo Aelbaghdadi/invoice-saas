@@ -312,7 +312,13 @@ export default async function AdminDashboard() {
                           {" "}cambió{" "}
                           <span className="font-semibold text-slate-600">{auditFieldLabelInline(log.field)}</span>
                           {" "}en{" "}
-                          <span className="whitespace-nowrap font-medium" title={log.invoice.filename}>
+                          {/* El numero, entero; el nombre del fichero («WhatsApp Image
+                              2026-09-28 at 13.08.02.jpeg») puede partirse, o en un
+                              movil se sale de la tarjeta. */}
+                          <span
+                            className={`font-medium ${log.invoice.invoiceNumber ? "whitespace-nowrap" : "break-all"}`}
+                            title={log.invoice.filename}
+                          >
                             {log.invoice.invoiceNumber ?? log.invoice.filename}
                           </span>
                         </p>
