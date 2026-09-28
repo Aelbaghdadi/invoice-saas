@@ -14,8 +14,9 @@
  * 2. Si no: el primero entre el leido y el aprendido con el que, calculando
  *    el importe, la factura cuadra.
  * 3. Si ninguno: el par leido si es coherente consigo mismo (base × % leido
- *    da el importe leido); si no, el aprendido, como antes. La factura
- *    queda descuadrada y el gestor lo ve.
+ *    da el importe leido); si no, el % leido con su importe calculado; el
+ *    aprendido, solo sin % leido. La factura queda descuadrada y el gestor
+ *    lo ve, pero con el tipo impreso.
  */
 import { percentOf } from "@/lib/money";
 import { LEGAL_RETENTION_RATES } from "@/lib/validators";
@@ -66,6 +67,9 @@ export function resolveIrpf(input: IrpfInput): { rate: number | null; amount: nu
   if (readRate != null && signed != null && sumBases !== 0 && percentOf(sumBases, readRate) === signed) {
     return { rate: readRate, amount: signed };
   }
+  // Si no, el % impreso antes que el aprendido: la factura sigue descuadrada,
+  // pero con el tipo de la factura. El aprendido, solo sin % leido.
+  if (readRate != null) return { rate: readRate, amount: percentOf(sumBases, readRate) };
   if (retentionRate != null) return { rate: retentionRate, amount: percentOf(sumBases, retentionRate) };
   return { rate: readRate, amount: readAmount };
 }

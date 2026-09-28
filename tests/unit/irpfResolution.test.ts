@@ -85,6 +85,17 @@ describe("resolveIrpf (F-073)", () => {
       .toEqual({ rate: 15, amount: 150 });
   });
 
+  it("sin nada que cuadre, el % leído va antes que el aprendido", () => {
+    // Honorarios de 1000 más un suplido de 200 al 0 %; «IRPF 7 %: 70» leído.
+    const total7 = (irpf: number) => Math.abs(1200 + 210 - irpf - 1340) < 0.005;
+    expect(resolveIrpf({ sumBases: 1200, balancedWith: total7, hasRetention: true, retentionRate: 15, readRate: 7, readAmount: 70 }))
+      .toEqual({ rate: 7, amount: 84 });
+    // Al revés: 7 % aprendido y 15 % · 150 leído.
+    const total15 = (irpf: number) => Math.abs(1200 + 210 - irpf - 1260) < 0.005;
+    expect(resolveIrpf({ sumBases: 1200, balancedWith: total15, hasRetention: true, retentionRate: 7, readRate: 15, readAmount: 150 }))
+      .toEqual({ rate: 15, amount: 180 });
+  });
+
   it("sin tipo de retención, lo leído tal cual", () => {
     expect(resolveIrpf({ ...invoice(1140), hasRetention: false, retentionRate: null, readRate: 7, readAmount: 70 }))
       .toEqual({ rate: 7, amount: 70 });
