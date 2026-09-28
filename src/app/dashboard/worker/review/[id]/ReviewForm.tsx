@@ -1444,6 +1444,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   // Lo mismo cuando el importe no cuadra o el CIF es el del cliente: antes
   // Enter no hacia nada y el gestor no sabia por que.
   const shakeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const supplierAccountRef = useRef<HTMLInputElement>(null);
+  const expenseAccountRef = useRef<HTMLInputElement>(null);
   const [shake, setShake] = useState<"accounts" | "math" | "cif" | null>(null);
   const triggerShake = (target: "accounts" | "math" | "cif") => {
     if (shakeTimeoutRef.current) clearTimeout(shakeTimeoutRef.current);
@@ -1505,7 +1507,22 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     });
     if (problem) {
       if (problem.rule === "descuadre") triggerShake("math");
-      if (problem.rule === "sin_cuentas") triggerShake("accounts");
+      if (problem.rule === "sin_cuentas") {
+        // Las cuentas suelen quedar fuera de la pantalla: temblar no bastaba
+        // (F-107). Se lleva al gestor a la primera vacía y se dice cuál falta.
+        triggerShake("accounts");
+        const missing = [
+          !supplierAccountVal.trim() && { input: supplierAccountRef.current, label: type === "SALE" ? "la cuenta de cliente (43x)" : "la cuenta de proveedor (4xx)" },
+          !expenseAccountVal.trim() && { input: expenseAccountRef.current, label: type === "SALE" ? "la cuenta de ingreso (7xx)" : "la cuenta de gasto (6xx)" },
+        ].filter((m): m is { input: HTMLInputElement | null; label: string } => Boolean(m));
+        const first = missing[0]?.input;
+        first?.scrollIntoView({ block: "center", behavior: "smooth" });
+        first?.focus({ preventScroll: true });
+        error(missing.length === 0
+          ? problem.message
+          : `Falta ${missing.map((m) => m.label).join(" y ")}: rellénala${missing.length > 1 ? "s" : ""} antes de validar.`);
+        return false;
+      }
       error(problem.message);
       return false;
     }
@@ -3102,6 +3119,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                     {type === "SALE" ? "Cuenta cliente (43x)" : "Cuenta proveedor (4xx)"}
                   </label>
                   <input
+                    ref={supplierAccountRef}
+                    aria-label={type === "SALE" ? "Cuenta cliente" : "Cuenta proveedor"}
                     className={`${inputClass} ${shake === "accounts" && !supplierAccountVal.trim() ? "animate-shake" : ""}`}
                     value={supplierAccountVal}
                     onChange={(e) => setSupplierAccount(sanitizeAccountingAccountInput(e.target.value))}
@@ -3114,6 +3133,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                     {type === "SALE" ? "Cuenta ingreso (7xx)" : "Cuenta gasto (6xx)"}
                   </label>
                   <input
+                    ref={expenseAccountRef}
+                    aria-label={type === "SALE" ? "Cuenta ingreso" : "Cuenta gasto"}
                     className={`${inputClass} ${shake === "accounts" && !expenseAccountVal.trim() ? "animate-shake" : ""}`}
                     value={expenseAccountVal}
                     onChange={(e) => {
