@@ -56,9 +56,16 @@ describe("textMentionsRetention — protección de datos (F-073)", () => {
       "la retención de su información", "la retención de tu información", "la retención de esta información",
       "el plazo legal de retención", "los plazos legales de retención", "sus datos serán retenidos",
       "plazo de conservación y retención", "el periodo máximo de retención",
+      "Sus datos personales serán retenidos durante el tiempo necesario",
+      "Los datos personales proporcionados serán retenidos", "La información será retenida",
     ]) {
       expect(textMentionsRetention(`Base 100 IVA 21 Total 121. ${phrase}.`), phrase).toBe(false);
     }
+  });
+
+  it("«Datos …» seguido de «Retenido»: es una retención de verdad", () => {
+    expect(textMentionsRetention("Datos bancarios\nRetenido 15%: 150,00")).toBe(true);
+    expect(textMentionsRetention("Datos fiscales Retenido: 150,00")).toBe(true);
   });
 
   it("con el pie de la LOPD, una retención de verdad se sigue viendo", () => {

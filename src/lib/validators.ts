@@ -370,7 +370,10 @@ export function textMentionsRetention(text: string | null | undefined): boolean 
     // informacion». No es IRPF, y proponia retencion en facturas sin ella.
     .replace(/\bretenc\w*\s+de\s+(?:(?:los|las|la|sus?|tus?|estos|estas?|dichos|dichas)\s+)?(?:datos|informacion)\b/g, " ")
     .replace(/\b(?:plazos?|periodos?|politicas?|tiempos?)(?:\s+(?:legal(?:es)?|maximos?|minimos?))?\s+de\s+(?:conservacion\s+y\s+)?retenc\w*/g, " ")
-    .replace(/\bdatos\s+(?:\w+\s+)?retenid\w*/g, " ");
+    // «sus datos personales serán retenidos», «la información será
+    // retenida»: con verbo. Sin él, «Datos bancarios\nRetenido 15 %» es
+    // una retención de verdad.
+    .replace(/\b(?:datos|informacion)(?:\s+\w+){0,3}?\s+(?:seran?|quedaran?|estaran?|permaneceran?|(?:se\s+)?mantendran?)\s+(?:\w+\s+y\s+)?retenid\w*/g, " ");
   return /\birpf\b/.test(t)
     || /\bretenc(?:ion|iones)\b/.test(t)
     || /\bretenid[oa]s?\b/.test(t);
