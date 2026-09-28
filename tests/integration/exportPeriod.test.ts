@@ -38,6 +38,16 @@ describe("sin validar en la vista previa (F-041)", () => {
     expect((await preview("QUARTERLY")).notValidated).toBe(3);
   });
 
+  it("con el cliente de otra asesoría en la URL: 0, por el filtro de asesoría", async () => {
+    const b = await makeFirm("B");
+    await makeInvoice(b.client, { ...april, status: "PENDING_REVIEW" });
+    const res = await exportPreview(new NextRequest(
+      `http://app.local/api/export?clientId=${b.client.id}&periodType=MONTHLY&month=4&year=2026&preview=1`,
+    ));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ count: 0, notValidated: 0 });
+  });
+
   it("sin pendientes, 0", async () => {
     expect((await preview()).notValidated).toBe(0);
   });
