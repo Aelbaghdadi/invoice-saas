@@ -10,6 +10,8 @@ import { fakeS3 } from "./helpers/fakeS3";
 import { stubOcr } from "./helpers/ocr";
 import { processInvoice } from "@/lib/processInvoice";
 import { classifyInvoice } from "@/app/dashboard/worker/clasificar/actions";
+import { saveInvoiceFields } from "@/app/dashboard/worker/review/[id]/actions";
+import { reviewForm, settleAction } from "./helpers/reviewForm";
 import type { ExtractedInvoice } from "@/lib/ocr";
 
 const CLIENT_CIF = "B87654321";
@@ -98,5 +100,33 @@ describe("al clasificar desde «Por clasificar» (F-019)", () => {
     const s = await state(id);
     expect(s.status).toBe("NEEDS_ATTENTION");
     expect(s.issues).toEqual([["MANUAL", "clientParty", "Factura a nombre de Ana Pérez (12345678Z), no del cliente."]]);
+  });
+});
+
+describe("al corregir el tipo y guardar (F-019)", () => {
+  // Una venta del cliente subida como compra: el cliente sale de emisor.
+  const upload = () => read("PURCHASE", {
+    issuerName: "Cliente A SL", issuerCif: CLIENT_CIF, receiverName: "Comprador SA", receiverCif: "A58818501",
+  });
+  const save = async (id: string, type: "PURCHASE" | "SALE") => {
+    const inv = await prisma.invoice.findUniqueOrThrow({ where: { id } });
+    return settleAction(saveInvoiceFields(null, reviewForm(id, inv.updatedAt, { name: "Cliente A SL", cif: CLIENT_CIF }, {
+      type, issuerName: "Cliente A SL", issuerCif: CLIENT_CIF, receiverName: "Comprador SA", receiverCif: "A58818501",
+      invoiceNumber: "X-1", totalAmount: "363", vatLines: JSON.stringify([{ taxBase: "300", vatRate: "21", vatAmount: "63" }]),
+    })));
+  };
+  const open = async (id: string) => prisma.invoiceIssue.count({ where: { invoiceId: id, field: "clientParty", status: "OPEN" } });
+
+  it("guardada como venta: la incidencia se cierra", async () => {
+    const id = await upload();
+    expect(await open(id)).toBe(1);
+    expect(await save(id, "SALE")).toEqual({ error: null });
+    expect(await open(id)).toBe(0);
+  });
+
+  it("guardada otra vez como compra: sigue abierta", async () => {
+    const id = await upload();
+    expect(await save(id, "PURCHASE")).toEqual({ error: null });
+    expect(await open(id)).toBe(1);
   });
 });

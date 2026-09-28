@@ -55,6 +55,7 @@ import { Prisma, type Invoice, type RejectionCategory } from "@prisma/client";
 import { EXPORT_TRANSACTION_OPTIONS } from "@/lib/exportBatch";
 import { closedPeriodError, conditionalWriteError, invoicePeriod } from "@/lib/reviewGuards";
 import { notifyRejection, rejectInvoiceCore } from "@/lib/invoiceRejection";
+import { clientPartyWarning } from "@/lib/clientParty";
 
 /** Un posible duplicado al validar: otra factura ya validada con el mismo
  *  numero y emisor («validated»), o una incidencia de posible duplicado
@@ -289,6 +290,12 @@ async function parseAndSave(
   // Asi el gestor ni siquiera con devtools puede sustituir los datos
   // del Client por otros distintos.
   const isPurchase = effectiveType === "PURCHASE";
+  // Lo que leyo el OCR, para la incidencia de otra parte (F-019).
+  const lastRead = await prisma.invoiceExtraction.findFirst({
+    where: { invoiceId }, orderBy: { createdAt: "desc" },
+    select: { issuerName: true, issuerCif: true, receiverName: true, receiverCif: true },
+  });
+  const clientPartyStillApplies = lastRead != null && clientPartyWarning(effectiveType, lastRead, invoice.client) != null;
   const finalIssuerName      = isPurchase ? (data.issuerName || null)    : invoice.client.name;
   const finalIssuerCif       = isPurchase ? (issuerParsed.clean || null) : invoice.client.cif;
   const finalIssuerCountry   = isPurchase ? issuerParsed.countryCode     : null;
@@ -729,6 +736,16 @@ async function parseAndSave(
       if (signIssuesToResolve) {
         await tx.invoiceIssue.updateMany({
           where: { invoiceId, field: "isRectificative", status: "OPEN", ...signIssuesToResolve },
+          data: { status: "RESOLVED", resolvedBy: userId, resolvedAt: new Date() },
+        });
+      }
+      // Factura a nombre de otro (F-019): si con el tipo que se guarda lo
+      // leido en el lado del cliente ya es el cliente (se corrigio el tipo),
+      // la incidencia se cierra. Si no, seguia abierta, la factura seguia
+      // «Con incidencias» y la revision no enseñaba nada.
+      if (!clientPartyStillApplies) {
+        await tx.invoiceIssue.updateMany({
+          where: { invoiceId, field: "clientParty", status: "OPEN" },
           data: { status: "RESOLVED", resolvedBy: userId, resolvedAt: new Date() },
         });
       }
