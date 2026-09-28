@@ -183,9 +183,9 @@ export default async function AuditLogPage({ searchParams }: Props) {
                     </td>
                     <td className="px-5 py-3">
                       <div className="flex items-center gap-1.5 text-[12px]">
-                        <span className="rounded bg-red-50 px-1.5 py-0.5 text-red-500 line-through">{formatAuditValue(log.oldValue)}</span>
+                        <span className="rounded bg-red-50 px-1.5 py-0.5 text-red-500 line-through">{formatAuditValue(log.oldValue, log.field)}</span>
                         <ArrowRight className="h-3 w-3 flex-shrink-0 text-slate-300" />
-                        <span className="rounded bg-green-50 px-1.5 py-0.5 font-medium text-green-700">{formatAuditValue(log.newValue)}</span>
+                        <span className="rounded bg-green-50 px-1.5 py-0.5 font-medium text-green-700">{formatAuditValue(log.newValue, log.field)}</span>
                       </div>
                     </td>
                   </tr>

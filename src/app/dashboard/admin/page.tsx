@@ -322,9 +322,9 @@ export default async function AdminDashboard() {
                       <p className="mt-1 text-[12px] text-slate-500">
                         {log.invoice.client.name}
                         <span className="mx-1.5 text-slate-300">·</span>
-                        {formatAuditValue(log.oldValue)}
+                        {formatAuditValue(log.oldValue, log.field)}
                         <span className="mx-1 text-slate-300">→</span>
-                        <span className="font-medium text-slate-600">{formatAuditValue(log.newValue)}</span>
+                        <span className="font-medium text-slate-600">{formatAuditValue(log.newValue, log.field)}</span>
                       </p>
                     </div>
                   </div>

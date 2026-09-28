@@ -18,6 +18,7 @@ import {
   type QueueFilter,
 } from "@/lib/reviewQueue";
 import { appendAuditLogs } from "@/lib/auditLog";
+import { auditValue } from "@/lib/auditValue";
 import { canAccessClient } from "@/lib/accessibleClients";
 import { parseTaxId, isPersonaFisica, operationTypeLabel, OPERATION_TYPE_OPTIONS, OPERATION_TYPE_LABEL, type OperationTypeName } from "@/lib/validators";
 import { learnAccountsForDirection, normalizePlanAccount } from "@/lib/accountingAccount";
@@ -450,19 +451,23 @@ async function parseAndSave(
   if (options.reopen && invoice.rejectionCategory) {
     auditEntries.push({ field: "rejectionCategory", oldValue: invoice.rejectionCategory, newValue: null });
   }
+  // Todo lo que se guarda deja rastro (F-024): antes la fecha, las cuentas,
+  // el periodo contable, la retencion, los paises, la serie rectificada, el
+  // art. 80.Tres y el origen de bienes/servicios se cambiaban sin dejarlo.
+  // Normalizado con auditValue: sin cambios falsos por el formato.
   const trackedFields = [
     "type",
-    "issuerName","issuerCif","receiverName","receiverCif",
-    "invoiceNumber","taxBase","vatRate","vatAmount","irpfRate","irpfAmount","totalAmount","currency",
-    "operationType","intracomGoodsType",
-    "isRectificative","rectifiedInvoiceNumber","rectificativeType",
+    "issuerName","issuerCif","issuerCountry","receiverName","receiverCif","receiverCountry",
+    "invoiceNumber","invoiceDate","taxBase","vatRate","vatAmount","irpfRate","irpfAmount","totalAmount","currency",
+    "retentionType","retentionBase",
+    "accountingPeriodMonth","accountingPeriodYear","supplierAccount","expenseAccount",
+    "operationType","intracomGoodsType","intracomGoodsSource",
+    "isRectificative","rectifiedInvoiceSeries","rectifiedInvoiceNumber","rectificativeType","art80Tres",
   ] as const;
 
   for (const field of trackedFields) {
-    const oldVal = invoice[field] !== null && invoice[field] !== undefined
-      ? String(invoice[field]) : null;
-    const newVal = newData[field] !== null && newData[field] !== undefined
-      ? String(newData[field]) : null;
+    const oldVal = auditValue(invoice[field]);
+    const newVal = auditValue(newData[field]);
     if (oldVal !== newVal) {
       auditEntries.push({ field, oldValue: oldVal, newValue: newVal });
     }

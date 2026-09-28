@@ -137,7 +137,7 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
                         <span className="font-medium text-slate-500">{auditFieldLabel(log.field)}</span>
                       </p>
                       <p className="text-[12px] text-slate-400">
-                        {formatAuditValue(log.oldValue)} → {formatAuditValue(log.newValue)}
+                        {formatAuditValue(log.oldValue, log.field)} → {formatAuditValue(log.newValue, log.field)}
                       </p>
                     </div>
                     <p className="flex-shrink-0 text-[11px] text-slate-400">

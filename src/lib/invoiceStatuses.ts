@@ -15,7 +15,7 @@
  */
 
 import type { InvoiceStatus } from "@prisma/client";
-import { OPERATION_TYPE_LABEL, INTRACOM_GOODS_TYPE_LABEL } from "@/lib/validators";
+import { OPERATION_TYPE_LABEL, INTRACOM_GOODS_TYPE_LABEL, RETENTION_TYPE_LABEL } from "@/lib/validators";
 
 /** Pte. de que el gestor haga algo (revisar, re-procesar o subir). */
 export const PENDING_WORK: InvoiceStatus[] = [
@@ -147,6 +147,8 @@ export const AUDIT_FIELD_LABELS: Record<string, string> = {
   issuerCif: "CIF emisor",
   receiverName: "Receptor",
   receiverCif: "CIF receptor",
+  issuerCountry: "País emisor",
+  receiverCountry: "País receptor",
   invoiceNumber: "Nº factura",
   invoiceDate: "Fecha",
   taxBase: "Base imponible",
@@ -156,11 +158,25 @@ export const AUDIT_FIELD_LABELS: Record<string, string> = {
   irpfAmount: "Cuota IRPF",
   totalAmount: "Total",
   currency: "Moneda",
+  retentionType: "Tipo de retención",
+  retentionBase: "Base de la retención",
+  accountingPeriodMonth: "Mes contable",
+  accountingPeriodYear: "Año contable",
+  supplierAccount: "Cuenta del proveedor o cliente",
+  expenseAccount: "Cuenta de gasto o ingreso",
   operationType: "Tipo de operación",
   intracomGoodsType: "Bienes o servicios",
+  intracomGoodsSource: "Origen de bienes o servicios",
   isRectificative: "Rectificativa",
+  rectifiedInvoiceSeries: "Serie de la factura rectificada",
   rectifiedInvoiceNumber: "Factura rectificada",
   rectificativeType: "Tipo de rectificación",
+  art80Tres: "Art. 80.Tres (crédito incobrable)",
+  // Lo que cambia el sistema al leer la factura, sin que lo toque el gestor.
+  "auto:recargo": "Recargo propuesto (automático)",
+  "auto:irpf": "Retención recalculada (automático)",
+  "auto:parteCliente": "Datos del cliente puestos (automático)",
+  "auto:signo": "Signo corregido (automático)",
   rectificativeSign: "Signo de la rectificativa",
   equivalenceSurcharge: "Recargo de equivalencia",
   export: "Exportación",
@@ -197,6 +213,14 @@ export function auditFieldLabelInline(field: string): string {
   return first.toLowerCase() + label.slice(1);
 }
 
+/** De donde sale bienes/servicios (intracomGoodsSource), para la auditoria. */
+const INTRACOM_GOODS_SOURCE_LABEL: Record<string, string> = {
+  IA: "Detectado por la IA",
+  TERCERO: "Asignado al tercero",
+  CUENTA: "Según la cuenta",
+  MANUAL: "Marcado a mano",
+};
+
 /** Tipo de operación (emitida/recibida) para la UI. */
 export const OPERATION_LABELS: Record<string, string> = {
   PURCHASE: "Recibida",
@@ -210,8 +234,16 @@ export const OPERATION_LABELS: Record<string, string> = {
  * y el compuesto "<ESTADO> (reprocess)" que escribe el reproceso manual. Los
  * valores libres (importes, nombres, CIFs...) se devuelven tal cual.
  */
-export function formatAuditValue(value: string | null | undefined): string {
+export function formatAuditValue(value: string | null | undefined, field?: string): string {
   if (value == null || value === "") return "—";
+  // Valores que solo tienen sentido en su campo («MANUAL» o «IA» sueltos
+  // podrian ser un nombre).
+  if (field === "retentionType") return RETENTION_TYPE_LABEL[value as keyof typeof RETENTION_TYPE_LABEL] ?? value;
+  if (field === "intracomGoodsSource") return INTRACOM_GOODS_SOURCE_LABEL[value] ?? value;
+  if (field === "invoiceDate" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [y, m, d] = value.split("-");
+    return `${d}/${m}/${y}`;
+  }
   // "(reprocess masivo)" es como lo escribia el reproceso en bloque: la
   // auditoria es inmutable y esas filas se siguen viendo.
   const reproc = value.match(/^(.+?)\s*\(reprocess(?: masivo)?\)$/i);
