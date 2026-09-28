@@ -3,6 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { appendAuditLogs } from "@/lib/auditLog";
 import { exportFingerprint, type FingerprintInvoice } from "@/lib/exportFingerprint";
 import { exportExtension, type ExportFormat, type InvoiceWithClient } from "@/lib/exportFormats";
+import { reexportChanges, type Reexport } from "@/lib/reexportChanges";
+import { taxIdWithCountry } from "@/lib/validators";
 
 /**
  * Registro de una exportacion a A3: lote, items con snapshot, puntero
@@ -234,4 +236,41 @@ export function isTransactionConflictError(err: unknown): boolean {
   if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2034") return true;
   const cause = (err as { cause?: { originalCode?: unknown } } | null)?.cause;
   return typeof cause?.originalCode === "string" && CONFLICT_SQLSTATES.has(cause.originalCode);
+}
+
+/**
+ * De estas facturas pendientes de exportar, las que ya salieron en un Excel
+ * anterior: en A3 ya existe una con el mismo NIF y numero. Con el ultimo lote
+ * de cada una y lo que cambia respecto a su snapshot. Todo dentro de la
+ * asesoria: el lote no tiene asesoria, sale de la factura y de su cliente.
+ */
+export async function findReexports(invoices: ExportInvoice[], firmId: string): Promise<Reexport[]> {
+  if (invoices.length === 0) return [];
+  const items = await prisma.exportBatchItem.findMany({
+    where: { invoiceId: { in: invoices.map((i) => i.id) }, invoice: { client: { advisoryFirmId: firmId } } },
+    orderBy: [{ invoiceId: "asc" }, { createdAt: "desc" }],
+    distinct: ["invoiceId"],
+    select: { invoiceId: true, snapshot: true, exportBatch: { select: { createdAt: true, userId: true } } },
+  });
+  if (items.length === 0) return [];
+  const users = await prisma.user.findMany({
+    where: { id: { in: [...new Set(items.map((i) => i.exportBatch.userId))] }, advisoryFirmId: firmId },
+    select: { id: true, name: true },
+  });
+  const userName = new Map(users.map((u) => [u.id, u.name]));
+  const lastItem = new Map(items.map((i) => [i.invoiceId, i]));
+  return invoices.flatMap((inv) => {
+    const item = lastItem.get(inv.id);
+    if (!item) return [];
+    const isSale = inv.type === "SALE";
+    return [{
+      invoiceId: inv.id,
+      invoiceNumber: inv.invoiceNumber,
+      thirdPartyNif: taxIdWithCountry(isSale ? inv.receiverCif : inv.issuerCif, isSale ? inv.receiverCountry : inv.issuerCountry),
+      thirdPartyName: (isSale ? inv.receiverName : inv.issuerName) ?? "",
+      previousExportAt: item.exportBatch.createdAt,
+      previousExportBy: userName.get(item.exportBatch.userId) ?? null,
+      changes: reexportChanges(item.snapshot, inv),
+    }];
+  });
 }

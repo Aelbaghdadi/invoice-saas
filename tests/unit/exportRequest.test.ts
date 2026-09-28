@@ -7,7 +7,7 @@ describe("parseExportRequest", () => {
   it("acepta la petición de la pantalla, con strings de la URL o números del JSON", () => {
     expect(parseExportRequest(valid)).toEqual({
       ok: true,
-      request: { ...valid, type: "ALL", format: "a3excel" },
+      request: { ...valid, type: "ALL", format: "a3excel", confirmedReexports: [] },
     });
     expect(parseExportRequest({ ...valid, month: "4", year: "2026", type: "SALE" })).toMatchObject({
       ok: true,
@@ -48,7 +48,7 @@ describe("parseExportRequest", () => {
 });
 
 describe("exportInvoiceWhere", () => {
-  const request: ExportRequest = { clientId: "c1", periodType: "MONTHLY", month: 4, year: 2026, type: "ALL", format: "a3excel" };
+  const request: ExportRequest = { clientId: "c1", periodType: "MONTHLY", month: 4, year: 2026, type: "ALL", format: "a3excel", confirmedReexports: [] };
 
   it("siempre dentro de la asesoría, del cliente y del periodo, y solo pendientes", () => {
     expect(exportInvoiceWhere(request, "firm1")).toEqual({

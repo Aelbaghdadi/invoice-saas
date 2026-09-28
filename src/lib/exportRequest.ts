@@ -14,6 +14,10 @@ const exportRequestSchema = z.object({
   year: z.coerce.number().int().min(2000).max(2100),
   type: z.enum(["ALL", "PURCHASE", "SALE"]).default("ALL"),
   format: z.enum(["a3excel"]).default("a3excel"),
+  // Las ya exportadas antes que quien exporta ha visto y confirmado (F-018).
+  // Van los ids, no un «si»: si entre la vista previa y la descarga se
+  // corrige otra, esa no esta confirmada.
+  confirmedReexports: z.array(z.string()).max(10_000).default([]),
 });
 
 export type ExportRequest = z.infer<typeof exportRequestSchema>;
@@ -25,6 +29,7 @@ const FIELD_LABELS: Record<string, string> = {
   year: "año",
   type: "tipo de factura",
   format: "formato",
+  confirmedReexports: "reexportadas confirmadas",
 };
 
 // El trimestre se pide por su primer mes, como lo manda la pantalla.
@@ -55,7 +60,10 @@ export function parseExportRequest(
  * asesoria. exportBatchId: null porque exportar no cambia el estado (sigue
  * VALIDATED): sin el filtro, cada exportacion repetia las ya exportadas.
  */
-export function exportInvoiceWhere(request: ExportRequest, firmId: string): Prisma.InvoiceWhereInput {
+export function exportInvoiceWhere(
+  request: Pick<ExportRequest, "clientId" | "periodType" | "month" | "year" | "type">,
+  firmId: string,
+): Prisma.InvoiceWhereInput {
   return {
     status: "VALIDATED",
     exportBatchId: null,

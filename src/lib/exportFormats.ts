@@ -1,5 +1,6 @@
 import type { Invoice, Client, InvoiceVatLine } from "@prisma/client";
 import * as XLSX from "xlsx";
+import { REEXPORT_SHEET_NAME, reexportSheetRows, type Reexport } from "@/lib/reexportChanges";
 import {
   OPERATION_TYPE_CODE,
   OPERATION_TYPE_LABEL,
@@ -716,6 +717,7 @@ export function partitionA3Exportable<T extends InvoiceWithClient>(
 export function generateA3Excel(
   invoices: InvoiceWithClient[],
   config?: ExportConfig,
+  reexports: Reexport[] = [],
 ): Buffer {
   const wb = XLSX.utils.book_new();
 
@@ -772,6 +774,16 @@ export function generateA3Excel(
   // If no invoices of either type, create an empty sheet
   if (purchases.length === 0 && sales.length === 0) {
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([A3_HEADERS]), "Facturas");
+  }
+
+  // Las ya exportadas antes (F-018), en una hoja aparte y al final: las de
+  // A3 no cambian ni de nombre ni de sitio. A3 no admite dos facturas con el
+  // mismo NIF y numero, y esta hoja dice cuales hay que borrar o corregir
+  // alli antes de importar.
+  if (reexports.length > 0) {
+    const ws = XLSX.utils.aoa_to_sheet(reexportSheetRows(reexports));
+    ws["!cols"] = [{ wch: 16 }, { wch: 16 }, { wch: 30 }, { wch: 18 }, { wch: 20 }, { wch: 28 }, { wch: 40 }, { wch: 40 }];
+    XLSX.utils.book_append_sheet(wb, ws, REEXPORT_SHEET_NAME);
   }
 
   return XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;

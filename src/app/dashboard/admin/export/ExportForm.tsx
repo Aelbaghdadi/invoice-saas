@@ -14,6 +14,19 @@ import type { AppError } from "@/lib/errorCodes";
 import { quarterStartMonth, periodLabel, MONTH_OPTIONS, QUARTER_OPTIONS } from "@/lib/period";
 import { filenameFromContentDisposition } from "@/lib/contentDisposition";
 import { describeExportExclusionBoxes, exportSuccessExclusionText, parseExportExclusionBoxes, type ExportExclusionBoxCounts } from "@/lib/exportExclusions";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
+import { formatDateTimeEs } from "@/lib/dates";
+import type { ExportChange } from "@/lib/reexportChanges";
+
+/** Una reexportada tal como llega en el JSON de la vista previa. */
+type ReexportPreview = {
+  invoiceId: string;
+  invoiceNumber: string | null;
+  thirdPartyName: string;
+  previousExportAt: string;
+  previousExportBy: string | null;
+  changes: ExportChange[] | null;
+};
 
 type ClientOption = { id: string; name: string; cif: string };
 
@@ -36,6 +49,7 @@ const YEARS      = Array.from({ length: 5 }, (_, i) => THIS_YEAR - i);
 
 export function ExportForm({ clients }: Props) {
   const router = useRouter();
+  const { confirm, dialog } = useConfirm();
   const [clientId,   setClientId]   = useState(clients[0]?.id ?? "");
   const [periodType, setPeriodType] = useState<"MONTHLY" | "QUARTERLY">("MONTHLY");
   const [month,      setMonth]      = useState(now.getMonth() + 1);
@@ -61,6 +75,10 @@ export function ExportForm({ clients }: Props) {
   const [excludedDetail, setExcludedDetail] = useState<string | null>(null);
   // Rectificativas a cero con importes (caja «a_mano»): la nota roja lo explica.
   const [manualCount, setManualCount] = useState(0);
+  // Corregidas despues de exportarse (F-018): las primeras, para el bloque,
+  // y todos los ids, que la descarga manda como confirmados.
+  const [reexports, setReexports] = useState<ReexportPreview[]>([]);
+  const [reexportIds, setReexportIds] = useState<string[]>([]);
   const [counting, setCounting] = useState(false);
   const [downloading, setDownloading] = useState(false);
   // Tras descargar: cuantas se quedaron fuera del fichero y el lote, si se
@@ -110,6 +128,8 @@ export function ExportForm({ clients }: Props) {
         setExcluded(0);
         setExcludedDetail(null);
         setManualCount(0);
+        setReexports([]);
+        setReexportIds([]);
         return;
       }
       const data = await res.json();
@@ -122,6 +142,8 @@ export function ExportForm({ clients }: Props) {
       setExcluded(data.excluded ?? 0);
       setExcludedDetail(describeExportExclusionBoxes((data.excludedByBox ?? {}) as Partial<ExportExclusionBoxCounts>));
       setManualCount(data.excludedByBox?.a_mano ?? 0);
+      setReexports(data.reexports ?? []);
+      setReexportIds(data.reexportIds ?? []);
     } catch {
       if (stale()) return;
       // Todo a cero: si no, seguian los avisos de "N con total 0" del filtro
@@ -134,6 +156,8 @@ export function ExportForm({ clients }: Props) {
       setExcluded(0);
       setExcludedDetail(null);
       setManualCount(0);
+      setReexports([]);
+      setReexportIds([]);
     } finally {
       if (!stale()) setCounting(false);
     }
@@ -149,6 +173,14 @@ export function ExportForm({ clients }: Props) {
     // Sin este freno, un doble clic creaba dos lotes con las mismas facturas
     // (asientos duplicados en A3) o sacaba el error de "nada que exportar".
     if (!count || downloading) return;
+    // Ya estan en A3 con el mismo NIF y numero: sin confirmar, no se exporta.
+    const n = reexportIds.length;
+    if (n > 0 && !(await confirm({
+      title: n === 1 ? "Esta factura ya se exportó" : `Estas ${n} facturas ya se exportaron`,
+      message: "En A3 hay que borrar o corregir la anterior antes de importar. En el Excel van también en la hoja «Reexportadas — revisar en A3», con lo que ha cambiado.",
+      confirmLabel: "Exportar igualmente",
+      focusCancel: true,
+    }))) return;
     // Se descarga con fetch y NO con un <a href>: al exportar, el servidor
     // marca las facturas como exportadas, y con el enlace a secas un fallo
     // (500, sesion caducada, 404 por filtros) se anunciaba igual como exito.
@@ -162,7 +194,7 @@ export function ExportForm({ clients }: Props) {
       const res = await fetch("/api/export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientId, periodType, month: effectiveMonth, year, type, format }),
+        body: JSON.stringify({ clientId, periodType, month: effectiveMonth, year, type, format, confirmedReexports: reexportIds }),
       });
       if (!res.ok) {
         // Sin un error de la API (p. ej. un corte del proxy) no se sabe si el
@@ -213,6 +245,7 @@ export function ExportForm({ clients }: Props) {
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+      {dialog}
       {/* ── LEFT: filters ────────────────────────────────────────────────── */}
       <div className="lg:col-span-3 space-y-5">
 
@@ -410,6 +443,12 @@ export function ExportForm({ clients }: Props) {
             )}
           </div>
 
+          {/* Corregidas después de exportarse (F-018): quien exporta tiene
+              que saber que en A3 ya hay una con el mismo NIF y número. */}
+          {reexportIds.length > 0 && !counting && (
+            <ReexportList items={reexports} total={reexportIds.length} />
+          )}
+
           {/* Avisos de validación A3: la última oportunidad de ver un error
               antes de que el fichero entre en la contabilidad del cliente. */}
           {warningCount > 0 && !counting && (
@@ -514,6 +553,53 @@ async function readApiError(res: Response, fallback: string): Promise<AppError |
     if (data?.error?.message) return data.error as AppError;
   } catch { /* la respuesta no era JSON */ }
   return fallback;
+}
+
+/** Las que vuelven al Excel tras corregirse: cuándo y quién las exportó, y
+ *  qué cambia respecto a lo que ya tiene A3. */
+function ReexportList({ items, total }: { items: ReexportPreview[]; total: number }) {
+  return (
+    <div className="rounded-xl border border-violet-200 bg-violet-50 px-4 py-3">
+      <p className="flex items-center gap-2 text-[13px] font-semibold text-violet-800">
+        <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+        {total === 1 ? "1 factura corregida después de exportarse" : `${total} facturas corregidas después de exportarse`}
+      </p>
+      <p className="mt-1 text-[11px] text-violet-600">
+        Ya están en A3 con el mismo NIF y número. Salen otra vez en el Excel y, aparte, en la hoja «Reexportadas — revisar en A3»: en A3 hay que borrar o corregir la anterior antes de importar.
+      </p>
+      <ul className="mt-2 max-h-72 space-y-2 overflow-y-auto pr-1">
+        {items.map((r) => (
+          <li key={r.invoiceId} className="text-[12px] text-violet-700">
+            <Link
+              href={`/dashboard/worker/review/${r.invoiceId}`}
+              prefetch={false}
+              className="font-medium underline decoration-violet-300 underline-offset-2 hover:text-violet-900"
+            >
+              {r.invoiceNumber || "Sin número"}
+            </Link>
+            {r.thirdPartyName ? ` — ${r.thirdPartyName}` : ""}
+            <span className="block text-[11px] text-violet-500">
+              Exportada el {formatDateTimeEs(r.previousExportAt)}{r.previousExportBy ? ` por ${r.previousExportBy}` : ""}
+            </span>
+            {r.changes == null ? (
+              <span className="block text-[11px]">No se puede comparar con el Excel anterior.</span>
+            ) : (
+              <ul className="mt-0.5 space-y-0.5">
+                {r.changes.map((c) => (
+                  <li key={c.field} className="text-[11px]">
+                    <span className="font-medium">{c.field}:</span> {c.before} → {c.after}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </li>
+        ))}
+      </ul>
+      {total > items.length && (
+        <p className="mt-2 text-[11px] text-violet-600">Y {total - items.length} más que no se muestran aquí.</p>
+      )}
+    </div>
+  );
 }
 
 // " (2 que hay que corregir y 1 que no va a A3)", o nada sin desglose.

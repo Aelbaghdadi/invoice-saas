@@ -102,7 +102,19 @@ function lineasExportadas(invoice: FingerprintInvoice): string[] {
     .sort();
 }
 
-export function exportFingerprint(invoice: FingerprintInvoice): string {
+/** Una columna de la cabecera de la fila de A3, con su valor en la huella. */
+export type ExportedColumn = {
+  key: "type" | "invoiceDate" | "invoiceNumber" | "thirdPartyNif" | "thirdPartyName" | "operationCode"
+    | "supplierAccount" | "expenseAccount" | "irpfRate" | "irpfAmount" | "totalAmount";
+  value: string;
+};
+
+/**
+ * Lo que A3 ve de una factura: la cabecera (una entrada por columna, en el
+ * orden de la huella) y las lineas. La huella y el detalle de cambios de las
+ * reexportadas (F-018) salen de aqui, asi que nunca discrepan.
+ */
+export function exportedColumns(invoice: FingerprintInvoice): { header: ExportedColumn[]; lines: string[] } {
   const isPurchase = texto(invoice.type) !== "SALE";
   // Columnas E y F: el tercero, que es el emisor en recibidas y el receptor
   // en emitidas. La otra parte es el propio cliente y no viaja al fichero.
@@ -119,21 +131,25 @@ export function exportFingerprint(invoice: FingerprintInvoice): string {
     ? OPERATION_TYPE_CODE[texto(invoice.operationType) as OperationTypeName] ?? 1
     : 1;
 
-  const cabecera = [
-    texto(invoice.type),
-    fecha(invoice.invoiceDate),
-    numeroExportado,
-    terceroNif,
-    terceroNombre,
-    String(codigoOperacion),
-    texto(invoice.supplierAccount),
-    texto(invoice.expenseAccount),
-    importe(invoice.irpfRate),
-    importe(invoice.irpfAmount),
+  const header: ExportedColumn[] = [
+    { key: "type", value: texto(invoice.type) },
+    { key: "invoiceDate", value: fecha(invoice.invoiceDate) },
+    { key: "invoiceNumber", value: numeroExportado },
+    { key: "thirdPartyNif", value: terceroNif },
+    { key: "thirdPartyName", value: terceroNombre },
+    { key: "operationCode", value: String(codigoOperacion) },
+    { key: "supplierAccount", value: texto(invoice.supplierAccount) },
+    { key: "expenseAccount", value: texto(invoice.expenseAccount) },
+    { key: "irpfRate", value: importe(invoice.irpfRate) },
+    { key: "irpfAmount", value: importe(invoice.irpfAmount) },
     // El total no es una columna, pero una factura con total cero se queda
     // fuera del fichero: si cambia, cambia lo que A3 recibe.
-    importe(invoice.totalAmount),
-  ].join("|");
+    { key: "totalAmount", value: importe(invoice.totalAmount) },
+  ];
+  return { header, lines: lineasExportadas(invoice) };
+}
 
-  return `${cabecera}||${lineasExportadas(invoice).join(";")}`;
+export function exportFingerprint(invoice: FingerprintInvoice): string {
+  const { header, lines } = exportedColumns(invoice);
+  return `${header.map((c) => c.value).join("|")}||${lines.join(";")}`;
 }
