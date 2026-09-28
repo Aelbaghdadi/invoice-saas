@@ -9,7 +9,8 @@ Los secretos van en Coolify (Environment Variables), nunca en el repo.
 - **Port:** `3000`.
 - **Connect To Predefined Network: ON** — para que la app resuelva por nombre
   a Postgres y (cuando se migre) a Garage en la red interna de Docker.
-- **Health check** (opcional): path `/login`, puerto 3000.
+- **Health check:** path `/api/health`, puerto 3000 (ver §8). Antes era
+  `/login`, que responde 200 aunque la base de datos o Garage estén caídos.
 
 ## 2. Variables de entorno
 
@@ -26,7 +27,8 @@ arrancar:
   para que `garage` resuelva en la red interna.
 
 Opcionales: `RESEND_API_KEY` + `EMAIL_FROM` (emails; sin clave son no-op),
-Document AI (`GOOGLE_*`, fallback de OCR), `CRON_SECRET` (ver §5).
+Document AI (`GOOGLE_*`, fallback de OCR), `CRON_SECRET` (ver §5),
+`ALERT_WEBHOOK_URL` (avisos de errores, ver §8).
 
 ## 3. Migraciones
 
@@ -140,3 +142,63 @@ interna ("Connect To Predefined Network: ON" para que `garage` resuelva).
 - Dominio + HTTPS (Coolify + Let's Encrypt) cuando se decida el nombre →
   actualizar `NEXTAUTH_URL`.
 - Backup offsite del bucket de facturas (Garage).
+
+## 8. Salud del servicio y alertas
+
+### `/api/health`
+
+`GET /api/health` comprueba Postgres (`SELECT 1`) y Garage (`HeadBucket`),
+cada uno con un timeout de 2 s, y responde:
+
+- **200** `{"db":true,"storage":true}` si los dos responden;
+- **503** con el que falle a `false` en cuanto uno no responda o tarde más.
+
+No pide sesión y no dice nada interno (ni hosts ni mensajes de error; el
+detalle va al log del contenedor con el prefijo `[health]`).
+
+- **En Coolify:** el health check del recurso (§1) apunta a `/api/health`. Con
+  la BD caída el contenedor sale como no sano, en vez de verde con `/login`.
+- **Monitor externo** (Uptime Kuma, UptimeRobot, Better Stack…): un chequeo
+  HTTP cada 1–5 min a `https://<dominio>/api/health` que avise si no es 200.
+  Es lo único que avisa si se cae el servidor entero, porque entonces Coolify
+  tampoco puede avisar.
+
+### Errores del servidor
+
+[`src/instrumentation.ts`](src/instrumentation.ts) (`onRequestError`) escribe
+cada error del servidor (páginas, route handlers, server actions) como una
+línea JSON en el log: `level`, `time`, `path` (sin la query), `method`,
+`routePath`, `routeType`, `digest`, `name` y `message`. El mensaje se limpia de
+correos, NIF/CIF/NIE, IBAN y números largos, y no se guardan cabeceras ni
+cookies. El `digest` es el que ve el usuario en la pantalla de error: con él se
+encuentra la línea en el log.
+
+- **`ALERT_WEBHOOK_URL`** (opcional): si está, cada error se manda también por
+  POST a esa URL, como mucho 10 cada 5 minutos por proceso (los que se callan
+  se cuentan en el siguiente aviso). El JSON lleva `text` (Slack, Mattermost),
+  `content` (Discord) y los campos de arriba.
+- **Servicio de errores (GlitchTip, Sentry…):** por decidir. No hay SDK
+  instalado; cuando se elija, se engancha en `onRequestError` o se apunta su
+  webhook de entrada a `ALERT_WEBHOOK_URL`.
+
+### Alertas que conviene tener
+
+| Alerta | Umbral orientativo | Cómo |
+|---|---|---|
+| Facturas en «Error OCR» | más de 5 en una hora | consulta de abajo, desde el monitor o una Scheduled Task |
+| Facturas atascadas analizándose | alguna más de 15 min | consulta de abajo; si pasa a menudo, mira que `retry-stuck` (§5) corre |
+| Fallos de correo | cualquiera | líneas `[NOTIFY]` en el log y el panel de Resend |
+| Disco del servidor | por encima del 80 % | métricas del servidor en Coolify o Hetzner (Postgres y Garage comparten disco) |
+
+Consultas de solo lectura:
+
+```sql
+-- Error OCR en la última hora
+SELECT count(*) FROM "Invoice"
+WHERE status = 'OCR_ERROR' AND "updatedAt" > now() - interval '1 hour';
+
+-- Atascadas: subidas o analizándose desde hace más de 15 min
+SELECT count(*) FROM "Invoice"
+WHERE status IN ('UPLOADED', 'ANALYZING') AND "updatedAt" < now() - interval '15 minutes';
+```
+

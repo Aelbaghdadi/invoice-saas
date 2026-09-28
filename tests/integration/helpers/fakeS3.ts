@@ -12,6 +12,7 @@ import type { AddressInfo } from "node:net";
  *    depender de tiempos: el test espera a heldGets() > 0, cambia lo que
  *    quiera y suelta. Los GET que llegan despues de volver a "ok" pasan.
  *  - "down": todo responde 500.
+ *  - "hang": nada responde (hasta clear() o close()), para los timeouts.
  */
 export type FakeS3 = {
   endpoint: string;
@@ -29,12 +30,23 @@ export async function startFakeS3(bucket: string): Promise<FakeS3> {
   let mode = "ok";
   let delayMs = 0;
   const held: { respond: () => void; fail: () => void }[] = [];
+  const hanging: http.ServerResponse[] = [];
   const server = http.createServer((req, res) => {
     const key = decodeURIComponent((req.url ?? "/").split("?")[0]);
+    if (mode === "hang") {
+      hanging.push(res);
+      return;
+    }
     const respond = () => {
       if (mode === "down") {
         res.writeHead(500, { "Content-Type": "application/xml" });
         res.end("<Error><Code>InternalError</Code><Message>caido</Message></Error>");
+        return;
+      }
+      // HeadBucket (/api/health): el bucket existe.
+      if (req.method === "HEAD" && (key === `/${bucket}` || key === `/${bucket}/`)) {
+        res.writeHead(200);
+        res.end();
         return;
       }
       const chunks: Buffer[] = [];
@@ -96,6 +108,7 @@ export async function startFakeS3(bucket: string): Promise<FakeS3> {
     clear: () => {
       store.clear();
       mode = "ok";
+      for (const res of hanging.splice(0)) res.destroy();
       for (const get of held.splice(0)) get.fail();
     },
     close: () => new Promise<void>((resolve) => {
