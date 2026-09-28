@@ -1296,6 +1296,20 @@ describe("«Es duplicada» del listado: el mismo flujo que rechazar (revisión 1
     await unchanged("VALIDATED");
   });
 
+  it("con la original rechazada: error, para que el gestor la revise antes", async () => {
+    const original = await makeInvoice(w.client, { invoiceNumber: "F-100", status: "REJECTED" });
+    await prisma.invoiceIssue.updateMany({ where: { invoiceId: id }, data: { field: `duplicateOf:${original.id}` } });
+    expect((await quickReject())?.error).toBe("La factura original está rechazada: revísala antes de rechazar esta como duplicada.");
+    await unchanged("PENDING_REVIEW");
+  });
+
+  it("con la original dividida: rechaza sin nombrarla", async () => {
+    const original = await makeInvoice(w.client, { invoiceNumber: "F-100", status: "SPLIT_SOURCE" });
+    await prisma.invoiceIssue.updateMany({ where: { invoiceId: id }, data: { field: `duplicateOf:${original.id}` } });
+    expect(await quickReject()).toEqual({ ok: true });
+    expect((await row()).rejectionReason).toBe("Factura duplicada: ya la habíamos recibido.");
+  });
+
   it("con el periodo cerrado: no", async () => {
     const r = await row();
     await prisma.periodClosure.create({ data: { clientId: w.client.id, month: r.periodMonth, year: r.periodYear, closedBy: w.admin.id } });

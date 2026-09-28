@@ -5,7 +5,7 @@
  * crudo del OCR («ESB12345678», «B-12345678») con el limpio de la BD y el
  * numero literal, y no casaban.
  */
-import { Prisma, type InvoiceType } from "@prisma/client";
+import { Prisma, type InvoiceStatus, type InvoiceType } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { formatEur } from "@/lib/format";
 import { formatDateEs } from "@/lib/dates";
@@ -110,18 +110,27 @@ export function describeExisting(existing: Omit<ExistingInvoice, "id">): string 
 /** Motivo del rechazo como duplicada, que le llega al cliente por correo. No
  *  es la descripcion de la incidencia («Posible duplicado de… mismo CIF
  *  emisor»), que es para el gestor. */
-export function duplicateRejectionReason(original: Omit<ExistingInvoice, "id"> | null): string {
-  return original
+/** Una original rechazada o dividida no se nombra: al cliente le diriamos que
+ *  ya tenemos una factura que para nosotros no cuenta. */
+export function duplicateRejectionReason(original: DuplicateOriginal | null): string {
+  return original && !originalNotUsable(original)
     ? `Factura duplicada: ya recibimos ${describeExisting(original)}.`
     : "Factura duplicada: ya la habíamos recibido.";
 }
 
+export type DuplicateOriginal = Omit<ExistingInvoice, "id"> & { status: InvoiceStatus };
+
+/** La original ya no cuenta: rechazada o dividida en otras. */
+export function originalNotUsable(original: { status: InvoiceStatus }): boolean {
+  return original.status === "REJECTED" || original.status === "SPLIT_SOURCE";
+}
+
 /** La original de una incidencia de duplicado, si la guarda y es del mismo
  *  cliente (el filtro por cliente evita leer una factura de otra asesoria). */
-export async function findDuplicateOriginal(field: string | null, clientId: string): Promise<ExistingInvoice | null> {
+export async function findDuplicateOriginal(field: string | null, clientId: string): Promise<(DuplicateOriginal & { id: string }) | null> {
   const originalId = duplicateOriginalId(field);
   if (!originalId) return null;
-  return prisma.invoice.findFirst({ where: { id: originalId, clientId }, select: DUPLICATE_SELECT });
+  return prisma.invoice.findFirst({ where: { id: originalId, clientId }, select: { ...DUPLICATE_SELECT, status: true } });
 }
 
 /** El `field` de una incidencia POSSIBLE_DUPLICATE guarda la factura original

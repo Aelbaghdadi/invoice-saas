@@ -55,6 +55,11 @@ export async function quickRejectDuplicate(
     select: { field: true, invoice: { select: { clientId: true } } },
   });
   const original = dupIssue ? await findDuplicateOriginal(dupIssue.field, dupIssue.invoice.clientId) : null;
+  // Si la original ya esta rechazada, quiza la buena es esta: que el gestor
+  // lo mire antes de rechazarla tambien.
+  if (original?.status === "REJECTED") {
+    return { error: "La factura original está rechazada: revísala antes de rechazar esta como duplicada." };
+  }
   const reason = duplicateRejectionReason(original);
 
   // El mismo flujo que rechazar desde la revision: exportada, estado,
