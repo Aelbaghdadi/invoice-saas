@@ -1,10 +1,13 @@
 // /api/health (F-034): Postgres y almacenamiento, sin sesion y sin revelar
 // nada interno.
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
+import { resetHealthCache } from "@/lib/health";
 import { GET } from "@/app/api/health/route";
 import { GET as live } from "@/app/api/health/live/route";
 import { fakeS3 } from "./helpers/fakeS3";
 import { signOut } from "./helpers/session";
+
+beforeEach(() => resetHealthCache());
 
 describe("/api/health", () => {
   it("todo bien: 200 con { db, storage } y sin sesión", async () => {
