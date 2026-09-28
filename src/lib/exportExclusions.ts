@@ -29,20 +29,6 @@ export function exportExclusionReason(inv: {
 }
 
 /**
- * ¿La llevaria la siguiente exportacion? Validada, sin lote (tambien una
- * corregida despues de exportarse) y sin razon para quedarse fuera por su
- * total o por estar dividida. Las bloqueantes si cuentan: se arreglan y se
- * exportan. Es el numero de «Exportar (N)» en Lotes.
- */
-export function awaitsExport(
-  inv: { status: string; exportBatchId: string | null; totalAmount: unknown },
-  isSplitParent: boolean,
-): boolean {
-  return inv.status === "VALIDATED" && inv.exportBatchId == null
-    && exportExclusionReason({ totalAmount: inv.totalAmount, _count: { splitInvoices: isSplitParent ? 1 : 0 } }) == null;
-}
-
-/**
  * Pone a cada factura el _count.splitInvoices que espera
  * exportExclusionReason a partir de las ids que tienen hijas. El export las
  * saca con una segunda consulta acotada a las candidatas: el _count de Prisma

@@ -12,7 +12,7 @@ import type { InvoiceType, PeriodType } from "@prisma/client";
 import { completionPercent, isBatchRejectable } from "@/lib/invoiceStatuses";
 import { periodLabel } from "@/lib/period";
 import { exportPageHref } from "@/lib/exportPage";
-import { awaitsExport } from "@/lib/exportExclusions";
+import { exportReadiness } from "@/lib/exportReadiness";
 import { QUEUE_ORDER } from "@/lib/reviewQueue";
 import { reviewHref } from "@/lib/reviewNavigation";
 import { AutoRefresh } from "@/components/ui/AutoRefresh";
@@ -50,9 +50,10 @@ type BatchGroup = {
   /** Lo que tocaria "Rechazar lote" (mismo criterio que la accion). */
   rejectable: number;
   rejectableValidated: number;
-  /** Lo que se llevaria «Exportar» (awaitsExport): sin las que el Excel deja
-   *  fuera para siempre (total 0, originales divididas). */
+  /** Lo que se llevaria «Exportar» (exportReadiness): lo que se marcaria. */
   pendingExport: number;
+  /** Validadas sin lote que no van al Excel hasta corregirlas (bloqueantes). */
+  blockedExport: number;
   /** Primera pendiente del lote en el orden de la cola (QUEUE_ORDER). */
   firstPendingId: string | null;
 };
@@ -119,18 +120,12 @@ export default async function BatchPage({
     orderBy: [{ periodYear: "desc" }, { periodMonth: "desc" }, ...QUEUE_ORDER],
   });
 
-  // Originales divididas entre las candidatas a exportar: no van al Excel.
-  // Consulta acotada a esas ids, como en el export.
-  const exportCandidateIds = invoices.filter((inv) => inv.status === "VALIDATED" && inv.exportBatchId == null).map((inv) => inv.id);
-  const splitParents = new Set(
-    exportCandidateIds.length > 0
-      ? (await prisma.invoice.findMany({
-          where: { splitFromId: { in: exportCandidateIds } },
-          select: { splitFromId: true },
-          distinct: ["splitFromId"],
-        })).map((c) => c.splitFromId)
-      : [],
-  );
+  // Lo que se llevaria la siguiente exportacion, con su misma decision
+  // (partitionA3Exportable): sin las que el Excel deja fuera para siempre, y
+  // las bloqueantes aparte, que hay que corregir antes.
+  const readiness = firmId
+    ? await exportReadiness(invoices.filter((inv) => inv.status === "VALIDATED" && inv.exportBatchId == null).map((inv) => inv.id), firmId)
+    : { exportable: new Set<string>(), blocked: new Set<string>() };
 
   // Group by client + period
   const groupMap = new Map<string, BatchGroup>();
@@ -162,12 +157,14 @@ export default async function BatchPage({
         rejectable: 0,
         rejectableValidated: 0,
         pendingExport: 0,
+        blockedExport: 0,
         firstPendingId: null,
       };
       groupMap.set(key, g);
     }
     g.total++;
-    if (awaitsExport(inv, splitParents.has(inv.id))) g.pendingExport++;
+    if (readiness.exportable.has(inv.id)) g.pendingExport++;
+    if (readiness.blocked.has(inv.id)) g.blockedExport++;
     const hasOpenIssue = inv.issues.length > 0;
 
     // Exportar no cambia el estado. Sin mirar el historial las exportadas
@@ -246,7 +243,7 @@ export default async function BatchPage({
     if (estado === "cerrados") return closed;
     if (estado === "por_cerrar") return !closed && allDone;
     // Pendientes: por revisar, o terminado pero sin llevar a A3 (F-041).
-    return (!closed && !allDone) || (allDone && g.pendingExport > 0);
+    return (!closed && !allDone) || (allDone && (g.pendingExport > 0 || g.blockedExport > 0));
   });
   const hiddenCount = groups.length - visibleGroups.length;
   const hiddenPlural = hiddenCount !== 1 ? "s" : "";
@@ -369,6 +366,11 @@ export default async function BatchPage({
                       </Badge>
                       {allDone && g.pendingExport > 0 && (
                         <Badge variant="blue">Listo para exportar</Badge>
+                      )}
+                      {g.blockedExport > 0 && (
+                        <Badge variant="yellow">
+                          {g.blockedExport} por corregir antes de exportar
+                        </Badge>
                       )}
                       {closed ? (
                         <Badge variant="slate">Periodo cerrado</Badge>

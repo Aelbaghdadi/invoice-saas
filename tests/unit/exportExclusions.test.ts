@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import {
-  awaitsExport,
   exportExclusionReason,
   exportSuccessExclusionText,
   countExportExclusionBoxes,
@@ -77,26 +76,3 @@ describe("exportSuccessExclusionText", () => {
   });
 });
 
-describe("awaitsExport: el número de «Exportar (N)» en Lotes (revisión 1 del PR #13, punto 3)", () => {
-  const validated = { status: "VALIDATED", exportBatchId: null, totalAmount: 121 };
-
-  it("validada y sin lote: sí, también corregida después de exportarse", () => {
-    expect(awaitsExport(validated, false)).toBe(true);
-  });
-
-  it("ya en un lote, sin validar o rechazada: no", () => {
-    expect(awaitsExport({ ...validated, exportBatchId: "b1" }, false)).toBe(false);
-    expect(awaitsExport({ ...validated, status: "PENDING_REVIEW" }, false)).toBe(false);
-    expect(awaitsExport({ ...validated, status: "REJECTED" }, false)).toBe(false);
-  });
-
-  it("las que el Excel deja fuera para siempre (total 0, original dividida): no", () => {
-    expect(awaitsExport({ ...validated, totalAmount: 0 }, false)).toBe(false);
-    expect(awaitsExport({ ...validated, totalAmount: "0.00" }, false)).toBe(false);
-    expect(awaitsExport(validated, true)).toBe(false);
-  });
-
-  it("sin total (bloqueante que se arregla): sí", () => {
-    expect(awaitsExport({ ...validated, totalAmount: null }, false)).toBe(true);
-  });
-});
