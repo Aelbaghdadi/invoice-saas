@@ -1092,6 +1092,14 @@ describe("F-057: las incidencias se cierran al validar, rechazar o reprocesar", 
     expect(closed.map((i) => [i.status, i.resolvedBy])).toEqual(closed.map(() => ["RESOLVED", w.worker.id]));
   });
 
+  it("validar una no toca las incidencias de otra factura", async () => {
+    const { id: otra } = await makeInvoice(w.client, { invoiceNumber: "OTRA-9" });
+    await openIssue(otra, "POSSIBLE_DUPLICATE");
+    await openIssue(id, "LOW_CONFIDENCE");
+    expect((await validate(await form({}))).error).toBeNull();
+    expect([await openCount(id), await openCount(otra)]).toEqual([0, 1]);
+  });
+
   it("guardar sin validar no las cierra", async () => {
     await openIssue(id, "LOW_CONFIDENCE");
     expect((await save({})).error).toBeNull();
@@ -1252,6 +1260,22 @@ describe("«Es duplicada» del listado: el mismo flujo que rechazar (revisión 1
     await prisma.invoiceIssue.updateMany({ where: { invoiceId: id }, data: { field: `duplicateOf:${original.id}` } });
     expect(await quickReject()).toEqual({ ok: true });
     expect((await row()).rejectionReason).toMatch(/^Factura duplicada: ya recibimos la factura F-100 subida el \d{2}\/\d{2}\/\d{4} \(/);
+  });
+
+  it("desde otra asesoría (admin y gestor): «No tienes acceso», sin cambios y sin correo", async () => {
+    const otra = await makeFirm("B");
+    for (const user of [otra.admin, otra.worker]) {
+      signInAs(user);
+      expect(await quickReject()).toEqual({ error: "No tienes acceso a esta factura." });
+    }
+    await unchanged("PENDING_REVIEW");
+  });
+
+  it("el ADMIN de su propia asesoría: sí", async () => {
+    signInAs(w.admin);
+    expect(await quickReject()).toEqual({ ok: true });
+    expect((await row()).status).toBe("REJECTED");
+    expect(await prisma.invoiceIssue.count({ where: { invoiceId: id, status: "OPEN" } })).toBe(0);
   });
 
   it("con el periodo cerrado: no", async () => {
