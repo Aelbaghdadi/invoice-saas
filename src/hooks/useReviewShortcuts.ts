@@ -58,12 +58,24 @@ function isTypingInput(el: EventTarget | null): boolean {
 export function useReviewShortcuts(h: ReviewShortcutHandlers) {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      const inInput = isTypingInput(e.target);
+      // Alt+←/→ antes que nada: en Windows/Linux es «Atras» del navegador,
+      // asi que se intercepta siempre (tambien mantenida o con un dialogo
+      // abierto), aunque solo navegue sin repeticion y sin dialogo.
+      const arrow = altArrowAction(e, { inInput, isMac: /Mac|iPhone|iPad/.test(navigator.platform) });
+      if (arrow) {
+        e.preventDefault();
+        if (e.repeat || h.isBlocked?.()) return;
+        if (arrow === "next") h.onNext?.();
+        if (arrow === "prev") h.onPrev?.();
+        return;
+      }
+
       // Ignorar repeticiones (cuando mantienes pulsada la tecla)
       if (e.repeat) return;
       if (h.isBlocked?.()) return;
 
       const isMod = e.ctrlKey || e.metaKey;
-      const inInput = isTypingInput(e.target);
 
       // Ayuda: "?"
       if (e.key === "?" && !inInput) {
@@ -115,16 +127,6 @@ export function useReviewShortcuts(h: ReviewShortcutHandlers) {
       if ((e.key === "d" || e.key === "D") && !isMod && !inInput && h.onMarkDuplicate) {
         e.preventDefault();
         h.onMarkDuplicate();
-        return;
-      }
-
-      // Alt+Left/Right: navegacion prev/next sin validar. Con el foco en un
-      // campo no cambia de factura (ver altArrowAction).
-      const arrow = altArrowAction(e, { inInput, isMac: /Mac|iPhone|iPad/.test(navigator.platform) });
-      if (arrow) {
-        e.preventDefault();
-        if (arrow === "next") h.onNext?.();
-        if (arrow === "prev") h.onPrev?.();
         return;
       }
     };
