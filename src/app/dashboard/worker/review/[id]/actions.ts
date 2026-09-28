@@ -5,7 +5,7 @@ import { createHash } from "crypto";
 import { splitStorageKey } from "@/lib/splitStorageKey";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { redirect } from "next/navigation";
+import { redirect, RedirectType } from "next/navigation";
 import { revalidatePath, refresh } from "next/cache";
 import { notifyClientInvoiceValidated } from "@/lib/email";
 import {
@@ -898,6 +898,7 @@ export async function validateInvoice(
   const fallbackNext = formData.get("nextId") as string | null;
   const bucket = parseBucket(formData.get("bucket"));
   const back = parseBackHref(formData.get("back"));
+  const replaceHistory = formData.get("replaceHistory") === "1";
   const expectedUpdatedAt = formData.get("updatedAt") as string | null;
   // Solo el boton "Reabrir y validar" lo manda; Enter nunca.
   const reopen = formData.get("reopen") === "1";
@@ -958,7 +959,7 @@ export async function validateInvoice(
   revalidatePath("/dashboard/worker/invoices");
   revalidatePath("/dashboard/worker/batch", "layout");
   revalidatePath("/dashboard/admin/batch", "layout");
-  goToNext(nextId, bucket, back);
+  goToNext(nextId, bucket, back, replaceHistory);
 }
 
 /**
@@ -983,10 +984,18 @@ async function resolveNextId(
 
 /** A la siguiente pendiente, conservando la cola y el listado de origen; si
  *  no queda ninguna, de vuelta a ese listado. */
-function goToNext(nextId: string | null, bucket: QueueBucket, back: string | null): never {
+/**
+ * Salta a la siguiente. Con `replace` (la pantalla tiene puesta la entrada
+ * «centinela» del aviso de cambios sin guardar, F-047) sustituye la entrada
+ * actual del historial en vez de añadir otra: si no, quedaba una pulsacion
+ * de Atras muerta en cada factura corregida. En una server action, redirect
+ * es push por defecto.
+ */
+function goToNext(nextId: string | null, bucket: QueueBucket, back: string | null, replace = false): never {
   const suffix = queueToSearchParams({ bucket, back }).toString();
-  if (nextId) redirect(`/dashboard/worker/review/${nextId}${suffix ? `?${suffix}` : ""}`);
-  redirect(back ?? "/dashboard/worker/invoices");
+  const type = replace ? RedirectType.replace : RedirectType.push;
+  if (nextId) redirect(`/dashboard/worker/review/${nextId}${suffix ? `?${suffix}` : ""}`, type);
+  redirect(back ?? "/dashboard/worker/invoices", type);
 }
 
 /**
@@ -1008,6 +1017,7 @@ export async function deferInvoice(
   const fallbackNext = formData.get("nextId") as string | null;
   const bucket = parseBucket(formData.get("bucket"));
   const back = parseBackHref(formData.get("back"));
+  const replaceHistory = formData.get("replaceHistory") === "1";
 
   const invoice = await prisma.invoice.findUnique({ where: { id } });
   if (!invoice) return { error: "Factura no encontrada" };
@@ -1038,7 +1048,7 @@ export async function deferInvoice(
   revalidatePath("/dashboard/worker/invoices");
   revalidatePath("/dashboard/worker/batch", "layout");
   revalidatePath("/dashboard/admin/batch", "layout");
-  goToNext(nextId, bucket, back);
+  goToNext(nextId, bucket, back, replaceHistory);
 }
 
 /**
@@ -1120,6 +1130,7 @@ export async function rejectInvoice(
   const fallbackNext = formData.get("nextId") as string | null;
   const bucket = parseBucket(formData.get("bucket"));
   const back = parseBackHref(formData.get("back"));
+  const replaceHistory = formData.get("replaceHistory") === "1";
 
   if (!reason) {
     return { error: "Debes indicar el motivo del rechazo." };
@@ -1151,7 +1162,7 @@ export async function rejectInvoice(
   revalidatePath("/dashboard/worker/invoices");
   revalidatePath("/dashboard/worker/batch", "layout");
   revalidatePath("/dashboard/admin/batch", "layout");
-  goToNext(nextId, bucket, back);
+  goToNext(nextId, bucket, back, replaceHistory);
 }
 
 // ── División multi-ticket ──────────────────────────────────────────────────
@@ -1329,6 +1340,7 @@ export async function splitInvoice(
   tickets: SplitTicket[],
   bucket: string,
   back?: string | null,
+  replaceHistory = false,
 ): Promise<{ error?: string }> {
   const session = await auth();
   if (!session?.user || !["ADMIN", "WORKER"].includes(session.user.role)) {
@@ -1416,7 +1428,7 @@ export async function splitInvoice(
   revalidatePath("/dashboard/worker/batch", "layout");
   revalidatePath("/dashboard/admin/batch", "layout");
 
-  goToNext(nextId, parsedBucket, parseBackHref(back));
+  goToNext(nextId, parsedBucket, parseBackHref(back), replaceHistory);
 }
 
 // ── División PDF multi-factura ────────────────────────────────────────────────
@@ -1440,6 +1452,7 @@ export async function splitPdfInvoice(
   parts: PdfSplitPart[],
   bucket: string,
   back?: string | null,
+  replaceHistory = false,
 ): Promise<{ error?: string }> {
   const session = await auth();
   if (!session?.user || !["ADMIN", "WORKER"].includes(session.user.role)) {
@@ -1566,7 +1579,7 @@ export async function splitPdfInvoice(
   revalidatePath("/dashboard/worker/batch", "layout");
   revalidatePath("/dashboard/admin/batch", "layout");
 
-  goToNext(nextId, parsedBucket, parseBackHref(back));
+  goToNext(nextId, parsedBucket, parseBackHref(back), replaceHistory);
 }
 
 function extractFields(fd: FormData): FieldData {

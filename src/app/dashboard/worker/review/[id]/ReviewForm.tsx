@@ -119,7 +119,7 @@ type ExtractionData = {
 };
 
 /** Lo que manda el formulario pero no edita el gestor: no son cambios. */
-const SNAPSHOT_IGNORE = ["updatedAt", "bucket", "back"] as const;
+const SNAPSHOT_IGNORE = ["updatedAt", "bucket", "back", "replaceHistory"] as const;
 
 type IssueData = {
   id: string;
@@ -934,6 +934,17 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     setTimeout(() => document.getElementById(field)?.focus(), 0);
   }, [setEditableIssuerCif, setEditableReceiverCif, setTotalAmount, updateVatLine]);
 
+  // Centinela de Atras (ver mas abajo). Aqui porque buildFormData lo lee.
+  const sentinelRef = useRef(false);
+  // Desde que se lanza una salida (validar y pasar, posponer, rechazar,
+  // dividir, un enlace) hasta que llega la otra factura o la accion falla: no
+  // se pone el centinela, que quedaria como una entrada muerta detras.
+  const departingRef = useRef(false);
+  useEffect(() => { sentinelRef.current = false; departingRef.current = false; }, [invoice.id]);
+  // Con el centinela puesto, la accion redirige con replace: sustituye la
+  // entrada repetida en vez de dejarla detras de la siguiente factura.
+  const setReplaceHistory = (fd: FormData) => { if (sentinelRef.current) fd.set("replaceHistory", "1"); };
+
   const buildFormData = useCallback((extra?: Record<string,string>) => {
     const fd = new FormData();
     fd.set("invoiceId",    invoice.id);
@@ -970,6 +981,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     fd.set("art80Tres", isRectificative && art80Tres ? "1" : "0");
     fd.set("bucket", bucket);
     if (back) fd.set("back", back);
+    if (sentinelRef.current) fd.set("replaceHistory", "1");
     if (extra) Object.entries(extra).forEach(([k,v]) => fd.set(k,v));
     return fd;
   }, [type, vatLines, totalAmount, markedEuro, invoiceDateVal, accountingMonth, accountingYear, supplierAccountVal, expenseAccountVal, operationType, goodsTypeShown, shownSource, retentionType, retentionBase, retentionRate, retentionAmount, isRectificative, rectifiedInvoiceSeries, rectifiedInvoiceNumber, rectificativeType, art80Tres, invoice.id, invoice.updatedAt, bucket, back]);
@@ -1033,17 +1045,23 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   // Alt+→) no abre otro aviso ni lanza un segundo guardado, que chocaba con
   // el bloqueo optimista y sacaba un error falso.
   const leavingRef = useRef(false);
+  // Lo que habia antes de «Descartar», por si la salida falla (Posponer sin
+  // red): entonces se restaura y lo tecleado vuelve a contar como cambios.
+  const discardedSnapshotRef = useRef<string | null>(null);
   const guardLeave = async (leave: () => void, onStay?: () => void) => {
     if (leavingRef.current) return;
+    discardedSnapshotRef.current = null;
     if (!isDirty()) return leave();
     leavingRef.current = true;
     try {
       const choice = await askUnsaved();
-      // «Descartar» no marca nada como limpio: si la accion falla (Posponer
-      // sin red, por ejemplo), lo tecleado sigue en pantalla y sigue sin
-      // guardar. Si sale bien, se cambia de factura y la instantanea se
-      // rehace.
+      // «Descartar» marca limpio antes de salir: si no, al salir a otro
+      // documento (Atras tras un F5) el navegador volvia a preguntar con
+      // beforeunload. Si la accion falla (Posponer sin red), quien la lanzo
+      // restaura la instantanea con restoreDiscarded().
       if (choice === "discard") {
+        discardedSnapshotRef.current = snapshotRef.current;
+        markClean();
         leave();
       } else if (choice === "save" && (await saveBeforeLeaving())) {
         leave();
@@ -1056,6 +1074,10 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   };
   // Dentro de la transicion del boton correspondiente (spinner y botones
   // deshabilitados). Sin red, la accion lanza: se avisa y no se sale.
+  const restoreDiscarded = () => {
+    if (discardedSnapshotRef.current != null) snapshotRef.current = discardedSnapshotRef.current;
+    discardedSnapshotRef.current = null;
+  };
   const saveBeforeLeaving = (): Promise<boolean> => new Promise((resolve) => {
     const run = isValidated ? startValidate : startSave;
     run(async () => {
@@ -1083,18 +1105,22 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   };
   // Atras del navegador (o del raton): es navegacion del router, sin
   // beforeunload. Con cambios se mete una entrada «centinela» en el historial
-  // (la misma URL); Atras la consume sin salir de la factura y aqui se
-  // pregunta. Si se sale, se da el paso atras que el gestor queria; si se
-  // queda, se vuelve a poner. Al salir por un enlace con el centinela puesto,
-  // se sustituye (replace) para no dejar una entrada repetida.
-  const sentinelRef = useRef(false);
-  useEffect(() => { sentinelRef.current = false; }, [invoice.id]);
+  // (la misma URL). Atras la consume sin salir de la factura; se vuelve a
+  // poner enseguida (asi un segundo Atras con el aviso abierto tampoco sale)
+  // y se pregunta. Si se sale, se dan los dos pasos: el centinela y el Atras
+  // que el gestor queria. Toda salida con el centinela puesto (enlace,
+  // flechas, validar y pasar, posponer, rechazar, dividir) sustituye la
+  // entrada (replace) en vez de dejarla repetida detras.
+  // Limite conocido: tras un F5 con el centinela puesto, la entrada repetida
+  // queda en el historial y un Atras de mas vuelve a esta misma factura.
   const pushSentinel = () => {
-    if (sentinelRef.current) return;
+    // En una pestaña nueva no hay Atras que proteger.
+    if (sentinelRef.current || departingRef.current || window.history.length <= 1) return;
     window.history.pushState(window.history.state, "", window.location.href);
     sentinelRef.current = true;
   };
   const navigate = (href: string) => {
+    departingRef.current = true;
     if (sentinelRef.current) {
       sentinelRef.current = false;
       router.replace(href);
@@ -1107,23 +1133,45 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   useEffect(() => { latest.current = { isDirty, guardLeave, navigate, pushSentinel }; });
   useEffect(() => {
     const root = rootRef.current;
+    const timers = new Set<ReturnType<typeof setTimeout>>();
     // Al teclear: si ya hay cambios, se pone el centinela (despues del
-    // render, cuando el estado ya lleva lo tecleado).
-    const onEdit = () => setTimeout(() => { if (latest.current.isDirty()) latest.current.pushSentinel(); }, 0);
+    // render, cuando el estado ya lleva lo tecleado). Los clics y teclas
+    // dentro de un dialogo (el propio aviso, «¿Validar igualmente?») no son
+    // edicion: «Descartar» volvia a poner el centinela justo al salir.
+    const onEdit = (e: Event) => {
+      if ((e.target as Element | null)?.closest?.('[role="alertdialog"],[role="dialog"],[aria-modal="true"]')) return;
+      const t = setTimeout(() => {
+        timers.delete(t);
+        if (!leavingRef.current && latest.current.isDirty()) latest.current.pushSentinel();
+      }, 0);
+      timers.add(t);
+    };
     const onPopState = () => {
       if (!sentinelRef.current) return;
       sentinelRef.current = false;
       const { isDirty: dirty, guardLeave: guard, pushSentinel: push } = latest.current;
+      // Atras con el aviso ya abierto: se repone y el aviso sigue.
+      if (leavingRef.current) {
+        push();
+        return;
+      }
       if (!dirty()) {
         window.history.back();
         return;
       }
-      void guard(() => window.history.back(), push);
+      push();
+      void guard(() => {
+        departingRef.current = true;
+        const steps = sentinelRef.current ? -2 : -1;
+        sentinelRef.current = false;
+        window.history.go(steps);
+      });
     };
     // Cualquier enlace interno (barra lateral, cabecera, «Volver», «<», «>»…):
     // con cambios, se para en captura, antes que el Link de Next, y se
-    // pregunta. Con Ctrl/Cmd/Shift/Alt, boton central o target (pestaña
-    // nueva) no se sale de esta y no se toca.
+    // pregunta. Sin cambios pero con el centinela puesto, tambien se para,
+    // para salir con replace. Con Ctrl/Cmd/Shift/Alt, boton central o target
+    // (pestaña nueva) no se sale de esta y no se toca.
     const onClick = (e: MouseEvent) => {
       if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       const a = (e.target as Element | null)?.closest?.("a[href]") as HTMLAnchorElement | null;
@@ -1131,22 +1179,20 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       const url = new URL(a.href, window.location.href);
       if (url.origin !== window.location.origin) return;
       if (url.pathname === window.location.pathname && url.search === window.location.search) return;
-      if (!latest.current.isDirty()) return;
+      if (!sentinelRef.current && !latest.current.isDirty()) return;
       e.preventDefault();
       e.stopPropagation();
       void latest.current.guardLeave(() => latest.current.navigate(url.pathname + url.search + url.hash));
     };
-    root?.addEventListener("input", onEdit, true);
-    root?.addEventListener("change", onEdit, true);
-    root?.addEventListener("click", onEdit, true);
+    const editEvents = ["input", "change", "click", "keyup"] as const;
+    for (const ev of editEvents) root?.addEventListener(ev, onEdit, true);
     window.addEventListener("popstate", onPopState);
     document.addEventListener("click", onClick, true);
     return () => {
-      root?.removeEventListener("input", onEdit, true);
-      root?.removeEventListener("change", onEdit, true);
-      root?.removeEventListener("click", onEdit, true);
+      for (const ev of editEvents) root?.removeEventListener(ev, onEdit, true);
       window.removeEventListener("popstate", onPopState);
       document.removeEventListener("click", onClick, true);
+      for (const t of timers) clearTimeout(t);
     };
   }, []);
   // Cerrar la pestaña o recargar: el aviso del navegador.
@@ -1176,6 +1222,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       goodsTypeAssignedSeen: assignedGoodsType ?? "",
       ...(reopen ? { reopen: "1" } : {}),
     };
+    // Una por revisar salta a la siguiente al validar; una validada se queda.
+    if (!isValidated) departingRef.current = true;
     let res = await validateInvoice(null, buildFormData(fields));
     // Posibles duplicados (F-010, F-016): otra ya validada con este numero
     // y emisor, o un aviso de duplicado abierto. El servidor no valida sin
@@ -1227,12 +1275,14 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       });
       asked = true;
       if (!ok) {
+        departingRef.current = false;
         setValidateState(null);
         return "asked";
       }
       res = await validateInvoice(null, buildFormData({ ...fields, confirmDuplicate: duplicates.map((d) => d.key).join(",") }));
     }
     setValidateState(res);
+    departingRef.current = false;
     if (res?.error) {
       error(isValidated
         ? `No se ha guardado la corrección: ${errorText(res.error)}`
@@ -1384,7 +1434,10 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       // siguiente de todo el lote.
       fd.set("bucket", bucket);
       if (back) fd.set("back", back);
+      setReplaceHistory(fd);
+      departingRef.current = true;
       const res = await rejectInvoice(null, fd);
+      departingRef.current = false;
       setRejectState(res);
       if (res?.error) {
         error(typeof res.error === "string" ? res.error : res.error.message);
@@ -1434,9 +1487,13 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       fd.set("nextId", nextPendingId ?? "");
       fd.set("bucket", bucket);
       if (back) fd.set("back", back);
+      setReplaceHistory(fd);
+      departingRef.current = true;
       const res = await deferInvoice(null, fd);
       // El action redirecciona en caso de exito; solo veremos retorno si hay error.
+      departingRef.current = false;
       if (res?.error) {
+        restoreDiscarded();
         error(typeof res.error === "string" ? res.error : res.error.message);
       }
     });
@@ -3312,6 +3369,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
           imageUrl={previewUrl}
           bucket={bucket ?? "all"}
           back={back}
+          replaceHistory={() => sentinelRef.current}
           onClose={() => setShowSplitModal(false)}
         />
       )}
@@ -3321,6 +3379,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
           pdfUrl={previewUrl}
           bucket={bucket ?? "all"}
           back={back}
+          replaceHistory={() => sentinelRef.current}
           onClose={() => setShowSplitPdfModal(false)}
         />
       )}

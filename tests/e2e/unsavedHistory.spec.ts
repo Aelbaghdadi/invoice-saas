@@ -1,0 +1,132 @@
+import { test, expect, type Page } from "@playwright/test";
+import { PrismaClient } from "@prisma/client";
+import { PrismaPg } from "@prisma/adapter-pg";
+import bcrypt from "bcryptjs";
+
+/**
+ * Cambios sin guardar y el historial del navegador (F-047): el centinela que
+ * protege Atras no deja entradas repetidas ni muertas.
+ *
+ * Siembra su propia asesoria en la BD de la app, asi que necesita
+ * E2E_DATABASE_URL (la misma BD que usa el servidor; se VACIA). Sin ella se
+ * salta. Contra la app compilada:
+ *   E2E_DATABASE_URL=postgresql://… PLAYWRIGHT_REUSE_SERVER=1 \
+ *   PLAYWRIGHT_BASE_URL=http://localhost:3999 npx playwright test unsavedHistory
+ */
+const DB = process.env.E2E_DATABASE_URL;
+test.skip(!DB, "Necesita E2E_DATABASE_URL");
+test.describe.configure({ mode: "serial" });
+
+const PASSWORD = "Prueba1234!";
+const IDS = ["h1", "h2", "h3", "h4"];
+
+test.beforeAll(async () => {
+  const db = new PrismaClient({ adapter: new PrismaPg({ connectionString: DB }) });
+  try {
+    await db.$executeRawUnsafe(`TRUNCATE "AccountEntry","InvoiceIssue","AuditLog","InvoiceStatusHistory","ExportBatchItem","InvoiceVatLine","Invoice","ExportBatch","Client","User","AdvisoryFirm" CASCADE`);
+    await db.advisoryFirm.create({ data: { id: "firm1", name: "Asesoría Prueba", cif: "A00000001" } });
+    await db.user.create({ data: { id: "admin1", username: "admin", email: "admin@prueba.es", passwordHash: await bcrypt.hash(PASSWORD, 10), name: "Admin", role: "ADMIN", advisoryFirmId: "firm1" } });
+    await db.client.create({ data: { id: "client1", name: "Cliente Prueba SL", cif: "B00000002", advisoryFirmId: "firm1" } });
+    for (const id of IDS) {
+      await db.invoice.create({
+        data: {
+          id, filename: `${id}.pdf`, storageKey: "k-pdf", fileType: "application/pdf", type: "PURCHASE",
+          periodMonth: 9, periodYear: 2026, clientId: "client1", status: "PENDING_REVIEW",
+          invoiceNumber: `F-${id}`, invoiceDate: new Date("2026-09-10"),
+          issuerName: "Proveedor SL", issuerCif: "B12345674", receiverName: "Cliente Prueba SL", receiverCif: "B00000002",
+          taxBase: 100, vatRate: 21, vatAmount: 21, totalAmount: 121,
+          supplierAccount: "40000001", expenseAccount: "60000001", operationType: "INTERIOR",
+          vatLines: { create: [{ position: 0, taxBase: 100, vatRate: 21, vatAmount: 21 }] },
+        },
+      });
+    }
+  } finally {
+    await db.$disconnect();
+  }
+});
+
+/** El historial de la pestaña como rutas cortas, con la actual entre asteriscos. */
+type NavigationEntries = { entries(): { url: string | null }[]; currentEntry: { index: number } | null };
+async function historyOf(page: Page) {
+  const { urls, index } = await page.evaluate(() => {
+    const nav = (window as unknown as { navigation: NavigationEntries }).navigation;
+    return { urls: nav.entries().map((e) => new URL(e.url ?? "").pathname), index: nav.currentEntry?.index ?? -1 };
+  });
+  return urls.map((u, i) => (i === index ? `*${u}*` : u));
+}
+
+const P = "/dashboard/worker/invoices";
+const review = (id: string) => `/dashboard/worker/review/${id}`;
+
+/** Listado (P) → factura (A), con cambios en el numero. */
+async function openAndEdit(page: Page, id: string) {
+  await page.goto("/login");
+  await page.getByLabel(/usuario/i).fill("admin");
+  await page.getByLabel(/contraseña/i).fill(PASSWORD);
+  await Promise.all([page.waitForURL(/dashboard/), page.getByRole("button", { name: /acceder/i }).click()]);
+  await page.goto(P);
+  await page.goto(review(id));
+  // Tras hidratar: antes, lo tecleado no pasa por los listeners de React.
+  await page.waitForLoadState("networkidle");
+  await page.locator("#invoiceNumber").fill(`${id}-CAMBIADO`);
+  // El centinela (la misma URL repetida) se pone tras el render.
+  await expect.poll(async () => (await historyOf(page)).slice(-2)).toEqual([review(id), `*${review(id)}*`]);
+}
+const back = (page: Page) => page.evaluate(() => history.back());
+const forward = (page: Page) => page.evaluate(() => history.forward());
+
+test("editar → Atrás → Descartar: sale, y Adelante/Atrás siguen funcionando", async ({ page }) => {
+  await openAndEdit(page, "h1");
+  const dialog = page.getByRole("alertdialog");
+  await back(page);
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Descartar" }).click();
+  await expect(page).toHaveURL(new RegExp(`${P}$`));
+  await forward(page);
+  await expect(page).toHaveURL(new RegExp(`${review("h1")}$`));
+  await expect(dialog).toHaveCount(0);
+  await back(page);
+  await expect(page).toHaveURL(new RegExp(`${P}$`));
+});
+
+test("editar → validar con Ctrl+Enter → Atrás: la factura anterior en un paso", async ({ page }) => {
+  await openAndEdit(page, "h2");
+  await page.locator("#invoiceNumber").press("Control+Enter");
+  await page.waitForURL((u) => u.pathname.startsWith("/dashboard/worker/review/") && !u.pathname.endsWith("/h2"));
+  // replace: la siguiente sustituye al centinela, sin la entrada repetida
+  // (con push quedaba [A, A, siguiente]).
+  expect((await historyOf(page)).slice(-3)).toEqual([P, review("h2"), expect.stringMatching(/^\*\/dashboard\/worker\/review\//)]);
+  await back(page);
+  await expect(page).toHaveURL(new RegExp(`${review("h2")}$`));
+  await back(page);
+  await expect(page).toHaveURL(new RegExp(`${P}$`));
+});
+
+test("editar → enlace → Descartar: [P, A, X]", async ({ page }) => {
+  await openAndEdit(page, "h3");
+  const dialog = page.getByRole("alertdialog");
+  const link = page.locator('nav a[href^="/dashboard"]').filter({ hasNot: page.locator(`[href="${P}"]`) }).first();
+  const target = await link.getAttribute("href");
+  await link.click();
+  await dialog.getByRole("button", { name: "Descartar" }).click();
+  await page.waitForURL((u) => u.pathname === target);
+  expect((await historyOf(page)).slice(-3)).toEqual([P, review("h3"), `*${target}*`]);
+});
+
+test("editar → Atrás → Cancelar → Atrás: vuelve a preguntar (también con el aviso abierto)", async ({ page }) => {
+  await openAndEdit(page, "h4");
+  const dialog = page.getByRole("alertdialog");
+  await back(page);
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Cancelar" }).click();
+  await expect.poll(async () => (await historyOf(page)).slice(-2)).toEqual([review("h4"), `*${review("h4")}*`]);
+  await back(page);
+  await expect(dialog).toBeVisible();
+  // Atras con el aviso abierto no sale de la factura.
+  await back(page);
+  await page.waitForTimeout(500);
+  await expect(page).toHaveURL(new RegExp(`${review("h4")}$`));
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Descartar" }).click();
+  await expect(page).toHaveURL(new RegExp(`${P}$`));
+});
