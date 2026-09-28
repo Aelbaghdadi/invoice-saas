@@ -30,6 +30,30 @@ export function parseRetryAfter(header: string | null | undefined, now = Date.no
 }
 
 /**
+ * La espera que piden las APIs de Google en el cuerpo del error, no en la
+ * cabecera (revision 1 del PR #14, punto 5): `error.details[]` con
+ * `"@type": "type.googleapis.com/google.rpc.RetryInfo"` y
+ * `"retryDelay": "37s"`. null si no viene o no se entiende.
+ */
+export function retryDelayFromGoogleBody(body: string): number | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  const details = (parsed as { error?: { details?: unknown } } | null)?.error?.details;
+  if (!Array.isArray(details)) return null;
+  for (const detail of details) {
+    const d = detail as { "@type"?: unknown; retryDelay?: unknown } | null;
+    if (typeof d?.["@type"] !== "string" || !d["@type"].endsWith("google.rpc.RetryInfo")) continue;
+    const match = typeof d.retryDelay === "string" ? /^(\d+(?:\.\d+)?)s$/.exec(d.retryDelay.trim()) : null;
+    if (match) return Math.round(Number(match[1]) * 1000);
+  }
+  return null;
+}
+
+/**
  * Cuanto esperar antes del intento `attempt + 1` (attempt empieza en 1).
  * Sin Retry-After: «full jitter» sobre 1 s, 2 s, 4 s… hasta 30 s, para que
  * las facturas de una misma subida no reintenten todas a la vez.

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseRetryAfter, retryDelayMs, RETRY_AFTER_MAX_MS, RETRY_MAX_MS } from "@/lib/retryBackoff";
+import { parseRetryAfter, retryDelayFromGoogleBody, retryDelayMs, RETRY_AFTER_MAX_MS, RETRY_MAX_MS } from "@/lib/retryBackoff";
 
 describe("parseRetryAfter (F-029)", () => {
   const now = Date.parse("2026-09-28T19:00:00Z");
@@ -42,5 +42,39 @@ describe("retryDelayMs (F-029)", () => {
   it("Retry-After manda, con su propio tope", () => {
     expect(retryDelayMs(1, 7_000, () => 0)).toBe(7_000);
     expect(retryDelayMs(1, 3_600_000)).toBe(RETRY_AFTER_MAX_MS);
+  });
+});
+
+describe("retryDelayFromGoogleBody (revisión 1 del PR #14, punto 5)", () => {
+  // Cuerpo real de un 429 de la API de Gemini (cuota por minuto agotada).
+  const body = JSON.stringify({
+    error: {
+      code: 429,
+      message: "You exceeded your current quota, please check your plan and billing details.",
+      status: "RESOURCE_EXHAUSTED",
+      details: [
+        {
+          "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+          violations: [{ quotaMetric: "generativelanguage.googleapis.com/generate_content_free_tier_requests", quotaId: "GenerateRequestsPerMinutePerProjectPerModel-FreeTier" }],
+        },
+        { "@type": "type.googleapis.com/google.rpc.Help", links: [{ description: "Learn more", url: "https://ai.google.dev/gemini-api/docs/rate-limits" }] },
+        { "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "37s" },
+      ],
+    },
+  });
+
+  it("lee retryDelay del RetryInfo", () => {
+    expect(retryDelayFromGoogleBody(body)).toBe(37_000);
+    expect(retryDelayFromGoogleBody(JSON.stringify({ error: { details: [{ "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "1.5s" }] } }))).toBe(1_500);
+  });
+
+  it("con el mismo tope que Retry-After", () => {
+    expect(retryDelayMs(1, retryDelayFromGoogleBody(body))).toBe(RETRY_AFTER_MAX_MS);
+  });
+
+  it("sin RetryInfo o sin JSON: null", () => {
+    expect(retryDelayFromGoogleBody("Too Many Requests")).toBeNull();
+    expect(retryDelayFromGoogleBody(JSON.stringify({ error: { details: [] } }))).toBeNull();
+    expect(retryDelayFromGoogleBody(JSON.stringify({ error: { details: [{ "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay: "pronto" }] } }))).toBeNull();
   });
 });
