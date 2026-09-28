@@ -278,9 +278,18 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
           // Document AI a veces no rellena el CIF estructurado aunque el CIF
           // o el nombre del cliente esten en el documento. Solo rutea si casa
           // exactamente uno (intragrupo → manual).
+          // Con el tipo confirmado, el CIF de la otra parte siempre esta en
+          // el texto: si es una empresa del grupo (factura de A a B), el texto
+          // la encontraria a ella y la factura acabaria en A como compra de A
+          // a si misma. Esa no es candidata. Con «Detectar automaticamente»
+          // se deja: es lo que permite reconocer una venta.
+          const other = normalizeProviderNif(otherCif);
+          const textCandidates = invoice.typeUnconfirmed || !other
+            ? candidates
+            : candidates.filter((c) => normalizeProviderNif(c.cif) !== other);
           const byText = routeByText(
             ocrResult.rawText,
-            candidates.map((c) => ({ clientId: c.id, cif: c.cif, name: c.name })),
+            textCandidates.map((c) => ({ clientId: c.id, cif: c.cif, name: c.name })),
           );
           if (byText) resolvedClientId = byText.clientId;
           const firmId = candidates[0]?.advisoryFirmId;

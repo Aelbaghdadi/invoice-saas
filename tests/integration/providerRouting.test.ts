@@ -86,6 +86,15 @@ describe("regla del proveedor al subir al buzón (F-021)", () => {
   });
 });
 
+describe("factura entre empresas del grupo", () => {
+  it("regla A → B y factura de A sin el CIF del receptor: el texto no la manda a A", async () => {
+    await learnProviderRule(w.firm.id, a.cif, b.id);
+    const r = await upload({ issuerCif: a.cif, receiverCif: null, rawText: `Empresa A\\nCIF ${a.cif}\\nTotal 242` });
+    expect([r.status, r.clientId]).toEqual(["PENDING_REVIEW", b.id]);
+    expect(r.audit).toHaveLength(1);
+  });
+});
+
 describe("«Detectar automáticamente» (tipo sin confirmar)", () => {
   it("una venta de A a un cliente con CIF válido: se enruta a A como venta", async () => {
     const r = await upload({ issuerCif: a.cif, receiverCif: validCif("B", "3333333"), typeUnconfirmed: true });
