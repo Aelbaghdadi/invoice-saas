@@ -130,6 +130,16 @@ describe("«Detectar automáticamente» (tipo sin confirmar)", () => {
     expect(r.audit).toEqual([]);
   });
 
+  it("de A a B con el CIF de B ilegible pero en el texto: al buzón, no venta de A", async () => {
+    const r = await upload({ issuerCif: a.cif, receiverCif: null, typeUnconfirmed: true, rawText: `De ${a.cif} a ${b.cif}\\nTotal 242` });
+    expect([r.status, r.clientId]).toEqual(["PENDING_ROUTING", w.client.id]);
+  });
+
+  it("lo mismo con solo el CIF de A en el texto: A como venta", async () => {
+    const r = await upload({ issuerCif: a.cif, receiverCif: null, typeUnconfirmed: true, rawText: `Emisor ${a.cif}\\nTotal 242` });
+    expect([r.status, r.clientId, r.type]).toEqual(["PENDING_REVIEW", a.id, "SALE"]);
+  });
+
   it("venta de A a X con el CIF de A mal leído pero en el texto: A", async () => {
     const r = await upload({ issuerCif: "B00000000", receiverCif: validCif("B", "3333333"), typeUnconfirmed: true, rawText: `Emisor ${a.cif}\\nTotal 242` });
     expect([r.status, r.clientId]).toEqual(["PENDING_REVIEW", a.id]);

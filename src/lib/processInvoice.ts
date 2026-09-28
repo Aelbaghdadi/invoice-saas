@@ -295,9 +295,24 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
         // regla del proveedor solo si el emisor no es del grupo: si lo es, es
         // una venta suya, no una compra a un proveedor.
         const swapped = routeByCif(byCifCandidates, otherCif, sideCif);
-        resolvedClientId = swapped.status === "routed"
-          ? swapped.clientId
-          : await byTextAndRule(candidates, sideUnreadable && !otherIsCandidate);
+        if (swapped.status === "routed") {
+          // Con el receptor ilegible, puede ser una factura de A a otra
+          // empresa del grupo cuyo CIF no se relleno: si el texto trae el CIF
+          // de otra candidata, al buzon. Si no, B perdia la compra y quedaba
+          // como venta de A confirmada. Con el CIF de B legible ya va al
+          // buzon por ambiguous.
+          const toOther = sideUnreadable
+            ? routeByText(
+                ocrResult.rawText,
+                candidates.filter((c) => c.id !== swapped.clientId).map((c) => ({ clientId: c.id, cif: c.cif, name: c.name })),
+                { cifOnly: true },
+              )
+            : null;
+          if (toOther) routingReason = "ambiguous";
+          else resolvedClientId = swapped.clientId;
+        } else {
+          resolvedClientId = await byTextAndRule(candidates, sideUnreadable && !otherIsCandidate);
+        }
       } else {
         routingReason = routing.reason;
         // 1) Match por CIF del cliente. Si no hay CIF legible en su lado (no

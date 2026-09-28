@@ -96,6 +96,7 @@ export type TextRoutingCandidate = { clientId: string; cif: string; name: string
 export function routeByText(
   rawText: string | null | undefined,
   candidates: TextRoutingCandidate[],
+  options: { cifOnly?: boolean } = {},
 ): { clientId: string; via: "cif" | "name" } | { ambiguous: true } | null {
   if (!rawText || candidates.length === 0) return null;
 
@@ -108,6 +109,7 @@ export function routeByText(
   });
   if (byCif.length === 1) return { clientId: byCif[0].clientId, via: "cif" };
   if (byCif.length > 1) return { ambiguous: true }; // varios CIF de candidatos en el texto
+  if (options.cifOnly) return null;
 
   // Texto normalizado (sin tildes ni puntuación) para buscar el nombre.
   const normText = normalizeBusinessName(rawText);

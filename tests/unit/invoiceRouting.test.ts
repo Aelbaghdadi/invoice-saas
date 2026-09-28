@@ -101,6 +101,10 @@ describe("routeByText", () => {
     expect(routeByText(txt, CANDS)).toEqual({ ambiguous: true });
   });
 
+  it("cifOnly: no mira los nombres", () => {
+    expect(routeByText("Restaurante La Plaza, sin CIF", CANDS, { cifOnly: true })).toBeNull();
+  });
+
   it("ambigua si aparecen los nombres de dos candidatos", () => {
     const txt = "Restaurante La Plaza y Bar Central, mismo grupo";
     expect(routeByText(txt, CANDS)).toEqual({ ambiguous: true });
