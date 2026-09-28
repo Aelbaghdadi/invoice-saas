@@ -19,7 +19,7 @@ export function normalizeInvoiceNumber(raw: string | null | undefined): string {
 }
 
 /**
- * La primera factura del cliente (no rechazada, distinta de excludeId) con
+ * La primera factura del cliente (no rechazada ni dividida, distinta de excludeId) con
  * el mismo numero normalizado y, si se da, el mismo CIF de emisor limpio.
  * El numero se normaliza igual en Postgres que en normalizeInvoiceNumber.
  */
@@ -40,7 +40,7 @@ export async function findByInvoiceNumber(input: {
     WHERE "clientId" = ${input.clientId}
       AND type = ${input.type}::"InvoiceType"
       AND id <> ${input.excludeId}
-      AND status <> 'REJECTED'
+      AND status NOT IN ('REJECTED', 'SPLIT_SOURCE')
       AND (NOT ${onlyValidated} OR status IN ('VALIDATED', 'EXPORTED'))
       AND (${input.issuerCif}::text IS NULL OR "issuerCif" = ${input.issuerCif})
       AND regexp_replace(upper("invoiceNumber"), '[^A-Z0-9]', '', 'g') = ${normalized}
@@ -114,7 +114,10 @@ export type DuplicateCheckInput = {
 export async function findPossibleDuplicate(input: DuplicateCheckInput): Promise<{ description: string; originalId: string } | null> {
   const { invoiceId, clientId, type } = input;
   const isSale = type === "SALE";
-  const baseWhere = { clientId, type, id: { not: invoiceId }, status: { notIn: ["REJECTED" as const] } };
+  // Una original dividida (SPLIT_SOURCE) conserva numero, CIF, total y fecha:
+  // sus hijas casaban con ella por A o por B. El hash si la mira: el mismo
+  // fichero subido otra vez es un duplicado aunque ya se dividiera.
+  const baseWhere = { clientId, type, id: { not: invoiceId }, status: { notIn: ["REJECTED" as const, "SPLIT_SOURCE" as const] } };
   const found = (existing: { id: string } & Parameters<typeof describeExisting>[0], reason: string) =>
     ({ description: `Posible duplicado de ${describeExisting(existing)}: ${reason}.`, originalId: existing.id });
 

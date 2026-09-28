@@ -10,7 +10,7 @@ import { fakeS3 } from "./helpers/fakeS3";
 import { facturaeXml } from "./helpers/fixtures";
 import { stubOcr } from "./helpers/ocr";
 import { NEGATIVE_AMOUNTS_HINT } from "@/lib/rectificative";
-import { duplicateOriginalId } from "@/lib/duplicates";
+import { duplicateOriginalId, findPossibleDuplicate } from "@/lib/duplicates";
 import { parseTaxId } from "@/lib/validators";
 import { accountEntryKey } from "@/lib/supplierMatching";
 import { processInvoice } from "@/lib/processInvoice";
@@ -937,6 +937,17 @@ describe("duplicados con el CIF limpio y el número normalizado (F-010)", () => 
     expect(await duplicatesFor({ issuerCif: "ESB-12345674", invoiceNumber: null, totalAmount: 321 })).toEqual([
       expect.stringContaining("mismo CIF emisor (B12345674), total (321,00 €) y fecha"),
     ]);
+  });
+
+  it("la original de una división (SPLIT_SOURCE) no es duplicado de sus hijas; el mismo fichero sí", async () => {
+    const madre = await stored("B12345674", "F-001", { status: "SPLIT_SOURCE", invoiceDate: new Date("2026-09-10"), totalAmount: 321, fileHash: "hash-madre" });
+    expect(await duplicatesFor({ issuerCif: "B12345674", invoiceNumber: "F-001" })).toEqual([]);
+    expect(await duplicatesFor({ issuerCif: "B12345674", invoiceNumber: null, totalAmount: 321 })).toEqual([]);
+    const hija = await makeInvoice(w.client, { invoiceNumber: "F-001", splitFromId: madre.id });
+    expect(await findPossibleDuplicate({
+      invoiceId: hija.id, clientId: w.client.id, type: "PURCHASE", invoiceNumber: "F-001", issuerCif: "B12345674",
+      receiverCif: null, receiverName: null, totalAmount: 321, invoiceDate: "2026-09-10", fileHash: "hash-madre",
+    })).toMatchObject({ originalId: madre.id });
   });
 
   it("en ventas basta el número: el cliente y el tipo fijan al emisor", async () => {
