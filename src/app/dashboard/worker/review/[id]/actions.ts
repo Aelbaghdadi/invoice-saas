@@ -465,9 +465,16 @@ async function parseAndSave(
     "isRectificative","rectifiedInvoiceSeries","rectifiedInvoiceNumber","rectificativeType","art80Tres",
   ] as const;
 
+  // El periodo contable, por su valor efectivo: sin el, cuenta el del lote.
+  // processInvoice no lo rellena y el formulario manda siempre el del lote,
+  // asi que el primer guardado auditaba «Mes contable — → 9» en todas.
+  const effective = (source: typeof invoice | typeof newData, field: (typeof trackedFields)[number]) =>
+    field === "accountingPeriodMonth" ? source.accountingPeriodMonth ?? invoice.periodMonth
+      : field === "accountingPeriodYear" ? source.accountingPeriodYear ?? invoice.periodYear
+        : source[field];
   for (const field of trackedFields) {
-    const oldVal = auditValue(invoice[field]);
-    const newVal = auditValue(newData[field]);
+    const oldVal = auditValue(effective(invoice, field));
+    const newVal = auditValue(effective(newData, field));
     if (oldVal !== newVal) {
       auditEntries.push({ field, oldValue: oldVal, newValue: newVal });
     }

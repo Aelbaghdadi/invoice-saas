@@ -34,6 +34,18 @@ beforeEach(async () => {
   baseline = (await allEntries()).length;
 });
 
+describe("primer guardado de una factura recién leída (PR #11, punto 5)", () => {
+  it("sin tocar nada: sin entradas de periodo contable (se compara el efectivo)", async () => {
+    const { id: fresh } = await makeInvoice(w.client);
+    await prisma.invoiceVatLine.create({ data: { invoiceId: fresh, position: 0, taxBase: 100, vatRate: 21, vatAmount: 21 } });
+    const r = await settleAction(saveInvoiceFields(null, reviewForm(fresh, (await prisma.invoice.findUniqueOrThrow({ where: { id: fresh } })).updatedAt, w.client)));
+    expect(r.error).toBeNull();
+    const fields = (await prisma.auditLog.findMany({ where: { invoiceId: fresh } })).map((e) => e.field);
+    expect(fields).not.toContain("accountingPeriodMonth");
+    expect(fields).not.toContain("accountingPeriodYear");
+  });
+});
+
 describe("auditoría completa al guardar (F-024)", () => {
   it("guardar sin cambios no deja ninguna entrada", async () => {
     expect((await save()).error).toBeNull();
