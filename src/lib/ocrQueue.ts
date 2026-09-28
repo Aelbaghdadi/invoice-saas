@@ -24,13 +24,14 @@ export function ocrConcurrencyFromEnv(value: string | undefined): number {
   return Number.isInteger(n) && n >= 1 && n <= 64 ? n : DEFAULT_OCR_CONCURRENCY;
 }
 
-type OcrQueue = { semaphore: Semaphore; waiting: Map<string, symbol> };
+type OcrQueue = { semaphore: Semaphore; waiting: Map<string, symbol>; stopping: boolean };
 
 // En globalThis: en desarrollo el recargado de modulos creaba otra cola.
 const globalForQueue = globalThis as unknown as { __facturocrOcrQueue?: OcrQueue };
 const queue: OcrQueue = globalForQueue.__facturocrOcrQueue ??= {
   semaphore: new Semaphore(ocrConcurrencyFromEnv(process.env.OCR_CONCURRENCY)),
   waiting: new Map(),
+  stopping: false,
 };
 
 /**
@@ -39,6 +40,9 @@ const queue: OcrQueue = globalForQueue.__facturocrOcrQueue ??= {
  * las demás, y si ya esperaba, se adelanta.
  */
 export async function runQueuedOcr(invoiceId: string, task: () => Promise<void>, options: { priority?: boolean } = {}): Promise<void> {
+  // Parando el proceso: lo que no ha empezado se queda en UPLOADED, sin
+  // gastar intento, y lo relanza retry-stuck tras el redeploy.
+  if (queue.stopping) return;
   if (queue.waiting.has(invoiceId)) {
     if (options.priority) queue.semaphore.promote(invoiceId);
     return;
@@ -53,6 +57,7 @@ export async function runQueuedOcr(invoiceId: string, task: () => Promise<void>,
   try {
     await queue.semaphore.run(() => {
       leaveQueue();
+      if (queue.stopping) return Promise.resolve();
       return task();
     }, { key: invoiceId, priority: options.priority });
   } finally {
@@ -69,6 +74,28 @@ export function ocrQueuePosition(invoiceId: string): number | null {
 /** Cuantas corren y cuantas esperan (para los tests). */
 export function ocrQueueState(): { active: number; waiting: number } {
   return { active: queue.semaphore.active, waiting: queue.semaphore.waiting };
+}
+
+/**
+ * Deja de arrancar analisis (revision 1 del PR #14, punto 6). Con SIGTERM,
+ * Next espera a los after() en curso durante el periodo de gracia: los que
+ * ya analizan terminan; los que esperan en la cola salen sin empezar (siguen
+ * en UPLOADED y sin gastar intento) en vez de empezar un OCR que el SIGKILL
+ * cortaria a medias.
+ */
+export function stopStartingOcr(stopping = true): void {
+  queue.stopping = stopping;
+}
+
+/** Desde instrumentation.ts, al arrancar el servidor. */
+export function stopStartingOcrOnShutdown(): void {
+  const onSigterm = () => {
+    stopStartingOcr();
+    // Si no hay nadie mas escuchando (fuera de next start), que SIGTERM
+    // haga lo de siempre: con un listener, Node ya no sale solo.
+    if (process.listenerCount("SIGTERM") === 0) process.kill(process.pid, "SIGTERM");
+  };
+  process.once("SIGTERM", onSigterm);
 }
 
 /** Solo para tests: cambiar el limite sin reiniciar el proceso. */

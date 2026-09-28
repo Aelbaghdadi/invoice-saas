@@ -8,8 +8,10 @@
 export const RETRY_BASE_MS = 1_000;
 export const RETRY_MAX_MS = 30_000;
 /** Un Retry-After mayor no se espera entero: la factura sigue en ANALYZING
- *  y el cron la da por atascada a los 5 minutos. Con 4 intentos de 30 s como
- *  mucho y 3 esperas de 30 s, el peor caso son 3,5 minutos. */
+ *  y el cron la da por atascada a los 5 minutos. Con Gemini (30 s por
+ *  llamada), 4 intentos y 3 esperas de 30 s son 3,5 minutos; con Document AI
+ *  (60 s por llamada) serian 5,5. Por eso processInvoice no empieza otro
+ *  intento pasados 4 minutos desde el claim (OCR_WAITS.retryBudgetMs). */
 export const RETRY_AFTER_MAX_MS = 30_000;
 
 /**

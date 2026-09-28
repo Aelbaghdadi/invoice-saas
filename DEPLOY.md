@@ -99,7 +99,11 @@ cola del OCR (§5 bis), que siguen en «Subida». Sin el cron no se relanzan
 solas: en la revisión sale «El análisis se ha parado» con un botón
 «Reprocesar».
 
-## 5 bis. Parada y Redeploy: periodo de gracia de al menos 120 s
+**Excepción:** `retry-stuck` no relanza las que ya llevan 3 análisis o más
+(`ocrAttempts ≥ 3`, p. ej. una reprocesada varias veces). Si una de esas se
+queda en «Subida» tras un redeploy, hay que pulsar «Reprocesar» a mano.
+
+## 5 bis. Parada y Redeploy: periodo de gracia de al menos 240 s
 
 El OCR de las facturas recién subidas corre en segundo plano (`after()`)
 dentro del propio proceso de Next. Al parar el contenedor (Redeploy,
@@ -110,16 +114,20 @@ Con SIGTERM, Next deja de aceptar peticiones y espera a que terminen los
 
 - **Dónde:** en Coolify 4.1.0 o posterior, la aplicación → *Advanced* →
   *Operations* → **«Stop Grace Period»** (por defecto, 30 s). Ponlo en
-  **120 s como mínimo**: un OCR con reintentos puede tardar más de un
-  minuto. En versiones anteriores de Coolify la parada son 30 s fijos.
-- **Qué cubre:** 120 s bastan para terminar un OCR en curso, no un lote
+  **240 s como mínimo** (300 s si se usa Document AI): un OCR con reintentos
+  no empieza otro intento pasados 4 minutos, pero con Gemini (30 s por
+  llamada) cuatro intentos ya son unos 2 minutos, y con Document AI (60 s por
+  llamada), más. En versiones anteriores de Coolify la parada son 30 s fijos.
+- **Qué cubre:** ese margen basta para terminar los OCR en curso, no un lote
   entero: el Reprocesar masivo y `retry-stuck` procesan las facturas en
   serie. Lo que quede sin terminar lo recoge `retry-stuck` en su siguiente
   ejecución, así que conviene tenerlo programado (§5).
 - **La cola del OCR:** como mucho `OCR_CONCURRENCY` análisis a la vez (4 por
-  defecto); en una subida de 200 PDFs, el resto espera en «Subida». La cola
-  vive en memoria: con un redeploy se pierde, y esas facturas las relanza
-  `retry-stuck` cuando llevan 5 minutos sin empezar.
+  defecto); en una subida de 200 PDFs, el resto espera en «Subida». Con
+  SIGTERM la cola deja de arrancar análisis: los que ya corren terminan y los
+  que esperan siguen en «Subida» sin gastar intento. La cola vive en memoria:
+  con el redeploy se pierde, y esas facturas las relanza `retry-stuck` cuando
+  llevan 5 minutos sin empezar.
 - `docker-entrypoint.sh` arranca con `exec node node_modules/next/dist/bin/next start`:
   Node es el PID 1 y recibe el SIGTERM sin depender de que npm lo reenvíe
   (con `npx next start` npm también lo reenviaba y esperaba; no era lo que

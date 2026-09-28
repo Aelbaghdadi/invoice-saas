@@ -6,7 +6,7 @@ import { makeFirm, makeInvoice, type FirmWorld } from "./helpers/factories";
 import { stubOcr } from "./helpers/ocr";
 import { fakeS3 } from "./helpers/fakeS3";
 import { processInvoice, OCR_WAITS } from "@/lib/processInvoice";
-import { ocrQueuePosition, ocrQueueState, setOcrConcurrency, DEFAULT_OCR_CONCURRENCY } from "@/lib/ocrQueue";
+import { ocrQueuePosition, ocrQueueState, setOcrConcurrency, stopStartingOcr, DEFAULT_OCR_CONCURRENCY } from "@/lib/ocrQueue";
 import { NextRequest } from "next/server";
 import { POST as processRoute } from "@/app/api/invoices/[id]/process/route";
 import { signInAs } from "./helpers/session";
@@ -163,6 +163,50 @@ describe("Reprocesar con la cola llena (revisión 1 del PR #14, punto 3)", () =>
       await Promise.all(running);
     }
     expect(ocrQueueState()).toEqual({ active: 0, waiting: 0 });
+  });
+});
+
+describe("redeploy y plazos (revisión 1 del PR #14, punto 6)", () => {
+  it("parando el proceso, lo que espera no arranca: sigue en UPLOADED sin gastar intento", async () => {
+    setOcrConcurrency(1);
+    let open!: () => void;
+    const gate = new Promise<void>((r) => { open = r; });
+    let calls = 0;
+    stubOcr(async () => { calls++; await gate; return reply(calls); });
+    const first = await upload(1);
+    const waiting = [await upload(2), await upload(3)];
+    const running = [first, ...waiting].map((id) => processInvoice(id, w.worker.id));
+    try {
+      await waitFor(async () => ocrQueueState().waiting === 2);
+      stopStartingOcr();
+      open();
+      await Promise.all(running);
+      expect(calls).toBe(1);
+      const rows = await prisma.invoice.findMany({ where: { id: { in: waiting } }, select: { status: true, ocrAttempts: true } });
+      expect(rows).toEqual([{ status: "UPLOADED", ocrAttempts: 0 }, { status: "UPLOADED", ocrAttempts: 0 }]);
+      // Una nueva tampoco arranca.
+      const late = await upload(4);
+      await processInvoice(late, w.worker.id);
+      expect((await prisma.invoice.findUniqueOrThrow({ where: { id: late } })).status).toBe("UPLOADED");
+    } finally {
+      stopStartingOcr(false);
+      open();
+    }
+  });
+
+  it("no empieza otro intento si pasaría del plazo total", async () => {
+    const original = OCR_WAITS.retryBudgetMs;
+    OCR_WAITS.retryBudgetMs = 150;
+    let calls = 0;
+    stubOcr(async () => { calls++; throw new OcrHttpError("Gemini Flash respondió 503: overloaded", 503, 200); });
+    try {
+      const id = await upload(1);
+      await processInvoice(id, w.worker.id);
+      expect(calls).toBe(1);
+      expect((await prisma.invoice.findUniqueOrThrow({ where: { id } })).status).toBe("OCR_ERROR");
+    } finally {
+      OCR_WAITS.retryBudgetMs = original;
+    }
   });
 });
 

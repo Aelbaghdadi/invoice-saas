@@ -10,3 +10,13 @@ export const onRequestError: Instrumentation.onRequestError = async (error, requ
   // Solo se espera a la linea del log; el aviso por webhook sigue solo.
   await reportRequestError(error, request, context);
 };
+
+/**
+ * Al parar el contenedor (SIGTERM), la cola del OCR deja de arrancar
+ * analisis: lo que espera sigue en UPLOADED y lo relanza retry-stuck.
+ */
+export async function register() {
+  if (process.env.NEXT_RUNTIME !== "nodejs") return;
+  const { stopStartingOcrOnShutdown } = await import("@/lib/ocrQueue");
+  stopStartingOcrOnShutdown();
+}

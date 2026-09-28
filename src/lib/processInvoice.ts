@@ -79,7 +79,11 @@ async function transitionStatus(
  * OCR_CONCURRENCY colgados, se paraba el OCR de todo el proceso (revision 1
  * del PR #14). Un objeto para que los tests lo puedan acortar.
  */
-export const OCR_WAITS = { storageMs: 30_000 };
+export const OCR_WAITS = {
+  storageMs: 30_000,
+  /** No se empieza otro intento si pasaria de este plazo desde el claim. */
+  retryBudgetMs: 4 * 60_000,
+};
 
 /**
  * Analiza una factura cuando haya hueco en la cola del OCR (F-029): como
@@ -165,7 +169,12 @@ async function analyzeInvoice(invoiceId: string, triggeredByUserId: string) {
         // Exponencial con jitter, o lo que pida el proveedor en Retry-After
         // (F-029): antes 1,2 y 2,4 s fijos para todas a la vez.
         const retryAfterMs = ocrErr instanceof OcrHttpError ? ocrErr.retryAfterMs : null;
-        await new Promise((r) => setTimeout(r, retryDelayMs(attempt, retryAfterMs)));
+        const delay = retryDelayMs(attempt, retryAfterMs);
+        // Plazo total: con Document AI (60 s por llamada) 4 intentos pasaban
+        // de 5 minutos, el corte del cron, y del periodo de gracia de un
+        // redeploy (revision 1 del PR #14, punto 6).
+        if (Date.now() - ocrStartedAt.getTime() + delay > OCR_WAITS.retryBudgetMs) throw ocrErr;
+        await new Promise((r) => setTimeout(r, delay));
       }
     }
 
