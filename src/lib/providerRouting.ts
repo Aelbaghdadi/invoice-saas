@@ -1,4 +1,3 @@
-import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { parseTaxId } from "@/lib/validators";
 
@@ -21,8 +20,10 @@ export function normalizeProviderNif(nif: string | null | undefined): string {
 /**
  * Aprende/actualiza la regla proveedor→empresa. No-op si no hay CIF de
  * proveedor.
- * - Primera vez: se crea. Si otro gestor la crea a la vez (P2002 del
- *   indice unico), se reintenta ya como actualizacion.
+ * - Primera vez: se crea. Con createMany + skipDuplicates (en Postgres, ON
+ *   CONFLICT DO NOTHING), si otro gestor la crea a la vez no hay P2002 (que
+ *   Prisma escribia en el log como error aunque se capturase): no se crea
+ *   nada y se sigue como actualizacion.
  * - Misma empresa: sube la confianza. Una regla ambigua sigue ambigua: que
  *   el proveedor vuelva a la empresa de antes no quita que tambien factura
  *   a otra del grupo.
@@ -35,34 +36,22 @@ export async function learnProviderRule(
 ): Promise<void> {
   const nif = normalizeProviderNif(providerNif);
   if (!nif) return;
-  const key = { advisoryFirmId_providerNif: { advisoryFirmId: firmId, providerNif: nif } };
 
-  for (let attempt = 0; ; attempt++) {
-    const existing = await prisma.providerRoutingRule.findUnique({ where: key });
-    if (!existing) {
-      try {
-        await prisma.providerRoutingRule.create({
-          data: { advisoryFirmId: firmId, providerNif: nif, clientId },
-        });
-        return;
-      } catch (err) {
-        if (attempt === 0 && err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") continue;
-        throw err;
-      }
-    }
-    if (existing.clientId === clientId) {
-      await prisma.providerRoutingRule.update({
-        where: { id: existing.id },
-        data: { hitCount: { increment: 1 }, lastSeenAt: new Date() },
-      });
-    } else {
-      await prisma.providerRoutingRule.update({
-        where: { id: existing.id },
-        data: { ambiguous: true, clientId, lastSeenAt: new Date() },
-      });
-    }
-    return;
-  }
+  const created = await prisma.providerRoutingRule.createMany({
+    data: [{ advisoryFirmId: firmId, providerNif: nif, clientId }],
+    skipDuplicates: true,
+  });
+  if (created.count === 1) return;
+
+  const existing = await prisma.providerRoutingRule.findUniqueOrThrow({
+    where: { advisoryFirmId_providerNif: { advisoryFirmId: firmId, providerNif: nif } },
+  });
+  await prisma.providerRoutingRule.update({
+    where: { id: existing.id },
+    data: existing.clientId === clientId
+      ? { hitCount: { increment: 1 }, lastSeenAt: new Date() }
+      : { ambiguous: true, clientId, lastSeenAt: new Date() },
+  });
 }
 
 /** Empresa aprendida para un proveedor, o null si no hay regla o es ambigua. */
