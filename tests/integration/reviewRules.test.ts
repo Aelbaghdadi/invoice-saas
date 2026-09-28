@@ -1051,6 +1051,27 @@ describe("al validar, confirmación si ya hay otra validada con el mismo número
     expect((await findByInvoiceNumber({ ...base, invoiceDate: new Date("2026-03-01") }))?.id).toBe(del2025.id);
   });
 
+  describe("correcciones de una ya validada (punto 12)", () => {
+    it.each(["VALIDATED", "EXPORTED"] as const)("%s sin tocar número ni CIF: guarda sin preguntar", async (status) => {
+      await otra("VALIDATED");
+      await prisma.invoice.update({ where: { id }, data: { status, invoiceNumber: "F-2026-001", issuerCif: "B12345674" } });
+      await prisma.invoiceIssue.create({ data: { invoiceId: id, type: "POSSIBLE_DUPLICATE", description: "Aviso viejo." } });
+      const r = await validate(await form({ invoiceNumber: "F-2026-001", totalAmount: "121" }));
+      expect(r.error).toBeNull();
+      expect((await row()).status).toBe("VALIDATED");
+    });
+
+    it("cambiando el número a uno ya validado: pregunta y no guarda sin confirmar", async () => {
+      const original = await otra("VALIDATED");
+      await prisma.invoice.update({ where: { id }, data: { status: "VALIDATED", invoiceNumber: "F-OTRO", issuerCif: "B12345674" } });
+      const r = await validateInvoice(null, await form({ invoiceNumber: "F-2026-001" }));
+      expect(r?.duplicateOf?.map((d) => [d.kind, d.id])).toEqual([["validated", original.id]]);
+      expect((await row()).invoiceNumber).toBe("F-OTRO");
+      expect((await validate(await form({ invoiceNumber: "F-2026-001", confirmDuplicate: "1" }))).error).toBeNull();
+      expect((await row()).invoiceNumber).toBe("F-2026-001");
+    });
+  });
+
   it("si la otra aún no está validada, no hace falta confirmar", async () => {
     await otra("PENDING_REVIEW");
     expect((await validate(await form({ invoiceNumber: "F-2026-001" }))).error).toBeNull();

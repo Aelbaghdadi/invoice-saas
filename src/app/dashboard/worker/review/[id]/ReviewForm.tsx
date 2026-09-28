@@ -1006,8 +1006,10 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       // que el gestor los confirme, todos en una sola confirmacion.
       if (res?.duplicateOf?.length) {
         const duplicates = res.duplicateOf;
+        // En una ya validada es una correccion: se pregunta por guardarla.
+        const again = isValidated ? "¿Guardar la corrección igualmente?" : "¿Validar igualmente?";
         const ok = await confirm({
-          title: "¿Validar igualmente?",
+          title: again,
           message: (
             <>
               <ul className="space-y-2">
@@ -1036,11 +1038,11 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
               </ul>
               <p className="mt-2">
                 {duplicates.some((d) => d.kind === "openIssue") && "Al validarla, el aviso se cierra. "}
-                ¿Validar igualmente?
+                {again}
               </p>
             </>
           ),
-          confirmLabel: "Validar igualmente",
+          confirmLabel: isValidated ? "Guardar igualmente" : "Validar igualmente",
           tone: "primary",
         });
         if (!ok) {

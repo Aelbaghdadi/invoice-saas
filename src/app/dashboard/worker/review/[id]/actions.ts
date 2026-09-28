@@ -36,7 +36,7 @@ import { amountFieldsProblem, parseVatLineInputs } from "@/lib/vatLineInput";
 import { validationProblems } from "@/lib/invoiceRules";
 import { percentOf } from "@/lib/money";
 import { anyNegativeAmount, applyRectificativeSign, NEGATIVE_AMOUNTS_HINT } from "@/lib/rectificative";
-import { describeExisting, duplicateOriginalId, findByInvoiceNumber } from "@/lib/duplicates";
+import { describeExisting, duplicateOriginalId, findByInvoiceNumber, normalizeInvoiceNumber } from "@/lib/duplicates";
 import { closeOpenIssues } from "@/lib/invoiceIssues";
 import { foldSurchargeLines, completeReadSurcharges, surchargeAuditValue } from "@/lib/equivalenceSurcharge";
 import { exportFingerprint, type FingerprintInvoice } from "@/lib/exportFingerprint";
@@ -518,12 +518,24 @@ async function parseAndSave(
   // Se miran los dos y van juntos en una sola confirmacion: antes, confirmar
   // el aviso abierto se saltaba tambien el control contra una validada que el
   // mensaje no habia nombrado.
-  if (validate && !alreadyValidated && data.confirmDuplicate !== "1") {
+  //
+  // Corregir una ya validada (o EXPORTED legacy) no es validarla por primera
+  // vez: no pregunta por el aviso abierto y solo vuelve a mirar las validadas
+  // si cambio la clave de duplicado (numero normalizado o CIF del emisor).
+  const firstValidation = validate && invoice.status !== "VALIDATED" && invoice.status !== "EXPORTED";
+  const duplicateKeyChanged =
+    newData.type !== invoice.type
+    || normalizeInvoiceNumber(newData.invoiceNumber) !== normalizeInvoiceNumber(invoice.invoiceNumber)
+    || (newData.type !== "SALE" && newData.issuerCif !== invoice.issuerCif);
+  const checkValidated = firstValidation || (validate && duplicateKeyChanged);
+  if (checkValidated && data.confirmDuplicate !== "1") {
     const duplicates: DuplicateWarning[] = [];
-    const openDuplicate = await prisma.invoiceIssue.findFirst({
-      where: { invoiceId, type: "POSSIBLE_DUPLICATE", status: "OPEN" },
-      select: { description: true, field: true },
-    });
+    const openDuplicate = firstValidation
+      ? await prisma.invoiceIssue.findFirst({
+        where: { invoiceId, type: "POSSIBLE_DUPLICATE", status: "OPEN" },
+        select: { description: true, field: true },
+      })
+      : null;
     if (openDuplicate) {
       duplicates.push({ kind: "openIssue", id: duplicateOriginalId(openDuplicate.field), label: openDuplicate.description });
     }
