@@ -174,6 +174,8 @@ describe("presentación de la auditoría (revisión 1 del PR #11, punto 14)", ()
     expect(auditFieldLabelShort("auto:recargo")).toBe("Recargo propuesto");
     expect(auditFieldLabel("auto:recargo")).toBe("Recargo propuesto (automático)");
     expect(auditFieldLabelShort("totalAmount")).toBe("Total");
+    // Neutra: en una venta, la otra parte es el cliente.
+    expect(auditFieldLabel("auto:ruteo")).toBe("Empresa elegida por la otra parte (automático)");
   });
 
   it("importes con más de dos decimales, en crudo (si no, «30,30 → 30,30» parece que no cambia)", () => {
