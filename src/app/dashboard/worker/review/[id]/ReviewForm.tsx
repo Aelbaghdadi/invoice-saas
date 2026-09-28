@@ -1017,15 +1017,16 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       error(`No se han guardado los cambios: ${vatLineIssue}`);
       return false;
     }
-    const res = await saveInvoiceFields(null, buildFormData());
+    const fd = buildFormData();
+    const sent = reviewSnapshot(fd);
+    const res = await saveInvoiceFields(null, fd);
     setSaveState(res);
     if (res?.error) {
       error(`No se han guardado los cambios: ${errorText(res.error)}`);
       return false;
     }
     success("Cambios guardados");
-    markClean();
-    justSavedRef.current = updatedAtTime;
+    markSaved(sent);
     return true;
   });
   const handleSave = () => {
@@ -1063,6 +1064,16 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   // refresco del guardado.
   const justSavedRef = useRef<number | null>(null);
   const updatedAtTime = new Date(invoice.updatedAt).getTime();
+  // Guardado con exito: la referencia es lo que se envio, no lo que hay ahora
+  // en pantalla. Lo tecleado mientras volvia la respuesta (el formulario no
+  // se bloquea) sigue contando como cambio; si no se ha tocado nada, el
+  // refresco rehace la instantanea con lo que devuelva el servidor. Si el
+  // refresco ya ha llegado, se queda lo enviado: como mucho, un aviso de mas.
+  const markSaved = (sent: string) => {
+    snapshotRef.current = sent;
+    const { isDirty: dirtyNow, updatedAtTime: currentUpdatedAt } = latest.current;
+    justSavedRef.current = !dirtyNow() && currentUpdatedAt === updatedAtTime ? updatedAtTime : null;
+  };
   useEffect(() => {
     if (justSavedRef.current == null || justSavedRef.current === updatedAtTime) return;
     justSavedRef.current = null;
@@ -1174,8 +1185,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     }
   };
   // Los listeners de abajo se registran una vez y leen lo ultimo por refs.
-  const latest = useRef({ isDirty, guardLeave, navigate, pushSentinel });
-  useEffect(() => { latest.current = { isDirty, guardLeave, navigate, pushSentinel }; });
+  const latest = useRef({ isDirty, guardLeave, navigate, pushSentinel, updatedAtTime });
+  useEffect(() => { latest.current = { isDirty, guardLeave, navigate, pushSentinel, updatedAtTime }; });
   useEffect(() => {
     const root = rootRef.current;
     const timers = new Set<ReturnType<typeof setTimeout>>();
@@ -1269,6 +1280,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     };
     // Una por revisar salta a la siguiente al validar; una validada se queda.
     if (!isValidated) departingRef.current = true;
+    let sent = reviewSnapshot(buildFormData());
     let res = await validateInvoice(null, buildFormData(fields));
     // Posibles duplicados (F-010, F-016): otra ya validada con este numero
     // y emisor, o un aviso de duplicado abierto. El servidor no valida sin
@@ -1324,6 +1336,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
         setValidateState(null);
         return "asked";
       }
+      sent = reviewSnapshot(buildFormData());
       res = await validateInvoice(null, buildFormData({ ...fields, confirmDuplicate: duplicates.map((d) => d.key).join(",") }));
     }
     setValidateState(res);
@@ -1337,8 +1350,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     // Una ya validada no salta a otra: se queda en ella con la correccion.
     success(isValidated ? "Corrección guardada" : "Factura validada");
     if (isValidated) {
-      markClean();
-      justSavedRef.current = updatedAtTime;
+      markSaved(sent);
     }
     return asked ? "asked" : "ok";
   });

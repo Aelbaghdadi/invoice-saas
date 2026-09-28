@@ -22,7 +22,7 @@ test.skip(!E2E_DB, "Necesita E2E_DATABASE_URL");
 test.describe.configure({ mode: "serial" });
 
 const PASSWORD = "Prueba1234!";
-const IDS = ["h1", "h2", "h3", "h4", "h5", "h6"];
+const IDS = ["h1", "h2", "h3", "h4", "h5", "h6", "h7"];
 
 test.beforeAll(async () => {
   const parsed = parseTestDatabaseUrl(E2E_DB, "E2E_DATABASE_URL");
@@ -165,4 +165,20 @@ test("guardar y salir enseguida: espera al guardado y no pregunta", async ({ pag
   await link.click();
   await page.waitForURL((u) => u.pathname === target);
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
+});
+
+test("lo tecleado mientras se guarda sigue contando como cambio", async ({ page }) => {
+  await openAndEdit(page, "h7");
+  await page.route(`**${review("h7")}`, async (route) => {
+    if (route.request().method() === "POST") await new Promise((r) => setTimeout(r, 1500));
+    await route.continue();
+  });
+  await page.getByRole("button", { name: "Guardar sin validar" }).click();
+  // Con el guardado en vuelo: un campo de estado que ya no va en el envío.
+  await page.locator("#totalAmount").fill("999");
+  await expect(page.getByText("Cambios guardados")).toBeVisible();
+  await page.waitForLoadState("networkidle");
+  await page.locator('nav a[href^="/dashboard"]').filter({ hasNot: page.locator(`[href="${P}"]`) }).first().click();
+  await expect(page.getByRole("alertdialog")).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`${review("h7")}$`));
 });
