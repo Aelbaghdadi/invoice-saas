@@ -50,13 +50,25 @@ describe("isValidNIF", () => {
   it("control 0: la letra es la J (F-076)", () => {
     // Universitat de Barcelona: 0818001 da control 0.
     expect(isValidNIF("Q0818001J")).toBe(true);
-    expect(isValidNIF("Q08180010")).toBe(true);
     expect(isValidNIF("Q0818001A")).toBe(false);
-    // Los de letra y los de número siguen igual.
     expect(isValidNIF("P2807900B")).toBe(true);
     expect(isValidNIF("P2807900J")).toBe(false);
-    expect(isValidNIF("B1234567D")).toBe(true);
+  });
+
+  it("letra o dígito según el prefijo (revisión 1 del PR #13, punto 5)", () => {
+    // A, B, E y H: solo dígito. B9132416J tiene control 0: el bueno es B91324160.
+    expect(isValidNIF("B91324160")).toBe(true);
+    expect(isValidNIF("B9132416J")).toBe(false);
+    expect(isValidNIF("B1234567D")).toBe(false);
+    expect(isValidNIF("B12345674")).toBe(true);
     expect(isValidNIF("A58818501")).toBe(true);
+    expect(isValidNIF("A5881850A")).toBe(false);
+    // P, Q, R, S, W y N: solo letra.
+    expect(isValidNIF("Q08180010")).toBe(false);
+    expect(isValidNIF("P28079002")).toBe(false);
+    // El resto (G, por ejemplo): cualquiera de los dos.
+    expect(isValidNIF("G28029643")).toBe(true);
+    expect(isValidNIF("G2802964C")).toBe(true);
   });
 
   it("rejects CIF with bad prefix", () => {
