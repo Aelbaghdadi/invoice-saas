@@ -1,12 +1,13 @@
 /**
  * Errores del servidor (F-034) desde instrumentation.ts (onRequestError):
  * una linea JSON en el log y, si hay ALERT_WEBHOOK_URL, un aviso por webhook
- * con un limite para no inundar. Sin SDK de terceros: el servicio de errores
- * (GlitchTip, Sentry…) esta por decidir y este webhook sirve de puente.
+ * (Slack, Mattermost o Discord) con un limite para no inundar. Sin SDK de
+ * terceros.
  *
  * Sin datos personales: la ruta va sin query (puede llevar nombres o
- * correos), no se mandan cabeceras ni cookies, y el mensaje se limpia de
- * correos, NIF/CIF/NIE, IBAN y numeros largos y se recorta.
+ * correos), no se mandan cabeceras ni cookies, y el mensaje (ver
+ * scrubMessage) pierde lo entrecomillado, correos, IBAN, NIF/CIF/NIE,
+ * telefonos y numeros largos, y se recorta.
  */
 
 export type ErrorRequest = { path: string; method: string };
@@ -25,22 +26,33 @@ export type ErrorReport = {
 };
 
 const MAX_MESSAGE = 300;
+// Se recorta antes de limpiar: sin «@», la expresion de correos prueba desde
+// cada posicion hasta el final, y con 100 KB de mensaje (un volcado de
+// Prisma) tardaba segundos.
+const MAX_SCRUB_INPUT = 2_000;
 
 /**
- * Quita del mensaje lo que puede ser un dato personal. Primero todo lo
- * entrecomillado: un PrismaClientValidationError vuelca los argumentos
- * (`issuerName: "Ana Pérez García"`, `issuerCif: "ESB12345674"`). Despues,
- * lo que quede suelto: correos, IBAN, NIF/CIF/NIE (con prefijo ES y
- * separadores), telefonos y numeros largos.
+ * Quita del mensaje lo que puede ser un dato personal:
+ * - lo entrecomillado con comillas dobles, aunque la comilla no se cierre
+ *   (el mensaje recortado): un PrismaClientValidationError vuelca los
+ *   argumentos (`issuerName: "Ana Pérez García"`);
+ * - lo entrecomillado con comillas simples que no van pegadas a una letra o
+ *   cifra: «Can't resolve 'x'» pierde la 'x' pero no se come el resto;
+ * - correos;
+ * - IBAN (pais en mayusculas: en minusculas, un UUID parecia un IBAN);
+ * - NIF/CIF/NIE, con prefijo ES y separadores («12.345.678-Z»);
+ * - telefonos con espacios, puntos o guiones («612-345-678»);
+ * - numeros de 9 o mas cifras.
  */
 export function scrubMessage(message: string): string {
   return message
-    .replace(/"(?:[^"\\\n]|\\.)*"/g, '"…"')
-    .replace(/'(?:[^'\\\n]|\\.)*'/g, "'…'")
+    .slice(0, MAX_SCRUB_INPUT)
+    .replace(/"(?:[^"\\\n]|\\.)*(?:"|$)/g, '"…"')
+    .replace(/(?<![\p{L}\p{N}])'(?:[^'\\\n]|\\.)*'(?![\p{L}\p{N}])/gu, "'…'")
     .replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, "[email]")
-    .replace(/\b[A-Z]{2}\d{2}(?:[ -]?[A-Z0-9]{4}){3,7}(?:[ -]?[A-Z0-9]{1,4})?\b/gi, "[iban]")
-    .replace(/\b(?:ES[ .-]?)?(?:[XYZ][ .-]?\d{7}[ .-]?[A-Z]|\d{8}[ .-]?[A-Z]|[ABCDEFGHJNPQRSUVW][ .-]?\d{7}[ .-]?[0-9A-J])\b/gi, "[nif]")
-    .replace(/(?:\+\d{1,3} ?)?\b\d{2,3}(?: \d{2,3}){2,4}\b/g, "[tel]")
+    .replace(/\b[A-Z]{2}\d{2}(?:[ -]?[A-Z0-9]{4}){3,7}(?:[ -]?[A-Z0-9]{1,4})?\b/g, "[iban]")
+    .replace(/\b(?:ES[ .-]?)?(?:[XYZ][ .-]?\d{7}[ .-]?[A-Z]|\d{2}(?:\.?\d{3}){2}[ .-]?[A-Z]|[ABCDEFGHJNPQRSUVW][ .-]?\d{7}[ .-]?[0-9A-J])\b/gi, "[nif]")
+    .replace(/(?:\+\d{1,3} ?)?\b\d{2,3}(?:[ .-]\d{2,3}){2,4}\b/g, "[tel]")
     .replace(/\d{9,}/g, "[num]")
     .slice(0, MAX_MESSAGE);
 }

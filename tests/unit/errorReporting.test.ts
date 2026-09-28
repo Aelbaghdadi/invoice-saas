@@ -12,10 +12,40 @@ describe("scrubMessage (F-034): sin datos personales", () => {
     expect(scrubMessage("teléfono 612345678901")).toBe("teléfono [num]");
   });
 
-  it("NIF con prefijo ES y separadores, IBAN con guiones o en minúsculas, teléfonos con espacios", () => {
+  it("NIF con prefijo ES y separadores, IBAN con guiones, teléfonos con espacios", () => {
     expect(scrubMessage("ESB12345674 B-12345674 12345678-Z X-1234567-L es 12345678z")).toBe("[nif] [nif] [nif] [nif] [nif]");
-    expect(scrubMessage("iban es91-2100-0418-4502-0005-1332")).toBe("iban [iban]");
+    expect(scrubMessage("iban ES91-2100-0418-4502-0005-1332")).toBe("iban [iban]");
     expect(scrubMessage("tel 612 345 678 o +34 612 34 56 78")).toBe("tel [tel] o [tel]");
+  });
+
+  it("DNI con puntos y teléfonos con puntos o guiones", () => {
+    expect(scrubMessage("DNI 12.345.678-Z")).toBe("DNI [nif]");
+    expect(scrubMessage("tel 612-345-678 o 612.34.56.78")).toBe("tel [tel] o [tel]");
+  });
+
+  it("un UUID no es un IBAN; fechas y horas quedan", () => {
+    expect(scrubMessage("lote ab12cd34-ef56-7890-ab12-cd34ef567890 el 2026-09-28 a las 12:30")).toBe("lote ab12cd34-ef56-7890-ab12-cd34ef567890 el 2026-09-28 a las 12:30");
+  });
+
+  it("comillas simples: solo las que no van pegadas a una palabra", () => {
+    expect(scrubMessage("Can't resolve 'x' in 'y'")).toBe("Can't resolve '…' in '…'");
+    expect(scrubMessage("O'Brien no existe")).toBe("O'Brien no existe");
+  });
+
+  it("una comilla doble sin cerrar (mensaje recortado) se quita hasta el final", () => {
+    expect(scrubMessage('issuerName: "Ana Pérez Gar')).toBe('issuerName: "…"');
+  });
+
+  it("100 KB se limpian en menos de 50 ms", () => {
+    const big = ('"' + "a".repeat(99) + " ").repeat(1000);
+    const t0 = performance.now();
+    scrubMessage(big);
+    scrubMessage("'".repeat(100_000));
+    scrubMessage("1 ".repeat(50_000));
+    // Sin «@», la de correos prueba desde cada posicion hasta el final:
+    // cuadratica sin el recorte previo.
+    scrubMessage("a".repeat(100_000));
+    expect(performance.now() - t0).toBeLessThan(50);
   });
 
   it("un PrismaClientValidationError real no deja pasar los argumentos", () => {
