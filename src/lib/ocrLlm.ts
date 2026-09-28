@@ -65,11 +65,6 @@ type PdfTextItem = {
   h: number;
 };
 
-/**
- * Extrae texto e items con posición de cada página del PDF. Exportada para
- * los tests.
- * La posición está normalizada a 0-1 (y desde arriba, al contrario que PDF space).
- */
 /** Paginas que se leen: las primeras y la ultima. Una factura rara vez pasa
  *  de ahi, y pdfjs en Node no cede el event loop (su «fake worker» corre en
  *  el hilo principal): 500 paginas lo bloqueaban unos 3 s. */
@@ -97,6 +92,11 @@ export function pagesToRead(numPages: number): number[] {
   return pages;
 }
 
+/**
+ * Extrae texto e items con posición de las páginas que se leen del PDF
+ * (pagesToRead). Exportada para los tests.
+ * La posición está normalizada a 0-1 (y desde arriba, al contrario que PDF space).
+ */
 export async function extractPdfTextAndItems(
   base64: string,
   budgetMs: number = TEXT_BUDGET_MS,
@@ -188,9 +188,15 @@ function buildSearchCandidates(rawValue: string, field: string): string[] {
   const s = rawValue.trim();
   if (!s) return [];
 
-  const candidates = [s];
+  const candidates: string[] = [];
+  const isAmount = ["taxBase", "vatAmount", "totalAmount", "vatRate", "irpfRate", "irpfAmount"].includes(field);
+  // En los importes, el valor tal cual («121» o «121.5») va despues del
+  // formato español, que es el que casi siempre aparece. En los % no: «21,00»
+  // encontraria la cuota antes que «21» %.
+  const isRate = field === "vatRate" || field === "irpfRate";
+  if (!isAmount || isRate) candidates.push(s);
 
-  if (["taxBase", "vatAmount", "totalAmount", "vatRate", "irpfRate", "irpfAmount"].includes(field)) {
+  if (isAmount) {
     const n = parseFloat(s);
     if (!isNaN(n)) {
       const dot2 = n.toFixed(2);
@@ -202,6 +208,7 @@ function buildSearchCandidates(rawValue: string, field: string): string[] {
       candidates.push(com2, comN, com2 + " €", com2 + "€");
       candidates.push(dot2, dotN, dot2 + " €", dot2 + "€");
     }
+    if (!isRate) candidates.push(s);
   }
 
   if (field === "invoiceDate" && /^\d{4}-\d{2}-\d{2}$/.test(s)) {
@@ -572,11 +579,10 @@ function totalMissing(extracted: ExtractedInvoice): boolean {
   return extracted.totalAmount == null || (extracted.totalAmount === 0 && extracted.confidence?.totalAmount === 0);
 }
 
-/** ¿Ha salido lo basico: el total y el CIF del emisor? */
+/** ¿Ha salido lo basico: el total y el CIF del emisor? (Si faltan todos los
+ *  campos clave, ya falta el total.) */
 function hasBasics(extracted: ExtractedInvoice): boolean {
-  const allKeyFieldsNull = [extracted.issuerName, extracted.issuerCif, extracted.invoiceNumber, extracted.totalAmount]
-    .every((v) => v == null);
-  return !(totalMissing(extracted) || extracted.issuerCif == null || allKeyFieldsNull);
+  return !totalMissing(extracted) && extracted.issuerCif != null;
 }
 
 /**

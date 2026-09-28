@@ -626,10 +626,10 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
           // Si este OCR no ve la moneda se conserva la que ya tenia (p.ej. la
           // heredada de la factura madre al dividir un PDF en USD).
           currency:      extracted.currency ?? invoice.currency,
-          // isValid final: recalculado con los importes YA FIRMADOS y el
-          // recargo de equivalencia por linea (el `isValid` de mas arriba es
-          // un diagnostico de la extraccion cruda, sin firmar ni recargo — se
-          // guarda tal cual en InvoiceExtraction, no aqui).
+          // isValid final: recalculado con los importes que se guardan (la
+          // retencion final) y el recargo de equivalencia por linea (el
+          // `isValid` de mas arriba es un diagnostico de la extraccion cruda
+          // — se guarda tal cual en InvoiceExtraction, no aqui).
           isValid: finalIsValid,
           lastOcrError:  null,
         },
