@@ -79,6 +79,12 @@ describe("resolveIrpf (F-073)", () => {
     expect(legalRateFor(1000, 70, 15)).toBeNull();
   });
 
+  it("si no cuadra con nada pero el par leído es coherente, se queda el leído", () => {
+    // 15 % y 150 leídos sobre 1000, un total que no cuadra con nada y un 7 % aprendido.
+    expect(resolveIrpf({ ...invoice(999), hasRetention: true, retentionRate: 7, readRate: 15, readAmount: 150 }))
+      .toEqual({ rate: 15, amount: 150 });
+  });
+
   it("sin tipo de retención, lo leído tal cual", () => {
     expect(resolveIrpf({ ...invoice(1140), hasRetention: false, retentionRate: null, readRate: 7, readAmount: 70 }))
       .toEqual({ rate: 7, amount: 70 });

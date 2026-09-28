@@ -376,7 +376,9 @@ export function textMentionsRetention(text: string | null | undefined): boolean 
     .replace(/\b(?:datos|informacion)(?:\s+\w+){0,3}?\s+(?:seran?|quedaran?|estaran?|permaneceran?|(?:se\s+)?mantendran?)\s+(?:\w+\s+y\s+)?retenid\w*/g, " ");
   return /\birpf\b/.test(t)
     || /\bretenc(?:ion|iones)\b/.test(t)
-    || /\bretenid[oa]s?\b/.test(t);
+    || /\bretenid[oa]s?\b/.test(t)
+    // «Ret. 7%», «Ret. (15%)», «Ret. -15 %».
+    || /\bret\.\s*\(?[-\u2212]?\d{1,2}(?:[.,]\d{1,2})?\s*%/.test(t);
 }
 
 export function isPersonaFisica(rawCif: string | null | undefined): boolean {

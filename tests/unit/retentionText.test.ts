@@ -8,6 +8,11 @@ describe("textMentionsRetention", () => {
     expect(textMentionsRetention("RETENCION 7%")).toBe(true);
     expect(textMentionsRetention("Total retenido: 45,00")).toBe(true);
     expect(textMentionsRetention("irpf")).toBe(true);
+    expect(textMentionsRetention("Base 1000,00 Ret. 7% -70,00")).toBe(true);
+    expect(textMentionsRetention("Ret. (15%): -150,00")).toBe(true);
+    expect(textMentionsRetention("Ret. −15 %")).toBe(true);
+    // Otras «ret.» sin porcentaje no cuentan.
+    expect(textMentionsRetention("Ref. pedido 123, ret. en almacén")).toBe(false);
   });
 
   it("no detecta una factura normal", () => {
