@@ -3,6 +3,7 @@ import { createHash } from "crypto";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { processInvoice } from "@/lib/processInvoice";
+import { noteUpload } from "@/lib/uploadNotices";
 import { notifyWorkersNewUpload } from "@/lib/email";
 import { appError } from "@/lib/errorCodes";
 import { validateUploadedFile, canonicalMime } from "@/lib/fileValidation";
@@ -212,27 +213,26 @@ export async function POST(req: Request) {
     });
   });
 
-  // Si sube un CLIENT, avisar a sus gestores (igual que el flujo anterior).
+  // Si sube un CLIENT, avisar a sus gestores: un aviso por subida, no por
+  // fichero (F-040). Cada fichero llega en su propia petición; noteUpload
+  // junta los del mismo cliente y periodo y avisa cuando dejan de llegar.
   if (session.user.role === "CLIENT") {
-    after(async () => {
-      try {
-        const assignments = await prisma.workerClientAssignment.findMany({
-          where: { clientId: effectiveClientId },
-          include: { worker: { select: { email: true } } },
+    const notifyPeriodType = periodType as PeriodType;
+    noteUpload(`${effectiveClientId}|${notifyPeriodType}|${periodMonth}|${periodYear}`, async (count) => {
+      const assignments = await prisma.workerClientAssignment.findMany({
+        where: { clientId: effectiveClientId },
+        include: { worker: { select: { email: true } } },
+      });
+      const emails = assignments.map((a) => a.worker.email);
+      if (emails.length) {
+        await notifyWorkersNewUpload({
+          workerEmails: emails,
+          clientName: clientNameForNotify,
+          count,
+          periodMonth,
+          periodYear,
+          periodType: notifyPeriodType,
         });
-        const emails = assignments.map((a) => a.worker.email);
-        if (emails.length) {
-          await notifyWorkersNewUpload({
-            workerEmails: emails,
-            clientName: clientNameForNotify,
-            count: 1,
-            periodMonth,
-            periodYear,
-            periodType: periodType as PeriodType,
-          });
-        }
-      } catch (err) {
-        console.error("[NOTIFY] Error notifying workers:", err);
       }
     });
   }

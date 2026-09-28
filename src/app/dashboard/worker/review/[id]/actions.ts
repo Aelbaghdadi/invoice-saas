@@ -7,7 +7,6 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { redirect, RedirectType } from "next/navigation";
 import { revalidatePath, refresh } from "next/cache";
-import { notifyClientInvoiceValidated } from "@/lib/email";
 import {
   filterFromInvoice,
   getNextInQueue,
@@ -958,25 +957,8 @@ export async function validateInvoice(
     return null;
   }
 
-  // Notify client via email (after response)
-  after(async () => {
-    try {
-      const inv = await prisma.invoice.findUnique({
-        where: { id },
-        include: { client: { include: { user: { select: { email: true } } } } },
-      });
-      if (inv?.client?.user?.email) {
-        await notifyClientInvoiceValidated({
-          clientEmail: inv.client.user.email,
-          clientName: inv.client.name,
-          invoiceNumber: inv.invoiceNumber ?? "",
-          filename: inv.filename,
-        });
-      }
-    } catch (e) {
-      console.error("[NOTIFY] Error notifying client:", e);
-    }
-  });
+  // Sin correo al cliente por cada validada (F-040): recibe un resumen al
+  // cerrarse el periodo (sendPeriodSummary). El rechazo sí se avisa al momento.
 
   // Invalidar el cache de la siguiente factura: Next.js la habia
   // prefetcheado mientras la actual aun estaba PENDING, asi que el

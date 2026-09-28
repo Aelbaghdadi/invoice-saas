@@ -6,6 +6,8 @@ import { BATCH_REJECT_EXCLUDED_STATUSES, PERIOD_BLOCKING_STATUSES } from "@/lib/
 import { appendAuditLogs } from "@/lib/auditLog";
 import { closeOpenIssues } from "@/lib/invoiceIssues";
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
+import { sendPeriodSummary } from "@/lib/periodSummary";
 import { canAccessClient } from "@/lib/accessibleClients";
 import type { InvoiceType, InvoiceStatus, PeriodType } from "@prisma/client";
 
@@ -114,6 +116,9 @@ export async function closePeriodFromBatch(
       reopenedBy: null,
     },
   });
+
+  // Resumen al cliente (F-040), fuera de la petición.
+  after(() => sendPeriodSummary(parsed.clientId, parsed.month, parsed.year));
 
   revalidatePath("/dashboard/worker/batch");
   revalidatePath("/dashboard/worker/invoices");
