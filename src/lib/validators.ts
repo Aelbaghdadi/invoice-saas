@@ -53,8 +53,9 @@ function isValidCIF(cif: string): boolean {
   const control = (10 - (total % 10)) % 10;
 
   const checkChar = match[3];
-  // Some CIF types use letter, others digit, some accept both
-  const controlLetter = String.fromCharCode(64 + control); // A=1, B=2...
+  // Some CIF types use letter, others digit, some accept both.
+  // Con control 0 la letra es la J, no la «@» de 64 + 0 (F-076).
+  const controlLetter = "JABCDEFGHI"[control];
   return checkChar === String(control) || checkChar === controlLetter;
 }
 
