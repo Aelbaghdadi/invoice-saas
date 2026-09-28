@@ -118,6 +118,9 @@ type ExtractionData = {
   createdAt: string;
 };
 
+/** Lo que manda el formulario pero no edita el gestor: no son cambios. */
+const SNAPSHOT_IGNORE = ["updatedAt", "bucket", "back"] as const;
+
 type IssueData = {
   id: string;
   type: IssueType;
@@ -1002,23 +1005,26 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   // gestor toque nada: el primer pointerdown, keydown, focusin o beforeinput
   // dentro de la pantalla (este ultimo cubre pegar y el autocompletado, que no
   // pasan por el teclado). Asi no cuentan como cambios los valores que el
-  // propio formulario ajusta al montarse. Se rehace al cambiar de factura o
-  // de version (tras guardar).
+  // propio formulario ajusta al montarse. Se rehace al cambiar de factura y
+  // tras un guardado propio con exito (markClean). Un refresco de la pagina
+  // («Es el mismo», «No es duplicada»…) no la toca: lo tecleado sigue en
+  // pantalla y sigue sin guardar. Antes dependia de invoice.updatedAt, que es
+  // un Date nuevo en cada refresco, y los cambios dejaban de estar protegidos.
   const rootRef = useRef<HTMLDivElement>(null);
   const snapshotRef = useRef<string | null>(null);
-  useEffect(() => { snapshotRef.current = null; }, [invoice.id, invoice.updatedAt]);
+  useEffect(() => { snapshotRef.current = null; }, [invoice.id]);
   useEffect(() => {
     const root = rootRef.current;
     if (!root) return;
     const takeSnapshotOnce = () => {
-      if (snapshotRef.current == null) snapshotRef.current = formSnapshot(buildFormData());
+      if (snapshotRef.current == null) snapshotRef.current = formSnapshot(buildFormData(), SNAPSHOT_IGNORE);
     };
     const events = ["pointerdown", "keydown", "focusin", "beforeinput"] as const;
     for (const ev of events) root.addEventListener(ev, takeSnapshotOnce, true);
     return () => { for (const ev of events) root.removeEventListener(ev, takeSnapshotOnce, true); };
   }, [buildFormData]);
-  const markClean = () => { snapshotRef.current = formSnapshot(buildFormData()); };
-  const isDirty = () => snapshotRef.current != null && formSnapshot(buildFormData()) !== snapshotRef.current;
+  const markClean = () => { snapshotRef.current = formSnapshot(buildFormData(), SNAPSHOT_IGNORE); };
+  const isDirty = () => snapshotRef.current != null && formSnapshot(buildFormData(), SNAPSHOT_IGNORE) !== snapshotRef.current;
 
   // Antes de salir de la factura: si hay cambios, Guardar / Descartar /
   // Cancelar. Tambien al corregir una validada, el caso grave: una
