@@ -41,6 +41,13 @@ describe("dividir reserva antes la original", () => {
     expect(await prisma.auditLog.count({ where: { invoiceId: id, newValue: "SPLIT_SOURCE" } })).toBe(1);
   });
 
+  it("cierra las incidencias abiertas de la original (F-057)", async () => {
+    await prisma.invoiceIssue.create({ data: { invoiceId: id, type: "MATH_MISMATCH", description: "No cuadra" } });
+    expect(await run()).toEqual({ error: null });
+    const issue = await prisma.invoiceIssue.findFirstOrThrow({ where: { invoiceId: id } });
+    expect([issue.status, issue.resolvedBy]).toEqual(["RESOLVED", w.worker.id]);
+  });
+
   it("dos divisiones de PDF a la vez: solo una crea hijas y la otra no deja ficheros", async () => {
     const [a, b] = await Promise.all([inFlight(run()), inFlight(run())]);
     const errors = [a.error, b.error].filter(Boolean);

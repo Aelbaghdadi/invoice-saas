@@ -1228,6 +1228,9 @@ async function reserveAndCreateSplit(
         ids.push(child.id);
       }
 
+      // F-057: la original sale del flujo; las hijas generan las suyas al
+      // pasar por el OCR.
+      await closeOpenIssues(tx, invoice.id, userId);
       await tx.invoiceStatusHistory.create({
         data: { invoiceId: invoice.id, fromStatus: invoice.status, toStatus: "SPLIT_SOURCE", changedBy: userId },
       });

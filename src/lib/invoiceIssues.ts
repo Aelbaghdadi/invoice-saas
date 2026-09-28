@@ -10,6 +10,8 @@
  *    confirmacion antes. Se cierran todas.
  *  - al rechazar (una, «Es duplicada» o el lote entero): la factura sale del
  *    flujo. Se cierran todas.
+ *  - al dividir: la original sale del flujo; las hijas generan las suyas en
+ *    el OCR. Se cierran las de la original.
  *  - al reprocesar: el OCR vuelve a crear las que apliquen a la nueva
  *    lectura. Se cierran las anteriores.
  */
