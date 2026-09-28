@@ -11,6 +11,9 @@ export type ConfirmOptions = {
   cancelLabel?: string;
   /** "danger" para lo que borra o no se puede deshacer. */
   tone?: "danger" | "primary";
+  /** El foco empieza en Cancelar aunque no sea "danger": para lo que se
+   *  confirma sin querer con un Enter (validar un posible duplicado). */
+  focusCancel?: boolean;
 };
 
 /**
@@ -60,6 +63,7 @@ export function ConfirmDialog({
   confirmLabel = "Aceptar",
   cancelLabel = "Cancelar",
   tone = "primary",
+  focusCancel = false,
   onConfirm,
   onCancel,
 }: ConfirmOptions & { onConfirm: () => void; onCancel: () => void }) {
@@ -67,6 +71,7 @@ export function ConfirmDialog({
   // desde dentro y soltar en el fondo no tiene que cerrarse.
   const downOnBackdrop = useRef(false);
   const danger = tone === "danger";
+  const cancelFirst = danger || focusCancel;
 
   return (
     <div
@@ -85,6 +90,12 @@ export function ConfirmDialog({
             e.stopPropagation();
             onCancel();
           }
+          // Enter mantenido (el mismo que abrio la confirmacion, p. ej. al
+          // validar con Enter): la repeticion del teclado no confirma.
+          if (e.key === "Enter" && e.repeat) {
+            e.preventDefault();
+            e.stopPropagation();
+          }
         }}
       >
         <h3 id="confirm-title" className="flex items-center gap-2 text-[15px] font-semibold text-slate-800">
@@ -93,11 +104,11 @@ export function ConfirmDialog({
         </h3>
         {message && <div className="mt-1.5 text-[13px] text-slate-500">{message}</div>}
         <div className="mt-5 flex justify-end gap-2">
-          {/* En lo peligroso el foco empieza en Cancelar: un Enter por
-              inercia no borra nada. */}
+          {/* En lo peligroso (o con focusCancel) el foco empieza en
+              Cancelar: un Enter por inercia no borra ni valida nada. */}
           <button
             type="button"
-            autoFocus={danger}
+            autoFocus={cancelFirst}
             onClick={onCancel}
             className="rounded-lg border border-slate-200 px-4 py-2 text-[13px] font-medium text-slate-600 hover:bg-slate-50"
           >
@@ -105,7 +116,7 @@ export function ConfirmDialog({
           </button>
           <button
             type="button"
-            autoFocus={!danger}
+            autoFocus={!cancelFirst}
             onClick={onConfirm}
             className={`rounded-lg px-4 py-2 text-[13px] font-semibold text-white ${
               danger ? "bg-red-600 hover:bg-red-700" : "bg-blue-600 hover:bg-blue-700"

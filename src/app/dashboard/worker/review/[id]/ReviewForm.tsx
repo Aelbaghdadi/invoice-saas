@@ -1044,6 +1044,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
           ),
           confirmLabel: isValidated ? "Guardar igualmente" : "Validar igualmente",
           tone: "primary",
+          // Se llega aqui validando con Enter: un segundo Enter no confirma.
+          focusCancel: true,
         });
         if (!ok) {
           setValidateState(null);
