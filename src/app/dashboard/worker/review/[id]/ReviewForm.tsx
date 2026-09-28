@@ -1029,18 +1029,41 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   // Antes de salir de la factura: si hay cambios, Guardar / Descartar /
   // Cancelar. Tambien al corregir una validada, el caso grave: una
   // correccion perdida deja en A3 los valores viejos.
+  // Una sola salida a la vez: con un guardado en curso, otro clic (o
+  // Alt+→) no abre otro aviso ni lanza un segundo guardado, que chocaba con
+  // el bloqueo optimista y sacaba un error falso.
+  const leavingRef = useRef(false);
   const guardLeave = async (leave: () => void, onStay?: () => void) => {
+    if (leavingRef.current) return;
     if (!isDirty()) return leave();
-    const choice = await askUnsaved();
-    if (choice === "discard") {
-      markClean();
-      leave();
-    } else if (choice === "save" && (await (isValidated ? saveCorrectionNow() : saveNow()))) {
-      leave();
-    } else {
-      onStay?.();
+    leavingRef.current = true;
+    try {
+      const choice = await askUnsaved();
+      if (choice === "discard") {
+        markClean();
+        leave();
+      } else if (choice === "save" && (await saveBeforeLeaving())) {
+        leave();
+      } else {
+        onStay?.();
+      }
+    } finally {
+      leavingRef.current = false;
     }
   };
+  // Dentro de la transicion del boton correspondiente (spinner y botones
+  // deshabilitados). Sin red, la accion lanza: se avisa y no se sale.
+  const saveBeforeLeaving = (): Promise<boolean> => new Promise((resolve) => {
+    const run = isValidated ? startValidate : startSave;
+    run(async () => {
+      try {
+        resolve(await (isValidated ? saveCorrectionNow() : saveNow()));
+      } catch {
+        error("No se han guardado los cambios: error de conexión.");
+        resolve(false);
+      }
+    });
+  });
   // En una validada, «Guardar» es «Guardar corrección» (validar): pasa por
   // las mismas comprobaciones, el aviso de duplicado (F-010) y el aprendizaje
   // de cuentas. Con saveInvoiceFields se lo saltaba. Si hace falta una
