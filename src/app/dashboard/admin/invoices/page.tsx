@@ -10,6 +10,7 @@ import Link from "next/link";
 import { InvoicesTable } from "./InvoicesTable";
 import { ReprocessAllErrorsButton } from "./ReprocessAllErrorsButton";
 import { parsePage, parseIntInRange, periodMonthFilter } from "@/lib/listing";
+import { DONE_WORK } from "@/lib/invoiceStatuses";
 import {
   invoicePageIds,
   inIdOrder,
@@ -174,7 +175,9 @@ export default async function InvoicesPage({
     createdAt: inv.createdAt.toISOString(),
     totalAmount: inv.totalAmount !== null ? Number(inv.totalAmount) : null,
     client: { name: inv.client.name, cif: inv.client.cif },
-    hasDuplicateWarning: inv.issues.length > 0,
+    // Solo en las no terminadas: hasta F-057 validar y rechazar no cerraban
+    // incidencias, y hay facturas terminadas con el duplicado OPEN.
+    hasDuplicateWarning: inv.issues.length > 0 && !DONE_WORK.includes(inv.status),
     // El nombre del fichero no identifica nada cuando viene de un PDF
     // dividido ("factura1.pdf"): el gestor busca por numero de factura o por
     // el tercero, que es lo que ve en A3.

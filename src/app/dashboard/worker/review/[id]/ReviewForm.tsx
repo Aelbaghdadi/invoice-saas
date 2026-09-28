@@ -35,6 +35,7 @@ import { Select, type SelectOption } from "@/components/ui/Select";
 import { InvoiceStatusBadge } from "@/components/ui/InvoiceStatusBadge";
 import {
   NEEDS_REVIEW,
+  PENDING_WORK,
   REJECT_CATEGORY_LABEL,
   isReviewReadOnly,
   reviewActionBlockReason,
@@ -761,7 +762,11 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     : issues.filter((i) => i.field === "isRectificative" && i.status === "OPEN");
   // El resto de incidencias abiertas, arriba del formulario (F-016). Las del
   // signo no: ya salen en el panel de rectificativa, junto a la casilla.
-  const openIssues = issues.filter((i) => i.status === "OPEN" && i.field !== "isRectificative");
+  // Solo mientras esta por revisar: hasta F-057 validar y rechazar no cerraban
+  // incidencias, y hay facturas terminadas con incidencias OPEN.
+  const openIssues = PENDING_WORK.includes(invoice.status)
+    ? issues.filter((i) => i.status === "OPEN" && i.field !== "isRectificative")
+    : [];
   const hasValues  = vatTotals.anyFilled && totalAmount;
   const balanceInput = {
     sumBase: vatTotals.sumBase,
