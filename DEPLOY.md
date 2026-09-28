@@ -128,6 +128,11 @@ Con SIGTERM, Next deja de aceptar peticiones y espera a que terminen los
   que esperan siguen en «Subida» sin gastar intento. La cola vive en memoria:
   con el redeploy se pierde, y esas facturas las relanza `retry-stuck` cuando
   llevan 5 minutos sin empezar.
+- **La cola es una para todas las asesorías del proceso,** en orden de
+  llegada: una subida de 200 PDF de una asesoría retrasa unos 8 minutos el OCR
+  de las demás (con 4 a la vez y unos 10 s por factura). Con una sola asesoría
+  en producción no importa; con varias, sube `OCR_CONCURRENCY` si el
+  proveedor lo admite. «Reprocesar» a mano va siempre delante.
 - `docker-entrypoint.sh` arranca con `exec node node_modules/next/dist/bin/next start`:
   Node es el PID 1 y recibe el SIGTERM sin depender de que npm lo reenvíe
   (con `npx next start` npm también lo reenviaba y esperaba; no era lo que
