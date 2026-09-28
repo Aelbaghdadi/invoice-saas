@@ -528,12 +528,17 @@ async function parseAndSave(
   //
   // Corregir una ya validada (o EXPORTED legacy) no es validarla por primera
   // vez: no pregunta por el aviso abierto y solo vuelve a mirar las validadas
-  // si cambio la clave de duplicado (numero normalizado o CIF del emisor).
+  // si cambio la clave de duplicado (numero normalizado, CIF del emisor, tipo
+  // o año).
   const firstValidation = validate && invoice.status !== "VALIDATED" && invoice.status !== "EXPORTED";
+  // El año cuenta: la estrategia A solo compara facturas del mismo año, asi
+  // que pasar la fecha de 2025 a 2026 puede crear un duplicado.
+  const yearOf = (d: Date | null | undefined) => (d && !isNaN(d.getTime()) ? d.getUTCFullYear() : null);
   const duplicateKeyChanged =
     newData.type !== invoice.type
     || normalizeInvoiceNumber(newData.invoiceNumber) !== normalizeInvoiceNumber(invoice.invoiceNumber)
-    || (newData.type !== "SALE" && newData.issuerCif !== invoice.issuerCif);
+    || (newData.type !== "SALE" && newData.issuerCif !== invoice.issuerCif)
+    || yearOf(newData.invoiceDate) !== yearOf(invoice.invoiceDate);
   const checkValidated = firstValidation || (validate && duplicateKeyChanged);
   //
   // confirmDuplicate lleva las claves de lo que el gestor vio y confirmo: si

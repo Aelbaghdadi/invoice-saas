@@ -1064,6 +1064,15 @@ describe("al validar, confirmación si ya hay otra validada con el mismo número
       expect((await row()).status).toBe("VALIDATED");
     });
 
+    it("cambiando la fecha a otro año donde ya hay una validada con ese número: pregunta", async () => {
+      const del2026 = await otra("VALIDATED");
+      await prisma.invoice.update({ where: { id: del2026.id }, data: { invoiceDate: new Date("2026-03-01") } });
+      await prisma.invoice.update({ where: { id }, data: { status: "VALIDATED", invoiceNumber: "F-2026-001", issuerCif: "B12345674", invoiceDate: new Date("2025-12-20") } });
+      const r = await validateInvoice(null, await form({ invoiceNumber: "F-2026-001", invoiceDate: "2026-01-10" }));
+      expect(r?.duplicateOf?.map((d) => d.id)).toEqual([del2026.id]);
+      expect((await row()).invoiceDate?.toISOString().slice(0, 10)).toBe("2025-12-20");
+    });
+
     it("cambiando el número a uno ya validado: pregunta y no guarda sin confirmar", async () => {
       const original = await otra("VALIDATED");
       await prisma.invoice.update({ where: { id }, data: { status: "VALIDATED", invoiceNumber: "F-OTRO", issuerCif: "B12345674" } });
