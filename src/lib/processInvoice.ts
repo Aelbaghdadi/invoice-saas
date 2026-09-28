@@ -161,7 +161,7 @@ async function analyzeInvoice(invoiceId: string, triggeredByUserId: string) {
         // «El XML trae 500 facturas (lote)» casaba con el 500 de la regex.
         if (ocrErr instanceof DocumentError) throw ocrErr;
         const m = ocrErr instanceof Error ? ocrErr.message : String(ocrErr);
-        if (attempt >= MAX_OCR_ATTEMPTS || !(isTransientOcrError(m) || isAbortError(ocrErr))) throw ocrErr;
+        if (attempt >= MAX_OCR_ATTEMPTS || !isTransientError(ocrErr, m)) throw ocrErr;
         // Exponencial con jitter, o lo que pida el proveedor en Retry-After
         // (F-029): antes 1,2 y 2,4 s fijos para todas a la vez.
         const retryAfterMs = ocrErr instanceof OcrHttpError ? ocrErr.retryAfterMs : null;
@@ -863,6 +863,18 @@ async function analyzeInvoice(invoiceId: string, triggeredByUserId: string) {
  *  deterministas (archivo inválido/corrupto) no se reintentan: fallarían igual.
  *  Solo reintentamos patrones claramente transitorios (timeout, rate limit,
  *  red, 5xx) para no malgastar llamadas en errores que no se van a recuperar. */
+/**
+ * ¿Merece otro intento? Con la respuesta HTTP del proveedor, por su estado:
+ * 408, 429 y 5xx. El texto no sirve para eso: lleva el cuerpo, y un 403 con
+ * «503» dentro (el numero de proyecto, por ejemplo) se reintentaba (revision 1
+ * del PR #14, punto 4). La regex queda para los errores de red, que no traen
+ * estado.
+ */
+function isTransientError(err: unknown, message: string): boolean {
+  if (err instanceof OcrHttpError) return err.status === 408 || err.status === 429 || err.status >= 500;
+  return isAbortError(err) || isTransientOcrError(message);
+}
+
 /** El SDK de S3 corta con AbortError («Request aborted») al pasar el tope. */
 function isAbortError(err: unknown): boolean {
   const name = (err as { name?: unknown } | null)?.name;

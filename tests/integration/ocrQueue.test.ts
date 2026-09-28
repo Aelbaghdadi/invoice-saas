@@ -209,6 +209,19 @@ describe("reintentos del OCR (F-029)", () => {
     expect((await prisma.invoice.findUniqueOrThrow({ where: { id } })).status).not.toBe("OCR_ERROR");
   });
 
+  it("se decide por el estado HTTP: un 403 con «503» en el cuerpo no se reintenta; un 500 sí", async () => {
+    let calls = 0;
+    stubOcr(async () => { calls++; throw new OcrHttpError('Gemini Flash respondió 403: {"error":{"message":"Project 503118 lacks permission"}}', 403, null); });
+    await processInvoice(await upload(1), w.worker.id);
+    expect(calls).toBe(1);
+    calls = 0;
+    stubOcr(async () => { if (++calls === 1) throw new OcrHttpError("Gemini Flash respondió 500: backend error", 500, 0); return reply(2); });
+    const id = await upload(2);
+    await processInvoice(id, w.worker.id);
+    expect(calls).toBe(2);
+    expect((await prisma.invoice.findUniqueOrThrow({ where: { id } })).status).not.toBe("OCR_ERROR");
+  });
+
   it("un error que no es transitorio no se reintenta", async () => {
     let calls = 0;
     stubOcr(async () => { calls++; throw new OcrHttpError("Gemini Flash respondió 400: invalid argument", 400, null); });
