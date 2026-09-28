@@ -157,6 +157,14 @@ describe("entradas auto:* cuando el sistema cambia algo al leer (F-024)", () => 
       expect(await saved()).toEqual([7, 70, "PROFESSIONAL", true]);
     });
 
+    it("con una línea al 0 %, un 15 % impreso no pasa a un 12,5 % deducido: queda descuadrada", async () => {
+      await read({
+        taxBase: 1200, vatAmount: 210, irpfRate: 15, irpfAmount: 150, totalAmount: 1260,
+        vatLines: [{ taxBase: 1000, vatRate: 21, vatAmount: 210 }, { taxBase: 200, vatRate: 0, vatAmount: 0 }],
+      });
+      expect(await saved()).toEqual([15, 180, "PROFESSIONAL", false]);
+    });
+
     it("sin importe leído: el 15 % aprendido rellena, con auto:irpf", async () => {
       expect(await read({ irpfRate: null, irpfAmount: null, totalAmount: 1060 })).toEqual([
         ["auto:irpf", null, "15 % · 150"],

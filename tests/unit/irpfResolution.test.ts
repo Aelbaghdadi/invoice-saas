@@ -30,6 +30,24 @@ describe("resolveIrpf (F-073)", () => {
       .toEqual({ rate: 7.01, amount: 70.1 });
   });
 
+  it("una línea al 0 %: el 15 % impreso no se cambia por un 12,5 % deducido; queda descuadrada", () => {
+    // 1000 al 21 % y 200 al 0 %; leído 15 % y 150, y el total cuadra con 150.
+    const balancedWith = (irpf: number) => Math.abs(1200 + 210 - irpf - 1260) < 0.005;
+    expect(resolveIrpf({ sumBases: 1200, balancedWith, hasRetention: true, retentionRate: 15, readRate: 15, readAmount: 150 }))
+      .toEqual({ rate: 15, amount: 180 });
+  });
+
+  it("base pequeña sin % leído: el 15 % aprendido ya da el importe (no un 15,01 %)", () => {
+    const balancedWith = (irpf: number) => Math.abs(45.45 + 9.54 - irpf - 48.17) < 0.005;
+    expect(resolveIrpf({ sumBases: 45.45, balancedWith, hasRetention: true, retentionRate: 15, readRate: null, readAmount: 6.82 }))
+      .toEqual({ rate: 15, amount: 6.82 });
+  });
+
+  it("% leído sin importe y el total cuadra con él: el leído, no el aprendido", () => {
+    expect(resolveIrpf({ ...invoice(1140), hasRetention: true, retentionRate: 15, readRate: 7, readAmount: null }))
+      .toEqual({ rate: 7, amount: 70 });
+  });
+
   it("sin tipo de retención, lo leído tal cual", () => {
     expect(resolveIrpf({ ...invoice(1140), hasRetention: false, retentionRate: null, readRate: 7, readAmount: 70 }))
       .toEqual({ rate: 7, amount: 70 });
