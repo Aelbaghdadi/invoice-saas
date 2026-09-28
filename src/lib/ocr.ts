@@ -488,13 +488,11 @@ function facturaeInvoiceIsCorrective(inv: any): boolean {
 }
 
 /** ¿El XML Facturae guardado es de una rectificativa? Para classifyInvoice,
- *  que solo tiene el XML crudo de la extraccion. No lanza. */
-export async function facturaeXmlIsCorrective(xml: string): Promise<boolean> {
-  try {
-    return (await parseFacturaeXml(xml)).isCorrective === true;
-  } catch {
-    return false;
-  }
+ *  que solo tiene el XML crudo de la extraccion. Busca en el texto en vez de
+ *  parsear: con un adjunto de 18 MB, parsear eran 2,9 s de event loop y
+ *  750 MB de memoria. */
+export function facturaeXmlIsCorrective(xml: string): boolean {
+  return /<(?:[\w-]+:)?InvoiceClass>\s*(?:OR|CR)\s*<\/|<(?:[\w-]+:)?Corrective[\s/>]/i.test(xml);
 }
 
 /** «2026-09-14», «2026-09-14+02:00» o «2026-09-14T10:00:00Z» -> «2026-09-14». */

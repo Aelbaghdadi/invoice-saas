@@ -72,12 +72,16 @@ describe("Facturae rectificativa (revisión 1 del PR #9, punto 15)", () => {
     const corrective = facturae322.replace("<InvoiceClass>OO</InvoiceClass>",
       "<InvoiceClass>OO</InvoiceClass><Corrective><InvoiceNumber>0041</InvoiceNumber><ReasonCode>01</ReasonCode></Corrective>");
     expect((await extractInvoiceFromXml(corrective)).extracted.isCorrective).toBe(true);
-    expect(await facturaeXmlIsCorrective(corrective)).toBe(true);
+    expect(facturaeXmlIsCorrective(corrective)).toBe(true);
+    // Con prefijo de espacio de nombres y espacios, y sin parsear.
+    expect(facturaeXmlIsCorrective("<fe:InvoiceClass> CR </fe:InvoiceClass>")).toBe(true);
+    expect(facturaeXmlIsCorrective("<Corrective/>")).toBe(true);
   });
 
   it("una original (OO): no", async () => {
     expect((await extractInvoiceFromXml(facturae322)).extracted.isCorrective).toBe(false);
-    expect(await facturaeXmlIsCorrective(facturae322)).toBe(false);
-    expect(await facturaeXmlIsCorrective("no es xml")).toBe(false);
+    expect(facturaeXmlIsCorrective(facturae322)).toBe(false);
+    expect(facturaeXmlIsCorrective("no es xml")).toBe(false);
+    expect(facturaeXmlIsCorrective("<CorrectiveNote>x</CorrectiveNote>")).toBe(false);
   });
 });

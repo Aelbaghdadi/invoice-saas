@@ -9,7 +9,7 @@ import { detectInvoiceType } from "@/lib/invoiceRouting";
 import { DUPLICATE_SELECT, describeExisting } from "@/lib/issueDetector";
 import { intracomVatIssue, mathIssues } from "@/lib/mathIssues";
 import { isInvoiceBalanced } from "@/lib/invoiceBalance";
-import { hasRectificativeMention, rectificativeSignHint } from "@/lib/rectificative";
+import { anyNegativeAmount, hasRectificativeMention, rectificativeSignHint } from "@/lib/rectificative";
 import { facturaeXmlIsCorrective } from "@/lib/ocr";
 import { proposeSurchargesFromTotal } from "@/lib/equivalenceSurcharge";
 import { proposeOperationType } from "@/lib/operationTypeProposal";
@@ -187,20 +187,25 @@ async function classify(invoiceId: string, clientId: string): Promise<ClassifySt
   if (intracomVat) mathProblems.push(intracomVat);
   // Signo (F-012): el OCR no crea incidencias en el buzon. Se miran los
   // importes guardados y la mencion que dejo el OCR en la extraccion.
-  const lastExtraction = await prisma.invoiceExtraction.findFirst({
-    where: { invoiceId }, orderBy: { ocrFinishedAt: "desc" }, select: { rawResponse: true, source: true },
-  });
-  const mentioned = lastExtraction?.source === "xml_parse"
-    ? await facturaeXmlIsCorrective(lastExtraction.rawResponse ?? "")
-    : hasRectificativeMention(lastExtraction?.rawResponse);
-  const signHint = rectificativeSignHint({
+  const signAmounts = {
     lines,
     taxBase: invoice.taxBase == null ? null : Number(invoice.taxBase),
     vatAmount: invoice.vatAmount == null ? null : Number(invoice.vatAmount),
     totalAmount,
     irpfAmount,
     retentionBase: invoice.retentionBase == null ? null : Number(invoice.retentionBase),
-  }, null, mentioned);
+  };
+  // Con negativos ya hay incidencia: no hace falta leer la extraccion.
+  let mentioned = false;
+  if (!anyNegativeAmount(signAmounts)) {
+    const lastExtraction = await prisma.invoiceExtraction.findFirst({
+      where: { invoiceId }, orderBy: { ocrFinishedAt: "desc" }, select: { rawResponse: true, source: true },
+    });
+    mentioned = lastExtraction?.source === "xml_parse"
+      ? facturaeXmlIsCorrective(lastExtraction.rawResponse ?? "")
+      : hasRectificativeMention(lastExtraction?.rawResponse);
+  }
+  const signHint = rectificativeSignHint(signAmounts, null, mentioned);
   if (signHint) mathProblems.push({ type: "MANUAL", description: signHint, field: "isRectificative" });
   // isValid con el recargo ya propuesto, como `finalIsValid` en el OCR: el
   // del buzon se calculo sin recargo y la ficha lo pintaba en rojo.
