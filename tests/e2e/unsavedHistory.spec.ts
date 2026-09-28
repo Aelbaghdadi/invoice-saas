@@ -206,7 +206,7 @@ test("lo tecleado entre «Cambios guardados» y el refresco sigue contando como 
   await expect(page.getByRole("alertdialog")).toBeVisible();
 });
 
-test("primera entrada de la pestaña con otras por delante: sin centinela", async ({ page, context }) => {
+test("primera entrada de la pestaña con otras por delante: Adelante y Atrás no salen", async ({ page, context }) => {
   // Sesion iniciada en esta pestaña; la factura, en una pestaña nueva.
   await openAndEdit(page, "h1");
   const tab = await context.newPage();
@@ -220,7 +220,17 @@ test("primera entrada de la pestaña con otras por delante: sin centinela", asyn
   await tab.waitForURL((u) => u.pathname === review("h8"));
   await tab.waitForLoadState("networkidle");
   await tab.locator("#invoiceNumber").fill("h8-CAMBIADO");
-  await tab.waitForTimeout(500);
-  // Nada detras: no se mete el centinela (salir haria go(-2) a ninguna parte).
-  expect(await historyOf(tab)).toEqual([`*${review("h8")}*`, target]);
+  // El centinela trunca lo de delante: Adelante ya no lleva a X.
+  await expect.poll(() => historyOf(tab)).toEqual([review("h8"), `*${review("h8")}*`]);
+  await tab.evaluate(() => history.forward());
+  await tab.waitForTimeout(800);
+  expect(new URL(tab.url()).pathname).toBe(review("h8"));
+  // Atras: no hay nada detras de la factura; se queda, sin aviso, con lo
+  // tecleado y el centinela repuesto.
+  await tab.evaluate(() => history.back());
+  await tab.waitForTimeout(800);
+  expect(new URL(tab.url()).pathname).toBe(review("h8"));
+  await expect(tab.getByRole("alertdialog")).toHaveCount(0);
+  await expect(tab.locator("#invoiceNumber")).toHaveValue("h8-CAMBIADO");
+  expect(await historyOf(tab)).toEqual([review("h8"), `*${review("h8")}*`]);
 });

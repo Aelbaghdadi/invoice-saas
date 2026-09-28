@@ -120,9 +120,7 @@ type ExtractionData = {
 
 /** Lo que manda el formulario pero no edita el gestor: no son cambios. */
 const SNAPSHOT_IGNORE = ["updatedAt", "bucket", "back", "replaceHistory"] as const;
-// El lado bloqueado (el cliente) no lo edita el gestor: lo pone el servidor
-// al guardar (una factura sin receptor recibe el del cliente) y, al refrescar,
-// su valor cambiaba y salia un falso «cambios sin guardar».
+
 /**
  * Posicion de la entrada actual en el historial de la pestaña (cuantas hay
  * detras). Con la Navigation API, la de verdad; sin ella, solo se sabe que
@@ -135,6 +133,9 @@ function historyIndex(): number {
   return window.history.length <= 1 ? 0 : Number.POSITIVE_INFINITY;
 }
 
+// El lado bloqueado (el cliente) no lo edita el gestor: lo pone el servidor
+// al guardar (una factura sin receptor recibe el del cliente) y, al refrescar,
+// su valor cambiaba y salia un falso «cambios sin guardar».
 function reviewSnapshot(fd: FormData): string {
   const lockedFields = fd.get("type") === "PURCHASE" ? ["receiverName", "receiverCif"] : ["issuerName", "issuerCif"];
   return formSnapshot(fd, [...SNAPSHOT_IGNORE, ...lockedFields]);
@@ -1184,9 +1185,10 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   // Limite conocido: tras un F5 con el centinela puesto, la entrada repetida
   // queda en el historial y un Atras de mas vuelve a esta misma factura.
   const pushSentinel = () => {
-    // Sin nada detras (pestaña nueva, o la primera entrada con otras por
-    // delante) no hay Atras que proteger, y salir haria go() a ninguna parte.
-    if (sentinelRef.current || departingRef.current || historyIndex() === 0) return;
+    // En una pestaña nueva no hay nada que proteger. En la primera entrada
+    // con otras por delante si se pone: trunca lo de delante, y asi Adelante
+    // no sale de la factura sin avisar.
+    if (sentinelRef.current || departingRef.current || window.history.length <= 1) return;
     window.history.pushState(window.history.state, "", window.location.href);
     sentinelUrlRef.current = window.location.href;
     sentinelRef.current = true;
@@ -1233,6 +1235,12 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       // duplicaria la entrada de destino y borraria las de delante.
       if (window.location.href !== sentinelUrlRef.current) return;
       const { isDirty: dirty, guardLeave: guard, pushSentinel: push } = latest.current;
+      // Primera entrada de la pestaña: no hay adonde volver. Se repone el
+      // centinela y ya esta, sin aviso.
+      if (historyIndex() === 0) {
+        push();
+        return;
+      }
       // Atras con el aviso ya abierto: se repone y el aviso sigue.
       if (leavingRef.current) {
         push();
@@ -1244,9 +1252,11 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       }
       push();
       void guard(() => {
-        // El centinela y el Atras que queria el gestor, sin pasar de la
-        // primera entrada. Si no hay adonde ir, se queda con lo tecleado.
-        const steps = Math.min(sentinelRef.current ? 2 : 1, historyIndex());
+        // El centinela y el Atras que queria el gestor. Si no hay tantas
+        // entradas detras, no se sale (con uno de menos se volveria a la
+        // propia factura) y se queda con lo tecleado.
+        const needed = sentinelRef.current ? 2 : 1;
+        const steps = historyIndex() >= needed ? needed : 0;
         if (steps === 0) {
           latest.current.restoreDiscarded();
           return;
