@@ -15,7 +15,15 @@ import { normalizeBusinessName, parseTaxId } from "@/lib/validators";
 /** «F-001», «F 001», «f001» y «F/001» son el mismo numero: sin espacios ni
  *  separadores y en mayusculas. Solo ASCII y en este orden (quitar y luego
  *  subir), igual que normalizedNumberSql: con toUpperCase primero, «ß» pasa
- *  a «SS» en JS y no en Postgres, y los dos lados no casaban. */
+ *  a «SS» en JS y no en Postgres, y los dos lados no casaban.
+ *
+ *  Decisiones que se dejan asi a proposito:
+ *   - Al quitar separadores, «2026-1-15» y «2026-11-5» dan lo mismo
+ *     («2026115»). Es raro y solo pide una confirmacion; lo contrario (que
+ *     «F-001» y «F 001» no casen) era el fallo de F-010.
+ *   - Los ceros a la izquierda cuentan: «0042» no es «42». Hay series que
+ *     los usan para distinguir numeros, y quitarlos juntaria facturas
+ *     distintas. */
 export function normalizeInvoiceNumber(raw: string | null | undefined): string {
   return (raw ?? "").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
 }

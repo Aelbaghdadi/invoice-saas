@@ -14,6 +14,16 @@ describe("normalizeInvoiceNumber (F-010)", () => {
     expect(normalizeInvoiceNumber("Ñ-4")).toBe("4");
   });
 
+  // Decisiones, no fallos (revisión 1 del PR #10, punto 9): ver el comentario
+  // de normalizeInvoiceNumber.
+  it("decisión: al quitar separadores, «2026-1-15» y «2026-11-5» son el mismo número", () => {
+    expect(normalizeInvoiceNumber("2026-1-15")).toBe(normalizeInvoiceNumber("2026-11-5"));
+  });
+
+  it("decisión: los ceros a la izquierda cuentan, «0042» no es «42»", () => {
+    expect(normalizeInvoiceNumber("0042")).not.toBe(normalizeInvoiceNumber("42"));
+  });
+
   it("vacío o nulo: cadena vacía", () => {
     expect(normalizeInvoiceNumber(null)).toBe("");
     expect(normalizeInvoiceNumber(" - ")).toBe("");
