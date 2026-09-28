@@ -24,11 +24,22 @@ describe("scrubMessage (F-034): sin datos personales", () => {
     expect(scrubMessage("612-345-678 612.34.56.78")).toBe("[tel] [tel]");
   });
 
-  it("no toma por teléfono una IP, un importe, una fecha ni un fichero", () => {
-    expect(scrubMessage("ETIMEDOUT 172.31.45.123:5432")).toBe("ETIMEDOUT 172.31.45.123:5432");
-    expect(scrubMessage("total 12.345.678,90")).toBe("total 12.345.678,90");
-    expect(scrubMessage("el 28.09.26")).toBe("el 28.09.26");
-    expect(scrubMessage("chunk-12-34-56.js")).toBe("chunk-12-34-56.js");
+  it("teléfonos de 9 cifras con prefijo o seguidos", () => {
+    for (const tel of ["612 345 678", "612-345-678", "612.34.56.78", "+34 612 34 56 78", "91 123 45 67", "34 612 345 678", "+34-612-345-678", "+34.612.345.678"]) {
+      expect(scrubMessage(`tel ${tel} fin`)).toBe("tel [tel] fin");
+    }
+    expect(scrubMessage("a 612 345 678 612 345 678")).toBe("a [tel] [tel]");
+    expect(scrubMessage("precio 612 345 678 12")).toBe("precio [tel] 12");
+  });
+
+  it("no toma por teléfono una IP con puerto, un importe, una fecha, un número de factura ni una versión", () => {
+    for (const text of [
+      "ETIMEDOUT 172.31.45.123:5432", "172.31.45.12:5432", "10.12.123.45:6543", "total 12.345.678,90", "el 28.09.26",
+      "chunk-12-34-56.js", "2026-09-28", "1.234.567,89", "F-2026-001", "base 100.00 21.00 121.00 total", "v 16.2.1",
+      "docker 172.18.0.5",
+    ]) {
+      expect(scrubMessage(text)).toBe(text);
+    }
   });
 
   it("un UUID no es un IBAN; fechas y horas quedan", () => {
