@@ -42,6 +42,18 @@ describe("incidencia del % aprendido no legal al guardar (F-073)", () => {
     expect(await open()).toBe(0);
   });
 
+  it("cierra solo esa: ni la de otra factura ni otra incidencia de la misma", async () => {
+    const { id: other } = await makeInvoice(w.client, { totalAmount: 242 });
+    await prisma.invoiceIssue.create({ data: { invoiceId: other, type: "MANUAL", field: "irpfRate", description: "La otra" } });
+    await prisma.invoiceIssue.create({ data: { invoiceId: id, type: "MANUAL", field: "isRectificative", description: "Parece rectificativa" } });
+    expect(await save({ retentionType: "PROFESSIONAL", retentionBase: "100", retentionRate: "15", retentionAmount: "15", totalAmount: "106" })).toEqual({ error: null });
+    expect(await open()).toBe(0);
+    expect(await prisma.invoiceIssue.count({ where: { invoiceId: other, field: "irpfRate", status: "OPEN" } })).toBe(1);
+    // La de signo sigue abierta: sin marcar la casilla, su regla no la cierra.
+    const sign = await prisma.invoiceIssue.findFirstOrThrow({ where: { invoiceId: id, field: "isRectificative" } });
+    expect(sign.status).toBe("OPEN");
+  });
+
   it("sin retención, se cierra", async () => {
     expect(await save({ totalAmount: "121" })).toEqual({ error: null });
     expect(await open()).toBe(0);
