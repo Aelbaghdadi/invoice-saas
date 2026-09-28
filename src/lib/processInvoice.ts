@@ -278,7 +278,8 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
           field: "auto:ruteo",
           oldValue: null,
           // «·» como las demas auto:*: las pantallas ya pintan «viejo → nuevo».
-          newValue: `${partyAuditValue(chosen.name, chosen.cif)} · proveedor ${taxIdWithCountry(providerParsed.clean, providerParsed.countryCode)}`,
+          // La otra parte: el proveedor en una compra, el cliente en una venta.
+          newValue: `${partyAuditValue(chosen.name, chosen.cif)} · ${invoice.type === "SALE" ? "cliente" : "proveedor"} ${taxIdWithCountry(providerParsed.clean, providerParsed.countryCode)}`,
         };
         return learned;
       };

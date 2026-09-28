@@ -37,12 +37,12 @@ beforeEach(async () => {
 
 /** Sube al buzon una compra del proveedor con lo que lea el OCR y la procesa.
  *  (Otro total que las facturas de makeFirm: si no, seria un posible duplicado.) */
-async function upload(read: { receiverCif: string | null; issuerCif?: string; rawText?: string; typeUnconfirmed?: boolean }) {
+async function upload(read: { receiverCif: string | null; issuerCif?: string | null; rawText?: string; typeUnconfirmed?: boolean; type?: "PURCHASE" | "SALE" }) {
   stubOcr(async () => ({
     rawJson: "{}",
     rawText: read.rawText,
     extracted: {
-      issuerName: "Proveedor SL", issuerCif: read.issuerCif ?? PROVIDER, receiverName: null, receiverCif: read.receiverCif,
+      issuerName: "Proveedor SL", issuerCif: read.issuerCif === undefined ? PROVIDER : read.issuerCif, receiverName: null, receiverCif: read.receiverCif,
       invoiceNumber: `F-${Math.random()}`, invoiceDate: "2026-09-10", taxBase: 200, vatRate: 21, vatAmount: 42,
       irpfRate: null, irpfAmount: null, totalAmount: 242, currency: "EUR",
       vatLines: [{ taxBase: 200, vatRate: 21, vatAmount: 42 }], confidence: null,
@@ -54,6 +54,7 @@ async function upload(read: { receiverCif: string | null; issuerCif?: string; ra
     filename: "f.pdf", storageKey: key, fileType: "application/pdf", status: "UPLOADED",
     routingCandidateIds: [a.id, b.id], invoiceNumber: null, issuerCif: null, totalAmount: null,
     typeUnconfirmed: read.typeUnconfirmed ?? false,
+    type: read.type ?? "PURCHASE",
   });
   await processInvoice(id, w.worker.id);
   const inv = await prisma.invoice.findUniqueOrThrow({ where: { id } });
@@ -78,6 +79,14 @@ describe("regla del proveedor al subir al buzón (F-021)", () => {
     const r = await upload({ receiverCif: null, issuerCif: "PT515160873" });
     expect(r.clientId).toBe(b.id);
     expect(r.audit).toEqual([[null, `Empresa B SL (${b.cif}) · proveedor PT515160873`, w.worker.id]]);
+  });
+
+  it("en una venta, la otra parte es el cliente: «· cliente»", async () => {
+    // Venta confirmada, emisor (el lado del cliente) ilegible, y el comprador
+    // con su regla aprendida.
+    const r = await upload({ type: "SALE", issuerCif: null, receiverCif: PROVIDER });
+    expect(r.clientId).toBe(b.id);
+    expect(r.audit).toEqual([[null, `Empresa B SL (${b.cif}) · cliente ${PROVIDER}`, w.worker.id]]);
   });
 
   it("con un CIF de receptor válido que no casa: la regla no se aplica", async () => {
