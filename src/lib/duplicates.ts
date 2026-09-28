@@ -20,7 +20,10 @@ export function normalizeInvoiceNumber(raw: string | null | undefined): string {
 
 /**
  * La primera factura del cliente (no rechazada ni dividida, distinta de excludeId) con
- * el mismo numero normalizado y, si se da, el mismo CIF de emisor limpio.
+ * el mismo numero normalizado y, en compras, el mismo CIF de emisor limpio.
+ * En ventas basta el numero: el cliente y el tipo fijan al emisor. Una
+ * compra sin CIF no se compara: el «1234» de un ticket sin NIF casaba con el
+ * «1234» de cualquier otro proveedor.
  * El numero se normaliza igual en Postgres que en normalizeInvoiceNumber.
  */
 export async function findByInvoiceNumber(input: {
@@ -28,12 +31,15 @@ export async function findByInvoiceNumber(input: {
   type: InvoiceType;
   excludeId: string;
   invoiceNumber: string;
+  /** CIF del emisor limpio. En ventas se ignora. */
   issuerCif: string | null;
   /** Solo las ya validadas o exportadas (la comprobacion al validar). */
   onlyValidated?: boolean;
 }): Promise<string | null> {
   const normalized = normalizeInvoiceNumber(input.invoiceNumber);
   if (!normalized) return null;
+  const issuerCif = input.type === "SALE" ? null : input.issuerCif;
+  if (input.type !== "SALE" && !issuerCif) return null;
   const onlyValidated = input.onlyValidated === true;
   const rows = await prisma.$queryRaw<{ id: string }[]>`
     SELECT id FROM "Invoice"
@@ -42,7 +48,7 @@ export async function findByInvoiceNumber(input: {
       AND id <> ${input.excludeId}
       AND status NOT IN ('REJECTED', 'SPLIT_SOURCE')
       AND (NOT ${onlyValidated} OR status IN ('VALIDATED', 'EXPORTED'))
-      AND (${input.issuerCif}::text IS NULL OR "issuerCif" = ${input.issuerCif})
+      AND (${issuerCif}::text IS NULL OR "issuerCif" = ${issuerCif})
       AND regexp_replace(upper("invoiceNumber"), '[^A-Z0-9]', '', 'g') = ${normalized}
     ORDER BY "createdAt"
     LIMIT 1`;
@@ -136,10 +142,8 @@ export async function findPossibleDuplicate(input: DuplicateCheckInput): Promise
   const issuerCif = parseTaxId(input.issuerCif).clean || null;
 
   // A. Numero normalizado (+ CIF del emisor en compras).
-  if (input.invoiceNumber && (isSale || issuerCif)) {
-    const dupId = await findByInvoiceNumber({
-      clientId, type, excludeId: invoiceId, invoiceNumber: input.invoiceNumber, issuerCif: isSale ? null : issuerCif,
-    });
+  if (input.invoiceNumber) {
+    const dupId = await findByInvoiceNumber({ clientId, type, excludeId: invoiceId, invoiceNumber: input.invoiceNumber, issuerCif });
     const dup = dupId ? await prisma.invoice.findUnique({ where: { id: dupId }, select: DUPLICATE_SELECT }) : null;
     if (dup) {
       return found(dup, isSale ? "mismo número de factura emitida" : `mismo número y mismo CIF emisor (${issuerCif})`);

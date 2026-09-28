@@ -10,7 +10,7 @@ import { fakeS3 } from "./helpers/fakeS3";
 import { facturaeXml } from "./helpers/fixtures";
 import { stubOcr } from "./helpers/ocr";
 import { NEGATIVE_AMOUNTS_HINT } from "@/lib/rectificative";
-import { duplicateOriginalId, findPossibleDuplicate } from "@/lib/duplicates";
+import { duplicateOriginalId, findByInvoiceNumber, findPossibleDuplicate } from "@/lib/duplicates";
 import { parseTaxId } from "@/lib/validators";
 import { accountEntryKey } from "@/lib/supplierMatching";
 import { processInvoice } from "@/lib/processInvoice";
@@ -1010,6 +1010,16 @@ describe("al validar, confirmación si ya hay otra validada con el mismo número
     const r = await validate(await form({ invoiceNumber: "F-2026-001", confirmDuplicate: "1" }));
     expect(r.error).toBeNull();
     expect((await row()).status).toBe("VALIDATED");
+  });
+
+  it("una compra sin CIF no se compara: el «1234» de un ticket no es el de otro proveedor", async () => {
+    const otro = await makeInvoice(w.client, { status: "VALIDATED", issuerCif: "B12345674", invoiceNumber: "1234" });
+    const base = { clientId: w.client.id, excludeId: id, invoiceNumber: "1234", onlyValidated: true };
+    expect(await findByInvoiceNumber({ ...base, type: "PURCHASE", issuerCif: null })).toBeNull();
+    expect(await findByInvoiceNumber({ ...base, type: "PURCHASE", issuerCif: "B12345674" })).toBe(otro.id);
+    // En ventas el CIF no cuenta: el emisor es el propio cliente.
+    const venta = await makeInvoice(w.client, { type: "SALE", status: "VALIDATED", invoiceNumber: "V-9" });
+    expect(await findByInvoiceNumber({ ...base, invoiceNumber: "V-9", type: "SALE", issuerCif: "X" })).toBe(venta.id);
   });
 
   it("si la otra aún no está validada, no hace falta confirmar", async () => {
