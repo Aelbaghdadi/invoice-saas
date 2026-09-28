@@ -72,6 +72,32 @@ describe("valla del OCR (ocrAttempts)", () => {
     expect(s.audit).toEqual([]);
   });
 
+  describe("con una entrada auto:* (PR #11, punto 13)", () => {
+    // Otro receptor en el XML: el OCR pone el cliente y lo deja auditado.
+    const otherBuyer = () => fakeS3().put("k-xml", facturaeXml({ buyerCif: "B87654321", buyerName: "Otra Empresa SL" }));
+
+    it("sin cruce: estado y auto:parteCliente", async () => {
+      otherBuyer();
+      await processInvoice(id, w.worker.id);
+      const s = await state();
+      expect(s.audit).toEqual([
+        `status:UPLOADED->${s.status}`,
+        `auto:parteCliente:Otra Empresa SL (B87654321)->${w.client.name} (${w.client.cif})`,
+      ]);
+    });
+
+    it("rechazada mientras analizaba: ninguna entrada, tampoco las auto:*", async () => {
+      otherBuyer();
+      fakeS3().setMode("hold");
+      const run = inFlight(processInvoice(id, w.worker.id));
+      await vi.waitFor(() => expect(fakeS3().heldGets()).toBe(1));
+      await prisma.invoice.updateMany({ where: { id }, data: { status: "REJECTED", rejectionReason: "Ilegible" } });
+      fakeS3().releaseGets();
+      await run;
+      expect((await state()).audit).toEqual([]);
+    });
+  });
+
   it("el error de una ejecución que ya no es la dueña no pasa a OCR_ERROR una rechazada", async () => {
     fakeS3().setMode("hold");
     const run = inFlight(processInvoice(id, w.worker.id));
