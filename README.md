@@ -19,7 +19,7 @@ exportar a programas contables tipo **A3 Asesor**.
 | ORM | Prisma 7.5 + `@prisma/adapter-pg` |
 | Base de datos | PostgreSQL (Supabase) |
 | Auth | NextAuth v5 (credentials + bcryptjs) |
-| OCR | Google Document AI (Invoice Parser) |
+| OCR | Gemini; Google Document AI (Invoice Parser) solo si no hay clave de Gemini |
 | Storage de PDFs | Supabase Storage |
 | Email | Resend |
 | Deploy | Vercel |
@@ -38,8 +38,9 @@ exportar a programas contables tipo **A3 Asesor**.
 ### Requisitos
 - Node 20+
 - Cuenta Supabase (DB + Storage)
-- Cuenta Google Cloud con Document AI habilitado y un processor de
-  tipo *Invoice Parser* en la región `eu`.
+- Clave de Gemini (`GEMINI_API_KEY`), o, sin ella, una cuenta Google Cloud
+  con Document AI habilitado y un processor de tipo *Invoice Parser* en la
+  región `eu`.
 - Cuenta Resend (opcional en dev — si falta, los emails se loguean
   en consola).
 
@@ -68,8 +69,9 @@ Las explica en detalle [.env.example](.env.example). Resumen:
 | `AUTH_SECRET` | Firma de JWTs de NextAuth |
 | `NEXTAUTH_URL` | URL pública (emails, callbacks) |
 | `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_FORCE_PATH_STYLE` | Storage de PDFs (Garage / S3-compatible) |
-| `GEMINI_API_KEY`, `GEMINI_MODEL` | OCR principal (Gemini) |
-| `GOOGLE_APPLICATION_CREDENTIALS_JSON`, `GOOGLE_CLOUD_PROJECT_ID`, `GOOGLE_DOCUMENT_AI_PROCESSOR_ID`, `GOOGLE_DOCUMENT_AI_LOCATION` | OCR fallback (Document AI) |
+| `GEMINI_API_KEY`, `GEMINI_MODEL` | OCR (Gemini) |
+| `OCR_CONCURRENCY` | Análisis a la vez en el proceso (4 por defecto); lo demás espera en «Subida» |
+| `GOOGLE_APPLICATION_CREDENTIALS_JSON`, `GOOGLE_CLOUD_PROJECT_ID`, `GOOGLE_DOCUMENT_AI_PROCESSOR_ID`, `GOOGLE_DOCUMENT_AI_LOCATION` | OCR con Document AI, **solo si no hay `GEMINI_API_KEY`**. No es un fallback: si Gemini falla, no se prueba con Document AI |
 | `RESEND_API_KEY`, `EMAIL_FROM` | Emails transaccionales |
 | `CRON_SECRET` | Protege endpoints `/api/cron/*` |
 
@@ -169,7 +171,9 @@ POST /api/invoices/upload
 POST /api/invoices/[id]/process  (background)
     ↓ status: ANALYZING
     ↓
-processInvoice.ts → ocr.ts (Document AI)
+processInvoice.ts (cola en memoria: OCR_CONCURRENCY a la vez; espera en UPLOADED)
+    → ocrLlm.ts (Gemini), u ocr.ts (Document AI) si no hay GEMINI_API_KEY
+    (reintentos con backoff exponencial y Retry-After; al agotarlos, OCR_ERROR)
     ↓
 parseTaxId + pre-fill cliente + aprendizaje de cuentas
     ↓ status: PENDING_REVIEW (o NEEDS_ATTENTION / OCR_ERROR)

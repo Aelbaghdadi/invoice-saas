@@ -1,5 +1,6 @@
 import { GoogleAuth } from "google-auth-library";
-import { DocumentError } from "./ocrErrors";
+import { DocumentError, OcrHttpError } from "./ocrErrors";
+import { parseRetryAfter } from "./retryBackoff";
 import { XMLParser } from "fast-xml-parser";
 import { normalizeCurrency } from "./currency";
 import type { IntracomGoodsTypeName } from "./validators";
@@ -415,7 +416,7 @@ async function extractWithDocumentAI(
 
   if (!res.ok) {
     const err = await res.text();
-    throw new Error(`Document AI respondió ${res.status}: ${err}`);
+    throw new OcrHttpError(`Document AI respondió ${res.status}: ${err}`, res.status, parseRetryAfter(res.headers.get("retry-after")));
   }
 
   const data = await res.json();

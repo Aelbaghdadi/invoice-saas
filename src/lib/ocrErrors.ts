@@ -8,6 +8,19 @@
 export type OcrErrorCode = "ERR-OCR-001" | "ERR-OCR-002" | "ERR-OCR-003" | "ERR-OCR-004" | "ERR-SYS-001";
 
 /**
+ * El proveedor de OCR (Gemini, Document AI) respondio con un error HTTP. Lleva
+ * el Retry-After, si vino, para que el reintento espere lo que pide (F-029).
+ * El mensaje es el de siempre («Gemini Flash respondió 429: …»): la
+ * clasificacion de errores sigue leyendolo.
+ */
+export class OcrHttpError extends Error {
+  constructor(message: string, readonly status: number, readonly retryAfterMs: number | null) {
+    super(message);
+    this.name = "OcrHttpError";
+  }
+}
+
+/**
  * Un error de la base de datos (una FK que falla al guardar la auditoria,
  * una transaccion caducada...) no dice nada del documento. Antes su mensaje
  * ("Invalid `prisma.auditLog.create()` invocation") caia en ERR-OCR-002 y el

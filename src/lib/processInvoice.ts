@@ -41,7 +41,9 @@ import { routeByCif, clientSideCif, routeByText, detectInvoiceType } from "@/lib
 import { lookupProviderClient, normalizeProviderNif } from "@/lib/providerRouting";
 import { accountEntryKey } from "@/lib/supplierMatching";
 import { proposeOperationType, unclassifiedGoodsType } from "@/lib/operationTypeProposal";
-import { classifyOcrError, DocumentError, userMessageForError } from "@/lib/ocrErrors";
+import { classifyOcrError, DocumentError, OcrHttpError, userMessageForError } from "@/lib/ocrErrors";
+import { retryDelayMs } from "@/lib/retryBackoff";
+import { runQueuedOcr } from "@/lib/ocrQueue";
 import { closeOpenIssues } from "@/lib/invoiceIssues";
 
 /**
@@ -71,7 +73,16 @@ async function transitionStatus(
   });
 }
 
+/**
+ * Analiza una factura cuando haya hueco en la cola del OCR (F-029): como
+ * mucho OCR_CONCURRENCY a la vez en este proceso. Mientras espera sigue en
+ * UPLOADED. Devuelve al terminar el analisis, no al encolarla.
+ */
 export async function processInvoice(invoiceId: string, triggeredByUserId: string) {
+  await runQueuedOcr(invoiceId, () => analyzeInvoice(invoiceId, triggeredByUserId));
+}
+
+async function analyzeInvoice(invoiceId: string, triggeredByUserId: string) {
   // Claim atomico: solo arranca si sigue en UPLOADED. El fencing token de
   // esta ejecucion es el ocrAttempts que deja el propio UPDATE; leido despues
   // con otra consulta podria ser ya el de un claim posterior.
@@ -101,7 +112,7 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     // proveedor (Gemini/Document AI) falla a veces de forma puntual y al
     // reprocesar va — lo automatizamos para no dejar la factura en Error OCR
     // por un hipo. Los fallos deterministas (archivo inválido) no se reintentan.
-    const MAX_OCR_ATTEMPTS = 3;
+    const MAX_OCR_ATTEMPTS = 4;
     for (let attempt = 1; ; attempt++) {
       try {
         if (ft.includes("xml")) {
@@ -140,8 +151,10 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
         if (ocrErr instanceof DocumentError) throw ocrErr;
         const m = ocrErr instanceof Error ? ocrErr.message : String(ocrErr);
         if (attempt >= MAX_OCR_ATTEMPTS || !isTransientOcrError(m)) throw ocrErr;
-        // Backoff corto antes de reintentar (1.2s, 2.4s).
-        await new Promise((r) => setTimeout(r, 1200 * attempt));
+        // Exponencial con jitter, o lo que pida el proveedor en Retry-After
+        // (F-029): antes 1,2 y 2,4 s fijos para todas a la vez.
+        const retryAfterMs = ocrErr instanceof OcrHttpError ? ocrErr.retryAfterMs : null;
+        await new Promise((r) => setTimeout(r, retryDelayMs(attempt, retryAfterMs)));
       }
     }
 

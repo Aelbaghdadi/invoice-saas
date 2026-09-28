@@ -28,7 +28,10 @@ arrancar:
   para que `garage` resuelva en la red interna.
 
 Opcionales: `RESEND_API_KEY` + `EMAIL_FROM` (emails; sin clave son no-op),
-Document AI (`GOOGLE_*`, fallback de OCR), `CRON_SECRET` (ver §5),
+Document AI (`GOOGLE_*`; **solo se usa si no hay `GEMINI_API_KEY`**, no es
+un fallback: si Gemini falla, se reintenta con Gemini y la factura acaba en
+«Error OCR»), `OCR_CONCURRENCY` (análisis a la vez, 4 por defecto; ver §5 bis),
+`CRON_SECRET` (ver §5),
 `ALERT_WEBHOOK_URL` (avisos de errores, ver §8).
 
 ## 3. Migraciones
@@ -90,9 +93,11 @@ Los dos aceptan GET y POST con la misma comprobación del secreto: usa el que
 permita la Scheduled Task.
 
 Si no configuras los crons, la app funciona; solo no se ejecutan esas tareas
-periódicas. Una factura con el análisis parado (un redeploy a mitad del OCR)
-no se relanza sola: en la revisión sale «El análisis se ha parado» con un
-botón «Reprocesar».
+periódicas. Pero `retry-stuck` es **lo único** que recoge lo que un redeploy
+deja a medias: las facturas que estaban analizándose y las que esperaban en la
+cola del OCR (§5 bis), que siguen en «Subida». Sin el cron no se relanzan
+solas: en la revisión sale «El análisis se ha parado» con un botón
+«Reprocesar».
 
 ## 5 bis. Parada y Redeploy: periodo de gracia de al menos 120 s
 
@@ -111,6 +116,10 @@ Con SIGTERM, Next deja de aceptar peticiones y espera a que terminen los
   entero: el Reprocesar masivo y `retry-stuck` procesan las facturas en
   serie. Lo que quede sin terminar lo recoge `retry-stuck` en su siguiente
   ejecución, así que conviene tenerlo programado (§5).
+- **La cola del OCR:** como mucho `OCR_CONCURRENCY` análisis a la vez (4 por
+  defecto); en una subida de 200 PDFs, el resto espera en «Subida». La cola
+  vive en memoria: con un redeploy se pierde, y esas facturas las relanza
+  `retry-stuck` cuando llevan 5 minutos sin empezar.
 - `docker-entrypoint.sh` arranca con `exec node node_modules/next/dist/bin/next start`:
   Node es el PID 1 y recibe el SIGTERM sin depender de que npm lo reenvíe
   (con `npx next start` npm también lo reenviaba y esperaba; no era lo que
