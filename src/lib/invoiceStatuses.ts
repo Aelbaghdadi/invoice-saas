@@ -49,6 +49,13 @@ export const DONE_WORK: InvoiceStatus[] = [
   "SPLIT_SOURCE",
 ];
 
+/** El aviso de duplicado (etiqueta del listado, distintivo de admin, bloque
+ *  de la revision) solo en las no terminadas: hasta F-057 validar y rechazar
+ *  no cerraban incidencias, y hay terminadas con el duplicado OPEN. */
+export function showsDuplicateWarning(status: InvoiceStatus): boolean {
+  return !DONE_WORK.includes(status);
+}
+
 /** Calcula el porcentaje completado de un conjunto. */
 export function completionPercent(counts: {
   total: number;

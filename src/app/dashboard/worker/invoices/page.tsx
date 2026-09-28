@@ -17,6 +17,7 @@ import { InvoiceFilters } from "@/components/invoices/InvoiceFilters";
 import { parsePage, parseIntInRange, periodMonthFilter } from "@/lib/listing";
 import { reviewHref } from "@/lib/reviewNavigation";
 import { countWithin, invoicePageIds, inIdOrder, matchingInvoiceIds } from "@/lib/invoiceListing";
+import { REVIEWABLE, showsDuplicateWarning } from "@/lib/invoiceStatuses";
 
 const BASE_PATH = "/dashboard/worker/invoices";
 
@@ -291,8 +292,12 @@ export default async function WorkerInvoicesPage({
             <tbody className="divide-y divide-slate-50">
               {invoices.map((inv) => {
                 const monthName = MONTH_NAMES[inv.periodMonth - 1];
-                const duplicateIssue = inv.issues.find((i) => i.type === "POSSIBLE_DUPLICATE");
-                const reviewable = ["ANALYZED", "PENDING_REVIEW", "NEEDS_ATTENTION", "OCR_ERROR"].includes(inv.status);
+                // El aviso, como en admin y en la revision: solo en las no
+                // terminadas. Las acciones, con la misma lista que la revision.
+                const duplicateIssue = showsDuplicateWarning(inv.status)
+                  ? inv.issues.find((i) => i.type === "POSSIBLE_DUPLICATE")
+                  : undefined;
+                const reviewable = REVIEWABLE.includes(inv.status);
                 return (
                   <tr key={inv.id} className="hover:bg-slate-50/60">
                     <td className="px-5 py-3">

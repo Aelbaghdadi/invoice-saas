@@ -35,11 +35,12 @@ import { Select, type SelectOption } from "@/components/ui/Select";
 import { InvoiceStatusBadge } from "@/components/ui/InvoiceStatusBadge";
 import {
   NEEDS_REVIEW,
-  PENDING_WORK,
+  REVIEWABLE,
   REJECT_CATEGORY_LABEL,
   isReviewReadOnly,
   reviewActionBlockReason,
   reviewLockReason,
+  showsDuplicateWarning,
 } from "@/lib/invoiceStatuses";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { invoiceBalanceDiffCents, isInvoiceBalanced } from "@/lib/invoiceBalance";
@@ -770,7 +771,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   // diciendo lo que ya no es cierto.
   // Solo mientras esta por revisar: hasta F-057 validar y rechazar no cerraban
   // incidencias, y hay facturas terminadas con incidencias OPEN.
-  const openIssues = PENDING_WORK.includes(invoice.status)
+  const openIssues = showsDuplicateWarning(invoice.status)
     ? issues.filter((i) => i.status === "OPEN" && (i.type === "POSSIBLE_DUPLICATE" || i.type === "OCR_FAILED"))
     : [];
   const hasValues  = vatTotals.anyFilled && totalAmount;
@@ -1740,7 +1741,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                     </p>
                     {/* Solo con la factura por revisar y el periodo abierto:
                         con el periodo cerrado no se toca nada. */}
-                    {issue.type === "POSSIBLE_DUPLICATE" && NEEDS_REVIEW.includes(invoice.status) && !periodClosed && (
+                    {issue.type === "POSSIBLE_DUPLICATE" && REVIEWABLE.includes(invoice.status) && !periodClosed && (
                       <div className="flex flex-shrink-0 gap-1.5">
                         <button
                           type="button"
