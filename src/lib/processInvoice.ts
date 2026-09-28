@@ -36,7 +36,7 @@ import { routeByCif, clientSideCif, routeByText, detectInvoiceType } from "@/lib
 import { lookupProviderClient } from "@/lib/providerRouting";
 import { accountEntryKey } from "@/lib/supplierMatching";
 import { proposeOperationType, unclassifiedGoodsType } from "@/lib/operationTypeProposal";
-import { classifyOcrError, userMessageForError } from "@/lib/ocrErrors";
+import { classifyOcrError, DocumentError, userMessageForError } from "@/lib/ocrErrors";
 
 /**
  * Convierte el string de fecha del OCR a Date. Si el OCR devuelve algo
@@ -129,6 +129,9 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
         }
         break; // OCR completado
       } catch (ocrErr) {
+        // Un error del documento no es transitorio aunque su texto lo parezca:
+        // «El XML trae 500 facturas (lote)» casaba con el 500 de la regex.
+        if (ocrErr instanceof DocumentError) throw ocrErr;
         const m = ocrErr instanceof Error ? ocrErr.message : String(ocrErr);
         if (attempt >= MAX_OCR_ATTEMPTS || !isTransientOcrError(m)) throw ocrErr;
         // Backoff corto antes de reintentar (1.2s, 2.4s).

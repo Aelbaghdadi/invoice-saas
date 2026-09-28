@@ -800,6 +800,11 @@ describe("rectificativa en la revisión: la inversión del signo se audita (F-01
 });
 
 describe("Facturae: un lote con varias facturas (revisión 1 del PR #9, punto 12)", () => {
+  const facturaeXmlWithInvoices = (n: number) => {
+    const xml = facturaeXml({ buyerCif: w.client.cif });
+    const invoice = xml.slice(xml.indexOf("<Invoice>"), xml.indexOf("</Invoice>") + "</Invoice>".length);
+    return xml.replace(invoice, invoice.repeat(n));
+  };
   it("queda en Error OCR con el motivo, sin quedarse con la primera", async () => {
     const xml = facturaeXml({ buyerCif: w.client.cif });
     const invoice = xml.slice(xml.indexOf("<Invoice>"), xml.indexOf("</Invoice>") + "</Invoice>".length);
@@ -813,6 +818,21 @@ describe("Facturae: un lote con varias facturas (revisión 1 del PR #9, punto 12
     const after = await prisma.invoice.findUniqueOrThrow({ where: { id: lote } });
     expect(after.status).toBe("OCR_ERROR");
     expect(after.lastOcrError).toBe("[ERR-OCR-002] El XML trae 2 facturas (lote): súbelas por separado.");
+  });
+
+  it("con 500 facturas no se reintenta (el «500» no es un error de servidor)", async () => {
+    const xml = facturaeXmlWithInvoices(500);
+    fakeS3().put("k-lote-500", xml);
+    const { id: lote } = await makeInvoice(w.client, {
+      filename: "lote.xml", storageKey: "k-lote-500", fileType: "application/xml", status: "UPLOADED",
+      invoiceNumber: null, invoiceDate: null, issuerName: null, issuerCif: null,
+      taxBase: null, vatRate: null, vatAmount: null, totalAmount: null,
+    });
+    const started = Date.now();
+    await processInvoice(lote, w.worker.id);
+    // Con reintentos esperaria 1,2 s + 2,4 s antes de rendirse.
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect((await prisma.invoice.findUniqueOrThrow({ where: { id: lote } })).lastOcrError).toContain("El XML trae 500 facturas");
   });
 });
 
