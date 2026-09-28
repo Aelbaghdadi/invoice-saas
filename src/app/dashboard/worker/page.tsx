@@ -180,6 +180,9 @@ export default async function WorkerDashboard() {
       })
     : [];
   const closedSet = new Set(closedRows.map((c) => `${c.clientId}-${c.year}-${c.month}`));
+  // Los más recientes primero: el groupBy no trae orden y el slice(0, 5) de
+  // abajo cogía cinco al azar (antes salían por fecha, la de la consulta).
+  readyKeys.sort((a, b) => b.year - a.year || b.month - a.month || a.clientName.localeCompare(b.clientName));
   const readyToClose = readyKeys.filter(
     (r) => !closedSet.has(`${r.clientId}-${r.year}-${r.month}`),
   );
