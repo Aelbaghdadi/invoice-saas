@@ -1443,6 +1443,9 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       try {
         const res = await fetch(`/api/invoices/${invoice.id}/process`, { method: "POST" });
         if (res.ok) {
+          // Lo tecleado ya no cuenta: la recarga trae lo que lea el OCR (y
+          // si no, el navegador preguntaria al recargar).
+          markClean();
           success("OCR relanzado — recarga en unos segundos");
           setTimeout(() => window.location.reload(), 3000);
         } else {
@@ -1453,6 +1456,23 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
         error("Error de conexión al reprocesar");
       }
     });
+  };
+
+  // Con cambios, Reprocesar no ofrece «Guardar»: guardar pasa una OCR_ERROR
+  // a «Por revisar», y entonces ya no se puede reprocesar; y el OCR
+  // sustituye los datos de todas formas. Solo se confirma que se pierden.
+  const reprocessGuarded = async () => {
+    if (isDirty()) {
+      const ok = await confirm({
+        title: "¿Reprocesar la factura?",
+        message: "El OCR sustituirá los datos por los que lea: se pierden los cambios sin guardar.",
+        confirmLabel: "Reprocesar",
+        tone: "primary",
+        focusCancel: true,
+      });
+      if (!ok) return;
+    }
+    handleReprocess();
   };
 
   const inputClass = "w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[13px] text-slate-800 outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500";
@@ -1860,7 +1880,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                   </div>
                   <button
                     type="button"
-                    onClick={() => void guardLeave(handleReprocess)}
+                    onClick={() => void reprocessGuarded()}
                     disabled={isPendingReprocess}
                     className="flex flex-shrink-0 items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-red-700 disabled:opacity-50"
                   >
