@@ -626,7 +626,10 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   // sin etiquetas adicionales — el fondo gris ya indica que no se edita.
   const lockedSide: "issuer" | "receiver" = type === "PURCHASE" ? "receiver" : "issuer";
   // Lo que leyo el OCR en el lado del cliente, si es otra parte (F-019).
-  const partyWarning = extraction && sessionContext
+  // Como las incidencias abiertas: no en una factura ya terminada, y nunca
+  // en el buzon, donde el «cliente» es el provisional y cualquier CIF
+  // valido avisaria.
+  const partyWarning = extraction && sessionContext && invoice.status !== "PENDING_ROUTING" && showsDuplicateWarning(invoice.status)
     ? clientPartyWarning(type, extraction, { cif: sessionContext.clientCif })
     : null;
   const lockedInputClass = "w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-[13px] text-slate-600 cursor-not-allowed";
