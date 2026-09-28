@@ -9,38 +9,57 @@
  * leido, o con uno que no pasa el digito de control, no se avisa: puede ser
  * un error del OCR.
  *
+ * Se mira tambien el otro lado:
+ * - si alli esta el CIF del cliente, lo que pasa es que emisor y receptor
+ *   estan cambiados (o el tipo es el contrario): se avisa de eso, no de que
+ *   la factura sea de otro, que empujaria a rechazar una compra legitima;
+ * - si los dos lados traen el mismo CIF, el OCR lo ha copiado (un ticket):
+ *   no se avisa.
+ *
  * Sin imports de servidor: lo usa tambien la pantalla de revision.
  */
 import { isValidNIF, parseTaxId } from "@/lib/validators";
 
-export type ReadParty = { name: string | null | undefined; cif: string | null | undefined };
+export type ReadParties = {
+  issuerName: string | null | undefined;
+  issuerCif: string | null | undefined;
+  receiverName: string | null | undefined;
+  receiverCif: string | null | undefined;
+};
 
-/** La otra parte que leyo el OCR en el lado del cliente, o null si es el cliente. */
-export function foreignClientParty(read: ReadParty, client: { cif: string }): { name: string | null; cif: string } | null {
-  const cif = parseTaxId(read.cif).clean.toUpperCase();
-  if (!cif || !isValidNIF(cif)) return null;
-  if (cif === parseTaxId(client.cif).clean.toUpperCase()) return null;
-  return { name: read.name?.trim() || null, cif };
+export type ClientPartyWarning =
+  | { kind: "foreign"; name: string | null; cif: string }
+  | { kind: "swapped"; clientShownAs: "emisor" | "receptor" };
+
+const cifOf = (raw: string | null | undefined) => parseTaxId(raw).clean.toUpperCase();
+
+/** Lo que hay que avisar del lado del cliente, o null si es el cliente. */
+export function clientPartyWarning(type: string, read: ReadParties, client: { cif: string }): ClientPartyWarning | null {
+  const purchase = type === "PURCHASE";
+  const sideCif = cifOf(purchase ? read.receiverCif : read.issuerCif);
+  const sideName = purchase ? read.receiverName : read.issuerName;
+  const otherCif = cifOf(purchase ? read.issuerCif : read.receiverCif);
+  const clientCif = cifOf(client.cif);
+  if (!sideCif || sideCif === clientCif) return null;
+  if (sideCif === otherCif) return null;
+  if (otherCif && otherCif === clientCif) return { kind: "swapped", clientShownAs: purchase ? "emisor" : "receptor" };
+  if (!isValidNIF(sideCif)) return null;
+  return { kind: "foreign", name: sideName?.trim() || null, cif: sideCif };
 }
 
-/** Lo leido en el lado del cliente: receptor en compras, emisor en ventas. */
-export function readClientSide(
-  type: string,
-  read: { issuerName: string | null | undefined; issuerCif: string | null | undefined; receiverName: string | null | undefined; receiverCif: string | null | undefined },
-): ReadParty {
-  return type === "PURCHASE" ? { name: read.receiverName, cif: read.receiverCif } : { name: read.issuerName, cif: read.issuerCif };
-}
-
-/** «Factura a nombre de Ana Pérez (12345678Z), no del cliente.» */
-export function foreignClientPartyText(party: { name: string | null; cif: string }): string {
-  return `Factura a nombre de ${party.name ? `${party.name} (${party.cif})` : party.cif}, no del cliente.`;
+/** El texto de la incidencia. */
+export function clientPartyWarningText(warning: ClientPartyWarning): string {
+  if (warning.kind === "swapped") {
+    return `El cliente aparece como ${warning.clientShownAs} en la factura: revisa si emisor y receptor están cambiados o si el tipo es correcto.`;
+  }
+  return `Factura a nombre de ${warning.name ? `${warning.name} (${warning.cif})` : warning.cif}, no del cliente.`;
 }
 
 /**
  * La incidencia. MANUAL, como el aviso de signo de las rectificativas: los
  * tipos del enum son de otras cosas y uno nuevo necesitaria migracion.
  */
-export function foreignClientPartyIssue(read: ReadParty, client: { cif: string }): { type: "MANUAL"; description: string; field: string } | null {
-  const party = foreignClientParty(read, client);
-  return party ? { type: "MANUAL", description: foreignClientPartyText(party), field: "clientParty" } : null;
+export function clientPartyIssue(type: string, read: ReadParties, client: { cif: string }): { type: "MANUAL"; description: string; field: string } | null {
+  const warning = clientPartyWarning(type, read, client);
+  return warning ? { type: "MANUAL", description: clientPartyWarningText(warning), field: "clientParty" } : null;
 }

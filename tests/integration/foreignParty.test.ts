@@ -62,6 +62,14 @@ describe("al analizar (F-019)", () => {
     expect([s.status, s.issues]).toEqual(["PENDING_REVIEW", []]);
   });
 
+  it("compra con emisor y receptor cambiados: se avisa de eso, no de que sea de otro", async () => {
+    const s = await state(await read("PURCHASE", {
+      issuerName: "Cliente A SL", issuerCif: CLIENT_CIF, receiverName: "Proveedor SL", receiverCif: "B12345674",
+    }));
+    expect(s.issues).toEqual([["MANUAL", "clientParty",
+      "El cliente aparece como emisor en la factura: revisa si emisor y receptor están cambiados o si el tipo es correcto."]]);
+  });
+
   it("venta con el emisor de otro CIF: también", async () => {
     const s = await state(await read("SALE", {
       issuerName: "Socio SL", issuerCif: "B12345674", receiverName: "Comprador SA", receiverCif: "A58818501",
