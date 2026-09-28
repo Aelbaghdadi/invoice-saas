@@ -140,16 +140,25 @@ export default function PdfViewer({
   const [rotation, setRotation] = useState(0);
   // F-116: sin esto, un fallo de carga dejaba el spinner girando para
   // siempre (o el «Failed to load PDF file.» de react-pdf, en inglés).
-  const [loadFailed, setLoadFailed] = useState(false);
+  // "password": PDF protegido; no se pide la contraseña (el prompt de
+  // react-pdf sale en inglés y, al cancelar, vuelve a salir en bucle).
+  const [failure, setFailure] = useState<null | "error" | "password">(null);
+  const loadFailed = failure != null;
   // Cambiarlo vuelve a montar el Document: «Reintentar».
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
-    setLoadFailed(false);
+    setFailure(null);
     setLoading(true);
   }, [url]);
   const onLoadError = useCallback(() => {
-    setLoadFailed(true);
+    setFailure((f) => f ?? "error");
     setLoading(false);
+  }, []);
+  // pdf.js acepta un Error en vez de la contraseña: rechaza la carga y
+  // llega a onLoadError.
+  const onPassword = useCallback((callback: (password: string) => void) => {
+    setFailure("password");
+    callback(new Error("PDF protegido") as unknown as string);
   }, []);
 
   // Bboxes calculadas en el cliente con pdfjs del navegador (más fiables que
@@ -215,7 +224,7 @@ export default function PdfViewer({
   const onLoad = useCallback(({ numPages: n }: { numPages: number }) => {
     setNumPages(n);
     setLoading(false);
-    setLoadFailed(false);
+    setFailure(null);
     computeClientBboxes(n);
   }, [computeClientBboxes]);
 
@@ -370,19 +379,27 @@ export default function PdfViewer({
         {loadFailed && (
           <div role="alert" className="flex h-full max-w-sm flex-col items-center justify-center gap-3 text-center">
             <AlertTriangle className="h-8 w-8 text-amber-400" />
-            <p className="text-sm font-medium text-white">No se ha podido cargar el documento.</p>
-            <p className="text-xs text-white/60">
-              Puede ser un fallo de conexión o que el enlace haya caducado. Si al reintentar sigue igual, ábrelo en una pestaña nueva o recarga la página.
-            </p>
+            {failure === "password" ? (
+              <p className="text-sm font-medium text-white">El PDF está protegido con contraseña: ábrelo en una pestaña nueva.</p>
+            ) : (
+              <>
+                <p className="text-sm font-medium text-white">No se ha podido cargar el documento.</p>
+                <p className="text-xs text-white/60">
+                  Puede ser un fallo de conexión o que el enlace haya caducado. Si al reintentar sigue igual, ábrelo en una pestaña nueva o recarga la página.
+                </p>
+              </>
+            )}
             <div className="flex gap-2">
+              {failure !== "password" && (
               <button
                 type="button"
-                onClick={() => { setLoadFailed(false); setLoading(true); setAttempt((a) => a + 1); }}
+                onClick={() => { setFailure(null); setLoading(true); setAttempt((a) => a + 1); }}
                 className="flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-white/20"
               >
                 <RefreshCw className="h-3.5 w-3.5" />
                 Reintentar
               </button>
+              )}
               <a
                 href={url}
                 target="_blank"
@@ -401,6 +418,7 @@ export default function PdfViewer({
           onLoadSuccess={onLoad}
           onLoadError={onLoadError}
           onSourceError={onLoadError}
+          onPassword={onPassword}
           loading={null}
           error={null}
           noData={null}
