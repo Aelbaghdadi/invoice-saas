@@ -93,6 +93,22 @@ describe("validar y cerrar el periodo (F-040)", () => {
   });
 });
 
+describe("resumen de un cierre con una trimestral rechazada (revisión 1 del PR #14, punto 14)", () => {
+  it("el cierre de julio llega como «Julio 2026», no como el T3", async () => {
+    await makeInvoice(w.client, { status: "REJECTED", periodType: "QUARTERLY", periodMonth: 7, rejectionReason: "Subida por error" });
+    await makeInvoice(w.client, { status: "VALIDATED", periodType: "MONTHLY", periodMonth: 7, totalAmount: 242 });
+    signInAs(w.worker);
+    const f = new FormData();
+    f.set("clientId", w.client.id);
+    f.set("month", "7");
+    f.set("year", "2026");
+    f.set("type", "PURCHASE");
+    expect(await closePeriodFromBatch({}, f)).toEqual({ ok: true });
+    await runAfterCallbacks();
+    expect(emails("resumen-periodo")[0]).toContain("Resumen de Julio 2026: 1 validada, 1 rechazada");
+  });
+});
+
 describe("cerrar desde Cierres (F-040)", () => {
   const form = (clientId: string) => {
     const f = new FormData();

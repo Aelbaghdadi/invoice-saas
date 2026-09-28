@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { notifyClientPeriodSummary } from "@/lib/email";
 import { PENDING_WORK } from "@/lib/invoiceStatuses";
+import { closurePeriodType } from "@/lib/closurePeriodType";
 
 /**
  * Correo de resumen al cliente al cerrar un periodo (F-040): validadas,
@@ -19,11 +20,12 @@ export async function sendPeriodSummary(clientId: string, month: number, year: n
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     });
     if (invoices.length === 0) return;
-    const quarterly = [1, 4, 7, 10].includes(month) && invoices.some((i) => i.periodType === "QUARTERLY");
     await notifyClientPeriodSummary({
       clientEmail: client.user.email,
       clientName: client.name,
-      periodType: quarterly ? "QUARTERLY" : "MONTHLY",
+      // Mismo criterio que el «Exportar» de Cierres: una T3 rechazada no hace
+      // trimestral el cierre de julio (revision 1 del PR #14, punto 14).
+      periodType: closurePeriodType(month, invoices),
       periodMonth: month,
       periodYear: year,
       validated: invoices.filter((i) => i.status === "VALIDATED" || i.status === "EXPORTED").length,
