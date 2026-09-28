@@ -261,8 +261,17 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       // aplicaba igual, y un proveedor de todo el grupo mandaba la factura a
       // la empresa de la ultima clasificacion (F-021).
       let resolvedClientId: string | null = null;
+      // «Detectar automaticamente»: el tipo guardado (compra) es solo un
+      // marcador, y que el receptor no case no quiere decir que la factura
+      // sea de otro. Se prueba el otro lado: si casa el emisor, es una venta
+      // del cliente (detectInvoiceType la fija mas abajo).
+      const swapped = routing.status === "unclassified" && routing.reason === "no_match" && invoice.typeUnconfirmed
+        ? routeByCif(candidates.map((c) => ({ clientId: c.id, cif: c.cif })), otherCif, sideCif)
+        : null;
       if (routing.status === "routed") {
         resolvedClientId = routing.clientId;
+      } else if (swapped?.status === "routed") {
+        resolvedClientId = swapped.clientId;
       } else {
         routingReason = routing.reason;
         if (routing.reason === "no_cif" || routing.reason === "invalid_cif") {

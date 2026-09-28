@@ -37,12 +37,12 @@ beforeEach(async () => {
 
 /** Sube al buzon una compra del proveedor con lo que lea el OCR y la procesa.
  *  (Otro total que las facturas de makeFirm: si no, seria un posible duplicado.) */
-async function upload(read: { receiverCif: string | null; rawText?: string }) {
+async function upload(read: { receiverCif: string | null; issuerCif?: string; rawText?: string; typeUnconfirmed?: boolean }) {
   stubOcr(async () => ({
     rawJson: "{}",
     rawText: read.rawText,
     extracted: {
-      issuerName: "Proveedor SL", issuerCif: PROVIDER, receiverName: null, receiverCif: read.receiverCif,
+      issuerName: "Proveedor SL", issuerCif: read.issuerCif ?? PROVIDER, receiverName: null, receiverCif: read.receiverCif,
       invoiceNumber: `F-${Math.random()}`, invoiceDate: "2026-09-10", taxBase: 200, vatRate: 21, vatAmount: 42,
       irpfRate: null, irpfAmount: null, totalAmount: 242, currency: "EUR",
       vatLines: [{ taxBase: 200, vatRate: 21, vatAmount: 42 }], confidence: null,
@@ -53,12 +53,13 @@ async function upload(read: { receiverCif: string | null; rawText?: string }) {
   const { id } = await makeInvoice(w.client, {
     filename: "f.pdf", storageKey: key, fileType: "application/pdf", status: "UPLOADED",
     routingCandidateIds: [a.id, b.id], invoiceNumber: null, issuerCif: null, totalAmount: null,
+    typeUnconfirmed: read.typeUnconfirmed ?? false,
   });
   await processInvoice(id, w.worker.id);
   const inv = await prisma.invoice.findUniqueOrThrow({ where: { id } });
   const audit = await prisma.auditLog.findMany({ where: { invoiceId: id, field: "auto:ruteo" } });
   const issues = await prisma.invoiceIssue.findMany({ where: { invoiceId: id } });
-  return { status: inv.status, clientId: inv.clientId, audit: audit.map((e) => [e.oldValue, e.newValue, e.userId]), issues: issues.map((i) => i.description) };
+  return { status: inv.status, clientId: inv.clientId, type: inv.type, audit: audit.map((e) => [e.oldValue, e.newValue, e.userId]), issues: issues.map((i) => i.description) };
 }
 
 describe("regla del proveedor al subir al buzón (F-021)", () => {
@@ -82,6 +83,18 @@ describe("regla del proveedor al subir al buzón (F-021)", () => {
     const r = await upload({ receiverCif: null, rawText: `Factura\\nCliente: ${a.cif}\\nTotal 242` });
     expect([r.status, r.clientId]).toEqual(["PENDING_REVIEW", a.id]);
     expect(r.audit).toEqual([]);
+  });
+});
+
+describe("«Detectar automáticamente» (tipo sin confirmar)", () => {
+  it("una venta de A a un cliente con CIF válido: se enruta a A como venta", async () => {
+    const r = await upload({ issuerCif: a.cif, receiverCif: validCif("B", "3333333"), typeUnconfirmed: true });
+    expect([r.status, r.clientId, r.type]).toEqual(["PENDING_REVIEW", a.id, "SALE"]);
+  });
+
+  it("con el tipo confirmado, un receptor que no casa sigue yendo al buzón", async () => {
+    const r = await upload({ issuerCif: a.cif, receiverCif: validCif("B", "3333333") });
+    expect([r.status, r.clientId]).toEqual(["PENDING_ROUTING", w.client.id]);
   });
 });
 
