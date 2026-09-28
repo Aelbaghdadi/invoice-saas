@@ -1159,35 +1159,47 @@ export async function rejectInvoice(
   // Condicionado al updatedAt leido: si una exportacion la reservo mientras
   // tanto, no se rechaza una factura que ya esta camino de A3 (F-049).
   // Estado, incidencias (F-057), historial y auditoria en una transaccion.
-  const rejectedOk = await prisma.$transaction(async (tx) => {
-    const rejected = await tx.invoice.updateMany({
-      where: { id, updatedAt: invoice.updatedAt, status: { in: reviewAllowedFrom("reject") } },
-      data: {
-        status: "REJECTED",
-        rejectionReason: reason,
-        ...(category ? { rejectionCategory: category as "ILLEGIBLE" | "INCOMPLETE" | "WRONG_PERIOD" | "DUPLICATE" | "OTHER" } : {}),
-      },
-    });
-    if (rejected.count === 0) return false;
-    await closeOpenIssues(tx, id, session.user.id);
-    await tx.invoiceStatusHistory.create({
-      data: {
+  // Con el timeout del export, como en parseAndSave: si un export tiene la
+  // fila reservada, el updateMany espera a su COMMIT y con los 5 s por
+  // defecto caducaba (P2028) y la accion lanzaba.
+  let rejectedOk: boolean;
+  try {
+    rejectedOk = await prisma.$transaction(async (tx) => {
+      const rejected = await tx.invoice.updateMany({
+        where: { id, updatedAt: invoice.updatedAt, status: { in: reviewAllowedFrom("reject") } },
+        data: {
+          status: "REJECTED",
+          rejectionReason: reason,
+          ...(category ? { rejectionCategory: category as "ILLEGIBLE" | "INCOMPLETE" | "WRONG_PERIOD" | "DUPLICATE" | "OTHER" } : {}),
+        },
+      });
+      if (rejected.count === 0) return false;
+      await closeOpenIssues(tx, id, session.user.id);
+      await tx.invoiceStatusHistory.create({
+        data: {
+          invoiceId: id,
+          fromStatus: invoice.status,
+          toStatus: "REJECTED",
+          changedBy: session.user.id,
+          reason,
+        },
+      });
+      await appendAuditLogs([{
         invoiceId: id,
-        fromStatus: invoice.status,
-        toStatus: "REJECTED",
-        changedBy: session.user.id,
-        reason,
-      },
-    });
-    await appendAuditLogs([{
-      invoiceId: id,
-      userId: session.user.id,
-      field: "status",
-      oldValue: invoice.status,
-      newValue: "REJECTED",
-    }], tx);
-    return true;
-  });
+        userId: session.user.id,
+        field: "status",
+        oldValue: invoice.status,
+        newValue: "REJECTED",
+      }], tx);
+      return true;
+    }, { timeout: EXPORT_TRANSACTION_OPTIONS.timeout + 5_000, maxWait: 5_000 });
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2028") {
+      return { error: appError("ERR-VALIDATE-003", `P2028 al rechazar: ${err.message}`) };
+    }
+    console.error(`[review] no se pudo rechazar la factura ${id}:`, err);
+    return { error: appError("ERR-SYS-001", `rechazar ${id}: ${err instanceof Error ? err.message : String(err)}`) };
+  }
   if (!rejectedOk) {
     return conditionalWriteError(id, "reject", {}, `updatedAt=${invoice.updatedAt.getTime()} al rechazar`);
   }

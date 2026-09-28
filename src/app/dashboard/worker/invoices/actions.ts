@@ -8,6 +8,8 @@ import { notifyClientInvoiceRejected } from "@/lib/email";
 import { appendAuditLogs } from "@/lib/auditLog";
 import { closeOpenIssues } from "@/lib/invoiceIssues";
 import { canAccessClient } from "@/lib/accessibleClients";
+import { EXPORT_TRANSACTION_OPTIONS } from "@/lib/exportBatch";
+import { Prisma } from "@prisma/client";
 
 export type InvoiceQuickAction = { ok?: boolean; error?: string } | null;
 
@@ -61,35 +63,44 @@ export async function quickRejectDuplicate(
   const reason = dupIssue?.description ?? "Factura duplicada detectada desde el listado";
 
   // Estado, incidencias (F-057: todas, no solo la del duplicado), historial
-  // y auditoria en una transaccion.
-  await prisma.$transaction(async (tx) => {
-    await tx.invoice.update({
-      where: { id: invoiceId },
-      data: {
-        status: "REJECTED",
-        rejectionReason: reason,
-        rejectionCategory: "DUPLICATE",
-        reviewedBy: session.user.id,
-      },
-    });
-    await closeOpenIssues(tx, invoiceId, session.user.id);
-    await tx.invoiceStatusHistory.create({
-      data: {
+  // y auditoria en una transaccion. Con el timeout del export (una
+  // exportacion puede tener la fila reservada) y sin lanzar a la UI.
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.invoice.update({
+        where: { id: invoiceId },
+        data: {
+          status: "REJECTED",
+          rejectionReason: reason,
+          rejectionCategory: "DUPLICATE",
+          reviewedBy: session.user.id,
+        },
+      });
+      await closeOpenIssues(tx, invoiceId, session.user.id);
+      await tx.invoiceStatusHistory.create({
+        data: {
+          invoiceId,
+          fromStatus: invoice.status,
+          toStatus: "REJECTED",
+          changedBy: session.user.id,
+          reason,
+        },
+      });
+      await appendAuditLogs([{
         invoiceId,
-        fromStatus: invoice.status,
-        toStatus: "REJECTED",
-        changedBy: session.user.id,
-        reason,
-      },
-    });
-    await appendAuditLogs([{
-      invoiceId,
-      userId: session.user.id,
-      field: "status",
-      oldValue: invoice.status,
-      newValue: "REJECTED",
-    }], tx);
-  });
+        userId: session.user.id,
+        field: "status",
+        oldValue: invoice.status,
+        newValue: "REJECTED",
+      }], tx);
+    }, { timeout: EXPORT_TRANSACTION_OPTIONS.timeout + 5_000, maxWait: 5_000 });
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2028") {
+      return { error: "Otra operación tenía la factura ocupada. Vuelve a intentarlo." };
+    }
+    console.error(`[invoices] no se pudo rechazar la factura ${invoiceId}:`, err);
+    return { error: "No se ha podido rechazar la factura. Vuelve a intentarlo." };
+  }
 
   // Notificacion al cliente en background
   after(async () => {
