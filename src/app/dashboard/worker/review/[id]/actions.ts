@@ -531,6 +531,7 @@ async function parseAndSave(
       excludeId: invoiceId,
       invoiceNumber: newData.invoiceNumber,
       issuerCif: newData.issuerCif,
+      invoiceDate: newData.invoiceDate,
       onlyValidated: true,
     });
     const dup = dupId ? await prisma.invoice.findUnique({ where: { id: dupId }, select: DUPLICATE_SELECT }) : null;

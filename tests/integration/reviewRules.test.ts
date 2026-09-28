@@ -1030,6 +1030,17 @@ describe("al validar, confirmación si ya hay otra validada con el mismo número
     expect(await findByInvoiceNumber({ ...base, invoiceNumber: "V-9", type: "SALE", issuerCif: "X" })).toBe(venta.id);
   });
 
+  it("con fecha, solo casa en el mismo año (numeración que reinicia cada año)", async () => {
+    const del2025 = await makeInvoice(w.client, { status: "VALIDATED", issuerCif: "B12345674", invoiceNumber: "1", invoiceDate: new Date("2025-03-01") });
+    const base = { clientId: w.client.id, type: "PURCHASE" as const, excludeId: id, invoiceNumber: "1", issuerCif: "B12345674", onlyValidated: true };
+    expect(await findByInvoiceNumber({ ...base, invoiceDate: new Date("2026-03-01") })).toBeNull();
+    expect(await findByInvoiceNumber({ ...base, invoiceDate: new Date("2025-12-31") })).toBe(del2025.id);
+    // Sin fecha en cualquiera de los dos lados, se compara igual.
+    expect(await findByInvoiceNumber({ ...base, invoiceDate: null })).toBe(del2025.id);
+    await prisma.invoice.update({ where: { id: del2025.id }, data: { invoiceDate: null } });
+    expect(await findByInvoiceNumber({ ...base, invoiceDate: new Date("2026-03-01") })).toBe(del2025.id);
+  });
+
   it("si la otra aún no está validada, no hace falta confirmar", async () => {
     await otra("PENDING_REVIEW");
     expect((await validate(await form({ invoiceNumber: "F-2026-001" }))).error).toBeNull();

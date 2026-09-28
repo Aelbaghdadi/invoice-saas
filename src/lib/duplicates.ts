@@ -40,6 +40,10 @@ export async function findByInvoiceNumber(input: {
   invoiceNumber: string;
   /** CIF del emisor limpio. En ventas se ignora. */
   issuerCif: string | null;
+  /** Fecha de la factura que se comprueba. Con fecha, solo casa con otras
+   *  del mismo año o sin fecha: un autonomo que numera «1», «2»… y reinicia
+   *  cada año daba duplicados de un año para otro. */
+  invoiceDate?: Date | null;
   /** Solo las ya validadas o exportadas (la comprobacion al validar). */
   onlyValidated?: boolean;
 }): Promise<string | null> {
@@ -48,6 +52,7 @@ export async function findByInvoiceNumber(input: {
   const issuerCif = input.type === "SALE" ? null : input.issuerCif;
   if (input.type !== "SALE" && !issuerCif) return null;
   const onlyValidated = input.onlyValidated === true;
+  const year = input.invoiceDate && !isNaN(input.invoiceDate.getTime()) ? input.invoiceDate.getUTCFullYear() : null;
   const rows = await prisma.$queryRaw<{ id: string }[]>`
     SELECT id FROM "Invoice"
     WHERE "clientId" = ${input.clientId}
@@ -56,6 +61,7 @@ export async function findByInvoiceNumber(input: {
       AND status NOT IN ('REJECTED', 'SPLIT_SOURCE')
       AND (NOT ${onlyValidated} OR status IN ('VALIDATED', 'EXPORTED'))
       AND (${issuerCif}::text IS NULL OR "issuerCif" = ${issuerCif})
+      AND (${year}::int IS NULL OR "invoiceDate" IS NULL OR extract(year FROM "invoiceDate") = ${year}::int)
       AND ${normalizedNumberSql(Prisma.raw('"invoiceNumber"'))} = ${normalized}
     ORDER BY "createdAt"
     LIMIT 1`;
@@ -120,7 +126,8 @@ export type DuplicateCheckInput = {
  * numero y, en una venta sin NIF del destinatario, nada.
  *  0. El mismo fichero (hash): duplicado seguro.
  *  A. El numero normalizado y, en compras, el CIF del emisor limpio. En
- *     ventas basta el numero: el cliente y el tipo fijan al emisor.
+ *     ventas basta el numero: el cliente y el tipo fijan al emisor. Con
+ *     fecha, solo del mismo año (o sin fecha).
  *  B. Total y fecha: en compras con el CIF del emisor; en ventas con el
  *     destinatario, o sin NIF ni numero con su nombre normalizado.
  */
@@ -148,20 +155,24 @@ export async function findPossibleDuplicate(input: DuplicateCheckInput): Promise
   // CIF limpio, como se guarda (F-010).
   const issuerCif = parseTaxId(input.issuerCif).clean || null;
 
-  // A. Numero normalizado (+ CIF del emisor en compras).
+  // Protegemos la fecha: el OCR a veces devuelve un RANGO (facturas de
+  // suministros, «14-jul-25 / 10-set-25») que da un Date invalido, y Prisma
+  // lo rechazaba con un error crudo.
+  const parsedDate = input.invoiceDate ? new Date(input.invoiceDate) : null;
+  const validDate = parsedDate && !isNaN(parsedDate.getTime()) ? parsedDate : null;
+
+  // A. Numero normalizado (+ CIF del emisor en compras), del mismo año.
   if (input.invoiceNumber) {
-    const dupId = await findByInvoiceNumber({ clientId, type, excludeId: invoiceId, invoiceNumber: input.invoiceNumber, issuerCif });
+    const dupId = await findByInvoiceNumber({
+      clientId, type, excludeId: invoiceId, invoiceNumber: input.invoiceNumber, issuerCif, invoiceDate: validDate,
+    });
     const dup = dupId ? await prisma.invoice.findUnique({ where: { id: dupId }, select: DUPLICATE_SELECT }) : null;
     if (dup) {
       return found(dup, isSale ? "mismo número de factura emitida" : `mismo número y mismo CIF emisor (${issuerCif})`);
     }
   }
 
-  // B. Total y fecha. Protegemos la fecha: el OCR a veces devuelve un RANGO
-  // (facturas de suministros, «14-jul-25 / 10-set-25») que da un Date
-  // invalido, y Prisma lo rechazaba con un error crudo.
-  const parsedDate = input.invoiceDate ? new Date(input.invoiceDate) : null;
-  const validDate = parsedDate && !isNaN(parsedDate.getTime()) ? parsedDate : null;
+  // B. Total y fecha.
   if (input.totalAmount == null || !validDate) return null;
   const sameAmountAndDate = { ...baseWhere, totalAmount: input.totalAmount, invoiceDate: validDate };
   const total = formatEur(input.totalAmount);
