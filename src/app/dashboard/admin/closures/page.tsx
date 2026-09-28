@@ -10,6 +10,7 @@ import { Lock, Unlock, CalendarCheck, Download } from "lucide-react";
 import { formatDateTimeEs } from "@/lib/dates";
 import { MONTH_NAMES } from "@/lib/period";
 import { exportPageHref } from "@/lib/exportPage";
+import { closureExportSelections } from "@/lib/closureExport";
 import { PAGE_SIZE, pageWindow, parsePage } from "@/lib/listing";
 import { ClosuresClient } from "./ClosuresClient";
 import { ReopenButton } from "./ReopenButton";
@@ -79,6 +80,8 @@ export default async function ClosuresPage({ searchParams }: Props) {
       })
     : [];
   const userName = new Map(users.map((u) => [u.id, u.name]));
+  // Mensual o trimestral segun las facturas del periodo cerrado.
+  const exportSelections = firmId ? await closureExportSelections(activeClosed, firmId) : [];
   const byWhom = (userId: string | null) => (userId ? userName.get(userId) ?? "—" : "—");
 
   const periodText = (month: number, year: number) => `${MONTH_NAMES[month - 1] ?? month} ${year}`;
@@ -133,7 +136,7 @@ export default async function ClosuresPage({ searchParams }: Props) {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50">
-                  {activeClosed.map((c) => (
+                  {activeClosed.map((c, i) => (
                     <tr key={c.id} className="text-slate-700 hover:bg-slate-50/60">
                       <td className="px-5 py-3 font-medium">{c.client.name}</td>
                       <td className="px-5 py-3">{periodText(c.month, c.year)}</td>
@@ -152,13 +155,15 @@ export default async function ClosuresPage({ searchParams }: Props) {
                       <td className="px-5 py-3">
                         <div className="flex flex-wrap items-center gap-2">
                           {/* Cerrado el mes, lo siguiente es llevarlo a A3 (F-041). */}
-                          <Link
-                            href={exportPageHref({ clientId: c.clientId, periodType: "MONTHLY", month: c.month, year: c.year, type: "ALL" })}
-                            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1 text-[12px] font-medium text-slate-700 hover:bg-slate-50"
-                          >
-                            <Download className="h-3.5 w-3.5" />
-                            Exportar
-                          </Link>
+                          {exportSelections[i] && (
+                            <Link
+                              href={exportPageHref(exportSelections[i])}
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1 text-[12px] font-medium text-slate-700 hover:bg-slate-50"
+                            >
+                              <Download className="h-3.5 w-3.5" />
+                              Exportar
+                            </Link>
+                          )}
                           <ReopenButton
                             closureId={c.id}
                             label={`${c.client.name} · ${periodText(c.month, c.year)}`}
