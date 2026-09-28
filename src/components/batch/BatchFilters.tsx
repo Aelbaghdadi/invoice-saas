@@ -36,6 +36,9 @@ export function BatchFilters({ clients, basePath }: Props) {
   const type = sp.get("type") ?? "";
   // Estado por defecto: solo lo pendiente (oculta completados y cerrados).
   const estado = sp.get("estado") ?? "pendientes";
+  // «Ver todo el histórico» (F-030) se conserva al cambiar cualquier filtro:
+  // si no, los lotes viejos desaparecían otra vez (revision 1 del PR #14).
+  const historico = sp.get("historico") === "1";
 
   const nowYear = new Date().getFullYear();
   const years = Array.from({ length: 5 }, (_, i) => nowYear - i);
@@ -51,10 +54,11 @@ export function BatchFilters({ clients, basePath }: Props) {
       if (v.month) params.set("month", v.month);
       if (v.type) params.set("type", v.type);
       if (v.estado && v.estado !== "pendientes") params.set("estado", v.estado);
+      if (historico) params.set("historico", "1");
       const qs = params.toString();
       router.replace(qs ? `${basePath}?${qs}` : basePath);
     },
-    [clientId, year, month, type, estado, basePath, router],
+    [clientId, year, month, type, estado, historico, basePath, router],
   );
 
   const hasFilters = clientId || year || month || type || estado !== "pendientes";
@@ -79,7 +83,7 @@ export function BatchFilters({ clients, basePath }: Props) {
         {hasFilters && (
           <button
             type="button"
-            onClick={() => router.replace(basePath)}
+            onClick={() => router.replace(historico ? `${basePath}?historico=1` : basePath)}
             className="ml-auto flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-1.5 text-[12px] font-medium text-slate-500 transition hover:bg-slate-50"
           >
             <X className="h-3 w-3" /> Limpiar
