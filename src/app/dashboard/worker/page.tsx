@@ -8,7 +8,7 @@ import Link from "next/link";
 import type { PeriodType } from "@prisma/client";
 import { DONE_WORK, PENDING_WORK, PERIOD_BLOCKING_STATUSES } from "@/lib/invoiceStatuses";
 import { periodLabel } from "@/lib/period";
-import { QUEUE_ORDER } from "@/lib/reviewQueue";
+import { loadBatchRows } from "@/lib/batchGroups";
 import { reviewHref } from "@/lib/reviewNavigation";
 import { startOfTodayInMadrid } from "@/lib/dates";
 
@@ -52,34 +52,34 @@ export default async function WorkerDashboard() {
 
   const clientIds = assignments.map((a) => a.clientId);
 
-  // Cargamos de una vez las facturas relevantes + issues abiertas.
-  const invoices = clientIds.length
-    ? await prisma.invoice.findMany({
-        // El buzon "Sin clasificar" no es un cliente: si el gestor lo tiene
-        // asignado, saldria como periodo listo para cerrar.
-        where: { clientId: { in: clientIds }, client: { isUnclassifiedBucket: false } },
-        include: {
-          client: { select: { id: true, name: true } },
-          issues: { where: { status: "OPEN" }, select: { id: true } },
-        },
-        // Dentro de cada lote, el orden de la cola: la primera que se abre
-        // es la 1 de la revision, no una pospuesta.
-        orderBy: [{ periodYear: "desc" }, { periodMonth: "desc" }, ...QUEUE_ORDER],
-      })
-    : [];
+  // Sin cargar el historico entero (F-030): recuentos agrupados por lote y
+  // estado, y solo las pendientes de revisar (para saber cual abrir primero
+  // y cuales tienen incidencias). Antes se leian todas las facturas de los
+  // clientes, con sus incidencias, en cada visita al inicio.
+  // El buzon "Sin clasificar" no es un cliente: si el gestor lo tiene
+  // asignado, saldria como periodo listo para cerrar.
+  const scope = { clientId: { in: clientIds }, client: { isUnclassifiedBucket: false } };
+  const [counts, pendingRows] = clientIds.length
+    ? await Promise.all([
+        prisma.invoice.groupBy({
+          by: ["clientId", "periodYear", "periodMonth", "periodType", "type", "status"],
+          where: scope,
+          _count: { _all: true },
+        }),
+        loadBatchRows({ ...scope, status: { in: ["PENDING_REVIEW", "NEEDS_ATTENTION", "OCR_ERROR"] } }),
+      ])
+    : [[], []];
+  const clientName = new Map(assignments.map((a) => [a.clientId, a.client.name]));
 
   // Agrupar por lote (cliente + periodo + tipo) para tarjetas accionables.
   const batchMap = new Map<string, BatchRow>();
-  for (const inv of invoices) {
-    // La original de una division no es una factura mas (sus hijas ya
-    // cuentan): dejaba el lote en "4/5" y el periodo pendiente para siempre.
-    if (inv.status === "SPLIT_SOURCE") continue;
+  const batchFor = (inv: { clientId: string; periodType: PeriodType; periodMonth: number; periodYear: number; type: string }) => {
     const key = `${inv.clientId}-${inv.periodYear}-${inv.periodMonth}-${inv.periodType}-${inv.type}`;
     let b = batchMap.get(key);
     if (!b) {
       b = {
         clientId: inv.clientId,
-        clientName: inv.client.name,
+        clientName: clientName.get(inv.clientId) ?? "—",
         periodType: inv.periodType,
         periodMonth: inv.periodMonth,
         periodYear: inv.periodYear,
@@ -93,21 +93,25 @@ export default async function WorkerDashboard() {
       };
       batchMap.set(key, b);
     }
-    b.total++;
-    const hasIssue = inv.issues.length > 0;
-    if (DONE_WORK.includes(inv.status)) {
-      b.done++;
-    } else if (["NEEDS_ATTENTION", "OCR_ERROR"].includes(inv.status)) {
+    return b;
+  };
+  for (const c of counts) {
+    // La original de una division no es una factura mas (sus hijas ya
+    // cuentan): dejaba el lote en "4/5" y el periodo pendiente para siempre.
+    if (c.status === "SPLIT_SOURCE") continue;
+    const b = batchFor(c);
+    b.total += c._count._all;
+    if (DONE_WORK.includes(c.status)) b.done += c._count._all;
+  }
+  // En el orden de la cola: la primera de cada bucket es la 1 de la revision.
+  for (const inv of pendingRows) {
+    const b = batchFor(inv);
+    if (inv.status !== "PENDING_REVIEW" || inv.hasOpenIssue) {
       b.attentionCount++;
-      if (!b.firstAttentionId) b.firstAttentionId = inv.id;
-    } else if (inv.status === "PENDING_REVIEW") {
-      if (hasIssue) {
-        b.attentionCount++;
-        if (!b.firstAttentionId) b.firstAttentionId = inv.id;
-      } else {
-        b.cleanCount++;
-        if (!b.firstCleanId) b.firstCleanId = inv.id;
-      }
+      b.firstAttentionId ??= inv.id;
+    } else {
+      b.cleanCount++;
+      b.firstCleanId ??= inv.id;
     }
     // UPLOADED/ANALYZING: procesandose, no accionable.
   }
@@ -132,22 +136,22 @@ export default async function WorkerDashboard() {
         })
       ).length
     : 0;
-  const pendingTotal = invoices.filter((i) => PENDING_WORK.includes(i.status)).length;
+  const pendingTotal = counts.reduce((sum, c) => sum + (PENDING_WORK.includes(c.status) ? c._count._all : 0), 0);
 
   // Cierres: periodos listos para cerrar (todo done y no cerrados).
   const pendingByPeriod = new Map<string, number>();
   const totalByPeriod = new Map<string, { clientId: string; clientName: string; periodType: PeriodType; month: number; year: number; done: number; total: number }>();
-  for (const inv of invoices) {
-    if (inv.status === "SPLIT_SOURCE") continue;
-    const key = `${inv.clientId}-${inv.periodYear}-${inv.periodMonth}`;
+  for (const c of counts) {
+    if (c.status === "SPLIT_SOURCE") continue;
+    const key = `${c.clientId}-${c.periodYear}-${c.periodMonth}`;
     let acc = totalByPeriod.get(key);
     if (!acc) {
       acc = {
-        clientId: inv.clientId,
-        clientName: inv.client.name,
-        periodType: inv.periodType,
-        month: inv.periodMonth,
-        year: inv.periodYear,
+        clientId: c.clientId,
+        clientName: clientName.get(c.clientId) ?? "—",
+        periodType: c.periodType,
+        month: c.periodMonth,
+        year: c.periodYear,
         done: 0,
         total: 0,
       };
@@ -155,12 +159,12 @@ export default async function WorkerDashboard() {
     }
     // El cierre va por cliente + mes + año: si en ese mes conviven lotes
     // mensuales y trimestrales, se nombra por el mes.
-    if (acc.periodType !== inv.periodType) acc.periodType = "MONTHLY";
-    acc.total++;
+    if (acc.periodType !== c.periodType) acc.periodType = "MONTHLY";
+    acc.total += c._count._all;
     // Mismo criterio que la accion de cerrar periodo y la pantalla de lotes.
-    const pending = PERIOD_BLOCKING_STATUSES.includes(inv.status);
-    if (!pending) acc.done++;
-    if (pending) pendingByPeriod.set(key, (pendingByPeriod.get(key) ?? 0) + 1);
+    const pending = PERIOD_BLOCKING_STATUSES.includes(c.status);
+    if (!pending) acc.done += c._count._all;
+    if (pending) pendingByPeriod.set(key, (pendingByPeriod.get(key) ?? 0) + c._count._all);
   }
   const readyKeys = Array.from(totalByPeriod.entries())
     .filter(([k, v]) => v.total > 0 && (pendingByPeriod.get(k) ?? 0) === 0)
