@@ -22,7 +22,7 @@ test.skip(!E2E_DB, "Necesita E2E_DATABASE_URL");
 test.describe.configure({ mode: "serial" });
 
 const PASSWORD = "Prueba1234!";
-const IDS = ["h1", "h2", "h3", "h4", "h5", "h6", "h7", "h8"];
+const IDS = ["h1", "h2", "h3", "h4", "h5", "h6", "h7", "h8", "h9"];
 
 test.beforeAll(async () => {
   const parsed = parseTestDatabaseUrl(E2E_DB, "E2E_DATABASE_URL");
@@ -181,6 +181,29 @@ test("lo tecleado mientras se guarda sigue contando como cambio", async ({ page 
   await page.locator('nav a[href^="/dashboard"]').filter({ hasNot: page.locator(`[href="${P}"]`) }).first().click();
   await expect(page.getByRole("alertdialog")).toBeVisible();
   await expect(page).toHaveURL(new RegExp(`${review("h7")}$`));
+});
+
+test("lo tecleado entre «Cambios guardados» y el refresco sigue contando como cambio", async ({ page }) => {
+  await openAndEdit(page, "h9");
+  // En cuanto sale el aviso (la acción ya ha vuelto; el árbol refrescado,
+  // aún no), se escribe en un campo que se lee del DOM.
+  await page.evaluate(() => {
+    const observer = new MutationObserver(() => {
+      if (!document.body.textContent?.includes("Cambios guardados")) return;
+      observer.disconnect();
+      const input = document.getElementById("invoiceNumber") as HTMLInputElement;
+      input.value = "h9-DESPUES";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+  });
+  await page.getByRole("button", { name: "Guardar sin validar" }).click();
+  await expect(page.getByText("Cambios guardados")).toBeVisible();
+  await page.waitForLoadState("networkidle");
+  await page.waitForTimeout(500);
+  await expect(page.locator("#invoiceNumber")).toHaveValue("h9-DESPUES");
+  await page.locator('nav a[href^="/dashboard"]').filter({ hasNot: page.locator(`[href="${P}"]`) }).first().click();
+  await expect(page.getByRole("alertdialog")).toBeVisible();
 });
 
 test("primera entrada de la pestaña con otras por delante: sin centinela", async ({ page, context }) => {

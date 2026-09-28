@@ -1212,8 +1212,15 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     // edicion: «Descartar» volvia a poner el centinela justo al salir.
     const onEdit = (e: Event) => {
       if ((e.target as Element | null)?.closest?.('[role="alertdialog"],[role="dialog"],[aria-modal="true"]')) return;
+      // Los campos que se leen del DOM ya llevan lo tecleado: se mira en el
+      // acto, por si el refresco se aplica antes del temporizador.
+      if (justSavedRef.current != null && latest.current.isDirty()) justSavedRef.current = null;
       const t = setTimeout(() => {
         timers.delete(t);
+        // Tras un guardado, hasta que llega el refresco la instantanea es lo
+        // enviado: si ya hay algo distinto, es lo tecleado despues de
+        // «Cambios guardados», y el refresco no puede darlo por guardado.
+        if (justSavedRef.current != null && latest.current.isDirty()) justSavedRef.current = null;
         if (!leavingRef.current && latest.current.isDirty()) latest.current.pushSentinel();
       }, 0);
       timers.add(t);
