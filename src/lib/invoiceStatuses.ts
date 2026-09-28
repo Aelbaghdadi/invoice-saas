@@ -230,12 +230,20 @@ export function auditFieldLabel(field: string): string {
 }
 
 /**
+ * Para ir junto a quien lo hizo («Automático (lanzado por Ana) modificó
+ * Recargo propuesto»): sin el « (automático)», que ya lo dice la frase. El
+ * filtro y la columna de campo usan la etiqueta completa.
+ */
+export function auditFieldLabelShort(field: string): string {
+  return auditFieldLabel(field).replace(/ \(automático\)$/, "");
+}
+
+/**
  * El mismo nombre para ir dentro de una frase («cambió motivo del rechazo en
  * …»): inicial en minuscula, salvo en siglas («CIF emisor» sigue igual).
  */
 export function auditFieldLabelInline(field: string): string {
-  // En la frase ya pone «Automático (lanzado por …)»: sin repetirlo.
-  const label = auditFieldLabel(field).replace(/ \(automático\)$/, "");
+  const label = auditFieldLabelShort(field);
   const [first, second] = label;
   if (!first || (second && second !== second.toLowerCase())) return label;
   return first.toLowerCase() + label.slice(1);

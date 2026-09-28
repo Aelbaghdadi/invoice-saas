@@ -4,6 +4,8 @@ import {
   REVIEWABLE,
   showsDuplicateWarning,
   auditActor,
+  auditFieldLabel,
+  auditFieldLabelShort,
   formatAuditValue,
   PENDING_WORK,
   DONE_WORK,
@@ -166,6 +168,12 @@ describe("presentación de la auditoría (revisión 1 del PR #11, punto 14)", ()
     expect(auditActor("status", "Ana", "UPLOADED", "VALIDATED")).toBe("Ana");
     // Sin el valor nuevo no se sabe: de la persona.
     expect(auditActor("status", "Ana", "UPLOADED")).toBe("Ana");
+  });
+
+  it("junto a quien lo hizo, la etiqueta va sin «(automático)»; la completa, para el filtro", () => {
+    expect(auditFieldLabelShort("auto:recargo")).toBe("Recargo propuesto");
+    expect(auditFieldLabel("auto:recargo")).toBe("Recargo propuesto (automático)");
+    expect(auditFieldLabelShort("totalAmount")).toBe("Total");
   });
 
   it("importes con más de dos decimales, en crudo (si no, «30,30 → 30,30» parece que no cambia)", () => {

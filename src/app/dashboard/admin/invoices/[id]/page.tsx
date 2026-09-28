@@ -7,7 +7,7 @@ import { ChevronLeft, Building2, Calendar, Hash, Euro, Percent, User } from "luc
 import Link from "next/link";
 import { AdminInvoiceViewer } from "./AdminInvoiceViewer";
 import { ReprocesarButton } from "./ReprocesarButton";
-import { auditFieldLabel, formatAuditValue, STATUS_LABELS, auditActor } from "@/lib/invoiceStatuses";
+import { auditFieldLabelShort, formatAuditValue, STATUS_LABELS, auditActor } from "@/lib/invoiceStatuses";
 import { formatDateEs, formatDateTimeEs } from "@/lib/dates";
 import { formatEur } from "@/lib/format";
 import { periodLabel } from "@/lib/period";
@@ -134,7 +134,7 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
                     <div className="min-w-0 flex-1">
                       <p className="text-[13px] text-slate-700">
                         <span className="font-semibold">{auditActor(log.field, log.user.name, log.oldValue, log.newValue)}</span> modificó{" "}
-                        <span className="font-medium text-slate-500">{auditFieldLabel(log.field)}</span>
+                        <span className="font-medium text-slate-500">{auditFieldLabelShort(log.field)}</span>
                       </p>
                       <p className="text-[12px] text-slate-400">
                         {formatAuditValue(log.oldValue, log.field)} → {formatAuditValue(log.newValue, log.field)}
