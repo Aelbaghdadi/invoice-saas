@@ -6,7 +6,7 @@ import { canAccessClient } from "@/lib/accessibleClients";
 import { appendAuditLogs } from "@/lib/auditLog";
 import { learnProviderRule } from "@/lib/providerRouting";
 import { detectInvoiceType } from "@/lib/invoiceRouting";
-import { DUPLICATE_SELECT, describeExisting } from "@/lib/issueDetector";
+import { duplicateField, findPossibleDuplicate } from "@/lib/duplicates";
 import { intracomVatIssue, mathIssues } from "@/lib/mathIssues";
 import { isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { anyNegativeAmount, hasRectificativeMention, rectificativeSignHint } from "@/lib/rectificative";
@@ -95,30 +95,23 @@ async function classify(invoiceId: string, clientId: string): Promise<ClassifySt
     ? { receiverName: client.name, receiverCif: client.cif }
     : { issuerName: client.name, issuerCif: client.cif, issuerCountry: null };
 
-  // Dedupe básico contra el cliente real (estrategia CIF + nº factura).
+  // Duplicados contra el cliente real, con la misma comprobacion que el OCR
+  // (src/lib/duplicates.ts): antes solo se miraba CIF + numero literal y,
+  // en una venta sin NIF del destinatario, nada.
   const otherCif = isPurchase ? invoice.issuerCif : invoice.receiverCif;
-  let isDuplicate = false;
-  let duplicateDescription: string | null = null;
-  if (otherCif && invoice.invoiceNumber) {
-    const dup = await prisma.invoice.findFirst({
-      where: {
-        clientId,
-        type: effectiveType,
-        id: { not: invoiceId },
-        status: { notIn: ["REJECTED", "PENDING_ROUTING"] },
-        issuerCif: isPurchase ? otherCif : undefined,
-        receiverCif: isPurchase ? undefined : otherCif,
-        invoiceNumber: invoice.invoiceNumber,
-      },
-      select: { id: true, ...DUPLICATE_SELECT },
-    });
-    if (dup) {
-      isDuplicate = true;
-      // Mismo texto que el detector del OCR: el aviso se lee igual venga de
-      // donde venga. Se crea dentro de la transaccion de abajo.
-      duplicateDescription = `Posible duplicado de ${describeExisting(dup)}.`;
-    }
-  }
+  const duplicate = await findPossibleDuplicate({
+    invoiceId,
+    clientId,
+    type: effectiveType,
+    invoiceNumber: invoice.invoiceNumber,
+    issuerCif: isPurchase ? invoice.issuerCif : client.cif,
+    receiverCif: isPurchase ? client.cif : invoice.receiverCif,
+    receiverName: invoice.receiverName,
+    totalAmount: invoice.totalAmount == null ? null : Number(invoice.totalAmount),
+    invoiceDate: invoice.invoiceDate,
+    fileHash: invoice.fileHash,
+  });
+  const isDuplicate = duplicate != null;
 
   // Tipo de operacion con lo aprendido del tercero en el cliente elegido,
   // como en el OCR: el que habia se calculo con el cliente buzon (INTERIOR)
@@ -243,7 +236,7 @@ async function classify(invoiceId: string, clientId: string): Promise<ClassifySt
     if (claim.count !== 1) return false;
 
     const issues = [
-      ...(duplicateDescription ? [{ type: "POSSIBLE_DUPLICATE" as const, description: duplicateDescription }] : []),
+      ...(duplicate ? [{ type: "POSSIBLE_DUPLICATE" as const, description: duplicate.description, field: duplicateField(duplicate.originalId) }] : []),
       ...mathProblems,
     ];
     if (issues.length > 0) {

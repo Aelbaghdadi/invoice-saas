@@ -10,6 +10,7 @@ import { fakeS3 } from "./helpers/fakeS3";
 import { facturaeXml } from "./helpers/fixtures";
 import { stubOcr } from "./helpers/ocr";
 import { NEGATIVE_AMOUNTS_HINT } from "@/lib/rectificative";
+import { duplicateOriginalId } from "@/lib/duplicates";
 import { parseTaxId } from "@/lib/validators";
 import { accountEntryKey } from "@/lib/supplierMatching";
 import { processInvoice } from "@/lib/processInvoice";
@@ -353,7 +354,9 @@ describe("moneda extranjera sin convertir (F-025)", () => {
 describe("«Por clasificar»: al clasificar se miran también el cuadre y el desglose", () => {
   async function routed(lines: [number, number, number][], total: number) {
     const inv = await makeInvoice(w.client, {
-      status: "PENDING_ROUTING", routingCandidateIds: [w.client.id], totalAmount: total, isValid: false,
+      // Otra fecha que la factura del beforeEach: con el mismo emisor y total
+      // seria un posible duplicado (estrategia B, tambien al clasificar).
+      status: "PENDING_ROUTING", routingCandidateIds: [w.client.id], totalAmount: total, isValid: false, invoiceDate: new Date("2026-08-20"),
       taxBase: lines.reduce((s, l) => s + l[0], 0), vatAmount: lines.reduce((s, l) => s + l[2], 0),
     });
     for (const [i, [taxBase, vatRate, vatAmount]] of lines.entries()) {
@@ -940,5 +943,39 @@ describe("duplicados con el CIF limpio y el número normalizado (F-010)", () => 
     expect(await duplicatesFor({ issuerCif: null, invoiceNumber: "v 2026/7" }, "SALE")).toEqual([
       expect.stringContaining("mismo número de factura emitida"),
     ]);
+  });
+});
+
+describe("al clasificar, la misma comprobación de duplicados que el OCR (F-010, punto 2)", () => {
+  const issuesOf = async (invoiceId: string) => prisma.invoiceIssue.findMany({ where: { invoiceId, type: "POSSIBLE_DUPLICATE" } });
+  const routed = (extra: object) => makeInvoice(w.client, {
+    status: "PENDING_ROUTING", routingCandidateIds: [w.client.id], totalAmount: 363, invoiceDate: new Date("2026-09-12"), ...extra,
+  });
+
+  it("compra: número normalizado y CIF limpio, con enlace a la original", async () => {
+    const original = await makeInvoice(w.client, { issuerCif: "B12345674", invoiceNumber: "F-001", totalAmount: 50 });
+    const inv = await routed({ issuerCif: "B12345674", invoiceNumber: "f 001" });
+    await classifyInvoice(inv.id, w.client.id);
+    const [issue] = await issuesOf(inv.id);
+    expect(issue.description).toContain("mismo número y mismo CIF emisor (B12345674)");
+    expect(duplicateOriginalId(issue.field)).toBe(original.id);
+    expect((await prisma.invoice.findUniqueOrThrow({ where: { id: inv.id } })).status).toBe("NEEDS_ATTENTION");
+  });
+
+  it("venta sin NIF del destinatario: por nombre, total y fecha (antes no se buscaba nada)", async () => {
+    await makeInvoice(w.client, {
+      type: "SALE", issuerCif: w.client.cif, receiverCif: null, receiverName: "Juan García", invoiceNumber: null,
+      totalAmount: 363, invoiceDate: new Date("2026-09-12"),
+    });
+    const inv = await routed({ type: "SALE", issuerCif: w.client.cif, receiverCif: null, receiverName: "JUAN GARCIA", invoiceNumber: null });
+    await classifyInvoice(inv.id, w.client.id);
+    expect((await issuesOf(inv.id)).map((i) => i.description)).toEqual([expect.stringContaining("venta sin NIF al mismo destinatario")]);
+  });
+
+  it("el mismo fichero ya subido al cliente elegido", async () => {
+    await makeInvoice(w.client, { fileHash: "hash-buzon", invoiceNumber: "X-9" });
+    const inv = await routed({ fileHash: "hash-buzon", invoiceNumber: "Z-1" });
+    await classifyInvoice(inv.id, w.client.id);
+    expect((await issuesOf(inv.id)).map((i) => i.description)).toEqual([expect.stringContaining("es el mismo fichero")]);
   });
 });
