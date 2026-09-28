@@ -4,12 +4,8 @@ import { after } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
-import { notifyClientInvoiceRejected } from "@/lib/email";
-import { appendAuditLogs } from "@/lib/auditLog";
-import { closeOpenIssues } from "@/lib/invoiceIssues";
 import { canAccessClient } from "@/lib/accessibleClients";
-import { EXPORT_TRANSACTION_OPTIONS } from "@/lib/exportBatch";
-import { Prisma } from "@prisma/client";
+import { notifyRejection, rejectInvoiceCore } from "@/lib/invoiceRejection";
 
 export type InvoiceQuickAction = { ok?: boolean; error?: string } | null;
 
@@ -50,78 +46,25 @@ export async function quickRejectDuplicate(
   const access = await assertAccess(session, invoiceId);
   if (access) return access;
 
-  const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
-  if (!invoice) return { error: "Factura no encontrada" };
-  if (invoice.status === "REJECTED" || invoice.status === "VALIDATED") {
-    return { error: "La factura ya está cerrada" };
-  }
-
   // Construye motivo a partir del issue POSSIBLE_DUPLICATE si existe
   const dupIssue = await prisma.invoiceIssue.findFirst({
     where: { invoiceId, type: "POSSIBLE_DUPLICATE", status: "OPEN" },
   });
   const reason = dupIssue?.description ?? "Factura duplicada detectada desde el listado";
 
-  // Estado, incidencias (F-057: todas, no solo la del duplicado), historial
-  // y auditoria en una transaccion. Con el timeout del export (una
-  // exportacion puede tener la fila reservada) y sin lanzar a la UI.
-  try {
-    await prisma.$transaction(async (tx) => {
-      await tx.invoice.update({
-        where: { id: invoiceId },
-        data: {
-          status: "REJECTED",
-          rejectionReason: reason,
-          rejectionCategory: "DUPLICATE",
-          reviewedBy: session.user.id,
-        },
-      });
-      await closeOpenIssues(tx, invoiceId, session.user.id);
-      await tx.invoiceStatusHistory.create({
-        data: {
-          invoiceId,
-          fromStatus: invoice.status,
-          toStatus: "REJECTED",
-          changedBy: session.user.id,
-          reason,
-        },
-      });
-      await appendAuditLogs([{
-        invoiceId,
-        userId: session.user.id,
-        field: "status",
-        oldValue: invoice.status,
-        newValue: "REJECTED",
-      }], tx);
-    }, { timeout: EXPORT_TRANSACTION_OPTIONS.timeout + 5_000, maxWait: 5_000 });
-  } catch (err) {
-    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2028") {
-      return { error: "Otra operación tenía la factura ocupada. Vuelve a intentarlo." };
-    }
-    console.error(`[invoices] no se pudo rechazar la factura ${invoiceId}:`, err);
-    return { error: "No se ha podido rechazar la factura. Vuelve a intentarlo." };
-  }
-
-  // Notificacion al cliente en background
-  after(async () => {
-    try {
-      const inv = await prisma.invoice.findUnique({
-        where: { id: invoiceId },
-        include: { client: { include: { user: { select: { email: true } } } } },
-      });
-      if (inv?.client?.user?.email) {
-        await notifyClientInvoiceRejected({
-          clientEmail: inv.client.user.email,
-          clientName: inv.client.name,
-          invoiceNumber: inv.invoiceNumber ?? "",
-          filename: inv.filename,
-          reason,
-        });
-      }
-    } catch (e) {
-      console.error("[NOTIFY] quickRejectDuplicate:", e);
-    }
+  // El mismo flujo que rechazar desde la revision: exportada, estado,
+  // periodo cerrado y escritura condicionada (F-057: cierra todas las
+  // incidencias, no solo la del duplicado).
+  const result = await rejectInvoiceCore({
+    invoiceId,
+    userId: session.user.id,
+    reason,
+    category: "DUPLICATE",
+    authorize: async (clientId) => (await canAccessClient(session, clientId)) ? null : { error: "No tienes acceso a esta factura." },
   });
+  if ("error" in result) return { error: typeof result.error === "string" ? result.error : result.error.message };
+
+  after(() => notifyRejection(invoiceId, reason));
 
   revalidatePath("/dashboard/worker/invoices");
   revalidatePath("/dashboard/worker/issues");

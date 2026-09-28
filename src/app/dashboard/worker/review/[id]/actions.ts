@@ -7,7 +7,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
 import { revalidatePath, refresh } from "next/cache";
-import { notifyClientInvoiceValidated, notifyClientInvoiceRejected } from "@/lib/email";
+import { notifyClientInvoiceValidated } from "@/lib/email";
 import {
   filterFromInvoice,
   getNextInQueue,
@@ -50,8 +50,10 @@ import {
   reviewTargetWhere,
   type ReviewAction,
 } from "@/lib/invoiceStatuses";
-import { Prisma, type Invoice } from "@prisma/client";
+import { Prisma, type Invoice, type RejectionCategory } from "@prisma/client";
 import { EXPORT_TRANSACTION_OPTIONS } from "@/lib/exportBatch";
+import { closedPeriodError, conditionalWriteError, invoicePeriod } from "@/lib/reviewGuards";
+import { notifyRejection, rejectInvoiceCore } from "@/lib/invoiceRejection";
 
 /** Resultado de las server actions de revision. El `error` puede ser:
  *  - AppError: cuando es un fallo "conocido" del dominio (tiene codigo)
@@ -75,41 +77,6 @@ async function assertInvoiceAccess(
 ): Promise<ReviewState> {
   if (await canAccessClient(session, clientId)) return null;
   return { error: "No tienes acceso a esta factura." };
-}
-
-/** Periodo en el que cuenta la factura: el contable si lo tiene, si no el del
- *  lote. Mismo criterio que la pagina de revision y que parseAndSave. */
-function invoicePeriod(
-  invoice: Pick<Invoice, "periodMonth" | "periodYear" | "accountingPeriodMonth" | "accountingPeriodYear">,
-): { month: number; year: number } {
-  return {
-    month: invoice.accountingPeriodMonth ?? invoice.periodMonth,
-    year: invoice.accountingPeriodYear ?? invoice.periodYear,
-  };
-}
-
-/** Rechazar y dividir cambian la factura igual que guardar: con el periodo
- *  cerrado no se tocan (mismo criterio que rejectBatch). La pagina ya oculta
- *  los botones, pero puede estar abierta desde antes del cierre. */
-async function closedPeriodError(
-  clientId: string,
-  periods: { month: number; year: number }[],
-  action: string,
-): Promise<{ error: string } | null> {
-  const seen = new Set<string>();
-  for (const { month, year } of periods) {
-    const key = `${month}/${year}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const closure = await prisma.periodClosure.findUnique({
-      where: { clientId_month_year: { clientId, month, year } },
-      select: { reopenedAt: true },
-    });
-    if (closure && !closure.reopenedAt) {
-      return { error: `El periodo ${key} está cerrado: pide a un administrador que lo reabra en Cierres antes de ${action} la factura.` };
-    }
-  }
-  return null;
 }
 
 type FieldData = {
@@ -183,33 +150,6 @@ function parseVatLines(raw: string): { lines: ParsedVatLine[] } | { error: strin
   // 5,2 / 1,4 / 0,5) y el formulario la reenvia tal cual. Se pliega sobre su
   // linea antes de guardar: en A3 seria un IVA que no existe.
   return { lines: completeReadSurcharges(foldSurchargeLines(parsed.lines).lines) };
-}
-
-/**
- * La escritura condicionada no ha tocado nada (count 0). Si la factura esta
- * ahora en un estado en el que la accion no vale, se dice por que; si no, es
- * que la cambio otra persona (ERR-VALIDATE-003).
- */
-async function conditionalWriteError(
-  invoiceId: string,
-  action: ReviewAction,
-  options: { reopen?: boolean },
-  detail: string,
-): Promise<{ error: string | AppError }> {
-  const now = await prisma.invoice
-    .findUnique({
-      where: { id: invoiceId },
-      select: { status: true, replacedBy: { select: { id: true } }, client: { select: { isUnclassifiedBucket: true } } },
-    })
-    .catch(() => null);
-  const reason = now
-    ? reviewActionBlockReason(now.status, action, options)
-      ?? reviewTargetBlockReason(action, {
-        replacedById: now.replacedBy?.id ?? null,
-        isUnclassifiedBucket: now.client.isUnclassifiedBucket,
-      }, options)
-    : null;
-  return { error: reason ?? appError("ERR-VALIDATE-003", detail) };
 }
 
 async function parseAndSave(
@@ -1133,97 +1073,19 @@ export async function rejectInvoice(
     return { error: "Categoría de rechazo no válida." };
   }
 
-  const invoice = await prisma.invoice.findUnique({
-    where: { id },
-    include: { exportBatchItems: { take: 1, select: { id: true } } },
+  // Acceso, exportada, estado, periodo y escritura condicionada: lo mismo
+  // que «Es duplicada» del listado (invoiceRejection).
+  const result = await rejectInvoiceCore({
+    invoiceId: id,
+    userId: session.user.id,
+    reason,
+    category: (category || null) as RejectionCategory | null,
+    authorize: async (clientId) => (await canAccessClient(session, clientId)) ? null : { error: "No tienes acceso a esta factura." },
   });
-  if (!invoice) return { error: "Factura no encontrada" };
+  if ("error" in result) return result;
+  const { invoice } = result;
 
-  // Workers can only reject invoices of assigned clients
-  const accessErr = await assertInvoiceAccess(session, invoice.clientId);
-  if (accessErr) return accessErr;
-
-  // Con las flechas se llega a facturas ya terminadas. Una que ya salio en un
-  // Excel esta en la contabilidad de A3: rechazarla aqui no la quita de alli
-  // y al cliente le llegaria un rechazo de algo ya contabilizado.
-  if (invoice.exportBatchItems.length > 0) {
-    return { error: "Esta factura ya se exportó a A3 y no se puede rechazar. Si hay que corregirla, corrígela y vuelve a exportarla." };
-  }
-  // Ya rechazada, en analisis, dividida o por clasificar: no se rechaza. Se
-  // repite en el propio updateMany de abajo.
-  const blocked = reviewActionBlockReason(invoice.status, "reject");
-  if (blocked) return { error: blocked };
-  const periodErr = await closedPeriodError(invoice.clientId, [invoicePeriod(invoice)], "rechazar");
-  if (periodErr) return periodErr;
-
-  // Condicionado al updatedAt leido: si una exportacion la reservo mientras
-  // tanto, no se rechaza una factura que ya esta camino de A3 (F-049).
-  // Estado, incidencias (F-057), historial y auditoria en una transaccion.
-  // Con el timeout del export, como en parseAndSave: si un export tiene la
-  // fila reservada, el updateMany espera a su COMMIT y con los 5 s por
-  // defecto caducaba (P2028) y la accion lanzaba.
-  let rejectedOk: boolean;
-  try {
-    rejectedOk = await prisma.$transaction(async (tx) => {
-      const rejected = await tx.invoice.updateMany({
-        where: { id, updatedAt: invoice.updatedAt, status: { in: reviewAllowedFrom("reject") } },
-        data: {
-          status: "REJECTED",
-          rejectionReason: reason,
-          ...(category ? { rejectionCategory: category as "ILLEGIBLE" | "INCOMPLETE" | "WRONG_PERIOD" | "DUPLICATE" | "OTHER" } : {}),
-        },
-      });
-      if (rejected.count === 0) return false;
-      await closeOpenIssues(tx, id, session.user.id);
-      await tx.invoiceStatusHistory.create({
-        data: {
-          invoiceId: id,
-          fromStatus: invoice.status,
-          toStatus: "REJECTED",
-          changedBy: session.user.id,
-          reason,
-        },
-      });
-      await appendAuditLogs([{
-        invoiceId: id,
-        userId: session.user.id,
-        field: "status",
-        oldValue: invoice.status,
-        newValue: "REJECTED",
-      }], tx);
-      return true;
-    }, { timeout: EXPORT_TRANSACTION_OPTIONS.timeout + 5_000, maxWait: 5_000 });
-  } catch (err) {
-    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2028") {
-      return { error: appError("ERR-VALIDATE-003", `P2028 al rechazar: ${err.message}`) };
-    }
-    console.error(`[review] no se pudo rechazar la factura ${id}:`, err);
-    return { error: appError("ERR-SYS-001", `rechazar ${id}: ${err instanceof Error ? err.message : String(err)}`) };
-  }
-  if (!rejectedOk) {
-    return conditionalWriteError(id, "reject", {}, `updatedAt=${invoice.updatedAt.getTime()} al rechazar`);
-  }
-
-  // Notify client about rejection
-  after(async () => {
-    try {
-      const inv = await prisma.invoice.findUnique({
-        where: { id },
-        include: { client: { include: { user: { select: { email: true } } } } },
-      });
-      if (inv?.client?.user?.email) {
-        await notifyClientInvoiceRejected({
-          clientEmail: inv.client.user.email,
-          clientName: inv.client.name,
-          invoiceNumber: inv.invoiceNumber ?? "",
-          filename: inv.filename,
-          reason,
-        });
-      }
-    } catch (e) {
-      console.error("[NOTIFY] Error notifying client rejection:", e);
-    }
-  });
+  after(() => notifyRejection(id, reason));
 
   const nextId = await resolveNextId(id, filterFromInvoice(invoice, bucket), fallbackNext);
   // Mismo motivo que en validateInvoice: prefetch del siguiente puede

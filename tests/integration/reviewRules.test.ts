@@ -17,7 +17,8 @@ import { processInvoice } from "@/lib/processInvoice";
 import { detectIssues } from "@/lib/issueDetector";
 import type { ExtractedInvoice } from "@/lib/ocr";
 import { classifyInvoice } from "@/app/dashboard/worker/clasificar/actions";
-import { dismissDuplicateIssue } from "@/app/dashboard/worker/invoices/actions";
+import { dismissDuplicateIssue, quickRejectDuplicate } from "@/app/dashboard/worker/invoices/actions";
+import { pendingAfterCallbacks } from "./helpers/after";
 import { NextRequest } from "next/server";
 import { POST as exportDownload } from "@/app/api/export/route";
 
@@ -1122,5 +1123,49 @@ describe("revisión con un posible duplicado abierto (F-016)", () => {
     const r = await row();
     expect([r.status, r.rejectionCategory, r.rejectionReason]).toEqual(["REJECTED", "DUPLICATE", "Posible duplicado de la factura OTRA-1."]);
     expect(await issueStatus()).toBe("RESOLVED");
+  });
+});
+
+describe("«Es duplicada» del listado: el mismo flujo que rechazar (revisión 1 del PR #10, punto 5)", () => {
+  const quickReject = () => {
+    const fd = new FormData();
+    fd.set("invoiceId", id);
+    return quickRejectDuplicate(null, fd);
+  };
+  beforeEach(async () => {
+    await prisma.invoiceIssue.create({ data: { invoiceId: id, type: "POSSIBLE_DUPLICATE", description: "Posible duplicado." } });
+  });
+  const unchanged = async (status: string) => {
+    expect((await row()).status).toBe(status);
+    expect(await prisma.invoiceIssue.count({ where: { invoiceId: id, status: "OPEN" } })).toBe(1);
+    expect(pendingAfterCallbacks()).toBe(0);
+  };
+
+  it("pendiente: rechaza con DUPLICATE, cierra la incidencia y encola el correo", async () => {
+    expect(await quickReject()).toEqual({ ok: true });
+    const r = await row();
+    expect([r.status, r.rejectionCategory, r.rejectionReason]).toEqual(["REJECTED", "DUPLICATE", "Posible duplicado."]);
+    expect(await prisma.invoiceIssue.count({ where: { invoiceId: id, status: "OPEN" } })).toBe(0);
+    expect(pendingAfterCallbacks()).toBe(1);
+  });
+
+  it("con el periodo cerrado: no", async () => {
+    const r = await row();
+    await prisma.periodClosure.create({ data: { clientId: w.client.id, month: r.periodMonth, year: r.periodYear, closedBy: w.admin.id } });
+    expect((await quickReject())?.error).toMatch(/está cerrado/);
+    await unchanged("PENDING_REVIEW");
+  });
+
+  it("analizándose: no", async () => {
+    await prisma.invoice.update({ where: { id }, data: { status: "ANALYZING" } });
+    expect((await quickReject())?.error).toMatch(/analizando/);
+    await unchanged("ANALYZING");
+  });
+
+  it("ya exportada a A3: no", async () => {
+    await prisma.exportBatch.create({ data: { id: "lote-1", format: "a3con", invoiceCount: 1, userId: w.admin.id } });
+    await prisma.exportBatchItem.create({ data: { exportBatchId: "lote-1", invoiceId: id, snapshot: "{}" } });
+    expect((await quickReject())?.error).toMatch(/ya se exportó a A3/);
+    await unchanged("PENDING_REVIEW");
   });
 });
