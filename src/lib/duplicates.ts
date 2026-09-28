@@ -29,15 +29,19 @@ export async function findByInvoiceNumber(input: {
   excludeId: string;
   invoiceNumber: string;
   issuerCif: string | null;
+  /** Solo las ya validadas o exportadas (la comprobacion al validar). */
+  onlyValidated?: boolean;
 }): Promise<string | null> {
   const normalized = normalizeInvoiceNumber(input.invoiceNumber);
   if (!normalized) return null;
+  const onlyValidated = input.onlyValidated === true;
   const rows = await prisma.$queryRaw<{ id: string }[]>`
     SELECT id FROM "Invoice"
     WHERE "clientId" = ${input.clientId}
       AND type = ${input.type}::"InvoiceType"
       AND id <> ${input.excludeId}
       AND status <> 'REJECTED'
+      AND (NOT ${onlyValidated} OR status IN ('VALIDATED', 'EXPORTED'))
       AND (${input.issuerCif}::text IS NULL OR "issuerCif" = ${input.issuerCif})
       AND regexp_replace(upper("invoiceNumber"), '[^A-Z0-9]', '', 'g') = ${normalized}
     ORDER BY "createdAt"

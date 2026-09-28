@@ -5,7 +5,7 @@ import { prisma } from "./helpers/db";
 import { makeFirm, makeInvoice, type FirmWorld } from "./helpers/factories";
 import { signInAs } from "./helpers/session";
 import { reviewForm, settleAction, validate } from "./helpers/reviewForm";
-import { saveInvoiceFields } from "@/app/dashboard/worker/review/[id]/actions";
+import { saveInvoiceFields, validateInvoice } from "@/app/dashboard/worker/review/[id]/actions";
 import { fakeS3 } from "./helpers/fakeS3";
 import { facturaeXml } from "./helpers/fixtures";
 import { stubOcr } from "./helpers/ocr";
@@ -977,5 +977,30 @@ describe("al clasificar, la misma comprobación de duplicados que el OCR (F-010,
     const inv = await routed({ fileHash: "hash-buzon", invoiceNumber: "Z-1" });
     await classifyInvoice(inv.id, w.client.id);
     expect((await issuesOf(inv.id)).map((i) => i.description)).toEqual([expect.stringContaining("es el mismo fichero")]);
+  });
+});
+
+describe("al validar, confirmación si ya hay otra validada con el mismo número y emisor (F-010, punto 3)", () => {
+  const otra = (status: "VALIDATED" | "EXPORTED" | "PENDING_REVIEW") =>
+    makeInvoice(w.client, { status, issuerCif: "B12345674", invoiceNumber: "F-2026-001" });
+
+  it("sin confirmar no se valida, y dice cuál es", async () => {
+    const original = await otra("VALIDATED");
+    const r = await validateInvoice(null, await form({ invoiceNumber: "f 2026/001" }));
+    expect(r?.duplicateOf?.id).toBe(original.id);
+    expect(r?.error).toMatch(/^Ya hay otra factura validada con este número y este emisor: la factura F-2026-001/);
+    expect((await row()).status).toBe("PENDING_REVIEW");
+  });
+
+  it("confirmado, sí", async () => {
+    await otra("EXPORTED");
+    const r = await validate(await form({ invoiceNumber: "F-2026-001", confirmDuplicate: "1" }));
+    expect(r.error).toBeNull();
+    expect((await row()).status).toBe("VALIDATED");
+  });
+
+  it("si la otra aún no está validada, no hace falta confirmar", async () => {
+    await otra("PENDING_REVIEW");
+    expect((await validate(await form({ invoiceNumber: "F-2026-001" }))).error).toBeNull();
   });
 });

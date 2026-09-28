@@ -36,6 +36,7 @@ import { amountFieldsProblem, parseVatLineInputs } from "@/lib/vatLineInput";
 import { validationProblems } from "@/lib/invoiceRules";
 import { percentOf } from "@/lib/money";
 import { anyNegativeAmount, applyRectificativeSign, NEGATIVE_AMOUNTS_HINT } from "@/lib/rectificative";
+import { describeExisting, DUPLICATE_SELECT, findByInvoiceNumber } from "@/lib/duplicates";
 import { foldSurchargeLines, completeReadSurcharges, surchargeAuditValue } from "@/lib/equivalenceSurcharge";
 import { exportFingerprint, type FingerprintInvoice } from "@/lib/exportFingerprint";
 import { appError, type AppError } from "@/lib/errorCodes";
@@ -55,7 +56,12 @@ import { EXPORT_TRANSACTION_OPTIONS } from "@/lib/exportBatch";
  *  - AppError: cuando es un fallo "conocido" del dominio (tiene codigo)
  *  - string: legacy / errores sin clasificar aun
  *  - undefined / null: exito */
-export type ReviewState = { error?: AppError | string } | null;
+export type ReviewState = {
+  error?: AppError | string;
+  /** Al validar: ya hay otra factura validada con el mismo numero y emisor.
+   *  La pantalla pide confirmacion y vuelve a validar con confirmDuplicate. */
+  duplicateOf?: { id: string; label: string };
+} | null;
 
 /** WORKER: el cliente tiene que estar asignado. ADMIN: tiene que ser de su
  *  asesoria. Antes solo se comprobaba al WORKER: cualquier otro rol pasaba sin
@@ -143,6 +149,8 @@ type FieldData = {
   rectifiedInvoiceSeries: string;
   rectifiedInvoiceNumber: string;
   rectificativeType:      string;  // "BY_DIFFERENCE" / "BY_SUBSTITUTION" / ""
+  /** "1" si el gestor ha confirmado validar pese al duplicado. */
+  confirmDuplicate:       string;
   art80Tres:              string;  // "1" / "0"
 };
 
@@ -555,6 +563,28 @@ async function parseAndSave(
   // exportBatchId null, y si se quedara EXPORTED una correccion que la saca
   // del lote no volveria nunca al Excel.
   const toValidated = (validate && !alreadyValidated) || invoice.status === "EXPORTED";
+
+  // Duplicado al validar (F-010): otra factura del cliente ya validada o
+  // exportada con el mismo numero (normalizado) y, en compras, el mismo CIF de
+  // emisor. No se valida sin la confirmacion del gestor.
+  if (validate && !alreadyValidated && data.confirmDuplicate !== "1" && newData.invoiceNumber) {
+    const dupId = await findByInvoiceNumber({
+      clientId: invoice.clientId,
+      type: newData.type,
+      excludeId: invoiceId,
+      invoiceNumber: newData.invoiceNumber,
+      issuerCif: newData.type === "SALE" ? null : newData.issuerCif,
+      onlyValidated: true,
+    });
+    const dup = dupId ? await prisma.invoice.findUnique({ where: { id: dupId }, select: DUPLICATE_SELECT }) : null;
+    if (dup) {
+      const label = describeExisting(dup);
+      return {
+        error: `Ya hay otra factura validada con este número y este emisor: ${label}. Si no es la misma, confírmalo para validarla.`,
+        duplicateOf: { id: dup.id, label },
+      };
+    }
+  }
 
   // When saving without validating, transition to PENDING_REVIEW if coming from initial states
   // ANALYZED es legacy (pre-refactor); si aun existe en BD se acepta como draft.
@@ -1613,6 +1643,7 @@ function extractFields(fd: FormData): FieldData {
     rectifiedInvoiceSeries: fd.get("rectifiedInvoiceSeries") as string ?? "",
     rectifiedInvoiceNumber: fd.get("rectifiedInvoiceNumber") as string ?? "",
     rectificativeType:      fd.get("rectificativeType")      as string ?? "",
+    confirmDuplicate:       fd.get("confirmDuplicate")       as string ?? "",
     art80Tres:              fd.get("art80Tres")              as string ?? "0",
   };
 }

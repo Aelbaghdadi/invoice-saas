@@ -980,12 +980,37 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     const reopen = reopenRef.current;
     reopenRef.current = false;
     startValidate(async () => {
-      const res = await validateInvoice(null, buildFormData({
+      const fields = {
         nextId: nextPendingId ?? "",
         goodsTypeScope,
         goodsTypeAssignedSeen: assignedGoodsType ?? "",
         ...(reopen ? { reopen: "1" } : {}),
-      }));
+      };
+      let res = await validateInvoice(null, buildFormData(fields));
+      // Ya hay otra validada con este numero y emisor (F-010): el servidor no
+      // valida sin que el gestor lo confirme.
+      if (res?.duplicateOf) {
+        const dup = res.duplicateOf;
+        const ok = await confirm({
+          title: "¿Validar igualmente?",
+          message: (
+            <>
+              Ya hay otra factura con este número y este emisor:{" "}
+              <Link href={`/dashboard/worker/review/${dup.id}`} target="_blank" className="font-medium underline">
+                {dup.label}
+              </Link>
+              . ¿Validar igualmente?
+            </>
+          ),
+          confirmLabel: "Validar igualmente",
+          tone: "primary",
+        });
+        if (!ok) {
+          setValidateState(null);
+          return;
+        }
+        res = await validateInvoice(null, buildFormData({ ...fields, confirmDuplicate: "1" }));
+      }
       setValidateState(res);
       if (res?.error) {
         error(isValidated
