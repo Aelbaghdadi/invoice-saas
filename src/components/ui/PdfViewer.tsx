@@ -146,10 +146,19 @@ export default function PdfViewer({
   const loadFailed = failure != null;
   // Cambiarlo vuelve a montar el Document: «Reintentar».
   const [attempt, setAttempt] = useState(0);
-  useEffect(() => {
+  // Otro documento con el visor montado (Clasificar solo cambia la url):
+  // se empieza de cero. Sin volver a la pagina 1, de la 3 de un PDF se
+  // pasaba a otro de una pagina y salia el error. Se ajusta en el render y
+  // no en un efecto: asi no se pinta antes el documento nuevo con el estado
+  // del anterior.
+  const [shownUrl, setShownUrl] = useState(url);
+  if (url !== shownUrl) {
+    setShownUrl(url);
     setFailure(null);
     setLoading(true);
-  }, [url]);
+    setPage(1);
+    setNumPages(0);
+  }
   const onLoadError = useCallback(() => {
     setFailure((f) => f ?? "error");
     setLoading(false);
