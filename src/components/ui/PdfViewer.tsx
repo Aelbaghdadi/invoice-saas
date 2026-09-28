@@ -13,6 +13,8 @@ import {
   Loader2,
   RotateCw,
   ExternalLink,
+  AlertTriangle,
+  RefreshCw,
 } from "lucide-react";
 import type { BoundingBox } from "@/lib/boundingBoxes";
 
@@ -136,6 +138,19 @@ export default function PdfViewer({
   const [zoom, setZoom]         = useState(DEFAULT_ZOOM);
   const [loading, setLoading]   = useState(true);
   const [rotation, setRotation] = useState(0);
+  // F-116: sin esto, un fallo de carga dejaba el spinner girando para
+  // siempre (o el «Failed to load PDF file.» de react-pdf, en inglés).
+  const [loadFailed, setLoadFailed] = useState(false);
+  // Cambiarlo vuelve a montar el Document: «Reintentar».
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    setLoadFailed(false);
+    setLoading(true);
+  }, [url]);
+  const onLoadError = useCallback(() => {
+    setLoadFailed(true);
+    setLoading(false);
+  }, []);
 
   // Bboxes calculadas en el cliente con pdfjs del navegador (más fiables que
   // las del servidor porque el viewport real ya está disponible).
@@ -200,6 +215,7 @@ export default function PdfViewer({
   const onLoad = useCallback(({ numPages: n }: { numPages: number }) => {
     setNumPages(n);
     setLoading(false);
+    setLoadFailed(false);
     computeClientBboxes(n);
   }, [computeClientBboxes]);
 
@@ -247,7 +263,7 @@ export default function PdfViewer({
             </span>
           ) : (
             <span className="text-[12px] text-white/40">
-              {loading ? "—" : `${numPages} pág.`}
+              {loading || loadFailed ? "—" : `${numPages} pág.`}
             </span>
           )}
 
@@ -346,19 +362,57 @@ export default function PdfViewer({
           if (sel) onTextSelect(sel);
         }}
       >
-        {loading && (
+        {loading && !loadFailed && (
           <div className="flex h-full items-center justify-center">
             <Loader2 className="h-8 w-8 animate-spin text-white/30" />
           </div>
         )}
+        {loadFailed && (
+          <div role="alert" className="flex h-full max-w-sm flex-col items-center justify-center gap-3 text-center">
+            <AlertTriangle className="h-8 w-8 text-amber-400" />
+            <p className="text-sm font-medium text-white">No se ha podido cargar el documento.</p>
+            <p className="text-xs text-white/60">
+              Puede ser un fallo de conexión o que el enlace haya caducado. Si al reintentar sigue igual, ábrelo en una pestaña nueva o recarga la página.
+            </p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => { setLoadFailed(false); setLoading(true); setAttempt((a) => a + 1); }}
+                className="flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-white/20"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                Reintentar
+              </button>
+              <a
+                href={url}
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-white/20"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                Abrir en pestaña nueva
+              </a>
+            </div>
+          </div>
+        )}
         <Document
+          key={attempt}
           file={url}
           onLoadSuccess={onLoad}
+          onLoadError={onLoadError}
+          onSourceError={onLoadError}
           loading={null}
-          className="flex flex-col items-center gap-4"
+          error={null}
+          noData={null}
+          className={loadFailed ? "hidden" : "flex flex-col items-center gap-4"}
         >
           <div className="relative">
             <Page
+              onLoadError={onLoadError}
+              onRenderError={onLoadError}
+              loading={null}
+              error={null}
+              noData={null}
               pageNumber={page}
               scale={zoom}
               rotate={rotation}
