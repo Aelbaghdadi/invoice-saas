@@ -140,6 +140,31 @@ describe("entradas auto:* cuando el sistema cambia algo al leer (F-024)", () => 
     ]);
   });
 
+  describe("IRPF leído frente al % aprendido (F-073)", () => {
+    beforeEach(async () => {
+      // El tercero (persona física) tiene aprendido un 15 %.
+      await prisma.accountEntry.create({
+        data: { clientId: w.client.id, nif: "12345678Z", name: "Ana Pérez", defaultRetentionType: "PROFESSIONAL", defaultRetentionRate: 15 },
+      });
+    });
+    const saved = async () => {
+      const inv = await prisma.invoice.findFirstOrThrow({ where: { filename: "auto.pdf" } });
+      return [Number(inv.irpfRate), Number(inv.irpfAmount), inv.retentionType, inv.isValid];
+    };
+
+    it("la factura imprime un 7 % y cuadra con él: se queda el leído, sin auto:irpf", async () => {
+      expect(await read({ irpfRate: 7, irpfAmount: 70, totalAmount: 1140 })).toEqual([]);
+      expect(await saved()).toEqual([7, 70, "PROFESSIONAL", true]);
+    });
+
+    it("sin importe leído: el 15 % aprendido rellena, con auto:irpf", async () => {
+      expect(await read({ irpfRate: null, irpfAmount: null, totalAmount: 1060 })).toEqual([
+        ["auto:irpf", null, "15 % · 150"],
+      ]);
+      expect(await saved()).toEqual([15, 150, "PROFESSIONAL", true]);
+    });
+  });
+
   it("auto:parteCliente: el OCR leyó otro receptor y se pone el cliente", async () => {
     expect(await read({ receiverName: "Otra Empresa SL", receiverCif: "B87654321" })).toEqual([
       ["auto:parteCliente", "Otra Empresa SL (B87654321)", `${w.client.name} (${w.client.cif})`],

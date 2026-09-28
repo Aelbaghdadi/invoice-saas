@@ -355,7 +355,12 @@ export function textMentionsRetention(text: string | null | undefined): boolean 
     .toLowerCase()
     // "sin retencion", "no sujeta a retencion", "exento de retencion": son
     // justo el caso CONTRARIO, asi que se borran antes de buscar.
-    .replace(/\b(sin|no\s+sujet\w*\s+a|exent\w*\s+de)\s+retenc\w*/g, " ");
+    .replace(/\b(sin|no\s+sujet\w*\s+a|exent\w*\s+de)\s+retenc\w*/g, " ")
+    // El pie de proteccion de datos (LOPD/RGPD) de muchas facturas: «la
+    // retencion de los datos», «plazos de retencion», «retencion de la
+    // informacion». No es IRPF, y proponia retencion en facturas sin ella.
+    .replace(/\bretenc\w*\s+de\s+(?:(?:los|sus|estos|dichos|tus)\s+)?(?:datos|la\s+informacion|informacion)\b/g, " ")
+    .replace(/\b(?:plazos?|periodos?|politicas?|tiempos?)\s+de\s+retenc\w*/g, " ");
   return /\birpf\b/.test(t)
     || /\bretenc(?:ion|iones)\b/.test(t)
     || /\bretenid[oa]s?\b/.test(t);

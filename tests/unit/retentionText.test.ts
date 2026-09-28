@@ -43,6 +43,19 @@ describe("familia de cuenta segun el sentido", () => {
   });
 });
 
+describe("textMentionsRetention — protección de datos (F-073)", () => {
+  it("el pie de la LOPD no es una retención de IRPF", () => {
+    const lopd = "De conformidad con el RGPD, le informamos de que sus datos se conservarán durante los plazos de retención " +
+      "legalmente establecidos. La retención de los datos se limitará al tiempo necesario. Política de retención: " +
+      "consulte la retención de la información en nuestra web. Conservación de los datos: 5 años.";
+    expect(textMentionsRetention(`Base imponible 100 IVA 21% Total 121\n${lopd}`)).toBe(false);
+  });
+
+  it("con el pie de la LOPD, una retención de verdad se sigue viendo", () => {
+    expect(textMentionsRetention("Retención IRPF 15%: -150,00\nLa retención de los datos se limitará al tiempo necesario.")).toBe(true);
+  });
+});
+
 describe("textMentionsRetention — negaciones (falsos positivos del 15%)", () => {
   it("no cuenta las menciones negadas", () => {
     expect(textMentionsRetention("Operación sin retención")).toBe(false);

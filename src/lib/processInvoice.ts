@@ -16,7 +16,8 @@ import { clientPartyAudit, irpfAuditValue, partyAuditValue } from "@/lib/auditVa
 import { foreignClientPartyIssue, readClientSide } from "@/lib/clientParty";
 import { ocrFenceWhere } from "@/lib/invoiceStatuses";
 import { isInvoiceBalanced } from "@/lib/invoiceBalance";
-import { percentOf, roundCents } from "@/lib/money";
+import { roundCents } from "@/lib/money";
+import { resolveIrpf } from "@/lib/irpfResolution";
 
 // La escritura final son unas pocas consultas; 15 s por si espera un bloqueo
 // de fila (los 5 s por defecto dejaban el resultado en OCR_ERROR).
@@ -519,16 +520,23 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     // tipo. La base por defecto es la suma de bases imponibles del IVA.
     const sumBasesAll = vatLines.reduce((s, l) => s + l.taxBase, 0);
     const retentionBase = retentionType ? sumBasesAll : null;
-    const computedIrpfAmount = retentionType && retentionRate != null
-      // El mismo redondeo que la pantalla (percentOf): con toFixed, 100,30
-      // al 15 % daba 15,04 frente a los 15,05 impresos y la factura quedaba
-      // isValid=false sin ninguna incidencia.
-      ? percentOf(sumBasesAll, retentionRate)
-      : (extracted.irpfAmount ?? null);
-    const finalIrpfRate = retentionRate ?? extracted.irpfRate ?? null;
-    const finalIrpfAmount = computedIrpfAmount;
-    // Retencion propuesta (tercero aprendido, persona fisica) o recalculada
-    // con el % redondeado: distinta de la leida.
+    // Si la factura cuadra con el importe leido, se queda ese (F-073); si
+    // no, base × % con el mismo redondeo que la pantalla (percentOf): con
+    // toFixed, 100,30 al 15 % daba 15,04 frente a los 15,05 impresos y la
+    // factura quedaba isValid=false sin ninguna incidencia.
+    const sumVat = vatLines.reduce((s, l) => s + l.vatAmount, 0);
+    const sumSurcharge = vatLines.reduce((s, l) => s + (l.equivalenceSurchargeAmount ?? 0), 0);
+    const { rate: finalIrpfRate, amount: finalIrpfAmount } = resolveIrpf({
+      hasRetention: retentionType != null,
+      retentionRate,
+      readRate: extracted.irpfRate ?? null,
+      readAmount: extracted.irpfAmount ?? null,
+      sumBases: sumBasesAll,
+      balancedWith: (irpf) => extracted.totalAmount != null
+        && isInvoiceBalanced({ sumBase: sumBasesAll, sumAmount: sumVat, sumSurcharge, irpf, total: extracted.totalAmount }),
+    });
+    // Solo cuando de verdad se sustituye lo leido: retencion propuesta
+    // (tercero aprendido, persona fisica) o recalculada.
     const finalIrpf = irpfAuditValue(finalIrpfRate, finalIrpfAmount);
     if (finalIrpf !== readIrpf) autoAudit.push({ field: "auto:irpf", oldValue: readIrpf, newValue: finalIrpf });
 
