@@ -96,14 +96,14 @@ describe("routeByText", () => {
     expect(routeByText(txt, CANDS)).toEqual({ clientId: "rest-c", via: "name" });
   });
 
-  it("null si aparecen los CIF de dos candidatos (intragrupo / ambiguo)", () => {
+  it("ambigua si aparecen los CIF de dos candidatos (intragrupo)", () => {
     const txt = "De B12345674 a A58818501 por servicios";
-    expect(routeByText(txt, CANDS)).toBeNull();
+    expect(routeByText(txt, CANDS)).toEqual({ ambiguous: true });
   });
 
-  it("null si aparecen los nombres de dos candidatos", () => {
+  it("ambigua si aparecen los nombres de dos candidatos", () => {
     const txt = "Restaurante La Plaza y Bar Central, mismo grupo";
-    expect(routeByText(txt, CANDS)).toBeNull();
+    expect(routeByText(txt, CANDS)).toEqual({ ambiguous: true });
   });
 
   it("null si no casa nada", () => {

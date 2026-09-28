@@ -291,9 +291,11 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
             ocrResult.rawText,
             textCandidates.map((c) => ({ clientId: c.id, cif: c.cif, name: c.name })),
           );
-          if (byText) resolvedClientId = byText.clientId;
+          if (byText && "clientId" in byText) resolvedClientId = byText.clientId;
           const firmId = candidates[0]?.advisoryFirmId;
-          if (!resolvedClientId && firmId) {
+          // Varias empresas del grupo en el texto: al buzon, sin la regla.
+          const textAmbiguous = byText != null && "ambiguous" in byText;
+          if (!resolvedClientId && firmId && !textAmbiguous) {
             const learned = await lookupProviderClient(firmId, otherCif);
             if (learned && candidates.some((c) => c.id === learned)) {
               resolvedClientId = learned;

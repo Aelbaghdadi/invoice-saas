@@ -79,6 +79,12 @@ describe("regla del proveedor al subir al buzón (F-021)", () => {
     expect(r.audit).toEqual([]);
   });
 
+  it("con varias empresas del grupo en el texto: al buzón, sin consultar la regla", async () => {
+    const r = await upload({ receiverCif: null, rawText: `Pedido conjunto ${a.cif} y ${b.cif}\\nTotal 242` });
+    expect([r.status, r.clientId]).toEqual(["PENDING_ROUTING", w.client.id]);
+    expect(r.audit).toEqual([]);
+  });
+
   it("primero el texto: el CIF de A en el PDF gana a la regla que dice B", async () => {
     const r = await upload({ receiverCif: null, rawText: `Factura\\nCliente: ${a.cif}\\nTotal 242` });
     expect([r.status, r.clientId]).toEqual(["PENDING_REVIEW", a.id]);
