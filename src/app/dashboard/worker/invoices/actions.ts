@@ -7,6 +7,7 @@ import { revalidatePath } from "next/cache";
 import { canAccessClient } from "@/lib/accessibleClients";
 import { notifyRejection, rejectInvoiceCore } from "@/lib/invoiceRejection";
 import { duplicateRejectionReason, findDuplicateOriginal } from "@/lib/duplicates";
+import { REVIEWABLE } from "@/lib/invoiceStatuses";
 
 export type InvoiceQuickAction = { ok?: boolean; error?: string } | null;
 
@@ -64,6 +65,9 @@ export async function quickRejectDuplicate(
     userId: session.user.id,
     reason,
     category: "DUPLICATE",
+    // Solo por revisar: el listado puede llevar rato abierto y otro gestor
+    // haberla validado (antes se deshacia su validacion).
+    allowedFrom: { statuses: REVIEWABLE, error: "Esta factura ya no está por revisar. Recarga la página." },
     authorize: async (clientId) => (await canAccessClient(session, clientId)) ? null : { error: "No tienes acceso a esta factura." },
   });
   if ("error" in result) return { error: typeof result.error === "string" ? result.error : result.error.message };

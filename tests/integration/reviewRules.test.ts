@@ -1,6 +1,6 @@
 // Reglas de validación en el servidor (paso 15: F-009, F-014, F-022, F-025,
 // F-058), contra Postgres: lo que la acción rechaza no llega a la BD.
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { prisma } from "./helpers/db";
 import { makeFirm, makeInvoice, type FirmWorld } from "./helpers/factories";
 import { signInAs } from "./helpers/session";
@@ -21,6 +21,8 @@ import { classifyInvoice } from "@/app/dashboard/worker/clasificar/actions";
 import { dismissDuplicateIssue, quickRejectDuplicate } from "@/app/dashboard/worker/invoices/actions";
 import { rejectBatch } from "@/app/dashboard/worker/batch/actions";
 import { pendingAfterCallbacks } from "./helpers/after";
+import { holdLock, sessionsWaitingForLock } from "./helpers/locks";
+import { inFlight } from "./helpers/inflight";
 import { NextRequest } from "next/server";
 import { POST as exportDownload } from "@/app/api/export/route";
 
@@ -1276,6 +1278,22 @@ describe("«Es duplicada» del listado: el mismo flujo que rechazar (revisión 1
     expect(await quickReject()).toEqual({ ok: true });
     expect((await row()).status).toBe("REJECTED");
     expect(await prisma.invoiceIssue.count({ where: { invoiceId: id, status: "OPEN" } })).toBe(0);
+  });
+
+  it("validada (otro gestor la validó con el listado abierto): no, y no se deshace su validación", async () => {
+    await prisma.invoice.update({ where: { id }, data: { status: "VALIDATED" } });
+    expect((await quickReject())?.error).toBe("Esta factura ya no está por revisar. Recarga la página.");
+    await unchanged("VALIDATED");
+  });
+
+  it("validada entre la comprobación y la escritura: tampoco", async () => {
+    const lock = await holdLock(`SELECT 1 FROM "Invoice" WHERE id = $1 FOR UPDATE`, id);
+    const pending = inFlight(quickReject());
+    await vi.waitFor(async () => expect(await sessionsWaitingForLock()).toBe(1), { timeout: 10_000 });
+    // Sin tocar updatedAt: lo que frena la escritura es el estado del where.
+    await lock.release(`UPDATE "Invoice" SET status = 'VALIDATED' WHERE id = $1`);
+    expect((await pending)?.error).toBe("Esta factura ya no está por revisar. Recarga la página.");
+    await unchanged("VALIDATED");
   });
 
   it("con el periodo cerrado: no", async () => {

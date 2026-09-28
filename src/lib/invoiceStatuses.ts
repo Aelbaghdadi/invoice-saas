@@ -35,6 +35,10 @@ export const NEEDS_REVIEW: InvoiceStatus[] = [
   "OCR_ERROR",
 ];
 
+/** Por revisar: donde tienen sentido las acciones de duplicado («No es
+ *  duplicada», «Es duplicada»). NEEDS_REVIEW mas el legacy ANALYZED. */
+export const REVIEWABLE: InvoiceStatus[] = [...NEEDS_REVIEW, "ANALYZED"];
+
 /** Trabajo terminado (independientemente de si se valida o rechaza). */
 export const DONE_WORK: InvoiceStatus[] = [
   "VALIDATED",

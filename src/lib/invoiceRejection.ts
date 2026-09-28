@@ -9,7 +9,7 @@
  * resto: exportada, estado de origen, periodo cerrado y la escritura
  * condicionada con incidencias (F-057), historial y auditoria.
  */
-import { Prisma, type Invoice, type RejectionCategory } from "@prisma/client";
+import { Prisma, type Invoice, type InvoiceStatus, type RejectionCategory } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { appendAuditLogs } from "@/lib/auditLog";
 import { appError, type AppError } from "@/lib/errorCodes";
@@ -26,6 +26,9 @@ export type RejectInput = {
   category: RejectionCategory | null;
   /** Acceso de la sesion al cliente de la factura: { error } o null. */
   authorize: (clientId: string) => Promise<{ error: string } | null>;
+  /** Estados de origen mas estrictos que los de rechazar (se intersectan
+   *  con reviewAllowedFrom("reject")), con el error si no esta en ellos. */
+  allowedFrom?: { statuses: InvoiceStatus[]; error: string };
 };
 
 /** La factura tal como estaba antes de rechazarla, o por que no se rechaza. */
@@ -50,6 +53,12 @@ export async function rejectInvoiceCore(input: RejectInput): Promise<{ error: st
   // repite en el propio updateMany de abajo.
   const blocked = reviewActionBlockReason(invoice.status, "reject");
   if (blocked) return { error: blocked };
+  // «Es duplicada» del listado solo con la factura por revisar: si otro gestor
+  // la valido mientras tanto, no se deshace su validacion. Tambien en el
+  // updateMany.
+  const allowedStatuses = reviewAllowedFrom("reject")
+    .filter((s) => !input.allowedFrom || input.allowedFrom.statuses.includes(s));
+  if (input.allowedFrom && !allowedStatuses.includes(invoice.status)) return { error: input.allowedFrom.error };
   const periodErr = await closedPeriodError(invoice.clientId, [invoicePeriod(invoice)], "rechazar");
   if (periodErr) return periodErr;
 
@@ -63,7 +72,7 @@ export async function rejectInvoiceCore(input: RejectInput): Promise<{ error: st
   try {
     rejectedOk = await prisma.$transaction(async (tx) => {
       const rejected = await tx.invoice.updateMany({
-        where: { id, updatedAt: invoice.updatedAt, status: { in: reviewAllowedFrom("reject") } },
+        where: { id, updatedAt: invoice.updatedAt, status: { in: allowedStatuses } },
         data: {
           status: "REJECTED",
           rejectionReason: reason,
@@ -92,6 +101,12 @@ export async function rejectInvoiceCore(input: RejectInput): Promise<{ error: st
     return { error: appError("ERR-SYS-001", `rechazar ${id}: ${err instanceof Error ? err.message : String(err)}`) };
   }
   if (!rejectedOk) {
+    if (input.allowedFrom) {
+      const now = await prisma.invoice.findUnique({ where: { id }, select: { status: true } });
+      if (now && reviewActionBlockReason(now.status, "reject") == null && !allowedStatuses.includes(now.status)) {
+        return { error: input.allowedFrom.error };
+      }
+    }
     return conditionalWriteError(id, "reject", {}, `updatedAt=${invoice.updatedAt.getTime()} al rechazar`);
   }
   return { invoice };
