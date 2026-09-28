@@ -70,7 +70,14 @@ describe("regla del proveedor al subir al buzón (F-021)", () => {
   it("sin CIF del receptor: la regla enruta y queda auto:ruteo", async () => {
     const r = await upload({ receiverCif: null });
     expect([r.status, r.clientId]).toEqual(["PENDING_REVIEW", b.id]);
-    expect(r.audit).toEqual([[null, `Proveedor ${PROVIDER} → Empresa B SL (${b.cif})`, w.worker.id]]);
+    expect(r.audit).toEqual([[null, `Empresa B SL (${b.cif}) · proveedor ${PROVIDER}`, w.worker.id]]);
+  });
+
+  it("un proveedor extranjero conserva el país en auto:ruteo", async () => {
+    await learnProviderRule(w.firm.id, "PT515160873", b.id);
+    const r = await upload({ receiverCif: null, issuerCif: "PT515160873" });
+    expect(r.clientId).toBe(b.id);
+    expect(r.audit).toEqual([[null, `Empresa B SL (${b.cif}) · proveedor PT515160873`, w.worker.id]]);
   });
 
   it("con un CIF de receptor válido que no casa: la regla no se aplica", async () => {

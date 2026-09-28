@@ -24,6 +24,7 @@ import { resolveIrpf } from "@/lib/irpfResolution";
 const OCR_WRITE_TRANSACTION_OPTIONS = { timeout: 15_000, maxWait: 5_000 } as const;
 import {
   parseTaxId,
+  taxIdWithCountry,
   isPersonaFisica,
   textMentionsRetention,
   RETENTION_DEFAULT_RATE,
@@ -300,10 +301,12 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
             if (learned && candidates.some((c) => c.id === learned)) {
               resolvedClientId = learned;
               const chosen = candidates.find((c) => c.id === learned)!;
+              const providerParsed = parseTaxId(otherCif);
               routedByRule = {
                 field: "auto:ruteo",
                 oldValue: null,
-                newValue: `Proveedor ${normalizeProviderNif(otherCif)} → ${partyAuditValue(chosen.name, chosen.cif)}`,
+                // «·» como las demas auto:*: las pantallas ya pintan «viejo → nuevo».
+                newValue: `${partyAuditValue(chosen.name, chosen.cif)} · proveedor ${taxIdWithCountry(providerParsed.clean, providerParsed.countryCode)}`,
               };
             }
           }
