@@ -71,6 +71,12 @@ describe("auditoría completa al guardar (F-024)", () => {
     ]));
   });
 
+  it("país «ES» guardado por el OCR y sin país al guardar: no es un cambio (PR #11, punto 12)", async () => {
+    await prisma.invoice.update({ where: { id }, data: { issuerCountry: "ES" } });
+    expect((await save()).error).toBeNull();
+    expect(await entries()).toEqual([]);
+  });
+
   it("países del emisor y del receptor", async () => {
     expect((await save({ issuerCif: "DE123456789", operationType: "INTRACOM", vatLines: JSON.stringify([{ taxBase: "100", vatRate: "0", vatAmount: "0" }]), totalAmount: "100" })).error).toBeNull();
     expect(await entries()).toEqual(expect.arrayContaining([

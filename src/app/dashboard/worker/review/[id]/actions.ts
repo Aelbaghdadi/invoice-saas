@@ -468,10 +468,13 @@ async function parseAndSave(
   // El periodo contable, por su valor efectivo: sin el, cuenta el del lote.
   // processInvoice no lo rellena y el formulario manda siempre el del lote,
   // asi que el primer guardado auditaba «Mes contable — → 9» en todas.
+  // Y el pais «ES» es lo mismo que sin pais: un NIF leido con prefijo ES
+  // guarda "ES", la pantalla lo ensena sin prefijo y al guardar queda null.
   const effective = (source: typeof invoice | typeof newData, field: (typeof trackedFields)[number]) =>
     field === "accountingPeriodMonth" ? source.accountingPeriodMonth ?? invoice.periodMonth
       : field === "accountingPeriodYear" ? source.accountingPeriodYear ?? invoice.periodYear
-        : source[field];
+        : (field === "issuerCountry" || field === "receiverCountry") ? (source[field]?.trim().toUpperCase() === "ES" ? null : source[field])
+          : source[field];
   for (const field of trackedFields) {
     const oldVal = auditValue(effective(invoice, field));
     const newVal = auditValue(effective(newData, field));
