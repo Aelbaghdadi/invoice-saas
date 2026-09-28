@@ -163,16 +163,16 @@ Detalles (qué se simula, factorías, carreras): ARCHITECTURE.md → Testing.
 ## Flujo de una factura
 
 ```
-Cliente sube PDF
+Cliente sube PDF (un fichero por petición)
     ↓
-POST /api/invoices/upload
+POST /api/uploads
     ↓ status: UPLOADED
     ↓
-POST /api/invoices/[id]/process  (background)
-    ↓ status: ANALYZING
+after(): processInvoice.ts
+    espera turno en la cola del OCR (OCR_CONCURRENCY a la vez), sin salir de UPLOADED
+    ↓ claim → status: ANALYZING
     ↓
-processInvoice.ts (cola en memoria: OCR_CONCURRENCY a la vez; espera en UPLOADED)
-    → ocrLlm.ts (Gemini), u ocr.ts (Document AI) si no hay GEMINI_API_KEY
+ocrLlm.ts (Gemini), u ocr.ts (Document AI) si no hay GEMINI_API_KEY
     (reintentos con backoff exponencial y Retry-After; al agotarlos, OCR_ERROR)
     ↓
 parseTaxId + pre-fill cliente + aprendizaje de cuentas
