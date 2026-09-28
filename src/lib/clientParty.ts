@@ -48,7 +48,9 @@ export function clientPartyWarning(type: string, read: ReadParties, client: { ci
   if (sideCif === otherCif) return null;
   if (otherCif && otherCif === clientCif) return { kind: "swapped", clientShownAs: purchase ? "emisor" : "receptor" };
   const foreignVat = sideParsed.countryCode != null && sideParsed.countryCode !== "ES";
-  if (foreignVat ? !isValidTaxIdWithPrefix(sideRaw ?? "") : !isValidNIF(sideCif)) return null;
+  // Un VAT sin ninguna cifra es una palabra que empieza por un codigo de
+  // pais («NO CONSTA», «CONTADO», «CLIENTE»), no un identificador.
+  if (foreignVat ? !isValidTaxIdWithPrefix(sideRaw ?? "") || !/\d/.test(sideParsed.clean) : !isValidNIF(sideCif)) return null;
   return {
     kind: "foreign",
     name: sideName?.trim() || null,

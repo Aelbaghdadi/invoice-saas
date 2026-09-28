@@ -25,6 +25,12 @@ describe("factura a nombre de otro (F-019)", () => {
       .toEqual({ kind: "foreign", name: "Muster GmbH", cif: "DE123456789" });
   });
 
+  it("una palabra que empieza por un código de país no es un VAT", () => {
+    for (const text of ["NO CONSTA", "CONTADO", "CLIENTE", "SIN DATOS", "SE DESCONOCE"]) {
+      expect(clientPartyWarning("PURCHASE", purchase(null, text), client), text).toBeNull();
+    }
+  });
+
   it("sin CIF o con uno que no pasa el dígito de control (error de OCR): nada", () => {
     expect(clientPartyWarning("PURCHASE", purchase("Otra SL", null), client)).toBeNull();
     expect(clientPartyWarning("PURCHASE", purchase("Otra SL", "12345678A"), client)).toBeNull();
