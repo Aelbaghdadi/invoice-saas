@@ -96,6 +96,15 @@ describe("resolveIrpf (F-073)", () => {
       .toEqual({ rate: 15, amount: 180 });
   });
 
+  it("suplido al 0 %: con el % leído sobre las bases con IVA, esa es la base de la retención", () => {
+    const balancedWith = (irpf: number) => Math.abs(1200 + 210 - irpf - 1260) < 0.005;
+    expect(resolveIrpf({ sumBases: 1200, taxedBases: 1000, balancedWith, hasRetention: true, retentionRate: 15, readRate: 15, readAmount: 150 }))
+      .toEqual({ rate: 15, amount: 150, base: 1000 });
+    // Sin % leído no se adivina la base.
+    expect(resolveIrpf({ sumBases: 1200, taxedBases: 1000, balancedWith, hasRetention: true, retentionRate: 15, readRate: null, readAmount: 150 }))
+      .toEqual({ rate: 15, amount: 180 });
+  });
+
   it("sin tipo de retención, lo leído tal cual", () => {
     expect(resolveIrpf({ ...invoice(1140), hasRetention: false, retentionRate: null, readRate: 7, readAmount: 70 }))
       .toEqual({ rate: 7, amount: 70 });

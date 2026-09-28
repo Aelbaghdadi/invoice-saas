@@ -157,12 +157,16 @@ describe("entradas auto:* cuando el sistema cambia algo al leer (F-024)", () => 
       expect(await saved()).toEqual([7, 70, "PROFESSIONAL", true]);
     });
 
-    it("con una línea al 0 %, un 15 % impreso no pasa a un 12,5 % deducido: queda descuadrada", async () => {
+    it("con un suplido al 0 %, el 15 % impreso va sobre los honorarios: 15 % · 150, cuadrada", async () => {
+      // Ni un 12,5 % deducido ni 15 % · 180 sobre el suplido: la base de la
+      // retención son los 1000 con IVA.
       await read({
         taxBase: 1200, vatAmount: 210, irpfRate: 15, irpfAmount: 150, totalAmount: 1260,
         vatLines: [{ taxBase: 1000, vatRate: 21, vatAmount: 210 }, { taxBase: 200, vatRate: 0, vatAmount: 0 }],
       });
-      expect(await saved()).toEqual([15, 180, "PROFESSIONAL", false]);
+      expect(await saved()).toEqual([15, 150, "PROFESSIONAL", true]);
+      const inv = await prisma.invoice.findFirstOrThrow({ where: { filename: "auto.pdf" } });
+      expect(Number(inv.retentionBase)).toBe(1000);
     });
 
     it("sin % leído, con una línea al 0 %: 150 no pasa a un 12,5 %; 15 % / 180, descuadrada", async () => {

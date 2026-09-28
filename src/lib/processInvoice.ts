@@ -560,14 +560,13 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     // Calculamos cuota e importe de la base de retencion solo si hay
     // tipo. La base por defecto es la suma de bases imponibles del IVA.
     const sumBasesAll = vatLines.reduce((s, l) => s + l.taxBase, 0);
-    const retentionBase = retentionType ? sumBasesAll : null;
     // Si la factura cuadra con el importe leido, se queda ese (F-073); si
     // no, base × % con el mismo redondeo que la pantalla (percentOf): con
     // toFixed, 100,30 al 15 % daba 15,04 frente a los 15,05 impresos y la
     // factura quedaba isValid=false sin ninguna incidencia.
     const sumVat = vatLines.reduce((s, l) => s + l.vatAmount, 0);
     const sumSurcharge = vatLines.reduce((s, l) => s + (l.equivalenceSurchargeAmount ?? 0), 0);
-    const { rate: finalIrpfRate, amount: finalIrpfAmount } = resolveIrpf({
+    const { rate: finalIrpfRate, amount: finalIrpfAmount, base: irpfBase } = resolveIrpf({
       hasRetention: retentionType != null,
       retentionRate,
       readRate: extracted.irpfRate ?? null,
@@ -575,7 +574,9 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       sumBases: sumBasesAll,
       balancedWith: (irpf) => extracted.totalAmount != null
         && isInvoiceBalanced({ sumBase: sumBasesAll, sumAmount: sumVat, sumSurcharge, irpf, total: extracted.totalAmount }),
+      taxedBases: vatLines.filter((l) => l.vatRate > 0).reduce((s, l) => s + l.taxBase, 0),
     });
+    const retentionBase = retentionType ? (irpfBase ?? sumBasesAll) : null;
     // Solo cuando de verdad se sustituye lo leido: retencion propuesta
     // (tercero aprendido, persona fisica) o recalculada.
     const finalIrpf = irpfAuditValue(finalIrpfRate, finalIrpfAmount);

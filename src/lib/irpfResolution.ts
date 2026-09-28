@@ -45,10 +45,13 @@ export type IrpfInput = {
   sumBases: number;
   /** ¿Cuadra la factura con este IRPF? */
   balancedWith: (irpf: number) => boolean;
+  /** Suma de las bases con IVA > 0: sin los suplidos al 0 %. */
+  taxedBases?: number;
 };
 
-export function resolveIrpf(input: IrpfInput): { rate: number | null; amount: number | null } {
-  const { hasRetention, retentionRate, readRate, readAmount, sumBases, balancedWith } = input;
+/** `base`: la de la retencion cuando no es la suma de todas las bases. */
+export function resolveIrpf(input: IrpfInput): { rate: number | null; amount: number | null; base?: number } {
+  const { hasRetention, retentionRate, readRate, readAmount, sumBases, balancedWith, taxedBases } = input;
   if (!hasRetention) return { rate: retentionRate ?? readRate, amount: readAmount };
 
   // El importe leido llega siempre en positivo (auto:signo); en una
@@ -57,6 +60,12 @@ export function resolveIrpf(input: IrpfInput): { rate: number | null; amount: nu
   if (signed != null && signed !== 0 && sumBases !== 0 && balancedWith(signed)) {
     for (const rate of [readRate, retentionRate, legalRateFor(sumBases, signed, readRate)]) {
       if (rate != null && percentOf(sumBases, rate) === signed) return { rate, amount: signed };
+    }
+    // Un profesional con suplidos al 0 %: la retencion va sobre los
+    // honorarios, no sobre el suplido (15 % de 1000, no de 1200).
+    if (readRate != null && taxedBases != null && taxedBases !== 0 && taxedBases !== sumBases
+      && percentOf(taxedBases, readRate) === signed) {
+      return { rate: readRate, amount: signed, base: taxedBases };
     }
   }
   for (const rate of [readRate, retentionRate]) {
