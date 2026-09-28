@@ -130,6 +130,21 @@ describe("reportRequestError", () => {
     await delivery;
   });
 
+  it("un texto por servicio: Slack/Mattermost escapado y sin menciones, Discord sin escapar y recortado", async () => {
+    const fetchFn = vi.fn(async () => new Response(null));
+    const long = "x".repeat(3000);
+    const { delivery } = await reportRequestError(new Error("a < b && @channel @all @here"), { path: `/api/${long}`, method: "GET" }, ctx, {
+      log: () => {}, fetchFn: fetchFn as unknown as typeof fetch, webhookUrl: "https://alertas.example/hook", limiter: createAlertLimiter(5, 1000),
+    });
+    await delivery;
+    const body = JSON.parse((fetchFn.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
+    expect(body.text).toContain("a &lt; b &amp;&amp; @\u200bchannel @\u200ball @\u200bhere");
+    expect(body.content).toContain("a < b && @channel");
+    expect(body.content.length).toBeLessThanOrEqual(1900);
+    // La ruta, recortada: el texto entero cabe en Discord.
+    expect(body.path).toHaveLength(200);
+  });
+
   it("sin menciones: <!channel> y @everyone no llegan como tales", async () => {
     const fetchFn = vi.fn(async () => new Response(null));
     const { delivery } = await reportRequestError(new Error("<!channel> @everyone & co"), req, ctx, {
@@ -137,7 +152,7 @@ describe("reportRequestError", () => {
     });
     await delivery;
     const body = JSON.parse((fetchFn.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
-    expect(body.text).toContain("&lt;!channel&gt; @everyone &amp; co");
+    expect(body.text).toContain("&lt;!channel&gt; @\u200beveryone &amp; co");
     expect(body.allowed_mentions).toEqual({ parse: [] });
   });
 

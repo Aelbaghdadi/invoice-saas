@@ -26,6 +26,11 @@ export type ErrorReport = {
 };
 
 const MAX_MESSAGE = 300;
+// Una ruta de miles de caracteres (un escaneo, un enlace mal pegado) no
+// tiene por que viajar entera al log ni al webhook.
+const MAX_PATH = 200;
+// Discord rechaza (400) un content de mas de 2000 caracteres.
+const MAX_DISCORD_CONTENT = 1_900;
 // Se recorta antes de limpiar: sin «@», la expresion de correos prueba desde
 // cada posicion hasta el final, y con 100 KB de mensaje (un volcado de
 // Prisma) tardaba segundos.
@@ -63,7 +68,7 @@ export function buildErrorReport(error: unknown, request: ErrorRequest, context:
   return {
     level: "error",
     time: now.toISOString(),
-    path: request.path.split("?")[0],
+    path: request.path.split("?")[0].slice(0, MAX_PATH),
     method: request.method,
     routePath: context.routePath ?? null,
     routeType: context.routeType ?? null,
@@ -114,10 +119,17 @@ type Deps = {
   clock?: () => number;
 };
 
-/** Para Slack: «&», «<» y «>» escapados, asi «<!channel>» o un enlace
- *  inventado en la URL no se interpretan. */
-function escapeForChat(text: string): string {
-  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+/**
+ * `text` de Slack y Mattermost: «&», «<» y «>» escapados (en Slack,
+ * «<!channel>» o un enlace inventado en la URL no se interpretan) y las
+ * menciones de Mattermost («@channel», «@all», «@here») rotas con un espacio
+ * de ancho cero. Discord no usa este texto: su `content` va sin escapar (lo
+ * mostraria tal cual) y sus menciones las apaga allowed_mentions.
+ */
+function textForSlack(text: string): string {
+  return text
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/@(channel|all|here|everyone)\b/gi, "@\u200b$1");
 }
 
 /**
@@ -140,7 +152,9 @@ export async function reportRequestError(
   const allowed = (deps.limiter ?? limiter).take((deps.clock ?? (() => performance.now()))());
   if (!allowed) return { delivery: Promise.resolve() };
   const extra = allowed.suppressedBefore > 0 ? ` (+${allowed.suppressedBefore} errores sin avisar por el límite)` : "";
-  const text = escapeForChat(`Error en FacturOCR: ${report.method} ${report.path} — ${report.name}: ${report.message}${report.digest ? ` [${report.digest}]` : ""}${extra}`);
+  const plain = `Error en FacturOCR: ${report.method} ${report.path} — ${report.name}: ${report.message}${report.digest ? ` [${report.digest}]` : ""}${extra}`;
+  const text = textForSlack(plain);
+  const content = plain.slice(0, MAX_DISCORD_CONTENT);
   const delivery = (async () => {
     try {
       // `text` para Slack/Mattermost, `content` para Discord (sin menciones:
@@ -148,7 +162,7 @@ export async function reportRequestError(
       const res = await (deps.fetchFn ?? fetch)(webhookUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, content: text, allowed_mentions: { parse: [] }, ...report, suppressedBefore: allowed.suppressedBefore }),
+        body: JSON.stringify({ text, content, allowed_mentions: { parse: [] }, ...report, suppressedBefore: allowed.suppressedBefore }),
         signal: AbortSignal.timeout(3_000),
       });
       // El cuerpo no interesa, pero se libera la conexion.
