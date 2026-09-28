@@ -217,7 +217,12 @@ async function classify(invoiceId: string, clientId: string): Promise<ClassifySt
   if (signHint) mathProblems.push({ type: "MANUAL", description: signHint, field: "isRectificative" });
   // A nombre de otro (F-019), con lo que leyo el OCR en el lado del cliente.
   // Con el tipo sin confirmar, el lado del cliente es una suposicion.
-  const foreign = typeStillUnconfirmed ? null : clientPartyIssue(effectiveType, invoice, client);
+  // En la factura el CIF va sin prefijo y el pais aparte: se vuelve a unir
+  // para que un VAT extranjero cuente como tal.
+  const foreign = typeStillUnconfirmed ? null : clientPartyIssue(effectiveType, {
+    issuerName: invoice.issuerName, issuerCif: taxIdWithCountry(invoice.issuerCif, invoice.issuerCountry),
+    receiverName: invoice.receiverName, receiverCif: taxIdWithCountry(invoice.receiverCif, invoice.receiverCountry),
+  }, client);
   if (foreign) mathProblems.push(foreign);
   // isValid con el recargo ya propuesto, como `finalIsValid` en el OCR: el
   // del buzon se calculo sin recargo y la ficha lo pintaba en rojo.

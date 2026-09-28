@@ -7,7 +7,9 @@
  *
  * Misma parte, como en clientPartyAudit (PR #11): el mismo CIF. Sin CIF
  * leido, o con uno que no pasa el digito de control, no se avisa: puede ser
- * un error del OCR.
+ * un error del OCR. Un VAT extranjero («DE123456789») cuenta como otra parte
+ * si tiene el formato de su pais; su letra de control no se puede comprobar
+ * sin VIES.
  *
  * Se mira tambien el otro lado:
  * - si alli esta el CIF del cliente, lo que pasa es que emisor y receptor
@@ -18,7 +20,7 @@
  *
  * Sin imports de servidor: lo usa tambien la pantalla de revision.
  */
-import { isValidNIF, parseTaxId } from "@/lib/validators";
+import { isValidNIF, isValidTaxIdWithPrefix, parseTaxId, taxIdWithCountry } from "@/lib/validators";
 
 export type ReadParties = {
   issuerName: string | null | undefined;
@@ -36,15 +38,22 @@ const cifOf = (raw: string | null | undefined) => parseTaxId(raw).clean.toUpperC
 /** Lo que hay que avisar del lado del cliente, o null si es el cliente. */
 export function clientPartyWarning(type: string, read: ReadParties, client: { cif: string }): ClientPartyWarning | null {
   const purchase = type === "PURCHASE";
-  const sideCif = cifOf(purchase ? read.receiverCif : read.issuerCif);
+  const sideRaw = purchase ? read.receiverCif : read.issuerCif;
+  const sideParsed = parseTaxId(sideRaw);
+  const sideCif = cifOf(sideRaw);
   const sideName = purchase ? read.receiverName : read.issuerName;
   const otherCif = cifOf(purchase ? read.issuerCif : read.receiverCif);
   const clientCif = cifOf(client.cif);
   if (!sideCif || sideCif === clientCif) return null;
   if (sideCif === otherCif) return null;
   if (otherCif && otherCif === clientCif) return { kind: "swapped", clientShownAs: purchase ? "emisor" : "receptor" };
-  if (!isValidNIF(sideCif)) return null;
-  return { kind: "foreign", name: sideName?.trim() || null, cif: sideCif };
+  const foreignVat = sideParsed.countryCode != null && sideParsed.countryCode !== "ES";
+  if (foreignVat ? !isValidTaxIdWithPrefix(sideRaw ?? "") : !isValidNIF(sideCif)) return null;
+  return {
+    kind: "foreign",
+    name: sideName?.trim() || null,
+    cif: foreignVat ? taxIdWithCountry(sideParsed.clean, sideParsed.countryCode) : sideCif,
+  };
 }
 
 /** El texto de la incidencia. */

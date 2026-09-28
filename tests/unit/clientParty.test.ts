@@ -20,6 +20,11 @@ describe("factura a nombre de otro (F-019)", () => {
     expect(clientPartyWarning("PURCHASE", purchase("Otro nombre", "b12345674"), client)).toBeNull();
   });
 
+  it("un VAT extranjero en el lado del cliente también es otra parte, con su país", () => {
+    expect(clientPartyWarning("PURCHASE", purchase("Muster GmbH", "DE123456789"), client))
+      .toEqual({ kind: "foreign", name: "Muster GmbH", cif: "DE123456789" });
+  });
+
   it("sin CIF o con uno que no pasa el dígito de control (error de OCR): nada", () => {
     expect(clientPartyWarning("PURCHASE", purchase("Otra SL", null), client)).toBeNull();
     expect(clientPartyWarning("PURCHASE", purchase("Otra SL", "12345678A"), client)).toBeNull();

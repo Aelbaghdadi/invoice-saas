@@ -78,6 +78,11 @@ describe("al analizar (F-019)", () => {
     expect(s.issues).toEqual([]);
   });
 
+  it("un VAT extranjero en el receptor también, con su país", async () => {
+    const s = await state(await read("PURCHASE", { receiverName: "Muster GmbH", receiverCif: "DE123456789" }));
+    expect(s.issues).toEqual([["MANUAL", "clientParty", "Factura a nombre de Muster GmbH (DE123456789), no del cliente."]]);
+  });
+
   it("venta con el emisor de otro CIF: también", async () => {
     const s = await state(await read("SALE", {
       issuerName: "Socio SL", issuerCif: "B12345674", receiverName: "Comprador SA", receiverCif: "A58818501",
@@ -87,6 +92,12 @@ describe("al analizar (F-019)", () => {
 });
 
 describe("al clasificar desde «Por clasificar» (F-019)", () => {
+  it("un VAT extranjero leído en el receptor: incidencia con su país", async () => {
+    const id = await read("PURCHASE", { receiverName: "Muster GmbH", receiverCif: "DE123456789" }, true);
+    expect(await classifyInvoice(id, w.client.id)).toEqual({ ok: true });
+    expect((await state(id)).issues).toEqual([["MANUAL", "clientParty", "Factura a nombre de Muster GmbH (DE123456789), no del cliente."]]);
+  });
+
   it("con el tipo sin confirmar: sin incidencia", async () => {
     const id = await read("PURCHASE", { receiverName: "Ana Pérez", receiverCif: "12345678Z" }, true, true);
     expect(await classifyInvoice(id, w.client.id)).toEqual({ ok: true });
