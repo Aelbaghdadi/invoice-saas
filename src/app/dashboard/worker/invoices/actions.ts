@@ -75,7 +75,8 @@ export async function quickRejectDuplicate(
  * Descartar incidencia POSSIBLE_DUPLICATE sin rechazar la factura ("no
  * es duplicado, son dos facturas distintas del mismo emisor con mismo
  * importe"). Baja a PENDING_REVIEW si no quedan otras incidencias. Desde el
- * listado y desde la revision («No es duplicada», F-016).
+ * listado (todas las de duplicado de la factura) y desde la revision («No es
+ * duplicada», F-016: solo la de esa fila, con issueId).
  */
 export async function dismissDuplicateIssue(
   _prev: InvoiceQuickAction,
@@ -88,6 +89,9 @@ export async function dismissDuplicateIssue(
 
   const invoiceId = formData.get("invoiceId") as string;
   if (!invoiceId) return { error: "ID no proporcionado" };
+  // Desde la revision llega la incidencia concreta: se descarta solo esa.
+  // Desde el listado no: se descartan todas las de duplicado de la factura.
+  const issueId = (formData.get("issueId") as string | null) || null;
 
   const access = await assertAccess(session, invoiceId);
   if (access) return access;
@@ -96,7 +100,7 @@ export async function dismissDuplicateIssue(
   // «Con incidencias» sin ninguna abierta.
   const dismissed = await prisma.$transaction(async (tx) => {
     const closed = await tx.invoiceIssue.updateMany({
-      where: { invoiceId, type: "POSSIBLE_DUPLICATE", status: "OPEN" },
+      where: { invoiceId, type: "POSSIBLE_DUPLICATE", status: "OPEN", ...(issueId ? { id: issueId } : {}) },
       data: {
         status: "DISMISSED",
         resolvedBy: session.user.id,

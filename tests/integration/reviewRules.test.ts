@@ -1181,6 +1181,22 @@ describe("revisión con un posible duplicado abierto (F-016)", () => {
     expect((await validate(await form({}))).error).toBeNull();
   });
 
+  it("«No es duplicada» con issueId (una fila de la revisión): solo esa", async () => {
+    const segunda = await prisma.invoiceIssue.create({ data: { invoiceId: id, type: "POSSIBLE_DUPLICATE", description: "Otro aviso." } });
+    const primera = await prisma.invoiceIssue.findFirstOrThrow({ where: { invoiceId: id, id: { not: segunda.id } } });
+    const fd = new FormData();
+    fd.set("invoiceId", id);
+    fd.set("issueId", primera.id);
+    expect(await dismissDuplicateIssue(null, fd)).toEqual({ ok: true });
+    const statuses = await prisma.invoiceIssue.findMany({ where: { invoiceId: id }, orderBy: { createdAt: "asc" } });
+    expect(statuses.map((i) => [i.id, i.status])).toEqual([[primera.id, "DISMISSED"], [segunda.id, "OPEN"]]);
+    expect((await row()).status).toBe("NEEDS_ATTENTION");
+    // Sin issueId (el listado): todas.
+    expect(await dismiss()).toEqual({ ok: true });
+    expect(await issueStatus()).toBe("DISMISSED");
+    expect(await prisma.invoiceIssue.count({ where: { invoiceId: id, status: "OPEN" } })).toBe(0);
+  });
+
   it("«No es duplicada» con otra incidencia abierta: sigue con incidencias", async () => {
     await prisma.invoiceIssue.create({ data: { invoiceId: id, type: "MATH_MISMATCH", description: "No cuadra" } });
     expect(await dismiss()).toEqual({ ok: true });

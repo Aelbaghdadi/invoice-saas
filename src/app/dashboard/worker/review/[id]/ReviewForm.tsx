@@ -1223,10 +1223,11 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     });
     if (ok) submitReject(issue.description, "DUPLICATE");
   };
-  const handleNotDuplicate = () => {
+  const handleNotDuplicate = (issue: IssueData) => {
     startDismiss(async () => {
       const fd = new FormData();
       fd.set("invoiceId", invoice.id);
+      fd.set("issueId", issue.id);
       const res = await dismissDuplicateIssue(null, fd);
       if (res?.error) error(res.error);
       else {
@@ -1734,7 +1735,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                       <div className="flex flex-shrink-0 gap-1.5">
                         <button
                           type="button"
-                          onClick={handleNotDuplicate}
+                          onClick={() => handleNotDuplicate(issue)}
                           disabled={isPendingDismiss || isPendingReject}
                           className="rounded-lg border border-amber-300 bg-white px-2.5 py-1 text-[12px] font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
                         >
