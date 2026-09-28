@@ -194,6 +194,13 @@ describe("entradas auto:* cuando el sistema cambia algo al leer (F-024)", () => 
     expect([Number(inv.irpfRate), Number(inv.irpfAmount)]).toEqual([7, -70]);
   });
 
+  it("abono con solo −70 leído: una única auto:irpf, de lo impreso al final", async () => {
+    expect(await read({
+      taxBase: -1000, vatAmount: -210, irpfRate: null, irpfAmount: -70, totalAmount: -1140,
+      vatLines: [{ taxBase: -1000, vatRate: 21, vatAmount: -210 }],
+    })).toEqual([["auto:irpf", "— % · -70", "7 % · -70"]]);
+  });
+
   it("primera factura sin aprendido: el % deducido solo si es un tipo legal (F-073)", async () => {
     await read({
       taxBase: 1200, vatAmount: 210, irpfRate: null, irpfAmount: 150, totalAmount: 1260,

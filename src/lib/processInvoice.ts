@@ -587,7 +587,12 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       const signo = autoAudit.findIndex((e) => e.field === "auto:signo");
       if (signo >= 0) autoAudit.splice(signo, 1);
     } else if (finalIrpf !== readIrpf) {
-      autoAudit.push({ field: "auto:irpf", oldValue: readIrpf, newValue: finalIrpf });
+      // Si ademas se cambio el signo (un abono sin % impreso: −70 → 70 → 7 %
+      // · −70), una sola entrada de lo impreso al final, en vez de dos que
+      // se anulan en parte. Sin mas cambios, auto:signo se queda sola.
+      const signo = autoAudit.findIndex((e) => e.field === "auto:signo");
+      if (signo >= 0) autoAudit.splice(signo, 1);
+      autoAudit.push({ field: "auto:irpf", oldValue: signo >= 0 ? printedIrpf : readIrpf, newValue: finalIrpf });
     }
 
     // Detect issues (duplicates, low confidence, math mismatch, IVA no-cero
