@@ -25,6 +25,10 @@ import { LEGAL_RETENTION_RATES } from "@/lib/validators";
  * El tipo legal que da `amount` sobre `sumBases` (con el signo de la base),
  * o null. Con % leido, solo uno que difiera de el por redondeo.
  */
+export function isLegalRetentionRate(rate: number): boolean {
+  return (LEGAL_RETENTION_RATES as readonly number[]).includes(rate);
+}
+
 export function legalRateFor(sumBases: number, amount: number, readRate: number | null = null): number | null {
   if (sumBases === 0) return null;
   for (const rate of LEGAL_RETENTION_RATES) {
@@ -52,13 +56,17 @@ export type IrpfInput = {
 /** `base`: la de la retencion cuando no es la suma de todas las bases. */
 export function resolveIrpf(input: IrpfInput): { rate: number | null; amount: number | null; base?: number } {
   const { hasRetention, retentionRate, readRate, readAmount, sumBases, balancedWith, taxedBases } = input;
+  // Un aprendido que no es un tipo legal (un 12,5 % que se aprendio de una
+  // factura mal leida) no entra en los pasos 1 y 2: solo como ultima
+  // propuesta, y quien llama lo marca (isLegalRetentionRate).
+  const learned = retentionRate != null && isLegalRetentionRate(retentionRate) ? retentionRate : null;
   if (!hasRetention) return { rate: retentionRate ?? readRate, amount: readAmount };
 
   // El importe leido llega siempre en positivo (auto:signo); en una
   // rectificativa con bases negativas lleva el signo de la base.
   const signed = readAmount == null ? null : (sumBases < 0 ? -1 : 1) * Math.abs(readAmount);
   if (signed != null && signed !== 0 && sumBases !== 0 && balancedWith(signed)) {
-    for (const rate of [readRate, retentionRate, legalRateFor(sumBases, signed, readRate)]) {
+    for (const rate of [readRate, learned, legalRateFor(sumBases, signed, readRate)]) {
       if (rate != null && percentOf(sumBases, rate) === signed) return { rate, amount: signed };
     }
     // Un profesional con suplidos al 0 %: la retencion va sobre los
@@ -68,7 +76,7 @@ export function resolveIrpf(input: IrpfInput): { rate: number | null; amount: nu
       return { rate: readRate, amount: signed, base: taxedBases };
     }
   }
-  for (const rate of [readRate, retentionRate]) {
+  for (const rate of [readRate, learned]) {
     if (rate != null && balancedWith(percentOf(sumBases, rate))) return { rate, amount: percentOf(sumBases, rate) };
   }
   // La factura no cuadra con nada: si el par leido es coherente consigo

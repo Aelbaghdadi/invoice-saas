@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { legalRateFor, resolveIrpf } from "@/lib/irpfResolution";
+import { isLegalRetentionRate, legalRateFor, resolveIrpf } from "@/lib/irpfResolution";
 
 // Base 1000, IVA 210: la factura cuadra con el IRPF que da el total.
 const invoice = (total: number) => ({ sumBases: 1000, balancedWith: (irpf: number) => Math.abs(1000 + 210 - irpf - total) < 0.005 });
@@ -103,6 +103,14 @@ describe("resolveIrpf (F-073)", () => {
     // Sin % leído no se adivina la base.
     expect(resolveIrpf({ sumBases: 1200, taxedBases: 1000, balancedWith, hasRetention: true, retentionRate: 15, readRate: null, readAmount: 150 }))
       .toEqual({ rate: 15, amount: 180 });
+  });
+
+  it("un aprendido no legal no gana a un tipo legal que reproduce el importe", () => {
+    // 12,5 % aprendido; 150 leído sobre 1000, que es un 15 %.
+    expect(resolveIrpf({ ...invoice(1060), hasRetention: true, retentionRate: 12.5, readRate: null, readAmount: 150 }))
+      .toEqual({ rate: 15, amount: 150 });
+    expect(isLegalRetentionRate(12.5)).toBe(false);
+    expect(isLegalRetentionRate(15)).toBe(true);
   });
 
   it("sin tipo de retención, lo leído tal cual", () => {

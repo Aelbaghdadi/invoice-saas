@@ -201,6 +201,28 @@ describe("entradas auto:* cuando el sistema cambia algo al leer (F-024)", () => 
     })).toEqual([["auto:irpf", "— % · -70", "7 % · -70"]]);
   });
 
+  it("un 12,5 % aprendido (no legal) no pasa en silencio aunque la factura cuadre", async () => {
+    await prisma.accountEntry.create({
+      data: { clientId: w.client.id, nif: "12345678Z", name: "Ana Pérez", defaultRetentionType: "PROFESSIONAL", defaultRetentionRate: 12.5 },
+    });
+    await read({ irpfRate: null, irpfAmount: null, totalAmount: 1085 });
+    const inv = await prisma.invoice.findFirstOrThrow({ where: { filename: "auto.pdf" } });
+    const issues = await prisma.invoiceIssue.findMany({ where: { invoiceId: inv.id } });
+    expect([Number(inv.irpfRate), Number(inv.irpfAmount), inv.status]).toEqual([12.5, 125, "NEEDS_ATTENTION"]);
+    expect(issues.map((i) => [i.type, i.field, i.description])).toEqual([
+      ["MANUAL", "irpfRate", "La retención aprendida del tercero (12,5 %) no es un tipo legal: revisa el % de la factura."],
+    ]);
+  });
+
+  it("con un 15 % aprendido (legal), sin esa incidencia", async () => {
+    await prisma.accountEntry.create({
+      data: { clientId: w.client.id, nif: "12345678Z", name: "Ana Pérez", defaultRetentionType: "PROFESSIONAL", defaultRetentionRate: 15 },
+    });
+    await read({ irpfRate: null, irpfAmount: null, totalAmount: 1060 });
+    const inv = await prisma.invoice.findFirstOrThrow({ where: { filename: "auto.pdf" } });
+    expect(await prisma.invoiceIssue.count({ where: { invoiceId: inv.id, field: "irpfRate" } })).toBe(0);
+  });
+
   it("primera factura sin aprendido: el % deducido solo si es un tipo legal (F-073)", async () => {
     await read({
       taxBase: 1200, vatAmount: 210, irpfRate: null, irpfAmount: 150, totalAmount: 1260,

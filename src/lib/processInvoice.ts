@@ -17,7 +17,7 @@ import { clientPartyIssue } from "@/lib/clientParty";
 import { ocrFenceWhere } from "@/lib/invoiceStatuses";
 import { isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { roundCents } from "@/lib/money";
-import { legalRateFor, resolveIrpf } from "@/lib/irpfResolution";
+import { isLegalRetentionRate, legalRateFor, resolveIrpf } from "@/lib/irpfResolution";
 
 // La escritura final son unas pocas consultas; 15 s por si espera un bloqueo
 // de fila (los 5 s por defecto dejaban el resultado en OCR_ERROR).
@@ -577,6 +577,10 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       taxedBases: vatLines.filter((l) => l.vatRate > 0).reduce((s, l) => s + l.taxBase, 0),
     });
     const retentionBase = retentionType ? (irpfBase ?? sumBasesAll) : null;
+    // El % aprendido del tercero no es un tipo legal y es el que se ha
+    // guardado: aunque la factura cuadre, que se vea.
+    const illegalLearnedRate = retentionType != null && retentionRate != null && finalIrpfRate === retentionRate
+      && finalIrpfRate !== (extracted.irpfRate ?? null) && !isLegalRetentionRate(retentionRate);
     // Solo cuando de verdad se sustituye lo leido: retencion propuesta
     // (tercero aprendido, persona fisica) o recalculada.
     const finalIrpf = irpfAuditValue(finalIrpfRate, finalIrpfAmount);
@@ -614,6 +618,13 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
         totalAmount: extracted.totalAmount, irpfAmount: finalIrpfAmount, retentionBase,
       }, ocrResult.rawText, extracted.isCorrective === true);
       if (hint) issues.push({ type: "MANUAL", description: hint, field: "isRectificative" });
+    }
+    if (!isUnclassified && illegalLearnedRate) {
+      issues.push({
+        type: "MANUAL",
+        field: "irpfRate",
+        description: `La retención aprendida del tercero (${String(retentionRate).replace(".", ",")} %) no es un tipo legal: revisa el % de la factura.`,
+      });
     }
     // A nombre de otro (F-019): en el lado del cliente se leyo un CIF valido
     // que no es el suyo. Los datos se sustituyen igual, pero se avisa. Con el
