@@ -12,6 +12,7 @@ import {
 } from "@/lib/ocrLlm";
 import { detectIssues } from "@/lib/issueDetector";
 import { appendAuditLogs } from "@/lib/auditLog";
+import { irpfAuditValue, partyAuditValue } from "@/lib/auditValue";
 import { ocrFenceWhere } from "@/lib/invoiceStatuses";
 import { isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { percentOf, roundCents } from "@/lib/money";
@@ -22,6 +23,7 @@ const OCR_WRITE_TRANSACTION_OPTIONS = { timeout: 15_000, maxWait: 5_000 } as con
 import {
   parseTaxId,
   isPersonaFisica,
+  normalizeBusinessName,
   textMentionsRetention,
   RETENTION_DEFAULT_RATE,
   type RetentionTypeName,
@@ -30,6 +32,7 @@ import {
   foldSurchargeLines,
   completeReadSurcharges,
   proposeSurchargesFromTotal,
+  surchargeAuditValue,
 } from "@/lib/equivalenceSurcharge";
 import { rectificativeSignHint, textMentionsRectificative, withRectificativeMention } from "@/lib/rectificative";
 import { routeByCif, clientSideCif, routeByText, detectInvoiceType } from "@/lib/invoiceRouting";
@@ -153,11 +156,17 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     // no pone el signo de una rectificativa (F-012): lo pone la revision al
     // marcar la casilla.
     const positive = (v: number | null) => (v == null ? v : Math.abs(v));
+    // Lo que cambia el sistema sin que lo toque el gestor queda en la
+    // auditoria como auto:* (F-024). Primero, el signo de la retencion.
+    const autoAudit: { field: string; oldValue: string | null; newValue: string | null }[] = [];
+    const printedIrpf = irpfAuditValue(roundCents(extracted.irpfRate), roundCents(extracted.irpfAmount));
     extracted.irpfAmount = roundCents(positive(extracted.irpfAmount));
     // Los % tambien: con 7,005 % la cuota se calculaba con el % sin redondear
     // y la BD guardaba 7,01, asi que la revision la daba por descuadrada.
     extracted.vatRate = roundCents(extracted.vatRate);
     extracted.irpfRate = roundCents(positive(extracted.irpfRate));
+    const readIrpf = irpfAuditValue(extracted.irpfRate, extracted.irpfAmount);
+    if (printedIrpf !== readIrpf) autoAudit.push({ field: "auto:signo", oldValue: printedIrpf, newValue: readIrpf });
     extracted.vatLines = extracted.vatLines.map((l) => ({
       ...l,
       taxBase: roundCents(l.taxBase),
@@ -319,6 +328,7 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     // contradice a los datos que se guardan unas lineas mas abajo, ademas de
     // mandar la factura a "Requiere atencion". Con Document AI el recargo no
     // se lee NUNCA, asi que le pasaba a todas las facturas de un cliente en RE.
+    const readSurcharge = surchargeAuditValue(extracted.vatLines);
     if (clientRecord?.equivalenceSurchargeCustomer) {
       for (const p of proposeSurchargesFromTotal(extracted.vatLines, extracted.totalAmount, extracted.irpfAmount)) {
         extracted.vatLines[p.index].equivalenceSurchargeRate = p.rate;
@@ -371,6 +381,20 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     let finalReceiverCountry = receiverParsed.countryCode;
 
     if (clientRecord) {
+      // Si el OCR leyo en el lado del cliente otra cosa, se sustituye y queda
+      // en la auditoria. Si no leyo nada, rellenarlo no es un cambio.
+      const readSide = invoice.type === "PURCHASE"
+        ? { name: extracted.receiverName, cif: receiverParsed.clean || null }
+        : { name: extracted.issuerName, cif: issuerParsed.clean || null };
+      const nameDiffers = readSide.name != null && normalizeBusinessName(readSide.name) !== normalizeBusinessName(clientRecord.name);
+      const cifDiffers = readSide.cif != null && readSide.cif !== clientRecord.cif;
+      if (nameDiffers || cifDiffers) {
+        autoAudit.push({
+          field: "auto:parteCliente",
+          oldValue: partyAuditValue(readSide.name, readSide.cif),
+          newValue: partyAuditValue(clientRecord.name, clientRecord.cif),
+        });
+      }
       if (invoice.type === "PURCHASE") {
         finalReceiverName    = clientRecord.name;
         finalReceiverCif     = clientRecord.cif;
@@ -496,6 +520,10 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       : (extracted.irpfAmount ?? null);
     const finalIrpfRate = retentionRate ?? extracted.irpfRate ?? null;
     const finalIrpfAmount = computedIrpfAmount;
+    // Retencion propuesta (tercero aprendido, persona fisica) o recalculada
+    // con el % redondeado: distinta de la leida.
+    const finalIrpf = irpfAuditValue(finalIrpfRate, finalIrpfAmount);
+    if (finalIrpf !== readIrpf) autoAudit.push({ field: "auto:irpf", oldValue: readIrpf, newValue: finalIrpf });
 
     // Detect issues (duplicates, low confidence, math mismatch, IVA no-cero
     // en intracomunitarias, etc.). En las "Por clasificar" no tiene sentido
@@ -569,6 +597,10 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       }
     }
     const totalSurchargeAmount = lineSurcharges.reduce((s, ls) => s + (ls.amount ?? 0), 0);
+    const finalSurcharge = surchargeAuditValue(amounts.lines.map((l, i) => ({
+      ...l, equivalenceSurchargeRate: lineSurcharges[i].rate, equivalenceSurchargeAmount: lineSurcharges[i].amount,
+    })));
+    if (finalSurcharge !== readSurcharge) autoAudit.push({ field: "auto:recargo", oldValue: readSurcharge, newValue: finalSurcharge });
 
     // isValid final: Σ(bases) + Σ(cuotas) + Σ(recargo) - IRPF = Total, con
     // los importes que se guardan (el `isValid` de mas arriba es un
@@ -679,7 +711,7 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
         field: "status",
         oldValue: "UPLOADED",
         newValue: targetStatus,
-      }], tx);
+      }, ...autoAudit.map((e) => ({ invoiceId, userId: triggeredByUserId, ...e }))], tx);
       return true;
     }, OCR_WRITE_TRANSACTION_OPTIONS);
     if (!written) {

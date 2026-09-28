@@ -6,6 +6,10 @@ import { makeFirm, makeInvoice, type FirmWorld } from "./helpers/factories";
 import { signInAs } from "./helpers/session";
 import { reviewForm, settleAction } from "./helpers/reviewForm";
 import { saveInvoiceFields } from "@/app/dashboard/worker/review/[id]/actions";
+import { stubOcr } from "./helpers/ocr";
+import { fakeS3 } from "./helpers/fakeS3";
+import { processInvoice } from "@/lib/processInvoice";
+import type { ExtractedInvoice } from "@/lib/ocr";
 
 let w: FirmWorld;
 let id: string;
@@ -77,5 +81,57 @@ describe("auditoría completa al guardar (F-024)", () => {
       ["rectifiedInvoiceSeries", null, "A"],
       ["art80Tres", "false", "true"],
     ]));
+  });
+});
+
+describe("entradas auto:* cuando el sistema cambia algo al leer (F-024)", () => {
+  async function read(extracted: Partial<ExtractedInvoice>) {
+    stubOcr(async () => ({
+      rawJson: "{}",
+      extracted: {
+        issuerName: "Ana Pérez", issuerCif: "12345678Z", receiverName: w.client.name, receiverCif: w.client.cif,
+        invoiceNumber: "AP-1", invoiceDate: "2026-09-10", taxBase: 1000, vatRate: 21, vatAmount: 210,
+        irpfRate: null, irpfAmount: null, totalAmount: 1210, currency: "EUR", supplyType: null,
+        vatLines: [{ taxBase: 1000, vatRate: 21, vatAmount: 210 }], confidence: null,
+        ...extracted,
+      } as ExtractedInvoice,
+    }));
+    fakeS3().put("k-auto", "%PDF-1.4");
+    const { id: inv } = await makeInvoice(w.client, {
+      filename: "auto.pdf", storageKey: "k-auto", fileType: "application/pdf", status: "UPLOADED",
+      invoiceNumber: null, issuerCif: null, totalAmount: null, vatRate: null,
+    });
+    await processInvoice(inv, w.worker.id);
+    return (await prisma.auditLog.findMany({ where: { invoiceId: inv, field: { startsWith: "auto:" } }, orderBy: { createdAt: "asc" } }))
+      .map((e) => [e.field, e.oldValue, e.newValue]);
+  }
+
+  it("una lectura sin nada que cambiar no deja ninguna", async () => {
+    expect(await read({})).toEqual([]);
+  });
+
+  it("auto:signo: IRPF impreso en negativo", async () => {
+    expect(await read({ irpfRate: -15, irpfAmount: -150, totalAmount: 1060 })).toEqual([
+      ["auto:signo", "-15 % · -150", "15 % · 150"],
+    ]);
+  });
+
+  it("auto:irpf: la cuota recalculada con el % redondeado", async () => {
+    expect(await read({ irpfRate: 7.005, irpfAmount: 70.05, totalAmount: 1139.95 })).toEqual([
+      ["auto:irpf", "7.01 % · 70.05", "7.01 % · 70.1"],
+    ]);
+  });
+
+  it("auto:parteCliente: el OCR leyó otro receptor y se pone el cliente", async () => {
+    expect(await read({ receiverName: "Otra Empresa SL", receiverCif: "B87654321" })).toEqual([
+      ["auto:parteCliente", "Otra Empresa SL (B87654321)", `${w.client.name} (${w.client.cif})`],
+    ]);
+  });
+
+  it("auto:recargo: recargo propuesto a un cliente en recargo de equivalencia", async () => {
+    await prisma.client.update({ where: { id: w.client.id }, data: { equivalenceSurchargeCustomer: true } });
+    expect(await read({ taxBase: 100, vatAmount: 21, totalAmount: 126.2, vatLines: [{ taxBase: 100, vatRate: 21, vatAmount: 21 }] })).toEqual([
+      ["auto:recargo", null, "21%: 5.2% 5.2"],
+    ]);
   });
 });
