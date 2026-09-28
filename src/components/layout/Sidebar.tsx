@@ -43,8 +43,10 @@ type NavSection = {
  *  - "Diario" → flujo de trabajo del día a día
  *  - "Otros"  → configuración y consultas puntuales
  *
- * "Incidencias" se quita: las incidencias ya aparecen pegadas a cada
- * factura en revisión, mantener un apartado aparte es ruido mental.
+ * "Incidencias" no esta en el menu: las abiertas salen arriba de cada
+ * factura en revision (bloque de incidencias de ReviewForm, con las
+ * acciones de duplicado) y el listado las marca. La pagina
+ * /dashboard/worker/issues sigue existiendo, solo sin entrada aqui.
  */
 const NAV_SECTIONS: Record<Role, NavSection[]> = {
   ADMIN: [

@@ -9,6 +9,7 @@ import {
   Globe, Scissors, Sparkles, Lock,
 } from "lucide-react";
 import { saveInvoiceFields, validateInvoice, rejectInvoice, deferInvoice, confirmThirdPartyName, type ReviewState } from "./actions";
+import { dismissDuplicateIssue } from "../../invoices/actions";
 import dynamic from "next/dynamic";
 const SplitInvoiceModal = dynamic(() => import("./SplitInvoiceModal"), { ssr: false });
 const SplitPdfModal = dynamic(() => import("./SplitPdfModal"), { ssr: false });
@@ -119,6 +120,8 @@ type IssueData = {
   status: IssueStatus;
   description: string;
   field: string | null;
+  /** POSSIBLE_DUPLICATE: la factura original, si la incidencia la guarda. */
+  duplicateOf: string | null;
 };
 
 type SuggestedAccount = {
@@ -756,6 +759,9 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   const rectificativeIssues = isRectificative
     ? []
     : issues.filter((i) => i.field === "isRectificative" && i.status === "OPEN");
+  // El resto de incidencias abiertas, arriba del formulario (F-016). Las del
+  // signo no: ya salen en el panel de rectificativa, junto a la casilla.
+  const openIssues = issues.filter((i) => i.status === "OPEN" && i.field !== "isRectificative");
   const hasValues  = vatTotals.anyFilled && totalAmount;
   const balanceInput = {
     sumBase: vatTotals.sumBase,
@@ -989,17 +995,31 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       let res = await validateInvoice(null, buildFormData(fields));
       // Ya hay otra validada con este numero y emisor (F-010): el servidor no
       // valida sin que el gestor lo confirme.
+      // Tambien con un posible duplicado abierto (F-016).
       if (res?.duplicateOf) {
         const dup = res.duplicateOf;
         const ok = await confirm({
           title: "¿Validar igualmente?",
-          message: (
+          message: dup.kind === "validated" ? (
             <>
               Ya hay otra factura con este número y este emisor:{" "}
               <Link href={`/dashboard/worker/review/${dup.id}`} target="_blank" className="font-medium underline">
                 {dup.label}
               </Link>
               . ¿Validar igualmente?
+            </>
+          ) : (
+            <>
+              {dup.label}{" "}
+              {dup.id && (
+                <>
+                  <Link href={`/dashboard/worker/review/${dup.id}`} target="_blank" className="font-medium underline">
+                    Ver la original
+                  </Link>
+                  .{" "}
+                </>
+              )}
+              Al validarla, el aviso se cierra. ¿Validar igualmente?
             </>
           ),
           confirmLabel: "Validar igualmente",
@@ -1143,13 +1163,12 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     if (ok) attemptValidate(true);
   };
 
-  const handleReject = () => {
-    if (!rejectReason.trim()) return;
+  const submitReject = (reason: string, category: string) => {
     startReject(async () => {
       const fd = new FormData();
       fd.set("invoiceId", invoice.id);
-      fd.set("rejectionReason", rejectReason);
-      if (rejectCategory) fd.set("rejectionCategory", rejectCategory);
+      fd.set("rejectionReason", reason);
+      if (category) fd.set("rejectionCategory", category);
       fd.set("nextId", nextPendingId ?? "");
       // Sin el bucket, rechazar en la cola de incidencias saltaba a la
       // siguiente de todo el lote.
@@ -1162,6 +1181,35 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       } else {
         success("Factura rechazada");
         setShowRejectModal(false);
+      }
+    });
+  };
+  const handleReject = () => {
+    if (!rejectReason.trim()) return;
+    submitReject(rejectReason, rejectCategory);
+  };
+
+  // Posible duplicado (F-016). «Es duplicada» la rechaza con la categoria
+  // DUPLICATE y el aviso como motivo (le llega al cliente): se confirma antes.
+  const [isPendingDismiss, startDismiss] = useTransition();
+  const handleIsDuplicate = async (issue: IssueData) => {
+    const ok = await confirm({
+      title: "¿Rechazar como duplicada?",
+      message: <>Se rechaza con este motivo, que le llega al cliente: «{issue.description}»</>,
+      confirmLabel: "Rechazar",
+      tone: "danger",
+    });
+    if (ok) submitReject(issue.description, "DUPLICATE");
+  };
+  const handleNotDuplicate = () => {
+    startDismiss(async () => {
+      const fd = new FormData();
+      fd.set("invoiceId", invoice.id);
+      const res = await dismissDuplicateIssue(null, fd);
+      if (res?.error) error(res.error);
+      else {
+        success("Aviso de duplicado descartado");
+        router.refresh();
       }
     });
   };
@@ -1635,6 +1683,56 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                 </div>
               );
             })()}
+
+            {/* Incidencias abiertas (F-016): antes solo se veian en el
+                listado y el gestor no sabia por que estaba en «Con
+                incidencias». */}
+            {openIssues.length > 0 && (
+              <div className="space-y-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5" data-testid="open-issues">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-amber-700">
+                  {openIssues.length === 1 ? "Incidencia abierta" : `${openIssues.length} incidencias abiertas`}
+                </p>
+                {openIssues.map((issue) => (
+                  <div key={issue.id} className="flex flex-wrap items-start gap-x-3 gap-y-1.5 text-[12px] text-amber-800">
+                    <p className="flex min-w-0 flex-1 items-start gap-2">
+                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+                      <span>
+                        {issue.description}
+                        {issue.duplicateOf && (
+                          <>
+                            {" "}
+                            <Link href={`/dashboard/worker/review/${issue.duplicateOf}`} target="_blank" className="font-medium underline">
+                              Ver la original
+                            </Link>
+                          </>
+                        )}
+                      </span>
+                    </p>
+                    {issue.type === "POSSIBLE_DUPLICATE" && !isValidated && lockReason == null && (
+                      <div className="flex flex-shrink-0 gap-1.5">
+                        <button
+                          type="button"
+                          onClick={handleNotDuplicate}
+                          disabled={isPendingDismiss || isPendingReject}
+                          className="rounded-lg border border-amber-300 bg-white px-2.5 py-1 text-[12px] font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+                        >
+                          No es duplicada
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleIsDuplicate(issue)}
+                          disabled={isPendingDismiss || isPendingReject || isExported}
+                          title={isExported ? "Ya se exportó a A3: no se puede rechazar" : undefined}
+                          className="rounded-lg bg-red-600 px-2.5 py-1 text-[12px] font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                        >
+                          Es duplicada
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
 
             {/* Errors — un solo ErrorBox para los tres actions. */}
             {(saveState?.error || validateState?.error || rejectState?.error) && (

@@ -5,7 +5,7 @@ import { prisma } from "./helpers/db";
 import { makeFirm, makeInvoice, type FirmWorld } from "./helpers/factories";
 import { signInAs } from "./helpers/session";
 import { reject, reviewForm, settleAction, validate } from "./helpers/reviewForm";
-import { saveInvoiceFields, validateInvoice } from "@/app/dashboard/worker/review/[id]/actions";
+import { rejectInvoice, saveInvoiceFields, validateInvoice } from "@/app/dashboard/worker/review/[id]/actions";
 import { fakeS3 } from "./helpers/fakeS3";
 import { facturaeXml } from "./helpers/fixtures";
 import { stubOcr } from "./helpers/ocr";
@@ -17,6 +17,7 @@ import { processInvoice } from "@/lib/processInvoice";
 import { detectIssues } from "@/lib/issueDetector";
 import type { ExtractedInvoice } from "@/lib/ocr";
 import { classifyInvoice } from "@/app/dashboard/worker/clasificar/actions";
+import { dismissDuplicateIssue } from "@/app/dashboard/worker/invoices/actions";
 import { NextRequest } from "next/server";
 import { POST as exportDownload } from "@/app/api/export/route";
 
@@ -1043,5 +1044,72 @@ describe("F-057: las incidencias se cierran al validar, rechazar o reprocesar", 
     // El desglose 200 al 10 % con cuota 42 sigue sin cuadrar: su incidencia vuelve a estar abierta.
     const abiertas = await prisma.invoiceIssue.findMany({ where: { invoiceId: inv, status: "OPEN" } });
     expect(abiertas.map((i) => i.field)).toEqual(["vatLines"]);
+  });
+});
+
+describe("revisión con un posible duplicado abierto (F-016)", () => {
+  let originalId: string;
+  beforeEach(async () => {
+    ({ id: originalId } = await makeInvoice(w.client, { status: "PENDING_REVIEW", invoiceNumber: "OTRA-1" }));
+    await prisma.invoice.update({ where: { id }, data: { status: "NEEDS_ATTENTION" } });
+    await prisma.invoiceIssue.create({
+      data: { invoiceId: id, type: "POSSIBLE_DUPLICATE", description: "Posible duplicado de la factura OTRA-1.", field: `duplicateOf:${originalId}` },
+    });
+  });
+  const dismiss = () => {
+    const fd = new FormData();
+    fd.set("invoiceId", id);
+    return dismissDuplicateIssue(null, fd);
+  };
+  const issueStatus = async () => (await prisma.invoiceIssue.findFirstOrThrow({ where: { invoiceId: id } })).status;
+
+  it("validar sin confirmar no valida y devuelve la incidencia con la original", async () => {
+    const r = await validateInvoice(null, await form({}));
+    expect(r?.duplicateOf).toEqual({ kind: "openIssue", id: originalId, label: "Posible duplicado de la factura OTRA-1." });
+    expect(r?.error).toBe("Esta factura tiene abierto un posible duplicado: Posible duplicado de la factura OTRA-1. Si no es la misma, confírmalo para validarla.");
+    expect((await row()).status).toBe("NEEDS_ATTENTION");
+    expect(await issueStatus()).toBe("OPEN");
+  });
+
+  it("validar confirmado valida y cierra la incidencia", async () => {
+    expect((await validate(await form({ confirmDuplicate: "1" }))).error).toBeNull();
+    expect((await row()).status).toBe("VALIDATED");
+    expect(await issueStatus()).toBe("RESOLVED");
+  });
+
+  it("«No es duplicada»: la descarta y, sin otras abiertas, pasa a pendiente con historial", async () => {
+    expect(await dismiss()).toEqual({ ok: true });
+    expect(await issueStatus()).toBe("DISMISSED");
+    expect((await row()).status).toBe("PENDING_REVIEW");
+    const history = await prisma.invoiceStatusHistory.findMany({ where: { invoiceId: id } });
+    expect(history.map((h) => [h.fromStatus, h.toStatus])).toEqual([["NEEDS_ATTENTION", "PENDING_REVIEW"]]);
+    // Ya no pide confirmación al validar.
+    expect((await validate(await form({}))).error).toBeNull();
+  });
+
+  it("«No es duplicada» con otra incidencia abierta: sigue con incidencias", async () => {
+    await prisma.invoiceIssue.create({ data: { invoiceId: id, type: "MATH_MISMATCH", description: "No cuadra" } });
+    expect(await dismiss()).toEqual({ ok: true });
+    expect((await row()).status).toBe("NEEDS_ATTENTION");
+  });
+
+  it("«No es duplicada» desde otra asesoría: no se toca", async () => {
+    const otra = await makeFirm("B");
+    for (const user of [otra.admin, otra.worker]) {
+      signInAs(user);
+      expect(await dismiss()).toEqual({ error: "No tienes acceso a esta factura." });
+    }
+    expect(await issueStatus()).toBe("OPEN");
+  });
+
+  it("«Es duplicada»: rechazo con categoría DUPLICATE, el aviso como motivo y la incidencia cerrada", async () => {
+    const fd = new FormData();
+    fd.set("invoiceId", id);
+    fd.set("rejectionReason", "Posible duplicado de la factura OTRA-1.");
+    fd.set("rejectionCategory", "DUPLICATE");
+    expect((await settleAction(rejectInvoice(null, fd))).error).toBeNull();
+    const r = await row();
+    expect([r.status, r.rejectionCategory, r.rejectionReason]).toEqual(["REJECTED", "DUPLICATE", "Posible duplicado de la factura OTRA-1."]);
+    expect(await issueStatus()).toBe("RESOLVED");
   });
 });

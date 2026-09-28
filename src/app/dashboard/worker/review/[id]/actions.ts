@@ -36,7 +36,7 @@ import { amountFieldsProblem, parseVatLineInputs } from "@/lib/vatLineInput";
 import { validationProblems } from "@/lib/invoiceRules";
 import { percentOf } from "@/lib/money";
 import { anyNegativeAmount, applyRectificativeSign, NEGATIVE_AMOUNTS_HINT } from "@/lib/rectificative";
-import { describeExisting, DUPLICATE_SELECT, findByInvoiceNumber } from "@/lib/duplicates";
+import { describeExisting, DUPLICATE_SELECT, duplicateOriginalId, findByInvoiceNumber } from "@/lib/duplicates";
 import { closeOpenIssues } from "@/lib/invoiceIssues";
 import { foldSurchargeLines, completeReadSurcharges, surchargeAuditValue } from "@/lib/equivalenceSurcharge";
 import { exportFingerprint, type FingerprintInvoice } from "@/lib/exportFingerprint";
@@ -59,9 +59,11 @@ import { EXPORT_TRANSACTION_OPTIONS } from "@/lib/exportBatch";
  *  - undefined / null: exito */
 export type ReviewState = {
   error?: AppError | string;
-  /** Al validar: ya hay otra factura validada con el mismo numero y emisor.
+  /** Al validar: ya hay otra factura validada con el mismo numero y emisor
+   *  («validated»), o la factura tiene abierta una incidencia de posible
+   *  duplicado («openIssue»; id null si la incidencia no guarda la original).
    *  La pantalla pide confirmacion y vuelve a validar con confirmDuplicate. */
-  duplicateOf?: { id: string; label: string };
+  duplicateOf?: { kind: "validated" | "openIssue"; id: string | null; label: string };
 } | null;
 
 /** WORKER: el cliente tiene que estar asignado. ADMIN: tiene que ser de su
@@ -568,6 +570,20 @@ async function parseAndSave(
   // Duplicado al validar (F-010): otra factura del cliente ya validada o
   // exportada con el mismo numero (normalizado) y, en compras, el mismo CIF de
   // emisor. No se valida sin la confirmacion del gestor.
+  // Tambien con una incidencia de posible duplicado abierta (F-016): validar
+  // la cierra, asi que el gestor tiene que decidir antes.
+  if (validate && !alreadyValidated && data.confirmDuplicate !== "1") {
+    const openDuplicate = await prisma.invoiceIssue.findFirst({
+      where: { invoiceId, type: "POSSIBLE_DUPLICATE", status: "OPEN" },
+      select: { description: true, field: true },
+    });
+    if (openDuplicate) {
+      return {
+        error: `Esta factura tiene abierto un posible duplicado: ${openDuplicate.description} Si no es la misma, confírmalo para validarla.`,
+        duplicateOf: { kind: "openIssue" as const, id: duplicateOriginalId(openDuplicate.field), label: openDuplicate.description },
+      };
+    }
+  }
   if (validate && !alreadyValidated && data.confirmDuplicate !== "1" && newData.invoiceNumber) {
     const dupId = await findByInvoiceNumber({
       clientId: invoice.clientId,
@@ -582,7 +598,7 @@ async function parseAndSave(
       const label = describeExisting(dup);
       return {
         error: `Ya hay otra factura validada con este número y este emisor: ${label}. Si no es la misma, confírmalo para validarla.`,
-        duplicateOf: { id: dup.id, label },
+        duplicateOf: { kind: "validated" as const, id: dup.id, label },
       };
     }
   }

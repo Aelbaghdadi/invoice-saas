@@ -1,5 +1,6 @@
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { duplicateOriginalId } from "@/lib/duplicates";
 import { canAccessClient } from "@/lib/accessibleClients";
 import { accountsForDirection } from "@/lib/accountingAccount";
 import { redirect, notFound } from "next/navigation";
@@ -192,6 +193,7 @@ export default async function ReviewPage({
     status: i.status,
     description: i.description,
     field: i.field,
+    duplicateOf: i.type === "POSSIBLE_DUPLICATE" ? duplicateOriginalId(i.field) : null,
   }));
 
   // Si la factura aun no tiene lineas de IVA pero si tiene base/cuota
