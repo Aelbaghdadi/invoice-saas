@@ -1006,8 +1006,10 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       let res = await validateInvoice(null, buildFormData(fields));
       // Posibles duplicados (F-010, F-016): otra ya validada con este numero
       // y emisor, o un aviso de duplicado abierto. El servidor no valida sin
-      // que el gestor los confirme, todos en una sola confirmacion.
-      if (res?.duplicateOf?.length) {
+      // que el gestor los confirme, todos en una sola confirmacion. Si con el
+      // dialogo abierto aparece otro, vuelve a preguntar con la lista nueva
+      // (con tope, por si acaso).
+      for (let round = 0; round < 3 && res?.duplicateOf?.length; round++) {
         const duplicates = res.duplicateOf;
         // En una ya validada es una correccion: se pregunta por guardarla.
         const again = isValidated ? "¿Guardar la corrección igualmente?" : "¿Validar igualmente?";
@@ -1054,7 +1056,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
           setValidateState(null);
           return;
         }
-        res = await validateInvoice(null, buildFormData({ ...fields, confirmDuplicate: "1" }));
+        res = await validateInvoice(null, buildFormData({ ...fields, confirmDuplicate: duplicates.map((d) => d.key).join(",") }));
       }
       setValidateState(res);
       if (res?.error) {

@@ -1027,8 +1027,8 @@ describe("al validar, confirmación si ya hay otra validada con el mismo número
   });
 
   it("confirmado, sí", async () => {
-    await otra("EXPORTED");
-    const r = await validate(await form({ invoiceNumber: "F-2026-001", confirmDuplicate: "1" }));
+    const original = await otra("EXPORTED");
+    const r = await validate(await form({ invoiceNumber: "F-2026-001", confirmDuplicate: `validated:${original.id}` }));
     expect(r.error).toBeNull();
     expect((await row()).status).toBe("VALIDATED");
   });
@@ -1070,9 +1070,22 @@ describe("al validar, confirmación si ya hay otra validada con el mismo número
       const r = await validateInvoice(null, await form({ invoiceNumber: "F-2026-001" }));
       expect(r?.duplicateOf?.map((d) => [d.kind, d.id])).toEqual([["validated", original.id]]);
       expect((await row()).invoiceNumber).toBe("F-OTRO");
-      expect((await validate(await form({ invoiceNumber: "F-2026-001", confirmDuplicate: "1" }))).error).toBeNull();
+      expect((await validate(await form({ invoiceNumber: "F-2026-001", confirmDuplicate: `validated:${original.id}` }))).error).toBeNull();
       expect((await row()).invoiceNumber).toBe("F-2026-001");
     });
+  });
+
+  it("confirmar una no se salta otra que aparece después (punto 3 de la revisión 2)", async () => {
+    const primera = await otra("VALIDATED");
+    // El gestor confirmó la primera; mientras tanto otra copia se validó antes.
+    await prisma.invoice.update({ where: { id: primera.id }, data: { createdAt: new Date("2026-09-02") } });
+    const tercera = await makeInvoice(w.client, { status: "VALIDATED", issuerCif: "B12345674", invoiceNumber: "F 2026 001" });
+    await prisma.invoice.update({ where: { id: tercera.id }, data: { createdAt: new Date("2026-09-01") } });
+    const r = await validateInvoice(null, await form({ invoiceNumber: "F-2026-001", confirmDuplicate: `validated:${primera.id}` }));
+    expect(r?.duplicateOf?.map((d) => d.key)).toEqual([`validated:${tercera.id}`]);
+    expect((await row()).status).toBe("PENDING_REVIEW");
+    // «1» ya no vale como confirmación.
+    expect((await validateInvoice(null, await form({ invoiceNumber: "F-2026-001", confirmDuplicate: "1" })))?.duplicateOf).toHaveLength(1);
   });
 
   it("si la otra aún no está validada, no hace falta confirmar", async () => {
@@ -1161,7 +1174,8 @@ describe("revisión con un posible duplicado abierto (F-016)", () => {
 
   it("validar sin confirmar no valida y devuelve la incidencia con la original", async () => {
     const r = await validateInvoice(null, await form({}));
-    expect(r?.duplicateOf).toEqual([{ kind: "openIssue", id: originalId, label: "Posible duplicado de la factura OTRA-1." }]);
+    const issue = await prisma.invoiceIssue.findFirstOrThrow({ where: { invoiceId: id } });
+    expect(r?.duplicateOf).toEqual([{ kind: "openIssue", key: `openIssue:${issue.id}`, id: originalId, label: "Posible duplicado de la factura OTRA-1." }]);
     expect(r?.error).toBe("Esta factura tiene abierto un aviso de duplicado. Si no es la misma, confírmalo para validarla.");
     expect((await row()).status).toBe("NEEDS_ATTENTION");
     expect(await issueStatus()).toBe("OPEN");
@@ -1176,7 +1190,8 @@ describe("revisión con un posible duplicado abierto (F-016)", () => {
   });
 
   it("validar confirmado valida y cierra la incidencia", async () => {
-    expect((await validate(await form({ confirmDuplicate: "1" }))).error).toBeNull();
+    const issue = await prisma.invoiceIssue.findFirstOrThrow({ where: { invoiceId: id } });
+    expect((await validate(await form({ confirmDuplicate: `openIssue:${issue.id}` }))).error).toBeNull();
     expect((await row()).status).toBe("VALIDATED");
     expect(await issueStatus()).toBe("RESOLVED");
   });
