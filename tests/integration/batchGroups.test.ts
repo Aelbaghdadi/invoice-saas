@@ -68,14 +68,43 @@ describe("paridad de Lotes con la cola y con «Rechazar lote» (F-030)", () => {
 describe("ventana por defecto (F-030)", () => {
   const now = new Date("2026-09-15T10:00:00Z");
 
-  it("los últimos 12 meses, y de antes solo los lotes con algo pendiente, enteros", async () => {
+  const close = (clientId: string, month: number, year: number) =>
+    prisma.periodClosure.create({ data: { clientId, month, year, closedBy: w.admin.id } });
+  const exportedBatch = async (invoiceId: string, keepPointer = true) => {
+    const batch = await prisma.exportBatch.create({ data: { format: "a3excel", invoiceCount: 1, userId: w.admin.id } });
+    await prisma.exportBatchItem.create({ data: { exportBatchId: batch.id, invoiceId, snapshot: "{}" } });
+    if (keepPointer) await prisma.invoice.update({ where: { id: invoiceId }, data: { exportBatchId: batch.id } });
+  };
+  const periods = async (where: object) =>
+    (await loadBatchRows(await batchWindowWhere(where, now))).map((r) => `${r.periodYear}-${r.periodMonth}`).sort();
+
+  it("los últimos 12 meses, y de antes lo que pide algo; lo cerrado y exportado, fuera", async () => {
     await inv("VALIDATED", { periodMonth: 10, periodYear: 2025 }); // dentro (octubre de 2025)
-    await inv("VALIDATED", { periodMonth: 9, periodYear: 2025 }); // fuera y terminado
-    await inv("VALIDATED", { periodMonth: 3, periodYear: 2024 });
-    await inv("PENDING_REVIEW", { periodMonth: 3, periodYear: 2024 }); // lote viejo con algo pendiente
-    const rows = await loadBatchRows(await batchWindowWhere(mine, now));
-    const periods = rows.map((r) => `${r.periodYear}-${r.periodMonth}`).sort();
-    expect(periods).toEqual(["2024-3", "2024-3", "2025-10"]);
+    // Cerrado y exportado: lo único que se queda fuera.
+    const done = await inv("VALIDATED", { periodMonth: 9, periodYear: 2025 });
+    await exportedBatch(done.id);
+    await close(w.client.id, 9, 2025);
+    // Algo pendiente de revisar.
+    await inv("PENDING_REVIEW", { periodMonth: 3, periodYear: 2024 });
+    // Todo validado y sin exportar.
+    await inv("VALIDATED", { periodMonth: 4, periodYear: 2024 });
+    // Cerrado, con una reexportada (corregida después de exportarse).
+    const re = await inv("VALIDATED", { periodMonth: 5, periodYear: 2024 });
+    await exportedBatch(re.id, false);
+    await close(w.client.id, 5, 2024);
+    // Cerrado, con una validada sin cuenta (bloqueante): sigue sin lote.
+    await inv("VALIDATED", { periodMonth: 6, periodYear: 2024, supplierAccount: null });
+    await close(w.client.id, 6, 2024);
+    // Exportado pero sin cerrar: «por cerrar».
+    const unclosed = await inv("VALIDATED", { periodMonth: 7, periodYear: 2024 });
+    await exportedBatch(unclosed.id);
+    expect(await periods(mine)).toEqual(["2024-3", "2024-4", "2024-5", "2024-6", "2024-7", "2025-10"]);
+  });
+
+  it("el periodo de otro cliente, validado y sin exportar, también", async () => {
+    const other = await prisma.client.create({ data: { name: "Otro SL", cif: "B99999999", advisoryFirmId: w.firm.id } });
+    await makeInvoice(other, { status: "VALIDATED", periodMonth: 2, periodYear: 2024 });
+    expect(await periods({ clientId: other.id })).toEqual(["2024-2"]);
   });
 
   it("sin ventana (año elegido o histórico), todo", async () => {

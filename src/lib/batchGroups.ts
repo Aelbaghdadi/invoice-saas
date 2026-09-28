@@ -81,20 +81,38 @@ export function recentPeriodsWhere(now = new Date()): Prisma.InvoiceWhereInput {
 }
 
 /**
- * Por defecto: los ultimos 12 meses y, de antes, los lotes enteros que
- * todavia tienen algo pendiente (un lote viejo con una factura sin revisar no
- * puede desaparecer). Los periodos viejos se buscan agrupados: son pocos.
+ * Por defecto: los ultimos 12 meses y, de antes, los periodos enteros que
+ * todavia piden algo (revision 1 del PR #14, punto 2):
+ * - algo pendiente de revisar (PENDING_WORK);
+ * - una validada sin lote: por exportar, una reexportada o una bloqueante;
+ * - sin cierre activo: terminado pero «por cerrar».
+ * Un periodo viejo cerrado y exportado es lo unico que se queda fuera.
  */
 export async function batchWindowWhere(base: Prisma.InvoiceWhereInput, now = new Date()): Promise<Prisma.InvoiceWhereInput> {
   const recent = recentPeriodsWhere(now);
-  const oldPending = await prisma.invoice.groupBy({
-    by: ["clientId", "periodYear", "periodMonth"],
-    where: { AND: [base, { NOT: recent }, { status: { in: PENDING_WORK } }] },
-  });
+  const old: Prisma.InvoiceWhereInput = { AND: [base, { NOT: recent }, { status: { notIn: ["SPLIT_SOURCE", "PENDING_ROUTING"] } }] };
+  const [actionable, oldPeriods] = await Promise.all([
+    prisma.invoice.groupBy({
+      by: ["clientId", "periodYear", "periodMonth"],
+      where: { AND: [old, { OR: [{ status: { in: PENDING_WORK } }, { status: "VALIDATED", exportBatchId: null }] }] },
+    }),
+    prisma.invoice.groupBy({ by: ["clientId", "periodYear", "periodMonth"], where: old }),
+  ]);
+  const key = (k: { clientId: string; periodYear: number; periodMonth: number }) => `${k.clientId}|${k.periodYear}|${k.periodMonth}`;
+  const closures = oldPeriods.length
+    ? await prisma.periodClosure.findMany({
+        where: { clientId: { in: [...new Set(oldPeriods.map((k) => k.clientId))] }, reopenedAt: null },
+        select: { clientId: true, year: true, month: true },
+      })
+    : [];
+  const closed = new Set(closures.map((c) => key({ clientId: c.clientId, periodYear: c.year, periodMonth: c.month })));
+  const rescued = new Map<string, { clientId: string; periodYear: number; periodMonth: number }>();
+  for (const k of actionable) rescued.set(key(k), k);
+  for (const k of oldPeriods) if (!closed.has(key(k))) rescued.set(key(k), k);
   return {
     AND: [
       base,
-      { OR: [recent, ...oldPending.map((k) => ({ clientId: k.clientId, periodYear: k.periodYear, periodMonth: k.periodMonth }))] },
+      { OR: [recent, ...[...rescued.values()].map((k) => ({ clientId: k.clientId, periodYear: k.periodYear, periodMonth: k.periodMonth }))] },
     ],
   };
 }

@@ -11,7 +11,7 @@ export function BatchWindowNote({ showHistory, toggleHref }: { showHistory: bool
     <p className="mb-4 text-[12px] text-slate-500">
       {showHistory
         ? "Se ve todo el histórico. "
-        : `Se ven los últimos ${BATCH_WINDOW_MONTHS} meses y, de antes, los lotes que aún tienen algo pendiente. `}
+        : `Se ven los últimos ${BATCH_WINDOW_MONTHS} meses y, de antes, los periodos con algo por revisar, por exportar o sin cerrar. `}
       {/* Sin precarga: el histórico entero es justo lo que se quiere no leer
           de más (y se precargaba en cada refresco automático). */}
       <Link href={toggleHref} prefetch={false} className="font-medium text-blue-600 hover:underline">
