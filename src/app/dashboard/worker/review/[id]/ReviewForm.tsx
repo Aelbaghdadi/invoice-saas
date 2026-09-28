@@ -120,6 +120,13 @@ type ExtractionData = {
 
 /** Lo que manda el formulario pero no edita el gestor: no son cambios. */
 const SNAPSHOT_IGNORE = ["updatedAt", "bucket", "back", "replaceHistory"] as const;
+// El lado bloqueado (el cliente) no lo edita el gestor: lo pone el servidor
+// al guardar (una factura sin receptor recibe el del cliente) y, al refrescar,
+// su valor cambiaba y salia un falso «cambios sin guardar».
+function reviewSnapshot(fd: FormData): string {
+  const lockedFields = fd.get("type") === "PURCHASE" ? ["receiverName", "receiverCif"] : ["issuerName", "issuerCif"];
+  return formSnapshot(fd, [...SNAPSHOT_IGNORE, ...lockedFields]);
+}
 
 type IssueData = {
   id: string;
@@ -1006,6 +1013,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     }
     success("Cambios guardados");
     markClean();
+    justSavedRef.current = updatedAtTime;
     return true;
   };
   const handleSave = () => {
@@ -1024,19 +1032,31 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   // un Date nuevo en cada refresco, y los cambios dejaban de estar protegidos.
   const rootRef = useRef<HTMLDivElement>(null);
   const snapshotRef = useRef<string | null>(null);
-  useEffect(() => { snapshotRef.current = null; }, [invoice.id]);
+  useEffect(() => { snapshotRef.current = null; justSavedRef.current = null; }, [invoice.id]);
   useEffect(() => {
     const root = rootRef.current;
     if (!root) return;
     const takeSnapshotOnce = () => {
-      if (snapshotRef.current == null) snapshotRef.current = formSnapshot(buildFormData(), SNAPSHOT_IGNORE);
+      if (snapshotRef.current == null) snapshotRef.current = reviewSnapshot(buildFormData());
     };
     const events = ["pointerdown", "keydown", "focusin", "beforeinput"] as const;
     for (const ev of events) root.addEventListener(ev, takeSnapshotOnce, true);
     return () => { for (const ev of events) root.removeEventListener(ev, takeSnapshotOnce, true); };
   }, [buildFormData]);
-  const markClean = () => { snapshotRef.current = formSnapshot(buildFormData(), SNAPSHOT_IGNORE); };
-  const isDirty = () => snapshotRef.current != null && formSnapshot(buildFormData(), SNAPSHOT_IGNORE) !== snapshotRef.current;
+  const markClean = () => { snapshotRef.current = reviewSnapshot(buildFormData()); };
+  // Tras un guardado propio, el refresco trae la factura como la dejo el
+  // servidor (valores normalizados, lado del cliente): esa es la nueva
+  // referencia, no la de justo antes del refresco.
+  // Guarda el updatedAt de antes de guardar; cuando llega otro, es el
+  // refresco del guardado.
+  const justSavedRef = useRef<number | null>(null);
+  const updatedAtTime = new Date(invoice.updatedAt).getTime();
+  useEffect(() => {
+    if (justSavedRef.current == null || justSavedRef.current === updatedAtTime) return;
+    justSavedRef.current = null;
+    snapshotRef.current = reviewSnapshot(buildFormData());
+  }, [updatedAtTime, buildFormData]);
+  const isDirty = () => snapshotRef.current != null && reviewSnapshot(buildFormData()) !== snapshotRef.current;
 
   // Antes de salir de la factura: si hay cambios, Guardar / Descartar /
   // Cancelar. Tambien al corregir una validada, el caso grave: una
@@ -1291,7 +1311,10 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     }
     // Una ya validada no salta a otra: se queda en ella con la correccion.
     success(isValidated ? "Corrección guardada" : "Factura validada");
-    if (isValidated) markClean();
+    if (isValidated) {
+      markClean();
+      justSavedRef.current = updatedAtTime;
+    }
     return asked ? "asked" : "ok";
   };
 

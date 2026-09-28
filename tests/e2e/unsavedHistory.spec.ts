@@ -18,7 +18,7 @@ test.skip(!DB, "Necesita E2E_DATABASE_URL");
 test.describe.configure({ mode: "serial" });
 
 const PASSWORD = "Prueba1234!";
-const IDS = ["h1", "h2", "h3", "h4"];
+const IDS = ["h1", "h2", "h3", "h4", "h5"];
 
 test.beforeAll(async () => {
   const db = new PrismaClient({ adapter: new PrismaPg({ connectionString: DB }) });
@@ -33,7 +33,9 @@ test.beforeAll(async () => {
           id, filename: `${id}.pdf`, storageKey: "k-pdf", fileType: "application/pdf", type: "PURCHASE",
           periodMonth: 9, periodYear: 2026, clientId: "client1", status: "PENDING_REVIEW",
           invoiceNumber: `F-${id}`, invoiceDate: new Date("2026-09-10"),
-          issuerName: "Proveedor SL", issuerCif: "B12345674", receiverName: "Cliente Prueba SL", receiverCif: "B00000002",
+          issuerName: "Proveedor SL", issuerCif: "B12345674",
+          // h5 sin receptor: al guardar, el servidor pone el del cliente.
+          receiverName: id === "h5" ? null : "Cliente Prueba SL", receiverCif: id === "h5" ? null : "B00000002",
           taxBase: 100, vatRate: 21, vatAmount: 21, totalAmount: 121,
           supplierAccount: "40000001", expenseAccount: "60000001", operationType: "INTERIOR",
           vatLines: { create: [{ position: 0, taxBase: 100, vatRate: 21, vatAmount: 21 }] },
@@ -129,4 +131,17 @@ test("editar → Atrás → Cancelar → Atrás: vuelve a preguntar (también co
   await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "Descartar" }).click();
   await expect(page).toHaveURL(new RegExp(`${P}$`));
+});
+
+test("guardar una factura sin receptor: tras el refresco no quedan cambios sin guardar", async ({ page }) => {
+  await openAndEdit(page, "h5");
+  await page.getByRole("button", { name: "Guardar sin validar" }).click();
+  await expect(page.getByText("Cambios guardados")).toBeVisible();
+  // El refresco trae el receptor que ha puesto el servidor.
+  await expect(page.locator("#receiverName")).toHaveValue("Cliente Prueba SL");
+  const link = page.locator('nav a[href^="/dashboard"]').filter({ hasNot: page.locator(`[href="${P}"]`) }).first();
+  const target = await link.getAttribute("href");
+  await link.click();
+  await page.waitForURL((u) => u.pathname === target);
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
 });
