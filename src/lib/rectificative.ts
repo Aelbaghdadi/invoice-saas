@@ -35,8 +35,12 @@ export function textMentionsRectificative(rawText: string | null | undefined): b
     // Las negaciones son justo lo contrario, y con el texto de los PDF ya
     // activo (F-013) salen: «no es rectificativa», «Rectificativa: No»,
     // «Tipo de factura: Ordinaria · Rectificativa: No».
-    .replace(/\bno (?:es )?(?:una )?(?:factura )?(?:rectificativ\w*|nota de credito|factura de abono)/g, " ")
-    .replace(/(?:rectificativ\w*|nota de credito|factura de abono) ?[:=] ?(?:no|false)\b/g, " ");
+    // Solo «no es [una] [factura] X» y «no X» directo: «No Factura
+    // Rectificativa: R-2026-001» es «Nº», no una negacion.
+    .replace(/\bno (?:es (?:una )?(?:factura )?)?(?:rectificativ\w*|nota de credito|factura de abono)/g, " ")
+    // «X: No» sin una referencia detras: «FACTURA RECTIFICATIVA: No.
+    // R-2026-01» y «Factura de abono: No. 12» son el numero.
+    .replace(/(?:rectificativ\w*|nota de credito|factura de abono) ?[:=] ?(?:no|false)\b(?!\.? ?(?:[a-z]{1,4}[-/]?)?\d)/g, " ");
   return RECTIFICATIVE_RE.test(norm);
 }
 

@@ -147,6 +147,17 @@ describe("textMentionsRectificative: negaciones y espacios (revisión 1 del PR #
     expect(textMentionsRectificative("NOTA   DE CRÉDITO")).toBe(true);
   });
 
+  it("«No» o «Nº» seguido del número de la factura no es una negación", () => {
+    for (const text of [
+      "FACTURA RECTIFICATIVA: No. R-2026-01",
+      "Factura de abono: No. 12",
+      "No Factura Rectificativa: R-2026-001",
+      "RECTIFICATIVA: No 2026/15",
+    ]) {
+      expect(textMentionsRectificative(text), text).toBe(true);
+    }
+  });
+
   it("una rectificativa de verdad sigue contando, aunque el texto diga «no» en otra parte", () => {
     expect(textMentionsRectificative("FACTURA RECTIFICATIVA R-1 · No incluye portes")).toBe(true);
     expect(textMentionsRectificative("Rectificativa: Sí")).toBe(true);
