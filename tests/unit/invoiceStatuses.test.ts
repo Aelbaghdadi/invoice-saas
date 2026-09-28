@@ -3,6 +3,8 @@ import {
   completionPercent,
   REVIEWABLE,
   showsDuplicateWarning,
+  auditActor,
+  formatAuditValue,
   PENDING_WORK,
   DONE_WORK,
   NEEDS_REVIEW,
@@ -132,5 +134,22 @@ describe("aviso y acciones de duplicado: el mismo conjunto en todas las pantalla
 
   it("las acciones, con la factura por revisar (legacy ANALYZED incluido)", () => {
     expect([...REVIEWABLE].sort()).toEqual(["ANALYZED", "NEEDS_ATTENTION", "OCR_ERROR", "PENDING_REVIEW"]);
+  });
+});
+
+describe("presentación de la auditoría (revisión 1 del PR #11, punto 14)", () => {
+  it("tipo de rectificación con los textos de la revisión", () => {
+    expect(formatAuditValue("BY_DIFFERENCE", "rectificativeType")).toBe("Por diferencias");
+    expect(formatAuditValue("BY_SUBSTITUTION", "rectificativeType")).toBe("Por sustitución");
+  });
+
+  it("importes con coma y dos decimales, solo en campos de importe", () => {
+    expect(formatAuditValue("12345.5", "totalAmount")).toBe("12.345,50");
+    expect(formatAuditValue("21", "vatRate")).toBe("21");
+  });
+
+  it("las auto:* no son de la persona que las lanzó", () => {
+    expect(auditActor("auto:recargo", "Ana")).toBe("Automático (lanzado por Ana)");
+    expect(auditActor("totalAmount", "Ana")).toBe("Ana");
   });
 });

@@ -12,7 +12,7 @@ import {
   Edit3,
 } from "lucide-react";
 import Link from "next/link";
-import { PENDING_WORK, auditFieldLabelInline, completionPercent, formatAuditValue } from "@/lib/invoiceStatuses";
+import { PENDING_WORK, auditFieldLabelInline, completionPercent, formatAuditValue, auditActor } from "@/lib/invoiceStatuses";
 import { formatDateEs } from "@/lib/dates";
 import { periodLabel } from "@/lib/period";
 import { InvoiceStatusBadge } from "@/components/ui/InvoiceStatusBadge";
@@ -307,7 +307,7 @@ export default async function AdminDashboard() {
                     <div className="min-w-0 flex-1">
                       <div className="flex items-baseline justify-between gap-3">
                         <p className="min-w-0 truncate text-[13px] text-slate-800">
-                          <span className="font-semibold">{log.user.name}</span>
+                          <span className="font-semibold">{auditActor(log.field, log.user.name)}</span>
                           {" "}cambió{" "}
                           <span className="font-semibold text-slate-600">{auditFieldLabelInline(log.field)}</span>
                           {" "}en{" "}

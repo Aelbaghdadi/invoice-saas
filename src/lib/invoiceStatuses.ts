@@ -16,6 +16,7 @@
 
 import type { InvoiceStatus } from "@prisma/client";
 import { OPERATION_TYPE_LABEL, INTRACOM_GOODS_TYPE_LABEL, RETENTION_TYPE_LABEL } from "@/lib/validators";
+import { formatAmountEs } from "@/lib/format";
 
 /** Pte. de que el gestor haga algo (revisar, re-procesar o subir). */
 export const PENDING_WORK: InvoiceStatus[] = [
@@ -197,6 +198,17 @@ export const REJECT_CATEGORY_LABEL: Record<string, string> = {
   OTHER: "Otro",
 };
 
+/** ¿Es una entrada que escribe el sistema (auto:*) y no una persona? */
+export function isAutoAuditField(field: string): boolean {
+  return field.startsWith("auto:");
+}
+
+/** Quien hizo el cambio, para la auditoria: las auto:* no las hace la persona
+ *  (en una subida desde el portal seria el propio cliente), solo las lanza. */
+export function auditActor(field: string, userName: string | null | undefined): string {
+  return isAutoAuditField(field) ? `Automático (lanzado por ${userName ?? "—"})` : userName ?? "—";
+}
+
 /** Nombre legible de un campo de la auditoria (el propio nombre si no se conoce). */
 export function auditFieldLabel(field: string): string {
   return AUDIT_FIELD_LABELS[field] ?? field;
@@ -212,6 +224,14 @@ export function auditFieldLabelInline(field: string): string {
   if (!first || (second && second !== second.toLowerCase())) return label;
   return first.toLowerCase() + label.slice(1);
 }
+
+/** Tipo de rectificacion, con los textos de la revision. */
+const RECTIFICATIVE_TYPE_LABEL: Record<string, string> = {
+  BY_DIFFERENCE: "Por diferencias",
+  BY_SUBSTITUTION: "Por sustitución",
+};
+
+const AMOUNT_FIELDS = new Set(["taxBase", "vatAmount", "irpfAmount", "totalAmount", "retentionBase"]);
 
 /** De donde sale bienes/servicios (intracomGoodsSource), para la auditoria. */
 const INTRACOM_GOODS_SOURCE_LABEL: Record<string, string> = {
@@ -240,6 +260,10 @@ export function formatAuditValue(value: string | null | undefined, field?: strin
   // podrian ser un nombre).
   if (field === "retentionType") return RETENTION_TYPE_LABEL[value as keyof typeof RETENTION_TYPE_LABEL] ?? value;
   if (field === "intracomGoodsSource") return INTRACOM_GOODS_SOURCE_LABEL[value] ?? value;
+  if (field === "rectificativeType") return RECTIFICATIVE_TYPE_LABEL[value] ?? value;
+  // Importes como en la pantalla: coma y dos decimales. Solo presentacion:
+  // lo guardado (y el hash) no cambia.
+  if (field && AMOUNT_FIELDS.has(field) && /^-?\d+(\.\d+)?$/.test(value)) return formatAmountEs(Number(value));
   if (field === "invoiceDate" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
     const [y, m, d] = value.split("-");
     return `${d}/${m}/${y}`;

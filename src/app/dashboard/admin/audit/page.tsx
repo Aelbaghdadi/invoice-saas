@@ -5,7 +5,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ClipboardList, ArrowRight } from "lucide-react";
 import { AuditFilters } from "./AuditFilters";
-import { auditFieldLabel, formatAuditValue } from "@/lib/invoiceStatuses";
+import { auditFieldLabel, formatAuditValue, auditActor } from "@/lib/invoiceStatuses";
 import { formatDateTimeEs, madridDayBounds } from "@/lib/dates";
 import { Pagination } from "@/components/ui/Pagination";
 import { parsePage, pageWindow } from "@/lib/listing";
@@ -161,7 +161,7 @@ export default async function AuditLogPage({ searchParams }: Props) {
                         <div className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-[9px] font-bold ${avatarColor(log.user.name ?? "U")}`}>
                           {initials(log.user.name ?? "U")}
                         </div>
-                        <span className="text-[13px] font-medium text-slate-700">{log.user.name}</span>
+                        <span className="text-[13px] font-medium text-slate-700">{auditActor(log.field, log.user.name)}</span>
                       </div>
                     </td>
                     <td className="px-5 py-3 max-w-[180px]">
