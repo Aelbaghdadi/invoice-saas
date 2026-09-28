@@ -35,11 +35,14 @@ export function resolveIrpf(input: IrpfInput): { rate: number | null; amount: nu
   const { hasRetention, retentionRate, readRate, readAmount, sumBases, balancedWith } = input;
   if (!hasRetention) return { rate: retentionRate ?? readRate, amount: readAmount };
 
-  if (readAmount != null && readAmount !== 0 && sumBases > 0 && balancedWith(readAmount)) {
-    const deduced = Math.round((Math.abs(readAmount) / sumBases) * 10_000) / 100;
+  // El importe leido llega siempre en positivo (auto:signo); en una
+  // rectificativa con bases negativas lleva el signo de la base.
+  const signed = readAmount == null ? null : (sumBases < 0 ? -1 : 1) * Math.abs(readAmount);
+  if (signed != null && signed !== 0 && sumBases !== 0 && balancedWith(signed)) {
+    const deduced = Math.round((Math.abs(signed) / Math.abs(sumBases)) * 10_000) / 100;
     const deducedOk = readRate == null || Math.abs(deduced - readRate) <= 0.01;
     for (const rate of [readRate, retentionRate, deducedOk ? deduced : null]) {
-      if (rate != null && percentOf(sumBases, rate) === readAmount) return { rate, amount: readAmount };
+      if (rate != null && percentOf(sumBases, rate) === signed) return { rate, amount: signed };
     }
   }
   for (const rate of [readRate, retentionRate]) {

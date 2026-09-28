@@ -48,6 +48,16 @@ describe("resolveIrpf (F-073)", () => {
       .toEqual({ rate: 7, amount: 70 });
   });
 
+  it("rectificativa con bases negativas: el importe leído se queda, con el signo de la base", () => {
+    // Abono de −1000 con −210 de IVA y −70 de IRPF (el OCR lo deja en +70),
+    // sin % leído y con un 15 % aprendido. Antes: 15 % / −150, descuadrada.
+    const balancedWith = (irpf: number) => Math.abs(-1000 - 210 - irpf - -1140) < 0.005;
+    expect(resolveIrpf({ sumBases: -1000, balancedWith, hasRetention: true, retentionRate: 15, readRate: null, readAmount: 70 }))
+      .toEqual({ rate: 7, amount: -70 });
+    expect(resolveIrpf({ sumBases: -1000, balancedWith, hasRetention: true, retentionRate: 15, readRate: 7, readAmount: 70 }))
+      .toEqual({ rate: 7, amount: -70 });
+  });
+
   it("sin tipo de retención, lo leído tal cual", () => {
     expect(resolveIrpf({ ...invoice(1140), hasRetention: false, retentionRate: null, readRate: 7, readAmount: 70 }))
       .toEqual({ rate: 7, amount: 70 });
