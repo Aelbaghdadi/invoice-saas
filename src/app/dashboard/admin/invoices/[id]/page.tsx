@@ -133,7 +133,7 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="text-[13px] text-slate-700">
-                        <span className="font-semibold">{auditActor(log.field, log.user.name)}</span> modificó{" "}
+                        <span className="font-semibold">{auditActor(log.field, log.user.name, log.oldValue)}</span> modificó{" "}
                         <span className="font-medium text-slate-500">{auditFieldLabel(log.field)}</span>
                       </p>
                       <p className="text-[12px] text-slate-400">

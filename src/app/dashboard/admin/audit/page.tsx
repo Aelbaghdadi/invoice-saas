@@ -161,7 +161,7 @@ export default async function AuditLogPage({ searchParams }: Props) {
                         <div className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-[9px] font-bold ${avatarColor(log.user.name ?? "U")}`}>
                           {initials(log.user.name ?? "U")}
                         </div>
-                        <span className="text-[13px] font-medium text-slate-700">{auditActor(log.field, log.user.name)}</span>
+                        <span className="text-[13px] font-medium text-slate-700">{auditActor(log.field, log.user.name, log.oldValue)}</span>
                       </div>
                     </td>
                     <td className="px-5 py-3 max-w-[180px]">

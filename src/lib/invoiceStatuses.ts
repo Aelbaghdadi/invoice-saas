@@ -203,10 +203,17 @@ export function isAutoAuditField(field: string): boolean {
   return field.startsWith("auto:");
 }
 
-/** Quien hizo el cambio, para la auditoria: las auto:* no las hace la persona
- *  (en una subida desde el portal seria el propio cliente), solo las lanza. */
-export function auditActor(field: string, userName: string | null | undefined): string {
-  return isAutoAuditField(field) ? `Automático (lanzado por ${userName ?? "—"})` : userName ?? "—";
+/** ¿La escribe el sistema? Las auto:* y el estado que deja el analisis del
+ *  OCR al terminar (desde «Subida»), que va en la misma transaccion. */
+export function isAutoAuditEntry(field: string, oldValue?: string | null): boolean {
+  return isAutoAuditField(field) || (field === "status" && oldValue === "UPLOADED");
+}
+
+/** Quien hizo el cambio, para la auditoria: las entradas automaticas no las
+ *  hace la persona (en una subida desde el portal seria el propio cliente),
+ *  solo las lanza. */
+export function auditActor(field: string, userName: string | null | undefined, oldValue?: string | null): string {
+  return isAutoAuditEntry(field, oldValue) ? `Automático (lanzado por ${userName ?? "—"})` : userName ?? "—";
 }
 
 /** Nombre legible de un campo de la auditoria (el propio nombre si no se conoce). */
@@ -219,7 +226,8 @@ export function auditFieldLabel(field: string): string {
  * …»): inicial en minuscula, salvo en siglas («CIF emisor» sigue igual).
  */
 export function auditFieldLabelInline(field: string): string {
-  const label = auditFieldLabel(field);
+  // En la frase ya pone «Automático (lanzado por …)»: sin repetirlo.
+  const label = auditFieldLabel(field).replace(/ \(automático\)$/, "");
   const [first, second] = label;
   if (!first || (second && second !== second.toLowerCase())) return label;
   return first.toLowerCase() + label.slice(1);
@@ -232,6 +240,8 @@ const RECTIFICATIVE_TYPE_LABEL: Record<string, string> = {
 };
 
 const AMOUNT_FIELDS = new Set(["taxBase", "vatAmount", "irpfAmount", "totalAmount", "retentionBase"]);
+// Varios numeros en un texto («15 % · 15.04», «21%: 5.2% 5.2»).
+const COMPOSITE_NUMBER_FIELDS = new Set(["auto:irpf", "auto:signo", "auto:recargo", "equivalenceSurcharge"]);
 
 /** De donde sale bienes/servicios (intracomGoodsSource), para la auditoria. */
 const INTRACOM_GOODS_SOURCE_LABEL: Record<string, string> = {
@@ -262,8 +272,11 @@ export function formatAuditValue(value: string | null | undefined, field?: strin
   if (field === "intracomGoodsSource") return INTRACOM_GOODS_SOURCE_LABEL[value] ?? value;
   if (field === "rectificativeType") return RECTIFICATIVE_TYPE_LABEL[value] ?? value;
   // Importes como en la pantalla: coma y dos decimales. Solo presentacion:
-  // lo guardado (y el hash) no cambia.
-  if (field && AMOUNT_FIELDS.has(field) && /^-?\d+(\.\d+)?$/.test(value)) return formatAmountEs(Number(value));
+  // lo guardado (y el hash) no cambia. Solo con dos decimales como mucho:
+  // filas antiguas guardan «30.299999999999997», y redondeada saldria
+  // «30,30 → 30,30», como si no hubiera cambiado nada.
+  if (field && AMOUNT_FIELDS.has(field) && /^-?\d+(\.\d{1,2})?$/.test(value)) return formatAmountEs(Number(value));
+  if (field && COMPOSITE_NUMBER_FIELDS.has(field)) return value.replace(/(\d)\.(\d)/g, "$1,$2");
   if (field === "invoiceDate" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
     const [y, m, d] = value.split("-");
     return `${d}/${m}/${y}`;

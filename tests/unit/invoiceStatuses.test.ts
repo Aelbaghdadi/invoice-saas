@@ -152,4 +152,30 @@ describe("presentación de la auditoría (revisión 1 del PR #11, punto 14)", ()
     expect(auditActor("auto:recargo", "Ana")).toBe("Automático (lanzado por Ana)");
     expect(auditActor("totalAmount", "Ana")).toBe("Ana");
   });
+
+  it("el estado que deja el análisis del OCR (desde «Subida») también es automático", () => {
+    expect(auditActor("status", "Cliente", "UPLOADED")).toBe("Automático (lanzado por Cliente)");
+    expect(auditActor("status", "Ana", "PENDING_REVIEW")).toBe("Ana");
+  });
+
+  it("importes con más de dos decimales, en crudo (si no, «30,30 → 30,30» parece que no cambia)", () => {
+    expect(formatAuditValue("30.299999999999997", "totalAmount")).toBe("30.299999999999997");
+    expect(formatAuditValue("30.3", "totalAmount")).toBe("30,30");
+    expect(formatAuditValue("-4.5", "taxBase")).toBe("-4,50");
+  });
+
+  it("año, número de factura y cuenta sin formato", () => {
+    expect(formatAuditValue("2026", "accountingPeriodYear")).toBe("2026");
+    expect(formatAuditValue("12345", "invoiceNumber")).toBe("12345");
+    expect(formatAuditValue("4000001", "supplierAccount")).toBe("4000001");
+  });
+
+  it("valores compuestos: coma decimal al pintar", () => {
+    expect(formatAuditValue("15 % · 15.04", "auto:irpf")).toBe("15 % · 15,04");
+    expect(formatAuditValue("-15 % · -15.04", "auto:signo")).toBe("-15 % · -15,04");
+    expect(formatAuditValue("21%: 5.2% 5.2 | 10%: 1.4% 1.4", "auto:recargo")).toBe("21%: 5,2% 5,2 | 10%: 1,4% 1,4");
+    expect(formatAuditValue("21%: 5.2% 5.2", "equivalenceSurcharge")).toBe("21%: 5,2% 5,2");
+    // Fuera de esos campos, un punto no se toca (una versión, un nombre).
+    expect(formatAuditValue("v1.2", "issuerName")).toBe("v1.2");
+  });
 });

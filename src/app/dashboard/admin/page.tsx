@@ -306,12 +306,13 @@ export default async function AdminDashboard() {
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-baseline justify-between gap-3">
-                        <p className="min-w-0 truncate text-[13px] text-slate-800">
-                          <span className="font-semibold">{auditActor(log.field, log.user.name)}</span>
+                        {/* Sin truncate: cortaba el numero de factura. */}
+                        <p className="min-w-0 break-words text-[13px] text-slate-800">
+                          <span className="font-semibold">{auditActor(log.field, log.user.name, log.oldValue)}</span>
                           {" "}cambió{" "}
                           <span className="font-semibold text-slate-600">{auditFieldLabelInline(log.field)}</span>
                           {" "}en{" "}
-                          <span className="font-medium" title={log.invoice.filename}>
+                          <span className="whitespace-nowrap font-medium" title={log.invoice.filename}>
                             {log.invoice.invoiceNumber ?? log.invoice.filename}
                           </span>
                         </p>
