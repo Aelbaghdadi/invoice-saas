@@ -114,6 +114,24 @@ describe("«Detectar automáticamente» (tipo sin confirmar)", () => {
     expect([r.status, r.clientId, r.type]).toEqual(["PENDING_REVIEW", a.id, "SALE"]);
   });
 
+  it("venta de A a un consumidor, sin texto y con la regla A → B: A como venta, sin la regla", async () => {
+    await learnProviderRule(w.firm.id, a.cif, b.id);
+    const r = await upload({ issuerCif: a.cif, receiverCif: null, typeUnconfirmed: true });
+    expect([r.status, r.clientId, r.type]).toEqual(["PENDING_REVIEW", a.id, "SALE"]);
+    expect(r.audit).toEqual([]);
+  });
+
+  it("venta de A a X con el CIF de A mal leído pero en el texto: A", async () => {
+    const r = await upload({ issuerCif: "B00000000", receiverCif: validCif("B", "3333333"), typeUnconfirmed: true, rawText: `Emisor ${a.cif}\\nTotal 242` });
+    expect([r.status, r.clientId]).toEqual(["PENDING_REVIEW", a.id]);
+  });
+
+  it("proveedor externo conocido y receptor ilegible: la regla sigue sirviendo", async () => {
+    await learnProviderRule(w.firm.id, PROVIDER, b.id);
+    const r = await upload({ receiverCif: null, typeUnconfirmed: true });
+    expect([r.status, r.clientId]).toEqual(["PENDING_REVIEW", b.id]);
+  });
+
   it("con el tipo confirmado, un receptor que no casa sigue yendo al buzón", async () => {
     const r = await upload({ issuerCif: a.cif, receiverCif: validCif("B", "3333333") });
     expect([r.status, r.clientId]).toEqual(["PENDING_ROUTING", w.client.id]);

@@ -254,62 +254,63 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
         otherCif,
       );
 
-      // 1) Match por CIF del cliente. Si no hay CIF legible en su lado (no se
-      // leyo, o no pasa el digito de control), 2) el texto crudo del OCR y
-      // 3) la regla aprendida por proveedor (otra parte). Con un CIF valido
-      // que no casa (o casa con varias) no se adivina: probablemente es de
-      // otro (F-019) y va a «Por clasificar». Antes la regla del proveedor se
-      // aplicaba igual, y un proveedor de todo el grupo mandaba la factura a
-      // la empresa de la ultima clasificacion (F-021).
       let resolvedClientId: string | null = null;
-      // «Detectar automaticamente»: el tipo guardado (compra) es solo un
-      // marcador, y que el receptor no case no quiere decir que la factura
-      // sea de otro. Se prueba el otro lado: si casa el emisor, es una venta
-      // del cliente (detectInvoiceType la fija mas abajo).
-      const swapped = routing.status === "unclassified" && routing.reason === "no_match" && invoice.typeUnconfirmed
-        ? routeByCif(candidates.map((c) => ({ clientId: c.id, cif: c.cif })), otherCif, sideCif)
-        : null;
+      const byCifCandidates = candidates.map((c) => ({ clientId: c.id, cif: c.cif }));
+      const other = normalizeProviderNif(otherCif);
+      const otherIsCandidate = !!other && candidates.some((c) => normalizeProviderNif(c.cif) === other);
+      // Texto y regla, cuando el CIF del lado del cliente no decide.
+      const byTextAndRule = async (textCandidates: typeof candidates, ruleAllowed: boolean) => {
+        // Document AI a veces no rellena el CIF estructurado aunque el CIF
+        // o el nombre del cliente esten en el documento. Solo rutea si casa
+        // exactamente uno; con varios (intragrupo), al buzon y sin la regla.
+        const byText = routeByText(
+          ocrResult.rawText,
+          textCandidates.map((c) => ({ clientId: c.id, cif: c.cif, name: c.name })),
+        );
+        if (byText && "clientId" in byText) return byText.clientId;
+        const firmId = candidates[0]?.advisoryFirmId;
+        if (!ruleAllowed || !firmId || (byText != null && "ambiguous" in byText)) return null;
+        const learned = await lookupProviderClient(firmId, otherCif);
+        if (!learned || !candidates.some((c) => c.id === learned)) return null;
+        const chosen = candidates.find((c) => c.id === learned)!;
+        const providerParsed = parseTaxId(otherCif);
+        routedByRule = {
+          field: "auto:ruteo",
+          oldValue: null,
+          // «·» como las demas auto:*: las pantallas ya pintan «viejo → nuevo».
+          newValue: `${partyAuditValue(chosen.name, chosen.cif)} · proveedor ${taxIdWithCountry(providerParsed.clean, providerParsed.countryCode)}`,
+        };
+        return learned;
+      };
+      const sideUnreadable = routing.status === "unclassified" && (routing.reason === "no_cif" || routing.reason === "invalid_cif");
       if (routing.status === "routed") {
         resolvedClientId = routing.clientId;
-      } else if (swapped?.status === "routed") {
-        resolvedClientId = swapped.clientId;
+      } else if (invoice.typeUnconfirmed && routing.reason !== "ambiguous") {
+        routingReason = routing.reason;
+        // «Detectar automaticamente»: el tipo guardado (compra) es solo un
+        // marcador, y que el receptor no enrute no quiere decir nada. Primero
+        // el emisor: si casa, es una venta del cliente (detectInvoiceType la
+        // fija mas abajo). Despues el texto, con todos los candidatos. La
+        // regla del proveedor solo si el emisor no es del grupo: si lo es, es
+        // una venta suya, no una compra a un proveedor.
+        const swapped = routeByCif(byCifCandidates, otherCif, sideCif);
+        resolvedClientId = swapped.status === "routed"
+          ? swapped.clientId
+          : await byTextAndRule(candidates, sideUnreadable && !otherIsCandidate);
       } else {
         routingReason = routing.reason;
-        if (routing.reason === "no_cif" || routing.reason === "invalid_cif") {
-          // Document AI a veces no rellena el CIF estructurado aunque el CIF
-          // o el nombre del cliente esten en el documento. Solo rutea si casa
-          // exactamente uno (intragrupo → manual).
-          // Con el tipo confirmado, el CIF de la otra parte siempre esta en
-          // el texto: si es una empresa del grupo (factura de A a B), el texto
-          // la encontraria a ella y la factura acabaria en A como compra de A
-          // a si misma. Esa no es candidata. Con «Detectar automaticamente»
-          // se deja: es lo que permite reconocer una venta.
-          const other = normalizeProviderNif(otherCif);
-          const textCandidates = invoice.typeUnconfirmed || !other
-            ? candidates
-            : candidates.filter((c) => normalizeProviderNif(c.cif) !== other);
-          const byText = routeByText(
-            ocrResult.rawText,
-            textCandidates.map((c) => ({ clientId: c.id, cif: c.cif, name: c.name })),
-          );
-          if (byText && "clientId" in byText) resolvedClientId = byText.clientId;
-          const firmId = candidates[0]?.advisoryFirmId;
-          // Varias empresas del grupo en el texto: al buzon, sin la regla.
-          const textAmbiguous = byText != null && "ambiguous" in byText;
-          if (!resolvedClientId && firmId && !textAmbiguous) {
-            const learned = await lookupProviderClient(firmId, otherCif);
-            if (learned && candidates.some((c) => c.id === learned)) {
-              resolvedClientId = learned;
-              const chosen = candidates.find((c) => c.id === learned)!;
-              const providerParsed = parseTaxId(otherCif);
-              routedByRule = {
-                field: "auto:ruteo",
-                oldValue: null,
-                // «·» como las demas auto:*: las pantallas ya pintan «viejo → nuevo».
-                newValue: `${partyAuditValue(chosen.name, chosen.cif)} · proveedor ${taxIdWithCountry(providerParsed.clean, providerParsed.countryCode)}`,
-              };
-            }
-          }
+        // 1) Match por CIF del cliente. Si no hay CIF legible en su lado (no
+        // se leyo, o no pasa el digito de control), 2) el texto crudo del OCR
+        // y 3) la regla aprendida por proveedor (otra parte). Con un CIF
+        // valido que no casa (o casa con varias) no se adivina: probablemente
+        // es de otro (F-019) y va a «Por clasificar» (F-021).
+        // Con el tipo confirmado, el CIF de la otra parte siempre esta en el
+        // texto: si es una empresa del grupo (factura de A a B), el texto la
+        // encontraria a ella y la factura acabaria en A como compra de A a si
+        // misma. Esa no es candidata.
+        if (sideUnreadable) {
+          const textCandidates = other ? candidates.filter((c) => normalizeProviderNif(c.cif) !== other) : candidates;
+          resolvedClientId = await byTextAndRule(textCandidates, true);
         }
       }
 
