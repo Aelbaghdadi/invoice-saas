@@ -19,6 +19,7 @@ import { detectIssues } from "@/lib/issueDetector";
 import type { ExtractedInvoice } from "@/lib/ocr";
 import { classifyInvoice } from "@/app/dashboard/worker/clasificar/actions";
 import { dismissDuplicateIssue, quickRejectDuplicate } from "@/app/dashboard/worker/invoices/actions";
+import { rejectBatch } from "@/app/dashboard/worker/batch/actions";
 import { pendingAfterCallbacks } from "./helpers/after";
 import { NextRequest } from "next/server";
 import { POST as exportDownload } from "@/app/api/export/route";
@@ -1102,6 +1103,19 @@ describe("F-057: las incidencias se cierran al validar, rechazar o reprocesar", 
     await openIssue(id, "MATH_MISMATCH");
     expect((await reject(id)).error).toBeNull();
     expect(await openCount(id)).toBe(0);
+  });
+
+  it("al rechazar el lote, las de todas sus facturas (y no las de otro lote)", async () => {
+    const r = await row();
+    const { id: otraDelLote } = await makeInvoice(w.client);
+    const { id: otroMes } = await makeInvoice(w.client, { periodMonth: r.periodMonth === 12 ? 1 : r.periodMonth + 1 });
+    for (const inv of [id, otraDelLote, otroMes]) await openIssue(inv, "MATH_MISMATCH");
+    const fd = new FormData();
+    for (const [k, v] of Object.entries({ clientId: w.client.id, month: String(r.periodMonth), year: String(r.periodYear), type: r.type, periodType: r.periodType, reason: "Lote ilegible" })) fd.set(k, v);
+    expect(await rejectBatch(null, fd)).toMatchObject({ ok: true });
+    expect([await openCount(id), await openCount(otraDelLote), await openCount(otroMes)]).toEqual([0, 0, 1]);
+    const closed = await prisma.invoiceIssue.findFirstOrThrow({ where: { invoiceId: id } });
+    expect([closed.status, closed.resolvedBy]).toEqual(["RESOLVED", w.worker.id]);
   });
 
   it("al reprocesar, las de la lectura anterior; las que sigan aplicando se crean otra vez", async () => {
