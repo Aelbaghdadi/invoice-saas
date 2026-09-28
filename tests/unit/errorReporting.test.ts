@@ -21,6 +21,14 @@ describe("scrubMessage (F-034): sin datos personales", () => {
   it("DNI con puntos y teléfonos con puntos o guiones", () => {
     expect(scrubMessage("DNI 12.345.678-Z")).toBe("DNI [nif]");
     expect(scrubMessage("tel 612-345-678 o 612.34.56.78")).toBe("tel [tel] o [tel]");
+    expect(scrubMessage("612-345-678 612.34.56.78")).toBe("[tel] [tel]");
+  });
+
+  it("no toma por teléfono una IP, un importe, una fecha ni un fichero", () => {
+    expect(scrubMessage("ETIMEDOUT 172.31.45.123:5432")).toBe("ETIMEDOUT 172.31.45.123:5432");
+    expect(scrubMessage("total 12.345.678,90")).toBe("total 12.345.678,90");
+    expect(scrubMessage("el 28.09.26")).toBe("el 28.09.26");
+    expect(scrubMessage("chunk-12-34-56.js")).toBe("chunk-12-34-56.js");
   });
 
   it("un UUID no es un IBAN; fechas y horas quedan", () => {

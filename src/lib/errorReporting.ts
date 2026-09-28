@@ -46,7 +46,10 @@ const MAX_SCRUB_INPUT = 2_000;
  * - correos;
  * - IBAN (pais en mayusculas: en minusculas, un UUID parecia un IBAN);
  * - NIF/CIF/NIE, con prefijo ES y separadores («12.345.678-Z»);
- * - telefonos con espacios, puntos o guiones («612-345-678»);
+ * - telefonos: 9 cifras (sin el prefijo internacional) en grupos con el
+ *   mismo separador, espacio, punto o guion («612-345-678», «612.34.56.78»).
+ *   Asi quedan una IP con puerto, un importe «12.345.678,90», una fecha
+ *   «28.09.26» o un «chunk-12-34-56.js», que sirven para depurar;
  * - numeros de 9 o mas cifras.
  */
 export function scrubMessage(message: string): string {
@@ -57,7 +60,8 @@ export function scrubMessage(message: string): string {
     .replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, "[email]")
     .replace(/\b[A-Z]{2}\d{2}(?:[ -]?[A-Z0-9]{4}){3,7}(?:[ -]?[A-Z0-9]{1,4})?\b/g, "[iban]")
     .replace(/\b(?:ES[ .-]?)?(?:[XYZ][ .-]?\d{7}[ .-]?[A-Z]|\d{2}(?:\.?\d{3}){2}[ .-]?[A-Z]|[ABCDEFGHJNPQRSUVW][ .-]?\d{7}[ .-]?[0-9A-J])\b/gi, "[nif]")
-    .replace(/(?:\+\d{1,3} ?)?\b\d{2,3}(?:[ .-]\d{2,3}){2,4}\b/g, "[tel]")
+    .replace(/(?:\+\d{1,3} ?)?\b\d{2,3}([ .-])\d{2,3}(?:\1\d{2,3}){1,3}\b/g,
+      (m) => (m.replace(/^\+\d{1,3} ?/, "").replace(/\D/g, "").length === 9 ? "[tel]" : m))
     .replace(/\d{9,}/g, "[num]")
     .slice(0, MAX_MESSAGE);
 }
