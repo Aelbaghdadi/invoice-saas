@@ -5,17 +5,24 @@
  * crudo del OCR («ESB12345678», «B-12345678») con el limpio de la BD y el
  * numero literal, y no casaban.
  */
-import type { InvoiceType } from "@prisma/client";
+import { Prisma, type InvoiceType } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { formatEur } from "@/lib/format";
 import { formatDateEs } from "@/lib/dates";
 import { periodLabel } from "@/lib/period";
 import { normalizeBusinessName, parseTaxId } from "@/lib/validators";
 
-/** «F-001», «F 001», «f001» y «F/001» son el mismo numero: mayusculas, sin
- *  espacios ni separadores. */
+/** «F-001», «F 001», «f001» y «F/001» son el mismo numero: sin espacios ni
+ *  separadores y en mayusculas. Solo ASCII y en este orden (quitar y luego
+ *  subir), igual que normalizedNumberSql: con toUpperCase primero, «ß» pasa
+ *  a «SS» en JS y no en Postgres, y los dos lados no casaban. */
 export function normalizeInvoiceNumber(raw: string | null | undefined): string {
-  return (raw ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  return (raw ?? "").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+}
+
+/** normalizeInvoiceNumber en Postgres, sobre una columna o expresion. */
+export function normalizedNumberSql(expression: Prisma.Sql): Prisma.Sql {
+  return Prisma.sql`upper(regexp_replace(${expression}, '[^A-Za-z0-9]', '', 'g'))`;
 }
 
 /**
@@ -49,7 +56,7 @@ export async function findByInvoiceNumber(input: {
       AND status NOT IN ('REJECTED', 'SPLIT_SOURCE')
       AND (NOT ${onlyValidated} OR status IN ('VALIDATED', 'EXPORTED'))
       AND (${issuerCif}::text IS NULL OR "issuerCif" = ${issuerCif})
-      AND regexp_replace(upper("invoiceNumber"), '[^A-Z0-9]', '', 'g') = ${normalized}
+      AND ${normalizedNumberSql(Prisma.raw('"invoiceNumber"'))} = ${normalized}
     ORDER BY "createdAt"
     LIMIT 1`;
   return rows[0]?.id ?? null;

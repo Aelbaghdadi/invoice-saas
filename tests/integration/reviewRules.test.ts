@@ -10,7 +10,8 @@ import { fakeS3 } from "./helpers/fakeS3";
 import { facturaeXml } from "./helpers/fixtures";
 import { stubOcr } from "./helpers/ocr";
 import { NEGATIVE_AMOUNTS_HINT } from "@/lib/rectificative";
-import { duplicateOriginalId, findByInvoiceNumber, findPossibleDuplicate } from "@/lib/duplicates";
+import { duplicateOriginalId, findByInvoiceNumber, findPossibleDuplicate, normalizeInvoiceNumber, normalizedNumberSql } from "@/lib/duplicates";
+import { Prisma } from "@prisma/client";
 import { parseTaxId } from "@/lib/validators";
 import { accountEntryKey } from "@/lib/supplierMatching";
 import { processInvoice } from "@/lib/processInvoice";
@@ -938,6 +939,13 @@ describe("duplicados con el CIF limpio y el número normalizado (F-010)", () => 
     expect(await duplicatesFor({ issuerCif: "ESB-12345674", invoiceNumber: null, totalAmount: 321 })).toEqual([
       expect.stringContaining("mismo CIF emisor (B12345674), total (321,00 €) y fecha"),
     ]);
+  });
+
+  it("normalizeInvoiceNumber y su versión en Postgres dan lo mismo, también con Unicode", async () => {
+    const list = ["F-001", "f 001", "F/001", " f.001 ", "Nº 12", "ß-1", "straße-7", "ﬁ-2", "ı-3", "İ-4", "Ñ-5", "ǅ-6", "ﬀ", "Ａ１", "2026-1-15", "0042", "", " - "];
+    const rows = await prisma.$queryRaw<{ raw: string; normalized: string }[]>`
+      SELECT x AS raw, ${normalizedNumberSql(Prisma.raw("x"))} AS normalized FROM unnest(${list}::text[]) AS x`;
+    expect(rows.map((r) => [r.raw, r.normalized])).toEqual(list.map((x) => [x, normalizeInvoiceNumber(x)]));
   });
 
   it("la original de una división (SPLIT_SOURCE) no es duplicado de sus hijas; el mismo fichero sí", async () => {
