@@ -22,7 +22,7 @@ test.skip(!E2E_DB, "Necesita E2E_DATABASE_URL");
 test.describe.configure({ mode: "serial" });
 
 const PASSWORD = "Prueba1234!";
-const IDS = ["h1", "h2", "h3", "h4", "h5", "h6", "h7"];
+const IDS = ["h1", "h2", "h3", "h4", "h5", "h6", "h7", "h8"];
 
 test.beforeAll(async () => {
   const parsed = parseTestDatabaseUrl(E2E_DB, "E2E_DATABASE_URL");
@@ -181,4 +181,23 @@ test("lo tecleado mientras se guarda sigue contando como cambio", async ({ page 
   await page.locator('nav a[href^="/dashboard"]').filter({ hasNot: page.locator(`[href="${P}"]`) }).first().click();
   await expect(page.getByRole("alertdialog")).toBeVisible();
   await expect(page).toHaveURL(new RegExp(`${review("h7")}$`));
+});
+
+test("primera entrada de la pestaña con otras por delante: sin centinela", async ({ page, context }) => {
+  // Sesion iniciada en esta pestaña; la factura, en una pestaña nueva.
+  await openAndEdit(page, "h1");
+  const tab = await context.newPage();
+  await tab.goto(review("h8"));
+  await tab.waitForLoadState("networkidle");
+  const link = tab.locator('nav a[href^="/dashboard"]').filter({ hasNot: tab.locator(`[href="${P}"]`) }).first();
+  const target = await link.getAttribute("href");
+  await link.click();
+  await tab.waitForURL((u) => u.pathname === target);
+  await tab.evaluate(() => history.back());
+  await tab.waitForURL((u) => u.pathname === review("h8"));
+  await tab.waitForLoadState("networkidle");
+  await tab.locator("#invoiceNumber").fill("h8-CAMBIADO");
+  await tab.waitForTimeout(500);
+  // Nada detras: no se mete el centinela (salir haria go(-2) a ninguna parte).
+  expect(await historyOf(tab)).toEqual([`*${review("h8")}*`, target]);
 });

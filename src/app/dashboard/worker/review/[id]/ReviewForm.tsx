@@ -123,6 +123,18 @@ const SNAPSHOT_IGNORE = ["updatedAt", "bucket", "back", "replaceHistory"] as con
 // El lado bloqueado (el cliente) no lo edita el gestor: lo pone el servidor
 // al guardar (una factura sin receptor recibe el del cliente) y, al refrescar,
 // su valor cambiaba y salia un falso «cambios sin guardar».
+/**
+ * Posicion de la entrada actual en el historial de la pestaña (cuantas hay
+ * detras). Con la Navigation API, la de verdad; sin ella, solo se sabe que
+ * con una unica entrada no hay nada detras.
+ */
+function historyIndex(): number {
+  const nav = (window as unknown as { navigation?: { currentEntry?: { index: number } | null } }).navigation;
+  const index = nav?.currentEntry?.index;
+  if (typeof index === "number" && index >= 0) return index;
+  return window.history.length <= 1 ? 0 : Number.POSITIVE_INFINITY;
+}
+
 function reviewSnapshot(fd: FormData): string {
   const lockedFields = fd.get("type") === "PURCHASE" ? ["receiverName", "receiverCif"] : ["issuerName", "issuerCif"];
   return formSnapshot(fd, [...SNAPSHOT_IGNORE, ...lockedFields]);
@@ -1170,8 +1182,9 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   // Limite conocido: tras un F5 con el centinela puesto, la entrada repetida
   // queda en el historial y un Atras de mas vuelve a esta misma factura.
   const pushSentinel = () => {
-    // En una pestaña nueva no hay Atras que proteger.
-    if (sentinelRef.current || departingRef.current || window.history.length <= 1) return;
+    // Sin nada detras (pestaña nueva, o la primera entrada con otras por
+    // delante) no hay Atras que proteger, y salir haria go() a ninguna parte.
+    if (sentinelRef.current || departingRef.current || historyIndex() === 0) return;
     window.history.pushState(window.history.state, "", window.location.href);
     sentinelRef.current = true;
   };
@@ -1185,8 +1198,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     }
   };
   // Los listeners de abajo se registran una vez y leen lo ultimo por refs.
-  const latest = useRef({ isDirty, guardLeave, navigate, pushSentinel, updatedAtTime });
-  useEffect(() => { latest.current = { isDirty, guardLeave, navigate, pushSentinel, updatedAtTime }; });
+  const latest = useRef({ isDirty, guardLeave, navigate, pushSentinel, updatedAtTime, restoreDiscarded });
+  useEffect(() => { latest.current = { isDirty, guardLeave, navigate, pushSentinel, updatedAtTime, restoreDiscarded }; });
   useEffect(() => {
     const root = rootRef.current;
     const timers = new Set<ReturnType<typeof setTimeout>>();
@@ -1217,10 +1230,16 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       }
       push();
       void guard(() => {
+        // El centinela y el Atras que queria el gestor, sin pasar de la
+        // primera entrada. Si no hay adonde ir, se queda con lo tecleado.
+        const steps = Math.min(sentinelRef.current ? 2 : 1, historyIndex());
+        if (steps === 0) {
+          latest.current.restoreDiscarded();
+          return;
+        }
         departingRef.current = true;
-        const steps = sentinelRef.current ? -2 : -1;
         sentinelRef.current = false;
-        window.history.go(steps);
+        window.history.go(-steps);
       });
     };
     // Cualquier enlace interno (barra lateral, cabecera, «Volver», «<», «>»…):
