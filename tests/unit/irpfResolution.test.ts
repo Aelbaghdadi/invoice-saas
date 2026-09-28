@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveIrpf } from "@/lib/irpfResolution";
+import { legalRateFor, resolveIrpf } from "@/lib/irpfResolution";
 
 // Base 1000, IVA 210: la factura cuadra con el IRPF que da el total.
 const invoice = (total: number) => ({ sumBases: 1000, balancedWith: (irpf: number) => Math.abs(1000 + 210 - irpf - total) < 0.005 });
@@ -56,6 +56,27 @@ describe("resolveIrpf (F-073)", () => {
       .toEqual({ rate: 7, amount: -70 });
     expect(resolveIrpf({ sumBases: -1000, balancedWith, hasRetention: true, retentionRate: 15, readRate: 7, readAmount: 70 }))
       .toEqual({ rate: 7, amount: -70 });
+  });
+
+  it("sin % leído, con una línea al 0 %: el 12,5 % deducido no vale; 15 % / 180, descuadrada", () => {
+    const balancedWith = (irpf: number) => Math.abs(1200 + 210 - irpf - 1260) < 0.005;
+    expect(resolveIrpf({ sumBases: 1200, balancedWith, hasRetention: true, retentionRate: 15, readRate: null, readAmount: 150 }))
+      .toEqual({ rate: 15, amount: 180 });
+  });
+
+  it("sin % leído, el deducido va a un tipo legal: 7 %, no 6,99 %; 15 %, no 14,98 %", () => {
+    const balanced = (base: number, irpf: number) => (x: number) => Math.abs(x - irpf) < 0.005;
+    expect(resolveIrpf({ sumBases: 33.33, balancedWith: balanced(33.33, 2.33), hasRetention: true, retentionRate: 15, readRate: null, readAmount: 2.33 }))
+      .toEqual({ rate: 7, amount: 2.33 });
+    expect(resolveIrpf({ sumBases: 21.43, balancedWith: balanced(21.43, 3.21), hasRetention: true, retentionRate: 7, readRate: null, readAmount: 3.21 }))
+      .toEqual({ rate: 15, amount: 3.21 });
+  });
+
+  it("legalRateFor: solo tipos que existen", () => {
+    expect(legalRateFor(1200, 150)).toBeNull();
+    expect(legalRateFor(33.33, 2.33)).toBe(7);
+    expect(legalRateFor(-1000, -70)).toBe(7);
+    expect(legalRateFor(1000, 70, 15)).toBeNull();
   });
 
   it("sin tipo de retención, lo leído tal cual", () => {

@@ -330,6 +330,15 @@ export const RETENTION_DEFAULT_RATE: Record<RetentionTypeName, number> = {
 };
 
 /**
+ * Tipos de retencion de IRPF que existen: modulos (1), agricultura y
+ * ganaderia (2), nuevos profesionales (7), profesionales (15),
+ * arrendamientos y capital (19), no residentes (24) y consejeros (35). Un %
+ * deducido de base e importe solo se acepta si es uno de estos: si no, con
+ * una linea al 0 % salia un 12,5 % que no existe.
+ */
+export const LEGAL_RETENTION_RATES = [1, 2, 7, 15, 19, 24, 35] as const;
+
+/**
  * Detecta si un NIF/CIF corresponde a una persona fisica (DNI o NIE),
  * lo que sugiere fuertemente que la factura es de un profesional
  * autonomo y por tanto suele llevar retencion IRPF (Modelo 111).

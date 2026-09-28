@@ -165,12 +165,29 @@ describe("entradas auto:* cuando el sistema cambia algo al leer (F-024)", () => 
       expect(await saved()).toEqual([15, 180, "PROFESSIONAL", false]);
     });
 
+    it("sin % leído, con una línea al 0 %: 150 no pasa a un 12,5 %; 15 % / 180, descuadrada", async () => {
+      await read({
+        taxBase: 1200, vatAmount: 210, irpfRate: null, irpfAmount: 150, totalAmount: 1260,
+        vatLines: [{ taxBase: 1000, vatRate: 21, vatAmount: 210 }, { taxBase: 200, vatRate: 0, vatAmount: 0 }],
+      });
+      expect(await saved()).toEqual([15, 180, "PROFESSIONAL", false]);
+    });
+
     it("sin importe leído: el 15 % aprendido rellena, con auto:irpf", async () => {
       expect(await read({ irpfRate: null, irpfAmount: null, totalAmount: 1060 })).toEqual([
         ["auto:irpf", null, "15 % · 150"],
       ]);
       expect(await saved()).toEqual([15, 150, "PROFESSIONAL", true]);
     });
+  });
+
+  it("primera factura sin aprendido: el % deducido solo si es un tipo legal (F-073)", async () => {
+    await read({
+      taxBase: 1200, vatAmount: 210, irpfRate: null, irpfAmount: 150, totalAmount: 1260,
+      vatLines: [{ taxBase: 1000, vatRate: 21, vatAmount: 210 }, { taxBase: 200, vatRate: 0, vatAmount: 0 }],
+    });
+    const inv = await prisma.invoice.findFirstOrThrow({ where: { filename: "auto.pdf" } });
+    expect([Number(inv.irpfRate), Number(inv.irpfAmount), inv.isValid]).toEqual([15, 180, false]);
   });
 
   it("auto:parteCliente: el OCR leyó otro receptor y se pone el cliente", async () => {

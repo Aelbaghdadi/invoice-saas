@@ -17,7 +17,7 @@ import { clientPartyIssue } from "@/lib/clientParty";
 import { ocrFenceWhere } from "@/lib/invoiceStatuses";
 import { isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { roundCents } from "@/lib/money";
-import { resolveIrpf } from "@/lib/irpfResolution";
+import { legalRateFor, resolveIrpf } from "@/lib/irpfResolution";
 
 // La escritura final son unas pocas consultas; 15 s por si espera un bloqueo
 // de fila (los 5 s por defecto dejaban el resultado en OCR_ERROR).
@@ -531,11 +531,12 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       // Si el OCR dio el importe pero no el %, lo deducimos de las bases en
       // vez de asumir el 15%: al recalcular la cuota mas abajo, un default
       // equivocado sobrescribiria el importe real extraido del documento.
+      // Solo un tipo legal: base / importe a secas daba 12,5 % con una linea
+      // al 0 %, o 6,99 % con una base pequeña.
       const baseParaTipo = vatLines.reduce((acc, l) => acc + l.taxBase, 0);
-      const tipoDeducido =
-        extracted.irpfAmount != null && baseParaTipo > 0
-          ? parseFloat((Math.abs(extracted.irpfAmount / baseParaTipo) * 100).toFixed(2))
-          : null;
+      const tipoDeducido = extracted.irpfAmount != null
+        ? legalRateFor(baseParaTipo, (baseParaTipo < 0 ? -1 : 1) * Math.abs(extracted.irpfAmount))
+        : null;
       retentionRate =
         extracted.irpfRate ?? tipoDeducido ?? RETENTION_DEFAULT_RATE.PROFESSIONAL;
     }
