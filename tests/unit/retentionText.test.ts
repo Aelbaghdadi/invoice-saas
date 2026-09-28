@@ -51,8 +51,19 @@ describe("textMentionsRetention — protección de datos (F-073)", () => {
     expect(textMentionsRetention(`Base imponible 100 IVA 21% Total 121\n${lopd}`)).toBe(false);
   });
 
+  it("más redacciones del pie de protección de datos", () => {
+    for (const phrase of [
+      "la retención de su información", "la retención de tu información", "la retención de esta información",
+      "el plazo legal de retención", "los plazos legales de retención", "sus datos serán retenidos",
+      "plazo de conservación y retención", "el periodo máximo de retención",
+    ]) {
+      expect(textMentionsRetention(`Base 100 IVA 21 Total 121. ${phrase}.`), phrase).toBe(false);
+    }
+  });
+
   it("con el pie de la LOPD, una retención de verdad se sigue viendo", () => {
     expect(textMentionsRetention("Retención IRPF 15%: -150,00\nLa retención de los datos se limitará al tiempo necesario.")).toBe(true);
+    expect(textMentionsRetention("Retención 7%: -70,00\nSus datos serán retenidos durante el plazo legal de retención.")).toBe(true);
   });
 });
 

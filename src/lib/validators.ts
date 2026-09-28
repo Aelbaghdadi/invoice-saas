@@ -359,8 +359,9 @@ export function textMentionsRetention(text: string | null | undefined): boolean 
     // El pie de proteccion de datos (LOPD/RGPD) de muchas facturas: «la
     // retencion de los datos», «plazos de retencion», «retencion de la
     // informacion». No es IRPF, y proponia retencion en facturas sin ella.
-    .replace(/\bretenc\w*\s+de\s+(?:(?:los|sus|estos|dichos|tus)\s+)?(?:datos|la\s+informacion|informacion)\b/g, " ")
-    .replace(/\b(?:plazos?|periodos?|politicas?|tiempos?)\s+de\s+retenc\w*/g, " ");
+    .replace(/\bretenc\w*\s+de\s+(?:(?:los|las|la|sus?|tus?|estos|estas?|dichos|dichas)\s+)?(?:datos|informacion)\b/g, " ")
+    .replace(/\b(?:plazos?|periodos?|politicas?|tiempos?)(?:\s+(?:legal(?:es)?|maximos?|minimos?))?\s+de\s+(?:conservacion\s+y\s+)?retenc\w*/g, " ")
+    .replace(/\bdatos\s+(?:\w+\s+)?retenid\w*/g, " ");
   return /\birpf\b/.test(t)
     || /\bretenc(?:ion|iones)\b/.test(t)
     || /\bretenid[oa]s?\b/.test(t);
