@@ -18,7 +18,7 @@ test.skip(!DB, "Necesita E2E_DATABASE_URL");
 test.describe.configure({ mode: "serial" });
 
 const PASSWORD = "Prueba1234!";
-const IDS = ["h1", "h2", "h3", "h4", "h5"];
+const IDS = ["h1", "h2", "h3", "h4", "h5", "h6"];
 
 test.beforeAll(async () => {
   const db = new PrismaClient({ adapter: new PrismaPg({ connectionString: DB }) });
@@ -141,6 +141,21 @@ test("guardar una factura sin receptor: tras el refresco no quedan cambios sin g
   await expect(page.locator("#receiverName")).toHaveValue("Cliente Prueba SL");
   const link = page.locator('nav a[href^="/dashboard"]').filter({ hasNot: page.locator(`[href="${P}"]`) }).first();
   const target = await link.getAttribute("href");
+  await link.click();
+  await page.waitForURL((u) => u.pathname === target);
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+});
+
+test("guardar y salir enseguida: espera al guardado y no pregunta", async ({ page }) => {
+  await openAndEdit(page, "h6");
+  const link = page.locator('nav a[href^="/dashboard"]').filter({ hasNot: page.locator(`[href="${P}"]`) }).first();
+  const target = await link.getAttribute("href");
+  // El guardado tarda: el enlace se pulsa con el guardado en vuelo.
+  await page.route(`**${review("h6")}`, async (route) => {
+    if (route.request().method() === "POST") await new Promise((r) => setTimeout(r, 1500));
+    await route.continue();
+  });
+  await page.getByRole("button", { name: "Guardar sin validar" }).click();
   await link.click();
   await page.waitForURL((u) => u.pathname === target);
   await expect(page.getByRole("alertdialog")).toHaveCount(0);

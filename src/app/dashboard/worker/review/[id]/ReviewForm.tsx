@@ -993,9 +993,21 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     return fd;
   }, [type, vatLines, totalAmount, markedEuro, invoiceDateVal, accountingMonth, accountingYear, supplierAccountVal, expenseAccountVal, operationType, goodsTypeShown, shownSource, retentionType, retentionBase, retentionRate, retentionAmount, isRectificative, rectifiedInvoiceSeries, rectifiedInvoiceNumber, rectificativeType, art80Tres, invoice.id, invoice.updatedAt, bucket, back]);
 
+  // El guardado o la validacion en curso. Mientras dura, la instantanea aun
+  // es la de antes: salir en ese momento preguntaba por unos cambios que ya
+  // se estaban guardando. guardLeave espera a que acabe y vuelve a mirar.
+  const savingRef = useRef<Promise<unknown> | null>(null);
+  const trackSaving = <T,>(run: () => Promise<T>): Promise<T> => {
+    const p = run();
+    savingRef.current = p;
+    const clear = () => { if (savingRef.current === p) savingRef.current = null; };
+    p.then(clear, clear);
+    return p;
+  };
+
   // Guarda y dice si ha ido bien: lo usan el boton y «Guardar» del aviso de
   // cambios sin guardar, que solo sigue adelante si se guardo.
-  const saveNow = async (): Promise<boolean> => {
+  const saveNow = (): Promise<boolean> => trackSaving(async () => {
     if (saveBlock) {
       error(saveBlock);
       return false;
@@ -1015,7 +1027,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     markClean();
     justSavedRef.current = updatedAtTime;
     return true;
-  };
+  });
   const handleSave = () => {
     startSave(async () => { await saveNow(); });
   };
@@ -1068,8 +1080,21 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   // Lo que habia antes de «Descartar», por si la salida falla (Posponer sin
   // red): entonces se restaura y lo tecleado vuelve a contar como cambios.
   const discardedSnapshotRef = useRef<string | null>(null);
-  const guardLeave = async (leave: () => void, onStay?: () => void) => {
+  const guardLeave = async (leave: () => void, onStay?: () => void): Promise<void> => {
     if (leavingRef.current) return;
+    const saving = savingRef.current;
+    if (saving) {
+      leavingRef.current = true;
+      try {
+        await saving.catch(() => {});
+      } finally {
+        leavingRef.current = false;
+      }
+      // Era validar y pasar: ya se esta saliendo.
+      if (departingRef.current) return;
+      // El guardado ya ha rehecho la instantanea: se vuelve a mirar.
+      return guardLeave(leave, onStay);
+    }
     discardedSnapshotRef.current = null;
     if (!isDirty()) return leave();
     leavingRef.current = true;
@@ -1234,7 +1259,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   // "ok", "error", o "asked" si ha hecho falta una confirmacion de duplicado
   // (el aviso de cambios sin guardar no navega entonces: el gestor se queda
   // en la factura).
-  const validateNow = async (goodsTypeScope: GoodsTypeScope, reopen: boolean): Promise<"ok" | "error" | "asked"> => {
+  const validateNow = (goodsTypeScope: GoodsTypeScope, reopen: boolean): Promise<"ok" | "error" | "asked"> => trackSaving(async () => {
     let asked = false;
     const fields = {
       nextId: nextPendingId ?? "",
@@ -1316,7 +1341,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       justSavedRef.current = updatedAtTime;
     }
     return asked ? "asked" : "ok";
-  };
+  });
 
   const runValidate = (goodsTypeScope: GoodsTypeScope) => {
     setGoodsQuestion(null);
