@@ -1022,7 +1022,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                       <>
                         Ya hay otra factura con este número y este emisor:{" "}
                         <Link href={`/dashboard/worker/review/${dup.id}`} target="_blank" className="font-medium underline">
-                          {dup.label}
+                          {dup.label}<span className="sr-only"> (se abre en una pestaña nueva)</span>
                         </Link>
                         .
                       </>
@@ -1031,7 +1031,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                         {dup.label}{" "}
                         {dup.id && (
                           <Link href={`/dashboard/worker/review/${dup.id}`} target="_blank" className="font-medium underline">
-                            Ver la original
+                            Ver la original<span className="sr-only"> (se abre en una pestaña nueva)</span>
                           </Link>
                         )}
                       </>
@@ -1730,7 +1730,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                           <>
                             {" "}
                             <Link href={`/dashboard/worker/review/${issue.duplicateOf}`} target="_blank" className="font-medium underline">
-                              Ver la original
+                              Ver la original<span className="sr-only"> (se abre en una pestaña nueva)</span>
                             </Link>
                           </>
                         )}
@@ -1744,8 +1744,10 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                           type="button"
                           onClick={() => handleNotDuplicate(issue)}
                           disabled={isPendingDismiss || isPendingReject}
-                          className="rounded-lg border border-amber-300 bg-white px-2.5 py-1 text-[12px] font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+                          aria-busy={isPendingDismiss}
+                          className="flex items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-2.5 py-1 text-[12px] font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
                         >
+                          {isPendingDismiss && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
                           No es duplicada
                         </button>
                         <button
