@@ -320,6 +320,9 @@ async function parseAndSave(
       : null;
   const retentionRateNum = retentionType ? parse(data.retentionRate) : null;
   const retentionBaseNum = retentionType ? parse(data.retentionBase) : null;
+  // Retencion aprendida que no es un tipo legal (F-073): la incidencia vale
+  // mientras se guarde ese mismo %; con otro (o sin retencion), se cierra.
+  const irpfRateChanged = retentionRateNum !== (invoice.irpfRate == null ? null : Number(invoice.irpfRate));
   // Cuota: si el form la mando, la usamos; si no, calculamos.
   const retentionAmountNum = retentionType
     ? (parse(data.retentionAmount)
@@ -746,6 +749,12 @@ async function parseAndSave(
       if (!clientPartyStillApplies) {
         await tx.invoiceIssue.updateMany({
           where: { invoiceId, field: "clientParty", status: "OPEN" },
+          data: { status: "RESOLVED", resolvedBy: userId, resolvedAt: new Date() },
+        });
+      }
+      if (irpfRateChanged) {
+        await tx.invoiceIssue.updateMany({
+          where: { invoiceId, field: "irpfRate", status: "OPEN" },
           data: { status: "RESOLVED", resolvedBy: userId, resolvedAt: new Date() },
         });
       }

@@ -798,6 +798,11 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   const rectificativeIssues = isRectificative
     ? []
     : issues.filter((i) => i.field === "isRectificative" && i.status === "OPEN");
+  // Retencion aprendida del tercero que no es un tipo legal (F-073): junto al
+  // campo, mientras el % del formulario siga siendo el guardado (el aprendido).
+  const retentionRateIssues = retentionType && parseFloat(retentionRate) === invoice.irpfRate
+    ? issues.filter((i) => i.field === "irpfRate" && i.status === "OPEN")
+    : [];
   // Incidencias abiertas arriba del formulario (F-016): solo las que el
   // formulario no recalcula en vivo. El cuadre (MATH_MISMATCH), la confianza
   // por campo (LOW_CONFIDENCE) y los avisos MANUAL (signo, intracomunitaria)
@@ -2816,6 +2821,12 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                     }`}
                   />
                 </button>
+                {retentionRateIssues.map((issue) => (
+                  <p key={issue.id} className="mt-1 flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-700">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+                    {issue.description}
+                  </p>
+                ))}
                 {showRetentionPanel && (
                   <div className="mt-2 space-y-2">
                     <div className="flex items-center justify-end">
