@@ -181,6 +181,15 @@ describe("entradas auto:* cuando el sistema cambia algo al leer (F-024)", () => 
     });
   });
 
+  it("abono con el IRPF impreso en negativo y guardado igual: ni auto:signo ni auto:irpf", async () => {
+    expect(await read({
+      taxBase: -1000, vatAmount: -210, irpfRate: 7, irpfAmount: -70, totalAmount: -1140,
+      vatLines: [{ taxBase: -1000, vatRate: 21, vatAmount: -210 }],
+    })).toEqual([]);
+    const inv = await prisma.invoice.findFirstOrThrow({ where: { filename: "auto.pdf" } });
+    expect([Number(inv.irpfRate), Number(inv.irpfAmount)]).toEqual([7, -70]);
+  });
+
   it("primera factura sin aprendido: el % deducido solo si es un tipo legal (F-073)", async () => {
     await read({
       taxBase: 1200, vatAmount: 210, irpfRate: null, irpfAmount: 150, totalAmount: 1260,

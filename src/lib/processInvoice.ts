@@ -564,7 +564,15 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     // Solo cuando de verdad se sustituye lo leido: retencion propuesta
     // (tercero aprendido, persona fisica) o recalculada.
     const finalIrpf = irpfAuditValue(finalIrpfRate, finalIrpfAmount);
-    if (finalIrpf !== readIrpf) autoAudit.push({ field: "auto:irpf", oldValue: readIrpf, newValue: finalIrpf });
+    if (finalIrpf === printedIrpf) {
+      // Se guarda exactamente lo impreso (un abono con el IRPF en negativo:
+      // auto:signo lo paso a positivo y resolveIrpf le devuelve el signo de
+      // la base): ni auto:signo ni auto:irpf, que se anulaban.
+      const signo = autoAudit.findIndex((e) => e.field === "auto:signo");
+      if (signo >= 0) autoAudit.splice(signo, 1);
+    } else if (finalIrpf !== readIrpf) {
+      autoAudit.push({ field: "auto:irpf", oldValue: readIrpf, newValue: finalIrpf });
+    }
 
     // Detect issues (duplicates, low confidence, math mismatch, IVA no-cero
     // en intracomunitarias, etc.). En las "Por clasificar" no tiene sentido
