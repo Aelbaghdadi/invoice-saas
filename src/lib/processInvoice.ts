@@ -37,6 +37,7 @@ import { lookupProviderClient } from "@/lib/providerRouting";
 import { accountEntryKey } from "@/lib/supplierMatching";
 import { proposeOperationType, unclassifiedGoodsType } from "@/lib/operationTypeProposal";
 import { classifyOcrError, DocumentError, userMessageForError } from "@/lib/ocrErrors";
+import { closeOpenIssues } from "@/lib/invoiceIssues";
 
 /**
  * Convierte el string de fecha del OCR a Date. Si el OCR devuelve algo
@@ -656,6 +657,9 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
           })),
         });
       }
+      // Reprocesar (F-057): las incidencias de la lectura anterior se cierran;
+      // las que sigan aplicando se crean otra vez aqui.
+      await closeOpenIssues(tx, invoiceId, triggeredByUserId);
       if (issues.length > 0) {
         await tx.invoiceIssue.createMany({
           data: issues.map((issue) => ({

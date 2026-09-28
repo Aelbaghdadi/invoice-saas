@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { prisma } from "./helpers/db";
 import { makeFirm, makeInvoice, type FirmWorld } from "./helpers/factories";
 import { signInAs } from "./helpers/session";
-import { reviewForm, settleAction, validate } from "./helpers/reviewForm";
+import { reject, reviewForm, settleAction, validate } from "./helpers/reviewForm";
 import { saveInvoiceFields, validateInvoice } from "@/app/dashboard/worker/review/[id]/actions";
 import { fakeS3 } from "./helpers/fakeS3";
 import { facturaeXml } from "./helpers/fixtures";
@@ -1002,5 +1002,46 @@ describe("al validar, confirmación si ya hay otra validada con el mismo número
   it("si la otra aún no está validada, no hace falta confirmar", async () => {
     await otra("PENDING_REVIEW");
     expect((await validate(await form({ invoiceNumber: "F-2026-001" }))).error).toBeNull();
+  });
+});
+
+describe("F-057: las incidencias se cierran al validar, rechazar o reprocesar", () => {
+  const openIssue = (invoiceId: string, type: "MATH_MISMATCH" | "LOW_CONFIDENCE" | "POSSIBLE_DUPLICATE" | "MANUAL") =>
+    prisma.invoiceIssue.create({ data: { invoiceId, type, description: `Incidencia ${type}` } });
+  const openCount = (invoiceId: string) => prisma.invoiceIssue.count({ where: { invoiceId, status: "OPEN" } });
+
+  it("al validar, todas", async () => {
+    for (const type of ["MATH_MISMATCH", "LOW_CONFIDENCE", "MANUAL"] as const) await openIssue(id, type);
+    expect((await validate(await form({}))).error).toBeNull();
+    expect(await openCount(id)).toBe(0);
+    const closed = await prisma.invoiceIssue.findMany({ where: { invoiceId: id } });
+    expect(closed.map((i) => [i.status, i.resolvedBy])).toEqual(closed.map(() => ["RESOLVED", w.worker.id]));
+  });
+
+  it("guardar sin validar no las cierra", async () => {
+    await openIssue(id, "LOW_CONFIDENCE");
+    expect((await save({})).error).toBeNull();
+    expect(await openCount(id)).toBe(1);
+  });
+
+  it("al rechazar, todas", async () => {
+    await openIssue(id, "POSSIBLE_DUPLICATE");
+    await openIssue(id, "MATH_MISMATCH");
+    expect((await reject(id)).error).toBeNull();
+    expect(await openCount(id)).toBe(0);
+  });
+
+  it("al reprocesar, las de la lectura anterior; las que sigan aplicando se crean otra vez", async () => {
+    fakeS3().put("k-repro", facturaeXml({ buyerCif: w.client.cif, base: "200.00", taxRate: "10.00", taxAmount: "42.00", total: "242.00" }));
+    const { id: inv } = await makeInvoice(w.client, {
+      filename: "r.xml", storageKey: "k-repro", fileType: "application/xml", status: "UPLOADED",
+      invoiceNumber: null, invoiceDate: null, issuerName: null, issuerCif: null, taxBase: null, vatRate: null, vatAmount: null, totalAmount: null,
+    });
+    const vieja = await openIssue(inv, "LOW_CONFIDENCE");
+    await processInvoice(inv, w.worker.id);
+    expect((await prisma.invoiceIssue.findUniqueOrThrow({ where: { id: vieja.id } })).status).toBe("RESOLVED");
+    // El desglose 200 al 10 % con cuota 42 sigue sin cuadrar: su incidencia vuelve a estar abierta.
+    const abiertas = await prisma.invoiceIssue.findMany({ where: { invoiceId: inv, status: "OPEN" } });
+    expect(abiertas.map((i) => i.field)).toEqual(["vatLines"]);
   });
 });

@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { notifyClientInvoiceRejected } from "@/lib/email";
 import { appendAuditLogs } from "@/lib/auditLog";
+import { closeOpenIssues } from "@/lib/invoiceIssues";
 
 export type InvoiceQuickAction = { ok?: boolean; error?: string } | null;
 
@@ -62,41 +63,36 @@ export async function quickRejectDuplicate(
   });
   const reason = dupIssue?.description ?? "Factura duplicada detectada desde el listado";
 
-  await prisma.invoice.update({
-    where: { id: invoiceId },
-    data: {
-      status: "REJECTED",
-      rejectionReason: reason,
-      rejectionCategory: "DUPLICATE",
-      reviewedBy: session.user.id,
-    },
-  });
-
-  await prisma.invoiceStatusHistory.create({
-    data: {
-      invoiceId,
-      fromStatus: invoice.status,
-      toStatus: "REJECTED",
-      changedBy: session.user.id,
-      reason,
-    },
-  });
-
-  // Cerrar el issue que motivo el rechazo
-  if (dupIssue) {
-    await prisma.invoiceIssue.update({
-      where: { id: dupIssue.id },
-      data: { status: "RESOLVED", resolvedBy: session.user.id, resolvedAt: new Date() },
+  // Estado, incidencias (F-057: todas, no solo la del duplicado), historial
+  // y auditoria en una transaccion.
+  await prisma.$transaction(async (tx) => {
+    await tx.invoice.update({
+      where: { id: invoiceId },
+      data: {
+        status: "REJECTED",
+        rejectionReason: reason,
+        rejectionCategory: "DUPLICATE",
+        reviewedBy: session.user.id,
+      },
     });
-  }
-
-  await appendAuditLogs([{
-    invoiceId,
-    userId: session.user.id,
-    field: "status",
-    oldValue: invoice.status,
-    newValue: "REJECTED",
-  }]);
+    await closeOpenIssues(tx, invoiceId, session.user.id);
+    await tx.invoiceStatusHistory.create({
+      data: {
+        invoiceId,
+        fromStatus: invoice.status,
+        toStatus: "REJECTED",
+        changedBy: session.user.id,
+        reason,
+      },
+    });
+    await appendAuditLogs([{
+      invoiceId,
+      userId: session.user.id,
+      field: "status",
+      oldValue: invoice.status,
+      newValue: "REJECTED",
+    }], tx);
+  });
 
   // Notificacion al cliente en background
   after(async () => {

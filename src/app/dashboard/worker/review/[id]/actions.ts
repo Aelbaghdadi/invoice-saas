@@ -37,6 +37,7 @@ import { validationProblems } from "@/lib/invoiceRules";
 import { percentOf } from "@/lib/money";
 import { anyNegativeAmount, applyRectificativeSign, NEGATIVE_AMOUNTS_HINT } from "@/lib/rectificative";
 import { describeExisting, DUPLICATE_SELECT, findByInvoiceNumber } from "@/lib/duplicates";
+import { closeOpenIssues } from "@/lib/invoiceIssues";
 import { foldSurchargeLines, completeReadSurcharges, surchargeAuditValue } from "@/lib/equivalenceSurcharge";
 import { exportFingerprint, type FingerprintInvoice } from "@/lib/exportFingerprint";
 import { appError, type AppError } from "@/lib/errorCodes";
@@ -695,6 +696,8 @@ async function parseAndSave(
       // escribieran despues y fallaran, quedaria la factura reabierta (motivo
       // borrado) o validada sin rastro en la auditoria, que es inmutable.
       if (toValidated) {
+        // F-057: validada, sus incidencias dejan de aplicar.
+        await closeOpenIssues(tx, invoiceId, userId);
         await tx.invoiceStatusHistory.create({
           data: {
             invoiceId,
@@ -1139,35 +1142,39 @@ export async function rejectInvoice(
 
   // Condicionado al updatedAt leido: si una exportacion la reservo mientras
   // tanto, no se rechaza una factura que ya esta camino de A3 (F-049).
-  const rejected = await prisma.invoice.updateMany({
-    where: { id, updatedAt: invoice.updatedAt, status: { in: reviewAllowedFrom("reject") } },
-    data: {
-      status: "REJECTED",
-      rejectionReason: reason,
-      ...(category ? { rejectionCategory: category as "ILLEGIBLE" | "INCOMPLETE" | "WRONG_PERIOD" | "DUPLICATE" | "OTHER" } : {}),
-    },
+  // Estado, incidencias (F-057), historial y auditoria en una transaccion.
+  const rejectedOk = await prisma.$transaction(async (tx) => {
+    const rejected = await tx.invoice.updateMany({
+      where: { id, updatedAt: invoice.updatedAt, status: { in: reviewAllowedFrom("reject") } },
+      data: {
+        status: "REJECTED",
+        rejectionReason: reason,
+        ...(category ? { rejectionCategory: category as "ILLEGIBLE" | "INCOMPLETE" | "WRONG_PERIOD" | "DUPLICATE" | "OTHER" } : {}),
+      },
+    });
+    if (rejected.count === 0) return false;
+    await closeOpenIssues(tx, id, session.user.id);
+    await tx.invoiceStatusHistory.create({
+      data: {
+        invoiceId: id,
+        fromStatus: invoice.status,
+        toStatus: "REJECTED",
+        changedBy: session.user.id,
+        reason,
+      },
+    });
+    await appendAuditLogs([{
+      invoiceId: id,
+      userId: session.user.id,
+      field: "status",
+      oldValue: invoice.status,
+      newValue: "REJECTED",
+    }], tx);
+    return true;
   });
-  if (rejected.count === 0) {
+  if (!rejectedOk) {
     return conditionalWriteError(id, "reject", {}, `updatedAt=${invoice.updatedAt.getTime()} al rechazar`);
   }
-
-  await prisma.invoiceStatusHistory.create({
-    data: {
-      invoiceId: id,
-      fromStatus: invoice.status,
-      toStatus: "REJECTED",
-      changedBy: session.user.id,
-      reason,
-    },
-  });
-
-  await appendAuditLogs([{
-    invoiceId: id,
-    userId: session.user.id,
-    field: "status",
-    oldValue: invoice.status,
-    newValue: "REJECTED",
-  }]);
 
   // Notify client about rejection
   after(async () => {
