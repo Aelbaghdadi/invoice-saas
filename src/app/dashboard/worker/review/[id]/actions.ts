@@ -55,17 +55,21 @@ import { EXPORT_TRANSACTION_OPTIONS } from "@/lib/exportBatch";
 import { closedPeriodError, conditionalWriteError, invoicePeriod } from "@/lib/reviewGuards";
 import { notifyRejection, rejectInvoiceCore } from "@/lib/invoiceRejection";
 
+/** Un posible duplicado al validar: otra factura ya validada con el mismo
+ *  numero y emisor («validated»), o una incidencia de posible duplicado
+ *  abierta («openIssue»; id null si la incidencia no guarda la original). */
+export type DuplicateWarning = { kind: "validated" | "openIssue"; id: string | null; label: string };
+
 /** Resultado de las server actions de revision. El `error` puede ser:
  *  - AppError: cuando es un fallo "conocido" del dominio (tiene codigo)
  *  - string: legacy / errores sin clasificar aun
  *  - undefined / null: exito */
 export type ReviewState = {
   error?: AppError | string;
-  /** Al validar: ya hay otra factura validada con el mismo numero y emisor
-   *  («validated»), o la factura tiene abierta una incidencia de posible
-   *  duplicado («openIssue»; id null si la incidencia no guarda la original).
-   *  La pantalla pide confirmacion y vuelve a validar con confirmDuplicate. */
-  duplicateOf?: { kind: "validated" | "openIssue"; id: string | null; label: string };
+  /** Al validar: los posibles duplicados que el gestor tiene que confirmar,
+   *  todos juntos. La pantalla pide confirmacion y vuelve a validar con
+   *  confirmDuplicate. */
+  duplicateOf?: DuplicateWarning[];
 } | null;
 
 /** WORKER: el cliente tiene que estar asignado. ADMIN: tiene que ser de su
@@ -509,37 +513,40 @@ async function parseAndSave(
 
   // Duplicado al validar (F-010): otra factura del cliente ya validada o
   // exportada con el mismo numero (normalizado) y, en compras, el mismo CIF de
-  // emisor. No se valida sin la confirmacion del gestor.
-  // Tambien con una incidencia de posible duplicado abierta (F-016): validar
-  // la cierra, asi que el gestor tiene que decidir antes.
+  // emisor. Tambien una incidencia de posible duplicado abierta (F-016):
+  // validar la cierra, asi que el gestor tiene que decidir antes.
+  // Se miran los dos y van juntos en una sola confirmacion: antes, confirmar
+  // el aviso abierto se saltaba tambien el control contra una validada que el
+  // mensaje no habia nombrado.
   if (validate && !alreadyValidated && data.confirmDuplicate !== "1") {
+    const duplicates: DuplicateWarning[] = [];
     const openDuplicate = await prisma.invoiceIssue.findFirst({
       where: { invoiceId, type: "POSSIBLE_DUPLICATE", status: "OPEN" },
       select: { description: true, field: true },
     });
     if (openDuplicate) {
-      return {
-        error: `Esta factura tiene abierto un posible duplicado: ${openDuplicate.description} Si no es la misma, confírmalo para validarla.`,
-        duplicateOf: { kind: "openIssue" as const, id: duplicateOriginalId(openDuplicate.field), label: openDuplicate.description },
-      };
+      duplicates.push({ kind: "openIssue", id: duplicateOriginalId(openDuplicate.field), label: openDuplicate.description });
     }
-  }
-  if (validate && !alreadyValidated && data.confirmDuplicate !== "1" && newData.invoiceNumber) {
-    const dup = await findByInvoiceNumber({
-      clientId: invoice.clientId,
-      type: newData.type,
-      excludeId: invoiceId,
-      invoiceNumber: newData.invoiceNumber,
-      issuerCif: newData.issuerCif,
-      invoiceDate: newData.invoiceDate,
-      onlyValidated: true,
-    });
-    if (dup) {
-      const label = describeExisting(dup);
-      return {
-        error: `Ya hay otra factura validada con este número y este emisor: ${label}. Si no es la misma, confírmalo para validarla.`,
-        duplicateOf: { kind: "validated" as const, id: dup.id, label },
-      };
+    const validatedDup = newData.invoiceNumber
+      ? await findByInvoiceNumber({
+        clientId: invoice.clientId,
+        type: newData.type,
+        excludeId: invoiceId,
+        invoiceNumber: newData.invoiceNumber,
+        issuerCif: newData.issuerCif,
+        invoiceDate: newData.invoiceDate,
+        onlyValidated: true,
+      })
+      : null;
+    // La misma factura que ya nombra el aviso abierto no se repite.
+    if (validatedDup && !duplicates.some((d) => d.id === validatedDup.id)) {
+      duplicates.push({ kind: "validated", id: validatedDup.id, label: describeExisting(validatedDup) });
+    }
+    if (duplicates.length > 0) {
+      const texts = duplicates.map((d) => d.kind === "validated"
+        ? `Ya hay otra factura validada con este número y este emisor: ${d.label}.`
+        : `Esta factura tiene abierto un posible duplicado: ${d.label}`);
+      return { error: `${texts.join(" ")} Si no es la misma, confírmalo para validarla.`, duplicateOf: duplicates };
     }
   }
 

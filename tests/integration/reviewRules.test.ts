@@ -1018,7 +1018,7 @@ describe("al validar, confirmación si ya hay otra validada con el mismo número
   it("sin confirmar no se valida, y dice cuál es", async () => {
     const original = await otra("VALIDATED");
     const r = await validateInvoice(null, await form({ invoiceNumber: "f 2026/001" }));
-    expect(r?.duplicateOf?.id).toBe(original.id);
+    expect(r?.duplicateOf?.map((d) => d.id)).toEqual([original.id]);
     expect(r?.error).toMatch(/^Ya hay otra factura validada con este número y este emisor: la factura F-2026-001/);
     expect((await row()).status).toBe("PENDING_REVIEW");
   });
@@ -1116,10 +1116,18 @@ describe("revisión con un posible duplicado abierto (F-016)", () => {
 
   it("validar sin confirmar no valida y devuelve la incidencia con la original", async () => {
     const r = await validateInvoice(null, await form({}));
-    expect(r?.duplicateOf).toEqual({ kind: "openIssue", id: originalId, label: "Posible duplicado de la factura OTRA-1." });
+    expect(r?.duplicateOf).toEqual([{ kind: "openIssue", id: originalId, label: "Posible duplicado de la factura OTRA-1." }]);
     expect(r?.error).toBe("Esta factura tiene abierto un posible duplicado: Posible duplicado de la factura OTRA-1. Si no es la misma, confírmalo para validarla.");
     expect((await row()).status).toBe("NEEDS_ATTENTION");
     expect(await issueStatus()).toBe("OPEN");
+  });
+
+  it("con el aviso abierto y otra validada con el mismo número: los dos en la misma confirmación", async () => {
+    const validada = await makeInvoice(w.client, { status: "VALIDATED", issuerCif: "B12345674", invoiceNumber: "F-77" });
+    const r = await validateInvoice(null, await form({ invoiceNumber: "F-77" }));
+    expect(r?.duplicateOf?.map((d) => [d.kind, d.id])).toEqual([["openIssue", originalId], ["validated", validada.id]]);
+    expect(r?.error).toMatch(/^Esta factura tiene abierto un posible duplicado: .* Ya hay otra factura validada con este número y este emisor: la factura F-77/);
+    expect((await row()).status).toBe("NEEDS_ATTENTION");
   });
 
   it("validar confirmado valida y cierra la incidencia", async () => {

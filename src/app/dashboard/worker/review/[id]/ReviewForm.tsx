@@ -1001,33 +1001,43 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
         ...(reopen ? { reopen: "1" } : {}),
       };
       let res = await validateInvoice(null, buildFormData(fields));
-      // Ya hay otra validada con este numero y emisor (F-010): el servidor no
-      // valida sin que el gestor lo confirme.
-      // Tambien con un posible duplicado abierto (F-016).
-      if (res?.duplicateOf) {
-        const dup = res.duplicateOf;
+      // Posibles duplicados (F-010, F-016): otra ya validada con este numero
+      // y emisor, o un aviso de duplicado abierto. El servidor no valida sin
+      // que el gestor los confirme, todos en una sola confirmacion.
+      if (res?.duplicateOf?.length) {
+        const duplicates = res.duplicateOf;
         const ok = await confirm({
           title: "¿Validar igualmente?",
-          message: dup.kind === "validated" ? (
+          message: (
             <>
-              Ya hay otra factura con este número y este emisor:{" "}
-              <Link href={`/dashboard/worker/review/${dup.id}`} target="_blank" className="font-medium underline">
-                {dup.label}
-              </Link>
-              . ¿Validar igualmente?
-            </>
-          ) : (
-            <>
-              {dup.label}{" "}
-              {dup.id && (
-                <>
-                  <Link href={`/dashboard/worker/review/${dup.id}`} target="_blank" className="font-medium underline">
-                    Ver la original
-                  </Link>
-                  .{" "}
-                </>
-              )}
-              Al validarla, el aviso se cierra. ¿Validar igualmente?
+              <ul className="space-y-2">
+                {duplicates.map((dup, i) => (
+                  <li key={i}>
+                    {dup.kind === "validated" ? (
+                      <>
+                        Ya hay otra factura con este número y este emisor:{" "}
+                        <Link href={`/dashboard/worker/review/${dup.id}`} target="_blank" className="font-medium underline">
+                          {dup.label}
+                        </Link>
+                        .
+                      </>
+                    ) : (
+                      <>
+                        {dup.label}{" "}
+                        {dup.id && (
+                          <Link href={`/dashboard/worker/review/${dup.id}`} target="_blank" className="font-medium underline">
+                            Ver la original
+                          </Link>
+                        )}
+                      </>
+                    )}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2">
+                {duplicates.some((d) => d.kind === "openIssue") && "Al validarla, el aviso se cierra. "}
+                ¿Validar igualmente?
+              </p>
             </>
           ),
           confirmLabel: "Validar igualmente",
