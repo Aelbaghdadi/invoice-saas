@@ -466,6 +466,26 @@ describe("«Por clasificar»: al clasificar se miran también el cuadre y el des
     expect(after.vatLines.map((l) => [Number(l.equivalenceSurchargeRate), Number(l.equivalenceSurchargeAmount)])).toEqual([[5.2, 5.2]]);
   });
 
+  it("auto:* al clasificar: recargo propuesto y parte del cliente sustituida (PR #11, punto 9)", async () => {
+    await prisma.client.update({ where: { id: w.client.id }, data: { equivalenceSurchargeCustomer: true } });
+    const inv = await routed([[100, 21, 21]], 126.2);
+    await prisma.invoice.update({ where: { id: inv }, data: { receiverName: "Otra Empresa SL", receiverCif: "B87654321" } });
+    await classifyInvoice(inv, w.client.id);
+    const auto = (await prisma.auditLog.findMany({ where: { invoiceId: inv, field: { startsWith: "auto:" } }, orderBy: { field: "asc" } }))
+      .map((e) => [e.field, e.oldValue, e.newValue, e.userId]);
+    expect(auto).toEqual([
+      ["auto:parteCliente", "Otra Empresa SL (B87654321)", `${w.client.name} (${w.client.cif})`, w.worker.id],
+      ["auto:recargo", null, "21%: 5.2% 5.2", w.worker.id],
+    ]);
+  });
+
+  it("al clasificar con el CIF del cliente leído: sin auto:parteCliente", async () => {
+    const inv = await routed([[100, 21, 21]], 121);
+    await prisma.invoice.update({ where: { id: inv }, data: { receiverName: w.client.name.toUpperCase(), receiverCif: w.client.cif } });
+    await classifyInvoice(inv, w.client.id);
+    expect(await prisma.auditLog.count({ where: { invoiceId: inv, field: { startsWith: "auto:" } } })).toBe(0);
+  });
+
   it("dos clasificaciones a la vez: solo una escribe incidencias, historial y auditoría", async () => {
     const inv = await routed([[100, 21, 21]], 121.01);
     const results = await Promise.all([classifyInvoice(inv, w.client.id), classifyInvoice(inv, w.client.id)]);
