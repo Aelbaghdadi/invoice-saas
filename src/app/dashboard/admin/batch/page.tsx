@@ -12,6 +12,7 @@ import type { InvoiceType, PeriodType } from "@prisma/client";
 import { completionPercent, isBatchRejectable } from "@/lib/invoiceStatuses";
 import { periodLabel } from "@/lib/period";
 import { exportPageHref } from "@/lib/exportPage";
+import { awaitsExport } from "@/lib/exportExclusions";
 import { QUEUE_ORDER } from "@/lib/reviewQueue";
 import { reviewHref } from "@/lib/reviewNavigation";
 import { AutoRefresh } from "@/components/ui/AutoRefresh";
@@ -49,8 +50,8 @@ type BatchGroup = {
   /** Lo que tocaria "Rechazar lote" (mismo criterio que la accion). */
   rejectable: number;
   rejectableValidated: number;
-  /** Validadas que aun no estan en ningun Excel (tambien las corregidas
-   *  despues de exportarse): lo que se llevaria «Exportar». */
+  /** Lo que se llevaria «Exportar» (awaitsExport): sin las que el Excel deja
+   *  fuera para siempre (total 0, originales divididas). */
   pendingExport: number;
   /** Primera pendiente del lote en el orden de la cola (QUEUE_ORDER). */
   firstPendingId: string | null;
@@ -118,6 +119,19 @@ export default async function BatchPage({
     orderBy: [{ periodYear: "desc" }, { periodMonth: "desc" }, ...QUEUE_ORDER],
   });
 
+  // Originales divididas entre las candidatas a exportar: no van al Excel.
+  // Consulta acotada a esas ids, como en el export.
+  const exportCandidateIds = invoices.filter((inv) => inv.status === "VALIDATED" && inv.exportBatchId == null).map((inv) => inv.id);
+  const splitParents = new Set(
+    exportCandidateIds.length > 0
+      ? (await prisma.invoice.findMany({
+          where: { splitFromId: { in: exportCandidateIds } },
+          select: { splitFromId: true },
+          distinct: ["splitFromId"],
+        })).map((c) => c.splitFromId)
+      : [],
+  );
+
   // Group by client + period
   const groupMap = new Map<string, BatchGroup>();
 
@@ -153,7 +167,7 @@ export default async function BatchPage({
       groupMap.set(key, g);
     }
     g.total++;
-    if (inv.status === "VALIDATED" && inv.exportBatchId == null) g.pendingExport++;
+    if (awaitsExport(inv, splitParents.has(inv.id))) g.pendingExport++;
     const hasOpenIssue = inv.issues.length > 0;
 
     // Exportar no cambia el estado. Sin mirar el historial las exportadas
@@ -231,7 +245,8 @@ export default async function BatchPage({
     if (estado === "todos") return true;
     if (estado === "cerrados") return closed;
     if (estado === "por_cerrar") return !closed && allDone;
-    return !closed && !allDone; // pendientes
+    // Pendientes: por revisar, o terminado pero sin llevar a A3 (F-041).
+    return (!closed && !allDone) || (allDone && g.pendingExport > 0);
   });
   const hiddenCount = groups.length - visibleGroups.length;
   const hiddenPlural = hiddenCount !== 1 ? "s" : "";
@@ -352,6 +367,9 @@ export default async function BatchPage({
                       <Badge variant={g.type === "PURCHASE" ? "blue" : "purple"}>
                         {g.type === "PURCHASE" ? "Recibidas" : "Emitidas"}
                       </Badge>
+                      {allDone && g.pendingExport > 0 && (
+                        <Badge variant="blue">Listo para exportar</Badge>
+                      )}
                       {closed ? (
                         <Badge variant="slate">Periodo cerrado</Badge>
                       ) : allDone ? (
