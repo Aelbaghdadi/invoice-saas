@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { Prisma } from "@prisma/client";
-import { auditValue, irpfAuditValue, partyAuditValue } from "@/lib/auditValue";
+import { auditValue, clientPartyAudit, irpfAuditValue, partyAuditValue } from "@/lib/auditValue";
 
 describe("auditValue (F-024)", () => {
   it("sin valor: null", () => {
@@ -39,5 +39,29 @@ describe("resúmenes para las entradas auto:*", () => {
   it("parte de la factura", () => {
     expect(partyAuditValue("Cliente SL", "B12345674")).toBe("Cliente SL (B12345674)");
     expect(partyAuditValue(null, null)).toBeNull();
+  });
+});
+
+describe("clientPartyAudit (auto:parteCliente)", () => {
+  const client = { name: "Cliente A SL", cif: "B12345674" };
+
+  it("con el CIF del cliente es la misma parte, aunque el nombre venga distinto", () => {
+    expect(clientPartyAudit({ name: "CLIENTE A, S.L.", cif: "B12345674" }, client)).toBeNull();
+  });
+
+  it("sin CIF leído: solo si el nombre es otro", () => {
+    expect(clientPartyAudit({ name: "CLIENTE A, S.L.", cif: null }, client)).toBeNull();
+    expect(clientPartyAudit({ name: "Otra Empresa SL", cif: null }, client)).toEqual({
+      oldValue: "Otra Empresa SL (—)", newValue: "Cliente A SL (B12345674)",
+    });
+  });
+
+  it("otro CIF: sí", () => {
+    expect(clientPartyAudit({ name: "Cliente A SL", cif: "B87654321" }, client)?.oldValue).toBe("Cliente A SL (B87654321)");
+  });
+
+  it("sin leer nada, o un nombre vacío: no", () => {
+    expect(clientPartyAudit({ name: null, cif: null }, client)).toBeNull();
+    expect(clientPartyAudit({ name: "", cif: "" }, client)).toBeNull();
   });
 });

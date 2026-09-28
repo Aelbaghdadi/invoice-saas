@@ -12,7 +12,7 @@ import {
 } from "@/lib/ocrLlm";
 import { detectIssues } from "@/lib/issueDetector";
 import { appendAuditLogs } from "@/lib/auditLog";
-import { irpfAuditValue, partyAuditValue } from "@/lib/auditValue";
+import { clientPartyAudit, irpfAuditValue } from "@/lib/auditValue";
 import { ocrFenceWhere } from "@/lib/invoiceStatuses";
 import { isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { percentOf, roundCents } from "@/lib/money";
@@ -23,7 +23,6 @@ const OCR_WRITE_TRANSACTION_OPTIONS = { timeout: 15_000, maxWait: 5_000 } as con
 import {
   parseTaxId,
   isPersonaFisica,
-  normalizeBusinessName,
   textMentionsRetention,
   RETENTION_DEFAULT_RATE,
   type RetentionTypeName,
@@ -383,18 +382,13 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     if (clientRecord) {
       // Si el OCR leyo en el lado del cliente otra cosa, se sustituye y queda
       // en la auditoria. Si no leyo nada, rellenarlo no es un cambio.
-      const readSide = invoice.type === "PURCHASE"
-        ? { name: extracted.receiverName, cif: receiverParsed.clean || null }
-        : { name: extracted.issuerName, cif: issuerParsed.clean || null };
-      const nameDiffers = readSide.name != null && normalizeBusinessName(readSide.name) !== normalizeBusinessName(clientRecord.name);
-      const cifDiffers = readSide.cif != null && readSide.cif !== clientRecord.cif;
-      if (nameDiffers || cifDiffers) {
-        autoAudit.push({
-          field: "auto:parteCliente",
-          oldValue: partyAuditValue(readSide.name, readSide.cif),
-          newValue: partyAuditValue(clientRecord.name, clientRecord.cif),
-        });
-      }
+      const substituted = clientPartyAudit(
+        invoice.type === "PURCHASE"
+          ? { name: extracted.receiverName, cif: receiverParsed.clean }
+          : { name: extracted.issuerName, cif: issuerParsed.clean },
+        clientRecord,
+      );
+      if (substituted) autoAudit.push({ field: "auto:parteCliente", ...substituted });
       if (invoice.type === "PURCHASE") {
         finalReceiverName    = clientRecord.name;
         finalReceiverCif     = clientRecord.cif;

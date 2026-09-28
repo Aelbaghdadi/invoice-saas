@@ -128,6 +128,10 @@ describe("entradas auto:* cuando el sistema cambia algo al leer (F-024)", () => 
     ]);
   });
 
+  it("con el CIF del cliente y el nombre escrito de otra forma: ninguna (PR #11, punto 4)", async () => {
+    expect(await read({ receiverName: `${w.client.name.toUpperCase()}, S.L.`, receiverCif: w.client.cif })).toEqual([]);
+  });
+
   it("auto:recargo: recargo propuesto a un cliente en recargo de equivalencia", async () => {
     await prisma.client.update({ where: { id: w.client.id }, data: { equivalenceSurchargeCustomer: true } });
     expect(await read({ taxBase: 100, vatAmount: 21, totalAmount: 126.2, vatLines: [{ taxBase: 100, vatRate: 21, vatAmount: 21 }] })).toEqual([
