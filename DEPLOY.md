@@ -186,12 +186,14 @@ pantalla de error: con él se encuentra la línea en el log.
 > (acceso restringido, retención limitada).
 
 - **`ALERT_WEBHOOK_URL`** (opcional): si está, cada error se manda también por
-  POST a esa URL, como mucho 10 cada 5 minutos por proceso (los que se callan
-  se cuentan en el siguiente aviso). El JSON lleva `text` (Slack, Mattermost),
-  `content` (Discord) y los campos de arriba.
-- **Servicio de errores (GlitchTip, Sentry…):** por decidir. No hay SDK
-  instalado; cuando se elija, se engancha en `onRequestError` o se apunta su
-  webhook de entrada a `ALERT_WEBHOOK_URL`.
+  POST a esa URL (webhook entrante de Slack, Discord o Mattermost), como mucho
+  10 en cualquier ventana de 5 minutos por proceso; los que se callan se
+  cuentan en el siguiente aviso. El JSON lleva `text` (Slack, Mattermost),
+  `content` (Discord), `allowed_mentions` vacío y los campos de arriba. El
+  aviso sale sin esperar respuesta, así que no retrasa la página de error.
+- **Servicio de errores (GlitchTip, Sentry…):** por decidir. No aceptan este
+  JSON: se enganchan con su propio protocolo (su SDK o su endpoint de
+  ingesta) dentro de `onRequestError`, no con `ALERT_WEBHOOK_URL`.
 
 ### Alertas que conviene tener
 

@@ -62,25 +62,22 @@ export function buildErrorReport(error: unknown, request: ErrorRequest, context:
 }
 
 /**
- * Como mucho `max` avisos por ventana de `windowMs`. Los que no pasan se
- * cuentan y se dicen en el siguiente que pase.
+ * Como mucho `max` avisos en cualquier ventana de `windowMs` (deslizante: con
+ * una ventana fija podian salir casi el doble en el cambio de ventana). Los
+ * que no pasan se cuentan y se dicen en el siguiente que pase.
  */
 export function createAlertLimiter(max: number, windowMs: number) {
-  let windowStart = 0;
-  let sent = 0;
+  const sentAt: number[] = [];
   let suppressed = 0;
   return {
     /** null si no toca avisar; si toca, cuantos se callaron antes. */
     take(now: number): { suppressedBefore: number } | null {
-      if (now - windowStart >= windowMs) {
-        windowStart = now;
-        sent = 0;
-      }
-      if (sent >= max) {
+      while (sentAt.length > 0 && now - sentAt[0] >= windowMs) sentAt.shift();
+      if (sentAt.length >= max) {
         suppressed++;
         return null;
       }
-      sent++;
+      sentAt.push(now);
       const suppressedBefore = suppressed;
       suppressed = 0;
       return { suppressedBefore };
@@ -99,27 +96,50 @@ type Deps = {
   now?: Date;
 };
 
-export async function reportRequestError(error: unknown, request: ErrorRequest, context: ErrorContext, deps: Deps = {}): Promise<void> {
+/** Para Slack: «&», «<» y «>» escapados, asi «<!channel>» o un enlace
+ *  inventado en la URL no se interpretan. */
+function escapeForChat(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/**
+ * Escribe la linea JSON (esperando) y lanza el aviso SIN esperarlo: el
+ * servidor es un Node persistente y el POST puede terminar despues, asi que
+ * el 500 del usuario no espera al webhook. `delivery` es la promesa del
+ * aviso, para los tests.
+ */
+export async function reportRequestError(
+  error: unknown,
+  request: ErrorRequest,
+  context: ErrorContext,
+  deps: Deps = {},
+): Promise<{ delivery: Promise<void> }> {
   const report = buildErrorReport(error, request, context, deps.now);
   (deps.log ?? console.error)(JSON.stringify(report));
 
   const webhookUrl = deps.webhookUrl ?? process.env.ALERT_WEBHOOK_URL;
-  if (!webhookUrl) return;
+  if (!webhookUrl) return { delivery: Promise.resolve() };
   const allowed = (deps.limiter ?? limiter).take((deps.now ?? new Date()).getTime());
-  if (!allowed) return;
+  if (!allowed) return { delivery: Promise.resolve() };
   const extra = allowed.suppressedBefore > 0 ? ` (+${allowed.suppressedBefore} errores sin avisar por el límite)` : "";
-  const text = `Error en FacturOCR: ${report.method} ${report.path} — ${report.name}: ${report.message}${report.digest ? ` [${report.digest}]` : ""}${extra}`;
-  try {
-    // `text` para Slack/Mattermost, `content` para Discord; el resto, para
-    // quien lo quiera procesar.
-    await (deps.fetchFn ?? fetch)(webhookUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, content: text, ...report, suppressedBefore: allowed.suppressedBefore }),
-      signal: AbortSignal.timeout(3_000),
-    });
-  } catch (err) {
-    // Si el webhook falla, no se reintenta ni se lanza: el error ya esta en el log.
-    console.warn(`[alert] no se pudo avisar por webhook: ${err instanceof Error ? err.name : "Error"}`);
-  }
+  const text = escapeForChat(`Error en FacturOCR: ${report.method} ${report.path} — ${report.name}: ${report.message}${report.digest ? ` [${report.digest}]` : ""}${extra}`);
+  const delivery = (async () => {
+    try {
+      // `text` para Slack/Mattermost, `content` para Discord (sin menciones:
+      // allowed_mentions vacio); el resto, para quien lo quiera procesar.
+      const res = await (deps.fetchFn ?? fetch)(webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, content: text, allowed_mentions: { parse: [] }, ...report, suppressedBefore: allowed.suppressedBefore }),
+        signal: AbortSignal.timeout(3_000),
+      });
+      // El cuerpo no interesa, pero se libera la conexion.
+      await res.body?.cancel().catch(() => {});
+      if (!res.ok) console.warn(`[alert] el webhook respondio ${res.status}`);
+    } catch (err) {
+      // Si el webhook falla, no se reintenta ni se lanza: el error ya esta en el log.
+      console.warn(`[alert] no se pudo avisar por webhook: ${err instanceof Error ? err.name : "Error"}`);
+    }
+  })();
+  return { delivery };
 }

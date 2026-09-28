@@ -7,5 +7,6 @@ import type { Instrumentation } from "next";
  */
 export const onRequestError: Instrumentation.onRequestError = async (error, request, context) => {
   const { reportRequestError } = await import("@/lib/errorReporting");
+  // Solo se espera a la linea del log; el aviso por webhook sigue solo.
   await reportRequestError(error, request, context);
 };

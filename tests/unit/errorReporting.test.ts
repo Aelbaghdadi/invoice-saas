@@ -61,9 +61,49 @@ describe("createAlertLimiter", () => {
     expect(l.take(30)).toBeNull();
     expect(l.take(1000)).toEqual({ suppressedBefore: 2 });
   });
+
+  it("ventana deslizante: en ningún tramo de windowMs salen más de N (antes, 2N en el cambio de ventana)", () => {
+    const l = createAlertLimiter(10, 300_000);
+    let sent = 0;
+    for (let t = 299_000; t < 301_000; t += 100) if (l.take(t)) sent++;
+    expect(sent).toBe(10);
+  });
 });
 
 describe("reportRequestError", () => {
+  it("webhook que responde 410: aviso en el log, sin lanzar", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fetchFn = vi.fn(async () => new Response("gone", { status: 410 }));
+    const { delivery } = await reportRequestError(new Error("x"), req, ctx, {
+      log: () => {}, fetchFn: fetchFn as unknown as typeof fetch, webhookUrl: "https://alertas.example/hook", limiter: createAlertLimiter(5, 1000),
+    });
+    await delivery;
+    expect(warn).toHaveBeenCalledWith("[alert] el webhook respondio 410");
+    warn.mockRestore();
+  });
+
+  it("no espera al webhook: vuelve con el POST aún en curso", async () => {
+    let finish!: () => void;
+    const fetchFn = vi.fn(() => new Promise<Response>((resolve) => { finish = () => resolve(new Response(null)); }));
+    const { delivery } = await reportRequestError(new Error("x"), req, ctx, {
+      log: () => {}, fetchFn: fetchFn as unknown as typeof fetch, webhookUrl: "https://alertas.example/hook", limiter: createAlertLimiter(5, 1000),
+    });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    finish();
+    await delivery;
+  });
+
+  it("sin menciones: <!channel> y @everyone no llegan como tales", async () => {
+    const fetchFn = vi.fn(async () => new Response(null));
+    const { delivery } = await reportRequestError(new Error("<!channel> @everyone & co"), req, ctx, {
+      log: () => {}, fetchFn: fetchFn as unknown as typeof fetch, webhookUrl: "https://alertas.example/hook", limiter: createAlertLimiter(5, 1000),
+    });
+    await delivery;
+    const body = JSON.parse((fetchFn.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
+    expect(body.text).toContain("&lt;!channel&gt; @everyone &amp; co");
+    expect(body.allowed_mentions).toEqual({ parse: [] });
+  });
+
   it("siempre una línea JSON en el log; sin ALERT_WEBHOOK_URL no llama a nada", async () => {
     const log = vi.fn();
     const fetchFn = vi.fn();
@@ -76,8 +116,8 @@ describe("reportRequestError", () => {
     const fetchFn = vi.fn(async () => new Response(null));
     const limiter = createAlertLimiter(1, 60_000);
     const deps = { log: () => {}, fetchFn: fetchFn as unknown as typeof fetch, webhookUrl: "https://alertas.example/hook", limiter, now: new Date(0) };
-    await reportRequestError(new Error("uno"), req, ctx, deps);
-    await reportRequestError(new Error("dos"), req, ctx, deps);
+    await (await reportRequestError(new Error("uno"), req, ctx, deps)).delivery;
+    await (await reportRequestError(new Error("dos"), req, ctx, deps)).delivery;
     expect(fetchFn).toHaveBeenCalledTimes(1);
     const body = JSON.parse((fetchFn.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
     expect(body.text).toBe("Error en FacturOCR: POST /dashboard/worker/review/abc — Error: uno");
@@ -85,8 +125,11 @@ describe("reportRequestError", () => {
 
   it("si el webhook falla, no lanza", async () => {
     const fetchFn = vi.fn(async () => { throw new Error("red"); });
-    await expect(reportRequestError(new Error("x"), req, ctx, {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { delivery } = await reportRequestError(new Error("x"), req, ctx, {
       log: () => {}, fetchFn: fetchFn as unknown as typeof fetch, webhookUrl: "https://alertas.example/hook", limiter: createAlertLimiter(5, 1000),
-    })).resolves.toBeUndefined();
+    });
+    await expect(delivery).resolves.toBeUndefined();
+    warn.mockRestore();
   });
 });

@@ -32,6 +32,9 @@ const STATUS_VARIANT: Record<string, "green" | "slate" | "yellow"> = {
   DISMISSED: "slate",
 };
 
+const ISSUE_TYPES = ["OCR_FAILED", "LOW_CONFIDENCE", "POSSIBLE_DUPLICATE", "MATH_MISMATCH", "MANUAL"] as const;
+const ISSUE_STATUSES = ["OPEN", "RESOLVED", "DISMISSED"] as const;
+
 export default async function WorkerIssuesPage({
   searchParams,
 }: {
@@ -42,8 +45,10 @@ export default async function WorkerIssuesPage({
     redirect("/login");
 
   const sp = await searchParams;
-  const filterType = sp.type ?? "ALL";
-  const filterStatus = sp.status ?? "OPEN";
+  // Solo valores del enum: uno inventado en la URL llegaba a Prisma y daba un
+  // 500 (y un aviso por webhook con lo que se hubiera escrito ahi).
+  const filterType = sp.type && (ISSUE_TYPES as readonly string[]).includes(sp.type) ? sp.type : "ALL";
+  const filterStatus = sp.status === "ALL" || (sp.status && (ISSUE_STATUSES as readonly string[]).includes(sp.status)) ? sp.status : "OPEN";
 
   // ADMIN ve issues de toda su firma; WORKER solo de sus clientes asignados.
   let clientIds: string[];
