@@ -1029,7 +1029,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   // Antes de salir de la factura: si hay cambios, Guardar / Descartar /
   // Cancelar. Tambien al corregir una validada, el caso grave: una
   // correccion perdida deja en A3 los valores viejos.
-  const guardLeave = async (leave: () => void) => {
+  const guardLeave = async (leave: () => void, onStay?: () => void) => {
     if (!isDirty()) return leave();
     const choice = await askUnsaved();
     if (choice === "discard") {
@@ -1037,6 +1037,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       leave();
     } else if (choice === "save" && (await (isValidated ? saveCorrectionNow() : saveNow()))) {
       leave();
+    } else {
+      onStay?.();
     }
   };
   // En una validada, «Guardar» es «Guardar corrección» (validar): pasa por
@@ -1053,14 +1055,74 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     }
     return (await validateNow("", false)) === "ok";
   };
-  // Para los Link: con cambios, se para la navegacion y se pregunta. Con
-  // Ctrl/Cmd/Shift o boton central (pestaña nueva) no se sale de esta.
-  const guardLink = (href: string) => (e: React.MouseEvent) => {
-    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-    if (!isDirty()) return;
-    e.preventDefault();
-    void guardLeave(() => router.push(href));
+  // Atras del navegador (o del raton): es navegacion del router, sin
+  // beforeunload. Con cambios se mete una entrada «centinela» en el historial
+  // (la misma URL); Atras la consume sin salir de la factura y aqui se
+  // pregunta. Si se sale, se da el paso atras que el gestor queria; si se
+  // queda, se vuelve a poner. Al salir por un enlace con el centinela puesto,
+  // se sustituye (replace) para no dejar una entrada repetida.
+  const sentinelRef = useRef(false);
+  useEffect(() => { sentinelRef.current = false; }, [invoice.id]);
+  const pushSentinel = () => {
+    if (sentinelRef.current) return;
+    window.history.pushState(window.history.state, "", window.location.href);
+    sentinelRef.current = true;
   };
+  const navigate = (href: string) => {
+    if (sentinelRef.current) {
+      sentinelRef.current = false;
+      router.replace(href);
+    } else {
+      router.push(href);
+    }
+  };
+  // Los listeners de abajo se registran una vez y leen lo ultimo por refs.
+  const latest = useRef({ isDirty, guardLeave, navigate, pushSentinel });
+  useEffect(() => { latest.current = { isDirty, guardLeave, navigate, pushSentinel }; });
+  useEffect(() => {
+    const root = rootRef.current;
+    // Al teclear: si ya hay cambios, se pone el centinela (despues del
+    // render, cuando el estado ya lleva lo tecleado).
+    const onEdit = () => setTimeout(() => { if (latest.current.isDirty()) latest.current.pushSentinel(); }, 0);
+    const onPopState = () => {
+      if (!sentinelRef.current) return;
+      sentinelRef.current = false;
+      const { isDirty: dirty, guardLeave: guard, pushSentinel: push } = latest.current;
+      if (!dirty()) {
+        window.history.back();
+        return;
+      }
+      void guard(() => window.history.back(), push);
+    };
+    // Cualquier enlace interno (barra lateral, cabecera, «Volver», «<», «>»…):
+    // con cambios, se para en captura, antes que el Link de Next, y se
+    // pregunta. Con Ctrl/Cmd/Shift/Alt, boton central o target (pestaña
+    // nueva) no se sale de esta y no se toca.
+    const onClick = (e: MouseEvent) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const a = (e.target as Element | null)?.closest?.("a[href]") as HTMLAnchorElement | null;
+      if (!a || (a.target && a.target !== "_self") || a.hasAttribute("download")) return;
+      const url = new URL(a.href, window.location.href);
+      if (url.origin !== window.location.origin) return;
+      if (url.pathname === window.location.pathname && url.search === window.location.search) return;
+      if (!latest.current.isDirty()) return;
+      e.preventDefault();
+      e.stopPropagation();
+      void latest.current.guardLeave(() => latest.current.navigate(url.pathname + url.search + url.hash));
+    };
+    root?.addEventListener("input", onEdit, true);
+    root?.addEventListener("change", onEdit, true);
+    root?.addEventListener("click", onEdit, true);
+    window.addEventListener("popstate", onPopState);
+    document.addEventListener("click", onClick, true);
+    return () => {
+      root?.removeEventListener("input", onEdit, true);
+      root?.removeEventListener("change", onEdit, true);
+      root?.removeEventListener("click", onEdit, true);
+      window.removeEventListener("popstate", onPopState);
+      document.removeEventListener("click", onClick, true);
+    };
+  }, []);
   // Cerrar la pestaña o recargar: el aviso del navegador.
   useEffect(() => {
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -1426,8 +1488,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       setRejectReason((prev) => prev || "Factura duplicada");
       setShowRejectModal(true);
     },
-    onNext: () => { if (nextId) void guardLeave(() => router.push(`/dashboard/worker/review/${nextId}${queueSuffix}`)); },
-    onPrev: () => { if (prevId) void guardLeave(() => router.push(`/dashboard/worker/review/${prevId}${queueSuffix}`)); },
+    onNext: () => { if (nextId) void guardLeave(() => navigate(`/dashboard/worker/review/${nextId}${queueSuffix}`)); },
+    onPrev: () => { if (prevId) void guardLeave(() => navigate(`/dashboard/worker/review/${prevId}${queueSuffix}`)); },
     onToggleHelp: () => setShowHelp((s) => !s),
     // Con «¿Reabrir y validar?» abierto, Ctrl+S guardaba por detras y
     // Alt+flechas cambiaba de factura.
@@ -1465,7 +1527,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       {/* Header bar */}
       <div className="flex flex-shrink-0 items-center justify-between border-b border-slate-200 bg-white px-5 py-3">
         <div className="flex items-center gap-3">
-          <Link href={backHref} onClick={guardLink(backHref)} className="flex items-center gap-1.5 text-[12px] text-slate-500 hover:text-slate-700">
+          <Link href={backHref} className="flex items-center gap-1.5 text-[12px] text-slate-500 hover:text-slate-700">
             <ChevronLeft className="h-4 w-4" />
             Volver
           </Link>
@@ -1495,7 +1557,6 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
           {!canDefer && nextPendingId && (
             <Link
               href={`/dashboard/worker/review/${nextPendingId}${queueSuffix}`}
-              onClick={guardLink(`/dashboard/worker/review/${nextPendingId}${queueSuffix}`)}
               className="flex h-7 items-center gap-1 rounded-lg bg-blue-50 px-2.5 text-[12px] font-medium text-blue-700 hover:bg-blue-100"
             >
               Siguiente pendiente
@@ -1505,7 +1566,6 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
           <span className="text-[12px] text-slate-400 tabular-nums">{position} de {batchTotal}</span>
           {prevId ? (
             <Link href={`/dashboard/worker/review/${prevId}${queueSuffix}`} prefetch
-              onClick={guardLink(`/dashboard/worker/review/${prevId}${queueSuffix}`)}
               title="Factura anterior del lote (Alt+←)" aria-label="Factura anterior del lote"
               className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50">
               <ChevronLeft className="h-4 w-4" />
@@ -1518,7 +1578,6 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
           )}
           {nextId ? (
             <Link href={`/dashboard/worker/review/${nextId}${queueSuffix}`} prefetch
-              onClick={guardLink(`/dashboard/worker/review/${nextId}${queueSuffix}`)}
               title="Factura siguiente del lote (Alt+→)" aria-label="Factura siguiente del lote"
               className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50">
               <ChevronRight className="h-4 w-4" />
