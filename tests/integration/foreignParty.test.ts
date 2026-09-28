@@ -22,7 +22,7 @@ beforeEach(async () => {
 });
 
 /** Procesa una factura con lo que lea el OCR; devuelve estado e incidencias. */
-async function read(type: "PURCHASE" | "SALE", extracted: Partial<ExtractedInvoice>, routing = false) {
+async function read(type: "PURCHASE" | "SALE", extracted: Partial<ExtractedInvoice>, routing = false, typeUnconfirmed = false) {
   stubOcr(async () => ({
     rawJson: "{}",
     extracted: {
@@ -38,6 +38,7 @@ async function read(type: "PURCHASE" | "SALE", extracted: Partial<ExtractedInvoi
   const { id } = await makeInvoice(w.client, {
     filename: "f.pdf", storageKey: key, fileType: "application/pdf", status: "UPLOADED", type,
     invoiceNumber: null, issuerCif: null, totalAmount: null,
+    typeUnconfirmed,
     ...(routing ? { routingCandidateIds: [w.client.id] } : {}),
   });
   await processInvoice(id, w.worker.id);
@@ -70,6 +71,11 @@ describe("al analizar (F-019)", () => {
       "El cliente aparece como emisor en la factura: revisa si emisor y receptor están cambiados o si el tipo es correcto."]]);
   });
 
+  it("con el tipo sin confirmar: sin incidencia (el lado del cliente es una suposición)", async () => {
+    const s = await state(await read("PURCHASE", { receiverName: "Ana Pérez", receiverCif: "12345678Z" }, false, true));
+    expect(s.issues).toEqual([]);
+  });
+
   it("venta con el emisor de otro CIF: también", async () => {
     const s = await state(await read("SALE", {
       issuerName: "Socio SL", issuerCif: "B12345674", receiverName: "Comprador SA", receiverCif: "A58818501",
@@ -79,6 +85,12 @@ describe("al analizar (F-019)", () => {
 });
 
 describe("al clasificar desde «Por clasificar» (F-019)", () => {
+  it("con el tipo sin confirmar: sin incidencia", async () => {
+    const id = await read("PURCHASE", { receiverName: "Ana Pérez", receiverCif: "12345678Z" }, true, true);
+    expect(await classifyInvoice(id, w.client.id)).toEqual({ ok: true });
+    expect((await state(id)).issues).toEqual([]);
+  });
+
   it("el receptor leído era de otro: incidencia al elegir el cliente", async () => {
     const id = await read("PURCHASE", { receiverName: "Ana Pérez", receiverCif: "12345678Z" }, true);
     expect((await state(id)).status).toBe("PENDING_ROUTING");

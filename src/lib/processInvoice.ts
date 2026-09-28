@@ -579,8 +579,11 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       if (hint) issues.push({ type: "MANUAL", description: hint, field: "isRectificative" });
     }
     // A nombre de otro (F-019): en el lado del cliente se leyo un CIF valido
-    // que no es el suyo. Los datos se sustituyen igual, pero se avisa.
-    if (!isUnclassified && clientRecord) {
+    // que no es el suyo. Los datos se sustituyen igual, pero se avisa. Con el
+    // tipo sin confirmar, el lado del cliente es una suposicion: el «Por
+    // confirmar» ya obliga a revisarlo, y el aviso de la pantalla se
+    // recalcula al elegir el tipo.
+    if (!isUnclassified && clientRecord && !typeUnconfirmed) {
       const foreign = clientPartyIssue(invoice.type, extracted, clientRecord);
       if (foreign) issues.push(foreign);
     }

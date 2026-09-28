@@ -216,7 +216,8 @@ async function classify(invoiceId: string, clientId: string): Promise<ClassifySt
   const signHint = rectificativeSignHint(signAmounts, null, mentioned);
   if (signHint) mathProblems.push({ type: "MANUAL", description: signHint, field: "isRectificative" });
   // A nombre de otro (F-019), con lo que leyo el OCR en el lado del cliente.
-  const foreign = clientPartyIssue(effectiveType, invoice, client);
+  // Con el tipo sin confirmar, el lado del cliente es una suposicion.
+  const foreign = typeStillUnconfirmed ? null : clientPartyIssue(effectiveType, invoice, client);
   if (foreign) mathProblems.push(foreign);
   // isValid con el recargo ya propuesto, como `finalIsValid` en el OCR: el
   // del buzon se calculo sin recargo y la ficha lo pintaba en rojo.
