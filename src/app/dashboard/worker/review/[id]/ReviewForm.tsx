@@ -760,12 +760,15 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   const rectificativeIssues = isRectificative
     ? []
     : issues.filter((i) => i.field === "isRectificative" && i.status === "OPEN");
-  // El resto de incidencias abiertas, arriba del formulario (F-016). Las del
-  // signo no: ya salen en el panel de rectificativa, junto a la casilla.
+  // Incidencias abiertas arriba del formulario (F-016): solo las que el
+  // formulario no recalcula en vivo. El cuadre (MATH_MISMATCH), la confianza
+  // por campo (LOW_CONFIDENCE) y los avisos MANUAL (signo, intracomunitaria)
+  // ya salen junto a su campo y, tras corregir, la incidencia seguiria
+  // diciendo lo que ya no es cierto.
   // Solo mientras esta por revisar: hasta F-057 validar y rechazar no cerraban
   // incidencias, y hay facturas terminadas con incidencias OPEN.
   const openIssues = PENDING_WORK.includes(invoice.status)
-    ? issues.filter((i) => i.status === "OPEN" && i.field !== "isRectificative")
+    ? issues.filter((i) => i.status === "OPEN" && (i.type === "POSSIBLE_DUPLICATE" || i.type === "OCR_FAILED"))
     : [];
   const hasValues  = vatTotals.anyFilled && totalAmount;
   const balanceInput = {
