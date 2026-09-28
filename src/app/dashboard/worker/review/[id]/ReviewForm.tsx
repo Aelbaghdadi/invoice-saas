@@ -2187,7 +2187,12 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                 la auditoria. */}
             {partyWarning && (
               <p role="note" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
-                {partyWarning.kind === "foreign" ? (
+                {/* Con el tipo sin confirmar, el formulario arranca como
+                    recibida por defecto: «el receptor es X» en una venta seria
+                    falso. Hasta que el gestor elija el tipo, un aviso neutro. */}
+                {partyWarning.kind === "foreign" && invoice.typeUnconfirmed && type === invoice.type ? (
+                  "El cliente no aparece como emisor ni como receptor: indica el tipo y comprueba que la factura es suya."
+                ) : partyWarning.kind === "foreign" ? (
                   <>
                     En la factura, el {lockedSide === "receiver" ? "receptor" : "emisor"} es{" "}
                     <span className="font-semibold">{partyWarning.name ? `${partyWarning.name} (${partyWarning.cif})` : partyWarning.cif}</span>
