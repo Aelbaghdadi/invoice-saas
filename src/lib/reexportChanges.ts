@@ -86,7 +86,6 @@ function shownLine(line: string): string {
   return `${formatAmountEs(base)} al ${formatAmountEs(rate).replace(/,00$/, "")} % (cuota ${formatAmountEs(amount)}${recargo})`;
 }
 
-/** null si el snapshot no se puede leer: no hay con que comparar. */
 /** El snapshot de ExportBatchItem, o null si no se puede leer. */
 function parseSnapshot(snapshot: string): FingerprintInvoice | null {
   try {
@@ -109,6 +108,7 @@ export function a3Identity(snapshot: string, current: FingerprintInvoice): { inv
   return { invoiceNumber: value("invoiceNumber"), nif: value("thirdPartyNif"), name: value("thirdPartyName") };
 }
 
+/** null si el snapshot no se puede leer: no hay con que comparar. */
 export function reexportChanges(snapshot: string, current: FingerprintInvoice): ExportChange[] | null {
   const before = parseSnapshot(snapshot);
   if (!before) return null;
