@@ -955,6 +955,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
 
   // Centinela de Atras (ver mas abajo). Aqui porque buildFormData lo lee.
   const sentinelRef = useRef(false);
+  // La URL de la factura cuando se puso el centinela.
+  const sentinelUrlRef = useRef<string | null>(null);
   // Desde que se lanza una salida (validar y pasar, posponer, rechazar,
   // dividir, un enlace) hasta que llega la otra factura o la accion falla: no
   // se pone el centinela, que quedaria como una entrada muerta detras.
@@ -1186,6 +1188,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     // delante) no hay Atras que proteger, y salir haria go() a ninguna parte.
     if (sentinelRef.current || departingRef.current || historyIndex() === 0) return;
     window.history.pushState(window.history.state, "", window.location.href);
+    sentinelUrlRef.current = window.location.href;
     sentinelRef.current = true;
   };
   const navigate = (href: string) => {
@@ -1218,6 +1221,10 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     const onPopState = () => {
       if (!sentinelRef.current) return;
       sentinelRef.current = false;
+      // Se ha saltado a otra pagina (el menu del boton Atras salta varias
+      // entradas): esa salida ya no se puede parar, y reponer el centinela
+      // duplicaria la entrada de destino y borraria las de delante.
+      if (window.location.href !== sentinelUrlRef.current) return;
       const { isDirty: dirty, guardLeave: guard, pushSentinel: push } = latest.current;
       // Atras con el aviso ya abierto: se repone y el aviso sigue.
       if (leavingRef.current) {
