@@ -5,7 +5,7 @@ import { prisma } from "./helpers/db";
 import { makeFirm, makeInvoice, type FirmWorld } from "./helpers/factories";
 import { stubOcr } from "./helpers/ocr";
 import { fakeS3 } from "./helpers/fakeS3";
-import { processInvoice } from "@/lib/processInvoice";
+import { processInvoice, OCR_WAITS } from "@/lib/processInvoice";
 import { ocrQueueState, setOcrConcurrency, DEFAULT_OCR_CONCURRENCY } from "@/lib/ocrQueue";
 import { OcrHttpError } from "@/lib/ocrErrors";
 import type { ExtractedInvoice, OcrResult } from "@/lib/ocr";
@@ -121,6 +121,33 @@ describe("cola del OCR (F-029)", () => {
     expect((await prisma.invoice.findUniqueOrThrow({ where: { id: good } })).status).not.toBe("UPLOADED");
     expect(ocrQueueState()).toEqual({ active: 0, waiting: 0 });
   });
+});
+
+describe("S3 colgado (revisión 1 del PR #14, punto 1)", () => {
+  it("la descarga tiene tope: la factura acaba en OCR_ERROR y el hueco se libera", async () => {
+    const original = OCR_WAITS.storageMs;
+    OCR_WAITS.storageMs = 150;
+    setOcrConcurrency(1);
+    stubOcr(async () => reply(1));
+    try {
+      const id = await upload(1);
+      fakeS3().setMode("hold");
+      await processInvoice(id, w.worker.id);
+      const row = await prisma.invoice.findUniqueOrThrow({ where: { id } });
+      expect(row.status).toBe("OCR_ERROR");
+      // El corte cuenta como transitorio: se reintenta hasta agotar los intentos.
+      expect(fakeS3().heldGets()).toBe(4);
+      expect(ocrQueueState()).toEqual({ active: 0, waiting: 0 });
+      // Con el hueco libre, la siguiente se analiza.
+      fakeS3().setMode("ok");
+      fakeS3().releaseGets({ fail: true });
+      const next = await upload(2);
+      await processInvoice(next, w.worker.id);
+      expect((await prisma.invoice.findUniqueOrThrow({ where: { id: next } })).status).not.toBe("OCR_ERROR");
+    } finally {
+      OCR_WAITS.storageMs = original;
+    }
+  }, 30_000);
 });
 
 describe("reintentos del OCR (F-029)", () => {
