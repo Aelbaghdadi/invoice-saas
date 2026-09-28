@@ -1039,8 +1039,11 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     leavingRef.current = true;
     try {
       const choice = await askUnsaved();
+      // «Descartar» no marca nada como limpio: si la accion falla (Posponer
+      // sin red, por ejemplo), lo tecleado sigue en pantalla y sigue sin
+      // guardar. Si sale bien, se cambia de factura y la instantanea se
+      // rehace.
       if (choice === "discard") {
-        markClean();
         leave();
       } else if (choice === "save" && (await saveBeforeLeaving())) {
         leave();
