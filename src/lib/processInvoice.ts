@@ -12,7 +12,7 @@ import {
 } from "@/lib/ocrLlm";
 import { detectIssues } from "@/lib/issueDetector";
 import { appendAuditLogs } from "@/lib/auditLog";
-import { clientPartyAudit, irpfAuditValue } from "@/lib/auditValue";
+import { clientPartyAudit, irpfAuditValue, partyAuditValue } from "@/lib/auditValue";
 import { ocrFenceWhere } from "@/lib/invoiceStatuses";
 import { isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { percentOf, roundCents } from "@/lib/money";
@@ -35,7 +35,7 @@ import {
 } from "@/lib/equivalenceSurcharge";
 import { rectificativeSignHint, textMentionsRectificative, withRectificativeMention } from "@/lib/rectificative";
 import { routeByCif, clientSideCif, routeByText, detectInvoiceType } from "@/lib/invoiceRouting";
-import { lookupProviderClient } from "@/lib/providerRouting";
+import { lookupProviderClient, normalizeProviderNif } from "@/lib/providerRouting";
 import { accountEntryKey } from "@/lib/supplierMatching";
 import { proposeOperationType, unclassifiedGoodsType } from "@/lib/operationTypeProposal";
 import { classifyOcrError, DocumentError, userMessageForError } from "@/lib/ocrErrors";
@@ -233,6 +233,7 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     // pipeline opera con el cliente real (forzar parte conocida, aprendizaje,
     // dedupe). Si no casa, queda "Por clasificar" (PENDING_ROUTING) en el buzón.
     let routingReason: string | null = null;
+    let routedByRule: { field: string; oldValue: string | null; newValue: string | null } | null = null;
     const isRoutingUpload = invoice.routingCandidateIds.length > 0;
     if (isRoutingUpload) {
       const candidates = await prisma.client.findMany({
@@ -250,31 +251,40 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
         otherCif,
       );
 
-      // 1) match por CIF del cliente. 2) si no casa, regla aprendida por
-      // proveedor (otra parte): si ese proveedor ya se clasificó antes a una de
-      // las empresas candidatas, lo auto-ruteamos ahí.
+      // 1) Match por CIF del cliente. Si no hay CIF legible en su lado (no se
+      // leyo, o no pasa el digito de control), 2) el texto crudo del OCR y
+      // 3) la regla aprendida por proveedor (otra parte). Con un CIF valido
+      // que no casa (o casa con varias) no se adivina: probablemente es de
+      // otro (F-019) y va a «Por clasificar». Antes la regla del proveedor se
+      // aplicaba igual, y un proveedor de todo el grupo mandaba la factura a
+      // la empresa de la ultima clasificacion (F-021).
       let resolvedClientId: string | null = null;
       if (routing.status === "routed") {
         resolvedClientId = routing.clientId;
       } else {
         routingReason = routing.reason;
-        const firmId = candidates[0]?.advisoryFirmId;
-        if (firmId) {
-          const learned = await lookupProviderClient(firmId, otherCif);
-          if (learned && candidates.some((c) => c.id === learned)) {
-            resolvedClientId = learned;
-          }
-        }
-        // 3) Fallback por texto crudo del OCR: Document AI a veces no rellena
-        // el CIF estructurado aunque el CIF/nombre del cliente esté en el
-        // documento. Buscamos el CIF de un candidato en el texto, y si no, su
-        // nombre. Solo rutea si casa exactamente uno (intragrupo → manual).
-        if (!resolvedClientId) {
+        if (routing.reason === "no_cif" || routing.reason === "invalid_cif") {
+          // Document AI a veces no rellena el CIF estructurado aunque el CIF
+          // o el nombre del cliente esten en el documento. Solo rutea si casa
+          // exactamente uno (intragrupo → manual).
           const byText = routeByText(
             ocrResult.rawText,
             candidates.map((c) => ({ clientId: c.id, cif: c.cif, name: c.name })),
           );
           if (byText) resolvedClientId = byText.clientId;
+          const firmId = candidates[0]?.advisoryFirmId;
+          if (!resolvedClientId && firmId) {
+            const learned = await lookupProviderClient(firmId, otherCif);
+            if (learned && candidates.some((c) => c.id === learned)) {
+              resolvedClientId = learned;
+              const chosen = candidates.find((c) => c.id === learned)!;
+              routedByRule = {
+                field: "auto:ruteo",
+                oldValue: null,
+                newValue: `Proveedor ${normalizeProviderNif(otherCif)} → ${partyAuditValue(chosen.name, chosen.cif)}`,
+              };
+            }
+          }
         }
       }
 
@@ -295,6 +305,8 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
         } else {
           invoice.clientId = resolvedClientId; // reasignar al cliente real
           routingReason = null;
+          // Enrutada por la regla del proveedor: que quede el rastro.
+          if (routedByRule) autoAudit.push(routedByRule);
         }
       }
     }
