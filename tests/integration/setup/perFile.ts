@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, vi } from "vitest";
-import { requireTestDatabase } from "./guard";
+import { requireTestDatabase } from "../../shared/testDatabase";
 import { startFakeS3 } from "../helpers/fakeS3";
 
 // Antes de importar nada de la app: src/lib/prisma lee DATABASE_URL al

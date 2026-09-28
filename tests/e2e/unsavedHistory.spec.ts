@@ -1,29 +1,35 @@
 import { test, expect, type Page } from "@playwright/test";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
+import { parseTestDatabaseUrl } from "../shared/testDatabase";
+import { truncateTestDatabase } from "../shared/testDatabaseReset";
 import bcrypt from "bcryptjs";
 
 /**
  * Cambios sin guardar y el historial del navegador (F-047): el centinela que
  * protege Atras no deja entradas repetidas ni muertas.
  *
- * Siembra su propia asesoria en la BD de la app, asi que necesita
- * E2E_DATABASE_URL (la misma BD que usa el servidor; se VACIA). Sin ella se
- * salta. Contra la app compilada:
- *   E2E_DATABASE_URL=postgresql://… PLAYWRIGHT_REUSE_SERVER=1 \
- *   PLAYWRIGHT_BASE_URL=http://localhost:3999 npx playwright test unsavedHistory
+ * Siembra su propia asesoria y para eso VACIA la base de datos de
+ * E2E_DATABASE_URL. Pasa la misma guarda que la integracion: nombre de
+ * pruebas, la conexion llega a esa base de datos y lleva el marcador del
+ * harness (`_facturocr_test.marker`, lo crea el globalSetup de integracion
+ * sobre una base de datos vacia). Con E2E_DATABASE_URL, playwright.config
+ * arranca el servidor contra esa misma base de datos. Sin ella, se salta.
+ *   E2E_DATABASE_URL=postgresql://…/facturocr_test npx playwright test unsavedHistory
  */
-const DB = process.env.E2E_DATABASE_URL;
-test.skip(!DB, "Necesita E2E_DATABASE_URL");
+const E2E_DB = process.env.E2E_DATABASE_URL;
+test.skip(!E2E_DB, "Necesita E2E_DATABASE_URL");
 test.describe.configure({ mode: "serial" });
 
 const PASSWORD = "Prueba1234!";
 const IDS = ["h1", "h2", "h3", "h4", "h5", "h6"];
 
 test.beforeAll(async () => {
-  const db = new PrismaClient({ adapter: new PrismaPg({ connectionString: DB }) });
+  const parsed = parseTestDatabaseUrl(E2E_DB, "E2E_DATABASE_URL");
+  if (!parsed.ok) throw new Error(`[e2e] ${parsed.problem}`);
+  const db = new PrismaClient({ adapter: new PrismaPg({ connectionString: parsed.db.url }) });
   try {
-    await db.$executeRawUnsafe(`TRUNCATE "AccountEntry","InvoiceIssue","AuditLog","InvoiceStatusHistory","ExportBatchItem","InvoiceVatLine","Invoice","ExportBatch","Client","User","AdvisoryFirm" CASCADE`);
+    await truncateTestDatabase(db, parsed.db, "e2e");
     await db.advisoryFirm.create({ data: { id: "firm1", name: "Asesoría Prueba", cif: "A00000001" } });
     await db.user.create({ data: { id: "admin1", username: "admin", email: "admin@prueba.es", passwordHash: await bcrypt.hash(PASSWORD, 10), name: "Admin", role: "ADMIN", advisoryFirmId: "firm1" } });
     await db.client.create({ data: { id: "client1", name: "Cliente Prueba SL", cif: "B00000002", advisoryFirmId: "firm1" } });
