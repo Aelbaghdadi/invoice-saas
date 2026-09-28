@@ -133,6 +133,10 @@ Con SIGTERM, Next deja de aceptar peticiones y espera a que terminen los
   de las demás (con 4 a la vez y unos 10 s por factura). Con una sola asesoría
   en producción no importa; con varias, sube `OCR_CONCURRENCY` si el
   proveedor lo admite. «Reprocesar» a mano va siempre delante.
+- **Avisos de subida a los gestores:** se juntan en memoria (un aviso por
+  subida, no por fichero) y salen al pasar 1 minuto sin ficheros nuevos, o a
+  los 5 minutos de la primera. Un redeploy pierde los que estaban esperando:
+  no se reintentan; las facturas siguen en Lotes y en el panel.
 - `docker-entrypoint.sh` arranca con `exec node node_modules/next/dist/bin/next start`:
   Node es el PID 1 y recibe el SIGTERM sin depender de que npm lo reenvíe
   (con `npx next start` npm también lo reenviaba y esperaba; no era lo que
