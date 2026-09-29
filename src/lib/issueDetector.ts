@@ -1,11 +1,9 @@
 import { prisma } from "@/lib/prisma";
 import type { ExtractedInvoice } from "@/lib/ocr";
 import type { Invoice, IssueType } from "@prisma/client";
-import { parseTaxId, type OperationTypeName } from "@/lib/validators";
-import { formatEur } from "@/lib/format";
-import { mathIssues } from "@/lib/mathIssues";
-import { formatDateEs } from "@/lib/dates";
-import { periodLabel } from "@/lib/period";
+import type { OperationTypeName } from "@/lib/validators";
+import { intracomVatIssue, mathIssues } from "@/lib/mathIssues";
+import { duplicateField, findPossibleDuplicate } from "@/lib/duplicates";
 
 type IssueData = {
   type: IssueType;
@@ -14,31 +12,6 @@ type IssueData = {
 };
 
 const CONFIDENCE_THRESHOLD = 0.7;
-
-export const DUPLICATE_SELECT = {
-  invoiceNumber: true,
-  filename: true,
-  createdAt: true,
-  periodType: true,
-  periodMonth: true,
-  periodYear: true,
-} as const;
-
-/** La factura ya registrada en el aviso de duplicado: numero, fecha de subida
- *  y periodo. Con el nombre del fichero a secas, si se subia el mismo PDF dos
- *  veces el aviso repetia el nombre del propio fichero y no decia cual era. */
-export function describeExisting(existing: {
-  invoiceNumber: string | null;
-  filename: string;
-  createdAt: Date;
-  periodType: "MONTHLY" | "QUARTERLY";
-  periodMonth: number;
-  periodYear: number;
-}): string {
-  const ref = existing.invoiceNumber ?? `«${existing.filename}»`;
-  const period = periodLabel(existing.periodType, existing.periodMonth, existing.periodYear);
-  return `la factura ${ref} subida el ${formatDateEs(existing.createdAt)} (${period})`;
-}
 
 /**
  * Detects issues after OCR extraction and creates InvoiceIssue records.
@@ -118,89 +91,31 @@ export async function detectIssues(
     }));
   }
 
-  // 4. INTRACOM_VAT — operacion intracomunitaria (adquisicion/entrega) con
-  // IVA declarado. Las intracomunitarias van con IVA 0%; si el OCR deja el
-  // 21% por defecto del documento, no puede colarse silenciosamente hasta
-  // el export. Se avisa aqui (NEEDS_ATTENTION) en vez de forzar el 0% a
-  // ciegas: puede ser un error real del proveedor que el gestor deba ver.
-  if (operationTypeHint === "INTRACOM" || operationTypeHint === "INTRACOM_SERVICIOS") {
-    const sumVat = extraction.vatLines.length > 0
-      ? extraction.vatLines.reduce((s, l) => s + l.vatAmount, 0)
-      : (extraction.vatAmount ?? 0);
-    if (Math.abs(sumVat) > 0.01) {
-      const rate = extraction.vatLines.length === 1 ? extraction.vatLines[0].vatRate : extraction.vatRate;
-      issues.push({
-        type: "MANUAL",
-        description: `Operación intracomunitaria con IVA declarado${rate != null ? ` (${rate}%)` : ""}: las intracomunitarias suelen ir con IVA 0%. Revisa el desglose antes de exportar.`,
-        field: "vatRate",
-      });
-    }
-  }
+  // 4. INTRACOM_VAT — intracomunitaria con IVA declarado (intracomVatIssue,
+  // tambien en la clasificacion manual).
+  const intracomVat = intracomVatIssue({
+    lines: extraction.vatLines,
+    vatAmount: extraction.vatAmount ?? null,
+    vatRate: extraction.vatRate ?? null,
+    operationType: operationTypeHint,
+  });
+  if (intracomVat) issues.push(intracomVat);
 
-  // 5. POSSIBLE_DUPLICATE — functional dedup (non-blocking alert)
-  // Strategy A: exact match by CIF + invoice number (strongest signal)
-  // Strategy B: fuzzy match by CIF + total + date (catches re-scans / different PDFs)
-  if (extraction.issuerCif) {
-    const baseWhere = {
-      clientId: invoice.clientId,
-      issuerCif: extraction.issuerCif,
-      type: invoice.type,
-      id: { not: invoiceId },
-      status: { notIn: ["REJECTED" as const] },
-    };
-
-    // Strategy A: CIF + invoice number
-    if (extraction.invoiceNumber) {
-      const dupByNumber = await prisma.invoice.findFirst({
-        where: { ...baseWhere, invoiceNumber: extraction.invoiceNumber },
-        select: DUPLICATE_SELECT,
-      });
-      if (dupByNumber) {
-        issues.push({
-          type: "POSSIBLE_DUPLICATE",
-          description: `Posible duplicado de ${describeExisting(dupByNumber)}: mismo número y mismo CIF emisor (${extraction.issuerCif}).`,
-        });
-      }
-    }
-
-    // Strategy B: CIF + total + date (only if Strategy A didn't match).
-    // Protegemos la fecha: el OCR a veces devuelve un RANGO (facturas de
-    // suministros, p.ej. "14-jul-25 / 10-set-25") que produce un Date inválido,
-    // y Prisma lo rechaza con un error crudo que dejaba la factura en Error OCR
-    // sin posible recuperación. Si no es parseable, saltamos esta estrategia.
-    const parsedDate = extraction.invoiceDate ? new Date(extraction.invoiceDate) : null;
-    const validDate = parsedDate && !isNaN(parsedDate.getTime()) ? parsedDate : null;
-    if (
-      !issues.some((i) => i.type === "POSSIBLE_DUPLICATE") &&
-      extraction.totalAmount != null &&
-      validDate
-    ) {
-      // En ventas el emisor es el propio cliente: comparar su CIF sacaba como
-      // duplicadas dos ventas del mismo importe y dia a clientes distintos.
-      // Ahi se compara el destinatario, limpio como se guarda (revision 2 del
-      // PR #7).
-      const isSale = invoice.type === "SALE";
-      const saleReceiver = isSale ? parseTaxId(extraction.receiverCif).clean || null : null;
-      const dupByFields = isSale && !saleReceiver
-        ? null
-        : await prisma.invoice.findFirst({
-            where: {
-              ...(isSale ? { ...baseWhere, issuerCif: undefined, receiverCif: saleReceiver } : baseWhere),
-              totalAmount: extraction.totalAmount,
-              invoiceDate: validDate,
-            },
-            select: DUPLICATE_SELECT,
-          });
-      if (dupByFields) {
-        issues.push({
-          type: "POSSIBLE_DUPLICATE",
-          description: isSale
-            ? `Posible duplicado de ${describeExisting(dupByFields)}: mismo destinatario (${saleReceiver}), total (${formatEur(extraction.totalAmount)}) y fecha.`
-            : `Posible duplicado de ${describeExisting(dupByFields)}: mismo CIF emisor (${extraction.issuerCif}), total (${formatEur(extraction.totalAmount)}) y fecha.`,
-        });
-      }
-    }
-  }
+  // 5. POSSIBLE_DUPLICATE — la misma comprobacion que al clasificar a mano
+  // (src/lib/duplicates.ts).
+  const duplicate = await findPossibleDuplicate({
+    invoiceId,
+    clientId: invoice.clientId,
+    type: invoice.type,
+    invoiceNumber: extraction.invoiceNumber,
+    issuerCif: extraction.issuerCif,
+    receiverCif: extraction.receiverCif,
+    receiverName: extraction.receiverName,
+    totalAmount: extraction.totalAmount,
+    invoiceDate: extraction.invoiceDate,
+    fileHash: invoice.fileHash,
+  });
+  if (duplicate) issues.push({ type: "POSSIBLE_DUPLICATE", description: duplicate.description, field: duplicateField(duplicate.originalId) });
 
   // Create all issues in database
   if (issues.length > 0 && options.persist !== false) {

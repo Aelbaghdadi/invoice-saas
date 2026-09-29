@@ -10,6 +10,7 @@ import Link from "next/link";
 import { InvoicesTable } from "./InvoicesTable";
 import { ReprocessAllErrorsButton } from "./ReprocessAllErrorsButton";
 import { parsePage, parseIntInRange, periodMonthFilter } from "@/lib/listing";
+import { showsDuplicateWarning } from "@/lib/invoiceStatuses";
 import {
   invoicePageIds,
   inIdOrder,
@@ -104,7 +105,9 @@ export default async function InvoicesPage({
       where: { AND: [listWhere, { id: { in: ids } }] },
       include: {
         client: true,
-        auditLogs: { where: { field: "duplicate_warning" }, take: 1 },
+        // El aviso de duplicado sale de la incidencia abierta; antes se leia
+        // un duplicate_warning de la auditoria que nadie escribe (F-010).
+        issues: { where: { type: "POSSIBLE_DUPLICATE", status: "OPEN" }, select: { id: true }, take: 1 },
         // Si salio alguna vez en un Excel. No vale mirar exportBatchId: al
         // corregir una factura ya exportada ese puntero se pone a null para
         // que vuelva a la cola, y la factura sigue estando en A3.
@@ -172,7 +175,7 @@ export default async function InvoicesPage({
     createdAt: inv.createdAt.toISOString(),
     totalAmount: inv.totalAmount !== null ? Number(inv.totalAmount) : null,
     client: { name: inv.client.name, cif: inv.client.cif },
-    hasDuplicateWarning: (inv.auditLogs?.length ?? 0) > 0,
+    hasDuplicateWarning: inv.issues.length > 0 && showsDuplicateWarning(inv.status),
     // El nombre del fichero no identifica nada cuando viene de un PDF
     // dividido ("factura1.pdf"): el gestor busca por numero de factura o por
     // el tercero, que es lo que ve en A3.

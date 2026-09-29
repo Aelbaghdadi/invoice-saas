@@ -1,17 +1,30 @@
 // Reglas de validación en el servidor (paso 15: F-009, F-014, F-022, F-025,
 // F-058), contra Postgres: lo que la acción rechaza no llega a la BD.
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { prisma } from "./helpers/db";
 import { makeFirm, makeInvoice, type FirmWorld } from "./helpers/factories";
 import { signInAs } from "./helpers/session";
-import { reviewForm, settleAction, validate } from "./helpers/reviewForm";
-import { saveInvoiceFields } from "@/app/dashboard/worker/review/[id]/actions";
+import { reject, reviewForm, settleAction, validate } from "./helpers/reviewForm";
+import { rejectInvoice, saveInvoiceFields, validateInvoice } from "@/app/dashboard/worker/review/[id]/actions";
 import { fakeS3 } from "./helpers/fakeS3";
 import { facturaeXml } from "./helpers/fixtures";
+import { stubOcr } from "./helpers/ocr";
+import { NEGATIVE_AMOUNTS_HINT } from "@/lib/rectificative";
+import { duplicateOriginalId, findByInvoiceNumber, findPossibleDuplicate, normalizeInvoiceNumber, normalizedNumberSql } from "@/lib/duplicates";
+import { Prisma } from "@prisma/client";
+import { parseTaxId } from "@/lib/validators";
+import { accountEntryKey } from "@/lib/supplierMatching";
 import { processInvoice } from "@/lib/processInvoice";
 import { detectIssues } from "@/lib/issueDetector";
 import type { ExtractedInvoice } from "@/lib/ocr";
 import { classifyInvoice } from "@/app/dashboard/worker/clasificar/actions";
+import { dismissDuplicateIssue, quickRejectDuplicate } from "@/app/dashboard/worker/invoices/actions";
+import { rejectBatch } from "@/app/dashboard/worker/batch/actions";
+import { pendingAfterCallbacks } from "./helpers/after";
+import { holdLock, sessionsWaitingForLock } from "./helpers/locks";
+import { inFlight } from "./helpers/inflight";
+import { NextRequest } from "next/server";
+import { POST as exportDownload } from "@/app/api/export/route";
 
 let w: FirmWorld;
 let id: string;
@@ -244,8 +257,9 @@ describe("validar exige lo mínimo en el servidor (F-009)", () => {
 
 describe("cuota = base × % por línea (F-022)", () => {
   it("el OCR la manda a «Requiere atención» con el aviso, aunque el total cuadre", async () => {
-    // Facturae con 100 al 10 % y cuota 21: el total (121) cuadra.
-    fakeS3().put("k-xml", facturaeXml({ buyerCif: w.client.cif, taxRate: "10.00" }));
+    // Facturae con 200 al 10 % y cuota 42: el total (242) cuadra. Otro total
+    // que la factura del beforeEach: con la fecha leida seria un duplicado.
+    fakeS3().put("k-xml", facturaeXml({ buyerCif: w.client.cif, base: "200.00", taxRate: "10.00", taxAmount: "42.00", total: "242.00" }));
     const { id: nueva } = await makeInvoice(w.client, {
       filename: "f.xml", storageKey: "k-xml", fileType: "application/xml", status: "UPLOADED",
       invoiceNumber: null, invoiceDate: null, issuerName: null, issuerCif: null,
@@ -256,7 +270,7 @@ describe("cuota = base × % por línea (F-022)", () => {
     expect(inv.status).toBe("NEEDS_ATTENTION");
     expect(inv.issues.map((i) => [i.type, i.field, i.description])).toEqual([[
       "MATH_MISMATCH", "vatLines",
-      "El desglose por tipo no cuadra. Línea 1: la cuota de IVA es 21,00 € y la base × 10 % da 10,00 €.",
+      "El desglose por tipo no cuadra. Línea 1: la cuota de IVA es 42,00 € y la base × 10 % da 20,00 €.",
     ]]);
   });
 
@@ -346,7 +360,9 @@ describe("moneda extranjera sin convertir (F-025)", () => {
 describe("«Por clasificar»: al clasificar se miran también el cuadre y el desglose", () => {
   async function routed(lines: [number, number, number][], total: number) {
     const inv = await makeInvoice(w.client, {
-      status: "PENDING_ROUTING", routingCandidateIds: [w.client.id], totalAmount: total,
+      // Otra fecha que la factura del beforeEach: con el mismo emisor y total
+      // seria un posible duplicado (estrategia B, tambien al clasificar).
+      status: "PENDING_ROUTING", routingCandidateIds: [w.client.id], totalAmount: total, isValid: false, invoiceDate: new Date("2026-08-20"),
       taxBase: lines.reduce((s, l) => s + l[0], 0), vatAmount: lines.reduce((s, l) => s + l[2], 0),
     });
     for (const [i, [taxBase, vatRate, vatAmount]] of lines.entries()) {
@@ -385,12 +401,67 @@ describe("«Por clasificar»: al clasificar se miran también el cuadre y el des
     expect(await issuesOf(inv)).toEqual([]);
   });
 
+  it("intracomunitaria con IVA declarado: el mismo aviso que en el OCR", async () => {
+    await prisma.accountEntry.create({
+      data: { clientId: w.client.id, nif: "B12345674", name: "Proveedor SL", defaultOperationType: "INTRACOM" },
+    });
+    const inv = await routed([[100, 21, 21]], 121);
+    await classifyInvoice(inv, w.client.id);
+    const after = await prisma.invoice.findUniqueOrThrow({ where: { id: inv } });
+    expect(after.operationType).toBe("INTRACOM");
+    expect(after.status).toBe("NEEDS_ATTENTION");
+    expect(await issuesOf(inv)).toEqual([[
+      "MANUAL", "Operación intracomunitaria con IVA declarado (21%): las intracomunitarias suelen ir con IVA 0%. Revisa el desglose antes de exportar.",
+    ]]);
+  });
+
+  it("servicios de la UE según la IA: el buzón lo guarda y al clasificar sale con el código de servicios", async () => {
+    // Sin el CIF del cliente en la factura: queda «Por clasificar». El NIF
+    // portugués viene sin prefijo, así que en el buzón es INTERIOR; el
+    // cliente real ya lo tiene aprendido como intracomunitario. Lo que dijo
+    // la IA tiene que llegar a la clasificación.
+    const real = await prisma.client.create({
+      data: { name: "Cliente Real SL", cif: "B87654321", email: "real@pruebas.es", advisoryFirmId: w.firm.id },
+    });
+    await prisma.workerClientAssignment.create({ data: { workerId: w.worker.id, clientId: real.id } });
+    const nif = parseTaxId("515160873");
+    await prisma.accountEntry.create({
+      data: {
+        clientId: real.id, nif: accountEntryKey(nif.clean, "Serviços Lda", nif.countryCode),
+        name: "Serviços Lda", defaultOperationType: "INTRACOM",
+      },
+    });
+    stubOcr(async () => ({
+      rawJson: "{}",
+      extracted: {
+        issuerName: "Serviços Lda", issuerCif: "515160873", receiverName: null, receiverCif: null,
+        invoiceNumber: "PT-1", invoiceDate: "2026-09-10", taxBase: 100, vatRate: 0, vatAmount: 0,
+        irpfRate: null, irpfAmount: null, totalAmount: 100, currency: "EUR", supplyType: "SERVICIOS",
+        vatLines: [{ taxBase: 100, vatRate: 0, vatAmount: 0 }], confidence: null,
+      } as ExtractedInvoice,
+    }));
+    fakeS3().put("k-ue", "%PDF-1.4");
+    const { id: ue } = await makeInvoice(w.client, {
+      filename: "ue.pdf", storageKey: "k-ue", fileType: "application/pdf", status: "UPLOADED",
+      routingCandidateIds: [w.client.id, real.id], invoiceNumber: null, issuerCif: null, totalAmount: null,
+    });
+    await processInvoice(ue, w.worker.id);
+    const routed = await prisma.invoice.findUniqueOrThrow({ where: { id: ue } });
+    expect([routed.status, routed.operationType]).toEqual(["PENDING_ROUTING", "INTERIOR"]);
+    expect([routed.intracomGoodsType, routed.intracomGoodsSource]).toEqual(["SERVICIOS", "IA"]);
+
+    expect(await classifyInvoice(ue, real.id)).toEqual({ ok: true });
+    const after = await prisma.invoice.findUniqueOrThrow({ where: { id: ue } });
+    expect([after.operationType, after.intracomGoodsType]).toEqual(["INTRACOM_SERVICIOS", "SERVICIOS"]);
+  });
+
   it("cliente en recargo: se propone el recargo desde el total, como en el OCR", async () => {
     await prisma.client.update({ where: { id: w.client.id }, data: { equivalenceSurchargeCustomer: true } });
     const inv = await routed([[100, 21, 21]], 126.2);
     await classifyInvoice(inv, w.client.id);
     const after = await prisma.invoice.findUniqueOrThrow({ where: { id: inv }, include: { vatLines: true } });
     expect(after.status).toBe("PENDING_REVIEW");
+    expect(after.isValid).toBe(true);
     expect(await issuesOf(inv)).toEqual([]);
     expect(after.vatLines.map((l) => [Number(l.equivalenceSurchargeRate), Number(l.equivalenceSurchargeAmount)])).toEqual([[5.2, 5.2]]);
   });
@@ -405,6 +476,73 @@ describe("«Por clasificar»: al clasificar se miran también el cuadre y el des
     expect(await prisma.auditLog.count({ where: { invoiceId: inv, field: "status" } })).toBe(1);
   });
 
+  // Un fallo real de la BD: un trigger que lanza al insertar en la tabla.
+  async function failingInserts<T>(table: string, run: () => Promise<T>): Promise<T> {
+    await prisma.$executeRawUnsafe(`CREATE OR REPLACE FUNCTION test_fail() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'fallo de prueba'; END $$ LANGUAGE plpgsql`);
+    await prisma.$executeRawUnsafe(`CREATE TRIGGER test_fail BEFORE INSERT ON "${table}" FOR EACH ROW EXECUTE FUNCTION test_fail()`);
+    try {
+      return await run();
+    } finally {
+      await prisma.$executeRawUnsafe(`DROP TRIGGER test_fail ON "${table}"`);
+    }
+  }
+
+  it("si falla la transacción: { error } y la factura sigue por clasificar", async () => {
+    const inv = await routed([[100, 21, 21]], 121);
+    const r = await failingInserts("InvoiceStatusHistory", () => classifyInvoice(inv, w.client.id));
+    expect(r).toEqual({ error: "No se pudo clasificar la factura. Inténtalo de nuevo." });
+    expect((await prisma.invoice.findUniqueOrThrow({ where: { id: inv } })).status).toBe("PENDING_ROUTING");
+  });
+
+  it("si falla una lectura previa a la transacción: { error }, no lanza", async () => {
+    const inv = await routed([[100, 21, 21]], 121);
+    // Un fallo real: la tabla de la ficha del tercero no está (se restaura).
+    await prisma.$executeRawUnsafe(`ALTER TABLE "AccountEntry" RENAME TO "AccountEntry_fuera"`);
+    let r;
+    try {
+      r = await classifyInvoice(inv, w.client.id);
+    } finally {
+      await prisma.$executeRawUnsafe(`ALTER TABLE "AccountEntry_fuera" RENAME TO "AccountEntry"`);
+    }
+    expect(r).toEqual({ error: "No se pudo clasificar la factura. Inténtalo de nuevo." });
+    expect((await prisma.invoice.findUniqueOrThrow({ where: { id: inv } })).status).toBe("PENDING_ROUTING");
+  });
+
+  it("si falla aprender el proveedor: la clasificación ya guardada vale", async () => {
+    const inv = await routed([[100, 21, 21]], 121);
+    const r = await failingInserts("ProviderRoutingRule", () => classifyInvoice(inv, w.client.id));
+    expect(r).toEqual({ ok: true });
+    expect((await prisma.invoice.findUniqueOrThrow({ where: { id: inv } })).status).toBe("PENDING_REVIEW");
+  });
+
+  it("con importes negativos: la incidencia del signo (F-012)", async () => {
+    const inv = await routed([[-100, 21, -21]], -121);
+    await classifyInvoice(inv, w.client.id);
+    expect((await issuesOf(inv)).map(([, d]) => d)).toEqual([expect.stringMatching(/^La factura trae importes negativos/)]);
+  });
+
+  it("«FACTURA RECTIFICATIVA» leída en el buzón: la incidencia sale al clasificar (F-012)", async () => {
+    stubOcr(async () => ({
+      rawJson: JSON.stringify({ source: "gemini_text" }),
+      rawText: "FACTURA RECTIFICATIVA Nº R-7 · Rectifica a la F-3",
+      extracted: {
+        issuerName: "Proveedor SL", issuerCif: "B12345674", receiverName: null, receiverCif: null,
+        invoiceNumber: "R-7", invoiceDate: "2026-09-12", taxBase: 300, vatRate: 21, vatAmount: 63,
+        irpfRate: null, irpfAmount: null, totalAmount: 363, currency: "EUR", supplyType: null,
+        vatLines: [{ taxBase: 300, vatRate: 21, vatAmount: 63 }], confidence: null,
+      } as ExtractedInvoice,
+    }));
+    fakeS3().put("k-rect-buzon", "%PDF-1.4");
+    const { id: inv } = await makeInvoice(w.client, {
+      filename: "r.pdf", storageKey: "k-rect-buzon", fileType: "application/pdf", status: "UPLOADED",
+      routingCandidateIds: [w.client.id], invoiceNumber: null, issuerCif: null, totalAmount: null,
+    });
+    await processInvoice(inv, w.worker.id);
+    expect((await prisma.invoice.findUniqueOrThrow({ where: { id: inv } })).status).toBe("PENDING_ROUTING");
+    expect(await classifyInvoice(inv, w.client.id)).toEqual({ ok: true });
+    expect((await issuesOf(inv)).map(([, d]) => d)).toEqual([expect.stringMatching(/^Parece rectificativa: revisa el signo/)]);
+  });
+
   it("cuadrada: a revisión normal y sin incidencias", async () => {
     const inv = await routed([[100, 21, 21]], 121);
     await classifyInvoice(inv, w.client.id);
@@ -414,21 +552,23 @@ describe("«Por clasificar»: al clasificar se miran también el cuadre y el des
 });
 
 describe("duplicados en ventas (estrategia B): se compara el destinatario", () => {
-  // detectIssues directo: el parser Facturae no lee la fecha de la fixture
-  // (IssueDate va en InvoiceIssueData y lo busca en InvoiceHeader), y la
-  // estrategia B necesita fecha.
-  async function saleDuplicates(buyerCif: string) {
+  // detectIssues directo, para controlar lo que se ha leido (la estrategia B
+  // necesita fecha, importe y destinatario).
+  async function saleDuplicates(
+    buyerCif: string | null,
+    read: { issuerCif?: string | null; invoiceNumber?: string | null; receiverName?: string | null } = {},
+  ) {
     const venta = await makeInvoice(w.client, { type: "SALE", issuerCif: w.client.cif, receiverCif: buyerCif, invoiceNumber: "V-2" });
     const extraction = {
       issuerCif: w.client.cif, receiverCif: buyerCif, invoiceNumber: "V-2", invoiceDate: "2026-09-10",
       taxBase: 100, vatAmount: 21, totalAmount: 121, irpfAmount: null, vatLines: [{ taxBase: 100, vatRate: 21, vatAmount: 21 }],
-      confidence: null,
+      confidence: null, receiverName: null, ...read,
     } as unknown as ExtractedInvoice;
     const issues = await detectIssues(venta.id, extraction, venta, "INTERIOR", { persist: false });
     return issues.filter((i) => i.type === "POSSIBLE_DUPLICATE").map((i) => i.description);
   }
-  const existing = (receiverCif: string) => makeInvoice(w.client, {
-    type: "SALE", issuerCif: w.client.cif, invoiceNumber: "V-1", invoiceDate: new Date("2026-09-10"), totalAmount: 121, receiverCif,
+  const existing = (receiverCif: string | null, receiverName: string | null = null) => makeInvoice(w.client, {
+    type: "SALE", issuerCif: w.client.cif, invoiceNumber: "V-1", invoiceDate: new Date("2026-09-10"), totalAmount: 121, receiverCif, receiverName,
   });
 
   it("misma fecha e importe a otro cliente: no es un posible duplicado", async () => {
@@ -439,5 +579,789 @@ describe("duplicados en ventas (estrategia B): se compara el destinatario", () =
   it("mismo destinatario, fecha e importe: sí", async () => {
     await existing("A58818501");
     expect(await saleDuplicates("A58818501")).toEqual([expect.stringContaining("mismo destinatario (A58818501)")]);
+  });
+
+  it("sin el CIF del emisor leído: se compara el destinatario igual", async () => {
+    await existing("A58818501");
+    expect(await saleDuplicates("A58818501", { issuerCif: null })).toEqual([expect.stringContaining("mismo destinatario (A58818501)")]);
+  });
+
+  it("tickets distintos sin NIF, número ni nombre, del mismo importe y día: ninguno es duplicado", async () => {
+    for (let i = 0; i < 5; i++) await existing(null);
+    expect(await saleDuplicates(null, { invoiceNumber: null })).toEqual([]);
+  });
+
+  it("el mismo fichero subido dos veces: duplicado por el hash, aunque no se lea nada", async () => {
+    await makeInvoice(w.client, { type: "SALE", fileHash: "abc123", invoiceNumber: null, receiverCif: null });
+    const venta = await makeInvoice(w.client, { type: "SALE", fileHash: "abc123", invoiceNumber: null, receiverCif: null });
+    const issues = await detectIssues(venta.id, {
+      issuerCif: null, receiverCif: null, invoiceNumber: null, invoiceDate: null, receiverName: null,
+      taxBase: null, vatAmount: null, totalAmount: null, irpfAmount: null, vatLines: [], confidence: null,
+    } as unknown as ExtractedInvoice, venta, "INTERIOR", { persist: false });
+    expect(issues.filter((i) => i.type === "POSSIBLE_DUPLICATE").map((i) => i.description)).toEqual([
+      expect.stringContaining("es el mismo fichero"),
+    ]);
+  });
+
+  it("ticket sin NIF con el mismo nombre (normalizado): sí", async () => {
+    await existing(null, "Juan García");
+    expect(await saleDuplicates(null, { invoiceNumber: null, receiverName: "JUAN GARCIA" })).toEqual([
+      expect.stringContaining("venta sin NIF al mismo destinatario (JUAN GARCIA), con el mismo total (121,00 €) y fecha"),
+    ]);
+  });
+
+  it("ticket sin NIF con otro nombre: no", async () => {
+    await existing(null, "Juan García");
+    expect(await saleDuplicates(null, { invoiceNumber: null, receiverName: "Pedro López" })).toEqual([]);
+  });
+
+  it("venta sin NIF pero con número: no se compara por importe y fecha", async () => {
+    await existing(null);
+    expect(await saleDuplicates(null, { invoiceNumber: "V-2" })).toEqual([]);
+  });
+});
+
+describe("OCR: los % también se redondean a 2 decimales", () => {
+  it("retención al 7,005 %: se guarda 7,01 % y la cuota con ese %", async () => {
+    stubOcr(async () => ({
+      rawJson: "{}",
+      extracted: {
+        issuerName: "Ana Pérez", issuerCif: "12345678Z", receiverName: w.client.name, receiverCif: w.client.cif,
+        invoiceNumber: "AP-1", invoiceDate: "2026-09-10", taxBase: 1000, vatRate: 21.004, vatAmount: 210,
+        irpfRate: 7.005, irpfAmount: 70.05, totalAmount: 1139.95, currency: "EUR", supplyType: null,
+        vatLines: [{ taxBase: 1000, vatRate: 21, vatAmount: 210 }], confidence: null,
+      } as ExtractedInvoice,
+    }));
+    fakeS3().put("k-irpf", "%PDF-1.4");
+    const { id: inv } = await makeInvoice(w.client, {
+      filename: "irpf.pdf", storageKey: "k-irpf", fileType: "application/pdf", status: "UPLOADED",
+      invoiceNumber: null, issuerCif: null, totalAmount: null, vatRate: null,
+    });
+    await processInvoice(inv, w.worker.id);
+    const after = await prisma.invoice.findUniqueOrThrow({ where: { id: inv } });
+    expect([Number(after.irpfRate), Number(after.irpfAmount), Number(after.vatRate)]).toEqual([7.01, 70.1, 21]);
+    // Con la cuota guardada (70,10) ya no cuadra con el total impreso: se dice,
+    // en vez de quedar isValid=false sin ninguna incidencia.
+    expect(after.isValid).toBe(false);
+    expect(after.status).toBe("NEEDS_ATTENTION");
+    const issues = await prisma.invoiceIssue.findMany({ where: { invoiceId: inv } });
+    expect(issues.map((i) => i.description)).toEqual([expect.stringContaining("Diferencia: 0,05 €")]);
+  });
+});
+
+describe("cuentas completadas en el servidor", () => {
+  it("«4.1» y «6.22» sin salir del campo se guardan completadas", async () => {
+    expect((await save({ supplierAccount: "4.1", expenseAccount: "6.22" })).error).toBeNull();
+    const after = await row();
+    expect([after.supplierAccount, after.expenseAccount]).toEqual(["40000001", "60000022"]);
+  });
+
+  it("una venta con «4.1» no pasa la regla del sentido", async () => {
+    await prisma.invoice.update({ where: { id }, data: { type: "SALE" } });
+    const r = await validate(await form({
+      type: "SALE", receiverCif: "A58818501", receiverName: "Cliente SA", supplierAccount: "4.1", expenseAccount: "70000001",
+    }));
+    expect(r.error).toBe("La cuenta 40000001 es de proveedor y esta factura es emitida: usa una cuenta de cliente (43x).");
+  });
+});
+
+describe("% fuera de 0-100: { error } y no ERR-SYS-001", () => {
+  it("recargo al 1500 %", async () => {
+    const r = await save({ vatLines: JSON.stringify([{ taxBase: "100", vatRate: "21", vatAmount: "21", equivalenceSurchargeRate: "1500", equivalenceSurchargeAmount: "1500" }]), totalAmount: "1621" });
+    expect(r.error).toBe("La línea 1 de IVA tiene el % de recargo fuera de rango: tiene que estar entre 0 y 100.");
+  });
+
+  it("retención al 1500 %", async () => {
+    const r = await save({ retentionType: "PROFESSIONAL", retentionBase: "100", retentionRate: "1500", retentionAmount: "1500", irpfAmount: "1500" });
+    expect(r.error).toBe("El % de retención tiene que estar entre 0 y 100.");
+  });
+});
+
+describe("cuentas sin punto: se guardan tal cual (no se rellenan por la derecha)", () => {
+  const siete = { supplierAccount: "4000001", expenseAccount: "6000001" };
+
+  it("validar con la sugerencia de la ficha sin tocarla no cambia la ficha", async () => {
+    await prisma.accountEntry.create({ data: { clientId: w.client.id, nif: "B12345674", name: "Proveedor SL", ...siete } });
+    expect((await validate(await form(siete))).error).toBeNull();
+    const after = await row();
+    expect([after.supplierAccount, after.expenseAccount]).toEqual(["4000001", "6000001"]);
+    const entry = await prisma.accountEntry.findUniqueOrThrow({ where: { clientId_nif: { clientId: w.client.id, nif: "B12345674" } } });
+    expect([entry.supplierAccount, entry.expenseAccount]).toEqual(["4000001", "6000001"]);
+  });
+
+  it("una exportada guardada sin cambios no vuelve a la cola", async () => {
+    // Validada antes con cuentas de 7 dígitos, tal como están en la BD.
+    await prisma.invoice.update({
+      where: { id },
+      data: {
+        status: "VALIDATED", ...siete, invoiceNumber: "F-1", invoiceDate: new Date("2026-09-10"), issuerName: "Proveedor SL",
+        issuerCif: "B12345674", taxBase: 100, vatRate: 21, vatAmount: 21, totalAmount: 121, accountingPeriodMonth: 9, accountingPeriodYear: 2026,
+      },
+    });
+    signInAs(w.admin);
+    const download = await exportDownload(new NextRequest("http://app.local/api/export", {
+      method: "POST",
+      headers: { "content-type": "application/json", "sec-fetch-site": "same-origin", host: "app.local" },
+      body: JSON.stringify({ periodType: "MONTHLY", month: 9, year: 2026, type: "ALL", format: "a3excel", clientId: w.client.id }),
+    }));
+    expect(download.status).toBe(200);
+    const exported = await row();
+    expect(exported.exportBatchId).not.toBeNull();
+    expect((await save(siete)).error).toBeNull();
+    expect((await row()).exportBatchId).toBe(exported.exportBatchId);
+  });
+
+  it("la genérica de 7 dígitos se guarda tal cual", async () => {
+    await prisma.client.update({ where: { id: w.client.id }, data: { simplifiedSupplierAccount: "4999999", simplifiedExpenseAccount: "6299999" } });
+    expect((await save({ supplierAccount: "4999999", expenseAccount: "6299999" })).error).toBeNull();
+    const after = await row();
+    expect([after.supplierAccount, after.expenseAccount]).toEqual(["4999999", "6299999"]);
+  });
+});
+
+describe("OCR: IRPF impreso en negativo", () => {
+  it("«IRPF −15 %» se guarda en positivo y la factura no pasa a rectificativa", async () => {
+    stubOcr(async () => ({
+      rawJson: "{}",
+      extracted: {
+        issuerName: "Ana Pérez", issuerCif: "12345678Z", receiverName: w.client.name, receiverCif: w.client.cif,
+        invoiceNumber: "AP-2", invoiceDate: "2026-09-10", taxBase: 1000, vatRate: 21, vatAmount: 210,
+        irpfRate: -15, irpfAmount: -150, totalAmount: 1060, currency: "EUR", supplyType: null,
+        vatLines: [{ taxBase: 1000, vatRate: 21, vatAmount: 210 }], confidence: null,
+      } as ExtractedInvoice,
+    }));
+    fakeS3().put("k-irpf-neg", "%PDF-1.4");
+    const { id: inv } = await makeInvoice(w.client, {
+      filename: "irpf-neg.pdf", storageKey: "k-irpf-neg", fileType: "application/pdf", status: "UPLOADED",
+      invoiceNumber: null, issuerCif: null, totalAmount: null, vatRate: null,
+    });
+    await processInvoice(inv, w.worker.id);
+    const after = await prisma.invoice.findUniqueOrThrow({ where: { id: inv } });
+    expect([Number(after.irpfRate), Number(after.irpfAmount), Number(after.taxBase), Number(after.totalAmount)]).toEqual([15, 150, 1000, 1060]);
+    expect(after.isValid).toBe(true);
+    expect(after.status).toBe("PENDING_REVIEW");
+  });
+});
+
+describe("OCR y rectificativas (F-012): no se cambian signos por el texto", () => {
+  async function ocr(rawText: string, base: number, vat: number, total: number) {
+    stubOcr(async () => ({
+      rawJson: "{}",
+      rawText,
+      extracted: {
+        issuerName: "Proveedor SL", issuerCif: "B12345674", receiverName: w.client.name, receiverCif: w.client.cif,
+        invoiceNumber: "R-1", invoiceDate: "2026-09-10", taxBase: base, vatRate: 21, vatAmount: vat,
+        irpfRate: null, irpfAmount: null, totalAmount: total, currency: "EUR", supplyType: null,
+        vatLines: [{ taxBase: base, vatRate: 21, vatAmount: vat }], confidence: null,
+      } as ExtractedInvoice,
+    }));
+    fakeS3().put("k-rect", "%PDF-1.4");
+    const { id: inv } = await makeInvoice(w.client, {
+      filename: "rect.pdf", storageKey: "k-rect", fileType: "application/pdf", status: "UPLOADED",
+      invoiceNumber: null, issuerCif: null, totalAmount: null, vatRate: null,
+    });
+    await processInvoice(inv, w.worker.id);
+    return prisma.invoice.findUniqueOrThrow({ where: { id: inv }, include: { issues: true, vatLines: true } });
+  }
+
+  it("«FACTURA RECTIFICATIVA» en el texto: los importes quedan en positivo y sale la incidencia", async () => {
+    const after = await ocr("FACTURA RECTIFICATIVA Nº R-1. Rectifica a la factura F-1.", 200, 42, 242);
+    expect([Number(after.taxBase), Number(after.vatAmount), Number(after.totalAmount)]).toEqual([200, 42, 242]);
+    expect(after.vatLines.map((l) => Number(l.taxBase))).toEqual([200]);
+    expect(after.isRectificative).toBe(false);
+    expect(after.status).toBe("NEEDS_ATTENTION");
+    expect(after.issues.map((i) => i.description)).toEqual([expect.stringMatching(/^Parece rectificativa: revisa el signo\./)]);
+  });
+
+  it("importes negativos: se respetan y sale la incidencia de marcar la casilla", async () => {
+    const after = await ocr("ABONO", -200, -42, -242);
+    expect([Number(after.taxBase), Number(after.totalAmount)]).toEqual([-200, -242]);
+    expect(after.issues.map((i) => i.description)).toEqual([expect.stringMatching(/^La factura trae importes negativos/)]);
+  });
+
+  it("«no es rectificativa» en el texto: sin incidencias", async () => {
+    const after = await ocr("FACTURA Nº R-1. Esta factura no es rectificativa.", 200, 42, 242);
+    expect(after.issues.map((i) => i.description)).toEqual([]);
+  });
+
+  it("una factura normal: sin incidencias", async () => {
+    const after = await ocr("FACTURA Nº R-1. Forma de pago: abono en cuenta.", 200, 42, 242);
+    expect(after.issues.map((i) => i.description)).toEqual([]);
+    expect(after.status).toBe("PENDING_REVIEW");
+  });
+});
+
+describe("rectificativa en la revisión: la inversión del signo se audita (F-012)", () => {
+  const signAudit = () => prisma.auditLog.findMany({ where: { invoiceId: id, field: "rectificativeSign" } });
+
+  it("marcada con todo en positivo: se guarda en negativo y queda en la auditoría", async () => {
+    expect((await save({ isRectificative: "1", rectificativeType: "BY_DIFFERENCE" })).error).toBeNull();
+    expect(Number((await row()).totalAmount)).toBe(-121);
+    expect((await signAudit()).map((a) => a.newValue)).toEqual(["importes en negativo (marcada como rectificativa)"]);
+  });
+
+  it("marcada y ya en negativo, o sin marcar: no hay inversión", async () => {
+    const negativos = { vatLines: JSON.stringify([{ taxBase: "-100", vatRate: "21", vatAmount: "-21" }]), totalAmount: "-121" };
+    expect((await save({ ...negativos, isRectificative: "1", rectificativeType: "BY_DIFFERENCE" })).error).toBeNull();
+    expect((await save({})).error).toBeNull();
+    expect(await signAudit()).toEqual([]);
+  });
+});
+
+describe("Facturae: un lote con varias facturas (revisión 1 del PR #9, punto 12)", () => {
+  const facturaeXmlWithInvoices = (n: number) => {
+    const xml = facturaeXml({ buyerCif: w.client.cif });
+    const invoice = xml.slice(xml.indexOf("<Invoice>"), xml.indexOf("</Invoice>") + "</Invoice>".length);
+    return xml.replace(invoice, invoice.repeat(n));
+  };
+  it("queda en Error OCR con el motivo, sin quedarse con la primera", async () => {
+    const xml = facturaeXml({ buyerCif: w.client.cif });
+    const invoice = xml.slice(xml.indexOf("<Invoice>"), xml.indexOf("</Invoice>") + "</Invoice>".length);
+    fakeS3().put("k-lote", xml.replace(invoice, invoice + invoice));
+    const { id: lote } = await makeInvoice(w.client, {
+      filename: "lote.xml", storageKey: "k-lote", fileType: "application/xml", status: "UPLOADED",
+      invoiceNumber: null, invoiceDate: null, issuerName: null, issuerCif: null,
+      taxBase: null, vatRate: null, vatAmount: null, totalAmount: null,
+    });
+    await processInvoice(lote, w.worker.id);
+    const after = await prisma.invoice.findUniqueOrThrow({ where: { id: lote } });
+    expect(after.status).toBe("OCR_ERROR");
+    expect(after.lastOcrError).toBe("[ERR-OCR-002] El XML trae 2 facturas (lote): súbelas por separado.");
+  });
+
+  it("con 500 facturas no se reintenta (el «500» no es un error de servidor)", async () => {
+    const xml = facturaeXmlWithInvoices(500);
+    fakeS3().put("k-lote-500", xml);
+    const { id: lote } = await makeInvoice(w.client, {
+      filename: "lote.xml", storageKey: "k-lote-500", fileType: "application/xml", status: "UPLOADED",
+      invoiceNumber: null, invoiceDate: null, issuerName: null, issuerCif: null,
+      taxBase: null, vatRate: null, vatAmount: null, totalAmount: null,
+    });
+    const started = Date.now();
+    await processInvoice(lote, w.worker.id);
+    // Con reintentos esperaria 1,2 s + 2,4 s antes de rendirse.
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect((await prisma.invoice.findUniqueOrThrow({ where: { id: lote } })).lastOcrError).toContain("El XML trae 500 facturas");
+  });
+});
+
+describe("Facturae rectificativa: la incidencia del signo (revisión 1 del PR #9, punto 15)", () => {
+  const rectXml = () => facturaeXml({ buyerCif: w.client.cif, base: "300.00", taxAmount: "63.00", total: "363.00", number: "R-9" })
+    .replace("<InvoiceNumber>R-9</InvoiceNumber>", "<InvoiceNumber>R-9</InvoiceNumber><InvoiceClass>OR</InvoiceClass>");
+  const xmlInvoice = (key: string, extra = {}) => makeInvoice(w.client, {
+    filename: "r.xml", storageKey: key, fileType: "application/xml", status: "UPLOADED",
+    invoiceNumber: null, invoiceDate: null, issuerName: null, issuerCif: null,
+    taxBase: null, vatRate: null, vatAmount: null, totalAmount: null, ...extra,
+  });
+  const issuesOf = async (invoiceId: string) => (await prisma.invoiceIssue.findMany({ where: { invoiceId } })).map((i) => i.description);
+
+  it("al procesarla", async () => {
+    fakeS3().put("k-rect-xml", rectXml());
+    const { id: inv } = await xmlInvoice("k-rect-xml");
+    await processInvoice(inv, w.worker.id);
+    expect(await issuesOf(inv)).toEqual([expect.stringMatching(/^Parece rectificativa: revisa el signo/)]);
+  });
+
+  it("y si queda en el buzón, al clasificarla", async () => {
+    fakeS3().put("k-rect-xml-buzon", rectXml().replace(`<TaxIdentificationNumber>${w.client.cif}</TaxIdentificationNumber>`, "<TaxIdentificationNumber>B99999999</TaxIdentificationNumber>"));
+    const { id: inv } = await xmlInvoice("k-rect-xml-buzon", { routingCandidateIds: [w.client.id] });
+    await processInvoice(inv, w.worker.id);
+    expect((await prisma.invoice.findUniqueOrThrow({ where: { id: inv } })).status).toBe("PENDING_ROUTING");
+    expect(await classifyInvoice(inv, w.client.id)).toEqual({ ok: true });
+    expect(await issuesOf(inv)).toEqual([expect.stringMatching(/^Parece rectificativa: revisa el signo/)]);
+  });
+});
+
+describe("incidencias del signo al guardar (revisión 2 del PR #9, punto 9)", () => {
+  const issue = (description: string) => prisma.invoiceIssue.create({
+    data: { invoiceId: id, type: "MANUAL", field: "isRectificative", description },
+  });
+  const statusOf = async (issueId: string) => (await prisma.invoiceIssue.findUniqueOrThrow({ where: { id: issueId } })).status;
+
+  it("con la casilla marcada se cierran las dos", async () => {
+    const mention = await issue("Parece rectificativa: revisa el signo.");
+    const negative = await issue(NEGATIVE_AMOUNTS_HINT);
+    expect((await save({ isRectificative: "1", rectificativeType: "BY_DIFFERENCE" })).error).toBeNull();
+    expect([await statusOf(mention.id), await statusOf(negative.id)]).toEqual(["RESOLVED", "RESOLVED"]);
+  });
+
+  it("sin marcar: la de negativos se cierra si ya no quedan; la de la mención sigue", async () => {
+    const mention = await issue("Parece rectificativa: revisa el signo.");
+    const negative = await issue(NEGATIVE_AMOUNTS_HINT);
+    expect((await save({})).error).toBeNull();
+    expect([await statusOf(mention.id), await statusOf(negative.id)]).toEqual(["OPEN", "RESOLVED"]);
+  });
+
+  it("sin marcar y con negativos: sigue abierta", async () => {
+    const negative = await issue(NEGATIVE_AMOUNTS_HINT);
+    const negativos = { vatLines: JSON.stringify([{ taxBase: "-100", vatRate: "21", vatAmount: "-21" }]), totalAmount: "-121" };
+    expect((await save(negativos)).error).toBeNull();
+    expect(await statusOf(negative.id)).toBe("OPEN");
+  });
+});
+
+describe("duplicados con el CIF limpio y el número normalizado (F-010)", () => {
+  async function duplicatesFor(read: { issuerCif: string | null; invoiceNumber: string | null; totalAmount?: number }, type: "PURCHASE" | "SALE" = "PURCHASE") {
+    const nueva = await makeInvoice(w.client, { type, invoiceNumber: read.invoiceNumber, totalAmount: 999 });
+    const extraction = {
+      issuerCif: read.issuerCif, receiverCif: null, receiverName: null, invoiceNumber: read.invoiceNumber, invoiceDate: "2026-09-10",
+      taxBase: null, vatAmount: null, totalAmount: read.totalAmount ?? null, irpfAmount: null, vatLines: [], confidence: null,
+    } as unknown as ExtractedInvoice;
+    const issues = await detectIssues(nueva.id, extraction, nueva, "INTERIOR", { persist: false });
+    return issues.filter((i) => i.type === "POSSIBLE_DUPLICATE").map((i) => i.description);
+  }
+  const stored = (issuerCif: string, invoiceNumber = "F-001", extra = {}) =>
+    makeInvoice(w.client, { issuerCif: parseTaxId(issuerCif).clean, invoiceNumber, totalAmount: 500, invoiceDate: new Date("2026-08-01"), ...extra });
+
+  it("el CIF leído con prefijo, separadores o en minúsculas casa con el guardado", async () => {
+    await stored("B12345674");
+    for (const read of ["B-12345674", "ESB12345674", "B.12.345.674", "b12345674"]) {
+      expect(await duplicatesFor({ issuerCif: read, invoiceNumber: "F-001" }), read).toHaveLength(1);
+    }
+  });
+
+  it("VAT extranjeros y el NIF español con prefijo ES", async () => {
+    await stored("DE123456789", "A-1");
+    await stored("IE6388047V", "B-1");
+    await stored("W0184081H", "C-1");
+    // El aviso muestra el VAT con su país, no el CIF guardado sin prefijo.
+    expect(await duplicatesFor({ issuerCif: "DE 123456789", invoiceNumber: "A-1" })).toEqual([
+      expect.stringContaining("mismo número y mismo CIF emisor (DE123456789)"),
+    ]);
+    expect(await duplicatesFor({ issuerCif: "IE6388047V", invoiceNumber: "B-1" })).toHaveLength(1);
+    expect(await duplicatesFor({ issuerCif: "ESW0184081H", invoiceNumber: "C-1" })).toHaveLength(1);
+  });
+
+  it("el número se compara normalizado: «F 001», «f001», «F/001»", async () => {
+    await stored("B12345674");
+    for (const n of ["F 001", "f001", "F/001"]) {
+      expect(await duplicatesFor({ issuerCif: "B12345674", invoiceNumber: n }), n).toHaveLength(1);
+    }
+    expect(await duplicatesFor({ issuerCif: "B12345674", invoiceNumber: "F-002" })).toEqual([]);
+  });
+
+  it("estrategia B con un VAT extranjero: el aviso lleva el país", async () => {
+    await stored("PT515160873", "OTRO-2", { invoiceDate: new Date("2026-09-10"), totalAmount: 654 });
+    expect(await duplicatesFor({ issuerCif: "PT 515160873", invoiceNumber: null, totalAmount: 654 })).toEqual([
+      expect.stringContaining("mismo CIF emisor (PT515160873), total (654,00 €) y fecha"),
+    ]);
+  });
+
+  it("estrategia B (total y fecha) con el CIF limpio", async () => {
+    await stored("B12345674", "OTRO-1", { invoiceDate: new Date("2026-09-10"), totalAmount: 321 });
+    expect(await duplicatesFor({ issuerCif: "ESB-12345674", invoiceNumber: null, totalAmount: 321 })).toEqual([
+      expect.stringContaining("mismo CIF emisor (B12345674), total (321,00 €) y fecha"),
+    ]);
+  });
+
+  it("normalizeInvoiceNumber y su versión en Postgres dan lo mismo, también con Unicode", async () => {
+    const list = ["F-001", "f 001", "F/001", " f.001 ", "Nº 12", "ß-1", "straße-7", "ﬁ-2", "ı-3", "İ-4", "Ñ-5", "ǅ-6", "ﬀ", "Ａ１", "2026-1-15", "0042", "", " - "];
+    const rows = await prisma.$queryRaw<{ raw: string; normalized: string }[]>`
+      SELECT x AS raw, ${normalizedNumberSql(Prisma.raw("x"))} AS normalized FROM unnest(${list}::text[]) AS x`;
+    expect(rows.map((r) => [r.raw, r.normalized])).toEqual(list.map((x) => [x, normalizeInvoiceNumber(x)]));
+  });
+
+  it("la original de una división (SPLIT_SOURCE) no es duplicado de sus hijas; el mismo fichero sí", async () => {
+    const madre = await stored("B12345674", "F-001", { status: "SPLIT_SOURCE", invoiceDate: new Date("2026-09-10"), totalAmount: 321, fileHash: "hash-madre" });
+    expect(await duplicatesFor({ issuerCif: "B12345674", invoiceNumber: "F-001" })).toEqual([]);
+    expect(await duplicatesFor({ issuerCif: "B12345674", invoiceNumber: null, totalAmount: 321 })).toEqual([]);
+    const hija = await makeInvoice(w.client, { invoiceNumber: "F-001", splitFromId: madre.id });
+    expect(await findPossibleDuplicate({
+      invoiceId: hija.id, clientId: w.client.id, type: "PURCHASE", invoiceNumber: "F-001", issuerCif: "B12345674",
+      receiverCif: null, receiverName: null, totalAmount: 321, invoiceDate: "2026-09-10", fileHash: "hash-madre",
+    })).toMatchObject({ originalId: madre.id });
+  });
+
+  it("en ventas basta el número: el cliente y el tipo fijan al emisor", async () => {
+    await makeInvoice(w.client, { type: "SALE", issuerCif: w.client.cif, invoiceNumber: "V-2026-7" });
+    expect(await duplicatesFor({ issuerCif: null, invoiceNumber: "v 2026/7" }, "SALE")).toEqual([
+      expect.stringContaining("mismo número de factura emitida"),
+    ]);
+  });
+});
+
+describe("al clasificar, la misma comprobación de duplicados que el OCR (F-010, punto 2)", () => {
+  const issuesOf = async (invoiceId: string) => prisma.invoiceIssue.findMany({ where: { invoiceId, type: "POSSIBLE_DUPLICATE" } });
+  const routed = (extra: object) => makeInvoice(w.client, {
+    status: "PENDING_ROUTING", routingCandidateIds: [w.client.id], totalAmount: 363, invoiceDate: new Date("2026-09-12"), ...extra,
+  });
+
+  it("compra: número normalizado y CIF limpio, con enlace a la original", async () => {
+    const original = await makeInvoice(w.client, { issuerCif: "B12345674", invoiceNumber: "F-001", totalAmount: 50 });
+    const inv = await routed({ issuerCif: "B12345674", invoiceNumber: "f 001" });
+    await classifyInvoice(inv.id, w.client.id);
+    const [issue] = await issuesOf(inv.id);
+    expect(issue.description).toContain("mismo número y mismo CIF emisor (B12345674)");
+    expect(duplicateOriginalId(issue.field)).toBe(original.id);
+    expect((await prisma.invoice.findUniqueOrThrow({ where: { id: inv.id } })).status).toBe("NEEDS_ATTENTION");
+  });
+
+  it("venta sin NIF del destinatario: por nombre, total y fecha (antes no se buscaba nada)", async () => {
+    await makeInvoice(w.client, {
+      type: "SALE", issuerCif: w.client.cif, receiverCif: null, receiverName: "Juan García", invoiceNumber: null,
+      totalAmount: 363, invoiceDate: new Date("2026-09-12"),
+    });
+    const inv = await routed({ type: "SALE", issuerCif: w.client.cif, receiverCif: null, receiverName: "JUAN GARCIA", invoiceNumber: null });
+    await classifyInvoice(inv.id, w.client.id);
+    expect((await issuesOf(inv.id)).map((i) => i.description)).toEqual([expect.stringContaining("venta sin NIF al mismo destinatario")]);
+  });
+
+  it("el mismo fichero ya subido al cliente elegido", async () => {
+    await makeInvoice(w.client, { fileHash: "hash-buzon", invoiceNumber: "X-9" });
+    const inv = await routed({ fileHash: "hash-buzon", invoiceNumber: "Z-1" });
+    await classifyInvoice(inv.id, w.client.id);
+    expect((await issuesOf(inv.id)).map((i) => i.description)).toEqual([expect.stringContaining("es el mismo fichero")]);
+  });
+});
+
+describe("al validar, confirmación si ya hay otra validada con el mismo número y emisor (F-010, punto 3)", () => {
+  const otra = (status: "VALIDATED" | "EXPORTED" | "PENDING_REVIEW") =>
+    makeInvoice(w.client, { status, issuerCif: "B12345674", invoiceNumber: "F-2026-001" });
+
+  it("sin confirmar no se valida, y dice cuál es", async () => {
+    const original = await otra("VALIDATED");
+    const r = await validateInvoice(null, await form({ invoiceNumber: "f 2026/001" }));
+    expect(r?.duplicateOf?.map((d) => d.id)).toEqual([original.id]);
+    expect(r?.error).toMatch(/^Ya hay otra factura validada con este número y este emisor: la factura F-2026-001/);
+    expect((await row()).status).toBe("PENDING_REVIEW");
+  });
+
+  it("confirmado, sí", async () => {
+    const original = await otra("EXPORTED");
+    const r = await validate(await form({ invoiceNumber: "F-2026-001", confirmDuplicate: `validated:${original.id}` }));
+    expect(r.error).toBeNull();
+    expect((await row()).status).toBe("VALIDATED");
+  });
+
+  it("una compra sin CIF no se compara: el «1234» de un ticket no es el de otro proveedor", async () => {
+    const otro = await makeInvoice(w.client, { status: "VALIDATED", issuerCif: "B12345674", invoiceNumber: "1234" });
+    const base = { clientId: w.client.id, excludeId: id, invoiceNumber: "1234", onlyValidated: true };
+    expect(await findByInvoiceNumber({ ...base, type: "PURCHASE", issuerCif: null })).toBeNull();
+    expect((await findByInvoiceNumber({ ...base, type: "PURCHASE", issuerCif: "B12345674" }))?.id).toBe(otro.id);
+    // En ventas el CIF no cuenta: el emisor es el propio cliente.
+    const venta = await makeInvoice(w.client, { type: "SALE", status: "VALIDATED", invoiceNumber: "V-9" });
+    expect((await findByInvoiceNumber({ ...base, invoiceNumber: "V-9", type: "SALE", issuerCif: "X" }))?.id).toBe(venta.id);
+  });
+
+  it("con fecha, solo casa en el mismo año (numeración que reinicia cada año)", async () => {
+    const del2025 = await makeInvoice(w.client, { status: "VALIDATED", issuerCif: "B12345674", invoiceNumber: "1", invoiceDate: new Date("2025-03-01") });
+    const base = { clientId: w.client.id, type: "PURCHASE" as const, excludeId: id, invoiceNumber: "1", issuerCif: "B12345674", onlyValidated: true };
+    expect(await findByInvoiceNumber({ ...base, invoiceDate: new Date("2026-03-01") })).toBeNull();
+    expect((await findByInvoiceNumber({ ...base, invoiceDate: new Date("2025-12-31") }))?.id).toBe(del2025.id);
+    // Sin fecha en cualquiera de los dos lados, se compara igual.
+    expect((await findByInvoiceNumber({ ...base, invoiceDate: null }))?.id).toBe(del2025.id);
+    await prisma.invoice.update({ where: { id: del2025.id }, data: { invoiceDate: null } });
+    expect((await findByInvoiceNumber({ ...base, invoiceDate: new Date("2026-03-01") }))?.id).toBe(del2025.id);
+  });
+
+  describe("correcciones de una ya validada (punto 12)", () => {
+    it.each(["VALIDATED", "EXPORTED"] as const)("%s sin tocar número ni CIF: guarda sin preguntar", async (status) => {
+      await otra("VALIDATED");
+      await prisma.invoice.update({ where: { id }, data: { status, invoiceNumber: "F-2026-001", issuerCif: "B12345674" } });
+      await prisma.invoiceIssue.create({ data: { invoiceId: id, type: "POSSIBLE_DUPLICATE", description: "Aviso viejo." } });
+      const r = await validate(await form({ invoiceNumber: "F-2026-001", totalAmount: "121" }));
+      expect(r.error).toBeNull();
+      expect((await row()).status).toBe("VALIDATED");
+    });
+
+    it("cambiando la fecha a otro año donde ya hay una validada con ese número: pregunta", async () => {
+      const del2026 = await otra("VALIDATED");
+      await prisma.invoice.update({ where: { id: del2026.id }, data: { invoiceDate: new Date("2026-03-01") } });
+      await prisma.invoice.update({ where: { id }, data: { status: "VALIDATED", invoiceNumber: "F-2026-001", issuerCif: "B12345674", invoiceDate: new Date("2025-12-20") } });
+      const r = await validateInvoice(null, await form({ invoiceNumber: "F-2026-001", invoiceDate: "2026-01-10" }));
+      expect(r?.duplicateOf?.map((d) => d.id)).toEqual([del2026.id]);
+      expect((await row()).invoiceDate?.toISOString().slice(0, 10)).toBe("2025-12-20");
+    });
+
+    it("cambiando el número a uno ya validado: pregunta y no guarda sin confirmar", async () => {
+      const original = await otra("VALIDATED");
+      await prisma.invoice.update({ where: { id }, data: { status: "VALIDATED", invoiceNumber: "F-OTRO", issuerCif: "B12345674" } });
+      const r = await validateInvoice(null, await form({ invoiceNumber: "F-2026-001" }));
+      expect(r?.duplicateOf?.map((d) => [d.kind, d.id])).toEqual([["validated", original.id]]);
+      expect((await row()).invoiceNumber).toBe("F-OTRO");
+      expect((await validate(await form({ invoiceNumber: "F-2026-001", confirmDuplicate: `validated:${original.id}` }))).error).toBeNull();
+      expect((await row()).invoiceNumber).toBe("F-2026-001");
+    });
+  });
+
+  it("confirmar una no se salta otra que aparece después (punto 3 de la revisión 2)", async () => {
+    const primera = await otra("VALIDATED");
+    // El gestor confirmó la primera; mientras tanto otra copia se validó antes.
+    await prisma.invoice.update({ where: { id: primera.id }, data: { createdAt: new Date("2026-09-02") } });
+    const tercera = await makeInvoice(w.client, { status: "VALIDATED", issuerCif: "B12345674", invoiceNumber: "F 2026 001" });
+    await prisma.invoice.update({ where: { id: tercera.id }, data: { createdAt: new Date("2026-09-01") } });
+    const r = await validateInvoice(null, await form({ invoiceNumber: "F-2026-001", confirmDuplicate: `validated:${primera.id}` }));
+    expect(r?.duplicateOf?.map((d) => d.key)).toEqual([`validated:${tercera.id}`]);
+    expect((await row()).status).toBe("PENDING_REVIEW");
+    // «1» ya no vale como confirmación.
+    expect((await validateInvoice(null, await form({ invoiceNumber: "F-2026-001", confirmDuplicate: "1" })))?.duplicateOf).toHaveLength(1);
+  });
+
+  it("si la otra aún no está validada, no hace falta confirmar", async () => {
+    await otra("PENDING_REVIEW");
+    expect((await validate(await form({ invoiceNumber: "F-2026-001" }))).error).toBeNull();
+  });
+});
+
+describe("F-057: las incidencias se cierran al validar, rechazar o reprocesar", () => {
+  const openIssue = (invoiceId: string, type: "MATH_MISMATCH" | "LOW_CONFIDENCE" | "POSSIBLE_DUPLICATE" | "MANUAL") =>
+    prisma.invoiceIssue.create({ data: { invoiceId, type, description: `Incidencia ${type}` } });
+  const openCount = (invoiceId: string) => prisma.invoiceIssue.count({ where: { invoiceId, status: "OPEN" } });
+
+  it("al validar, todas", async () => {
+    for (const type of ["MATH_MISMATCH", "LOW_CONFIDENCE", "MANUAL"] as const) await openIssue(id, type);
+    expect((await validate(await form({}))).error).toBeNull();
+    expect(await openCount(id)).toBe(0);
+    const closed = await prisma.invoiceIssue.findMany({ where: { invoiceId: id } });
+    expect(closed.map((i) => [i.status, i.resolvedBy])).toEqual(closed.map(() => ["RESOLVED", w.worker.id]));
+  });
+
+  it("validar una no toca las incidencias de otra factura", async () => {
+    const { id: otra } = await makeInvoice(w.client, { invoiceNumber: "OTRA-9" });
+    await openIssue(otra, "POSSIBLE_DUPLICATE");
+    await openIssue(id, "LOW_CONFIDENCE");
+    expect((await validate(await form({}))).error).toBeNull();
+    expect([await openCount(id), await openCount(otra)]).toEqual([0, 1]);
+  });
+
+  it("guardar sin validar no las cierra", async () => {
+    await openIssue(id, "LOW_CONFIDENCE");
+    expect((await save({})).error).toBeNull();
+    expect(await openCount(id)).toBe(1);
+  });
+
+  it("al rechazar, todas", async () => {
+    await openIssue(id, "POSSIBLE_DUPLICATE");
+    await openIssue(id, "MATH_MISMATCH");
+    expect((await reject(id)).error).toBeNull();
+    expect(await openCount(id)).toBe(0);
+  });
+
+  it("al rechazar el lote, las de todas sus facturas (y no las de otro lote)", async () => {
+    const r = await row();
+    const { id: otraDelLote } = await makeInvoice(w.client);
+    const { id: otroMes } = await makeInvoice(w.client, { periodMonth: r.periodMonth === 12 ? 1 : r.periodMonth + 1 });
+    for (const inv of [id, otraDelLote, otroMes]) await openIssue(inv, "MATH_MISMATCH");
+    const fd = new FormData();
+    for (const [k, v] of Object.entries({ clientId: w.client.id, month: String(r.periodMonth), year: String(r.periodYear), type: r.type, periodType: r.periodType, reason: "Lote ilegible" })) fd.set(k, v);
+    expect(await rejectBatch(null, fd)).toMatchObject({ ok: true });
+    expect([await openCount(id), await openCount(otraDelLote), await openCount(otroMes)]).toEqual([0, 0, 1]);
+    const closed = await prisma.invoiceIssue.findFirstOrThrow({ where: { invoiceId: id } });
+    expect([closed.status, closed.resolvedBy]).toEqual(["RESOLVED", w.worker.id]);
+  });
+
+  it("al reprocesar, las de la lectura anterior; las que sigan aplicando se crean otra vez", async () => {
+    fakeS3().put("k-repro", facturaeXml({ buyerCif: w.client.cif, base: "200.00", taxRate: "10.00", taxAmount: "42.00", total: "242.00" }));
+    const { id: inv } = await makeInvoice(w.client, {
+      filename: "r.xml", storageKey: "k-repro", fileType: "application/xml", status: "UPLOADED",
+      invoiceNumber: null, invoiceDate: null, issuerName: null, issuerCif: null, taxBase: null, vatRate: null, vatAmount: null, totalAmount: null,
+    });
+    const vieja = await openIssue(inv, "LOW_CONFIDENCE");
+    await processInvoice(inv, w.worker.id);
+    expect((await prisma.invoiceIssue.findUniqueOrThrow({ where: { id: vieja.id } })).status).toBe("RESOLVED");
+    // El desglose 200 al 10 % con cuota 42 sigue sin cuadrar: su incidencia vuelve a estar abierta.
+    const abiertas = await prisma.invoiceIssue.findMany({ where: { invoiceId: inv, status: "OPEN" } });
+    expect(abiertas.map((i) => i.field)).toEqual(["vatLines"]);
+  });
+});
+
+describe("revisión con un posible duplicado abierto (F-016)", () => {
+  let originalId: string;
+  beforeEach(async () => {
+    ({ id: originalId } = await makeInvoice(w.client, { status: "PENDING_REVIEW", invoiceNumber: "OTRA-1" }));
+    await prisma.invoice.update({ where: { id }, data: { status: "NEEDS_ATTENTION" } });
+    await prisma.invoiceIssue.create({
+      data: { invoiceId: id, type: "POSSIBLE_DUPLICATE", description: "Posible duplicado de la factura OTRA-1.", field: `duplicateOf:${originalId}` },
+    });
+  });
+  const dismiss = () => {
+    const fd = new FormData();
+    fd.set("invoiceId", id);
+    return dismissDuplicateIssue(null, fd);
+  };
+  const issueStatus = async () => (await prisma.invoiceIssue.findFirstOrThrow({ where: { invoiceId: id } })).status;
+
+  it("validar sin confirmar no valida y devuelve la incidencia con la original", async () => {
+    const r = await validateInvoice(null, await form({}));
+    const issue = await prisma.invoiceIssue.findFirstOrThrow({ where: { invoiceId: id } });
+    expect(r?.duplicateOf).toEqual([{ kind: "openIssue", key: `openIssue:${issue.id}`, id: originalId, label: "Posible duplicado de la factura OTRA-1." }]);
+    expect(r?.error).toBe("Esta factura tiene abierto un aviso de duplicado. Si no es la misma, confírmalo para validarla.");
+    expect((await row()).status).toBe("NEEDS_ATTENTION");
+    expect(await issueStatus()).toBe("OPEN");
+  });
+
+  it("con el aviso abierto y otra validada con el mismo número: los dos en la misma confirmación", async () => {
+    const validada = await makeInvoice(w.client, { status: "VALIDATED", issuerCif: "B12345674", invoiceNumber: "F-77" });
+    const r = await validateInvoice(null, await form({ invoiceNumber: "F-77" }));
+    expect(r?.duplicateOf?.map((d) => [d.kind, d.id])).toEqual([["openIssue", originalId], ["validated", validada.id]]);
+    expect(r?.error).toMatch(/^Esta factura tiene abierto un aviso de duplicado\. Ya hay otra factura validada con este número y este emisor: la factura F-77/);
+    expect((await row()).status).toBe("NEEDS_ATTENTION");
+  });
+
+  it("validar confirmado valida y cierra la incidencia", async () => {
+    const issue = await prisma.invoiceIssue.findFirstOrThrow({ where: { invoiceId: id } });
+    expect((await validate(await form({ confirmDuplicate: `openIssue:${issue.id}` }))).error).toBeNull();
+    expect((await row()).status).toBe("VALIDATED");
+    expect(await issueStatus()).toBe("RESOLVED");
+  });
+
+  it("«No es duplicada»: la descarta y, sin otras abiertas, pasa a pendiente con historial", async () => {
+    expect(await dismiss()).toEqual({ ok: true });
+    expect(await issueStatus()).toBe("DISMISSED");
+    expect((await row()).status).toBe("PENDING_REVIEW");
+    const history = await prisma.invoiceStatusHistory.findMany({ where: { invoiceId: id } });
+    expect(history.map((h) => [h.fromStatus, h.toStatus])).toEqual([["NEEDS_ATTENTION", "PENDING_REVIEW"]]);
+    // Ya no pide confirmación al validar.
+    expect((await validate(await form({}))).error).toBeNull();
+  });
+
+  it("«No es duplicada» con issueId (una fila de la revisión): solo esa", async () => {
+    const segunda = await prisma.invoiceIssue.create({ data: { invoiceId: id, type: "POSSIBLE_DUPLICATE", description: "Otro aviso." } });
+    const primera = await prisma.invoiceIssue.findFirstOrThrow({ where: { invoiceId: id, id: { not: segunda.id } } });
+    const fd = new FormData();
+    fd.set("invoiceId", id);
+    fd.set("issueId", primera.id);
+    expect(await dismissDuplicateIssue(null, fd)).toEqual({ ok: true });
+    const statuses = await prisma.invoiceIssue.findMany({ where: { invoiceId: id }, orderBy: { createdAt: "asc" } });
+    expect(statuses.map((i) => [i.id, i.status])).toEqual([[primera.id, "DISMISSED"], [segunda.id, "OPEN"]]);
+    expect((await row()).status).toBe("NEEDS_ATTENTION");
+    // Sin issueId (el listado): todas.
+    expect(await dismiss()).toEqual({ ok: true });
+    expect(await issueStatus()).toBe("DISMISSED");
+    expect(await prisma.invoiceIssue.count({ where: { invoiceId: id, status: "OPEN" } })).toBe(0);
+  });
+
+  it("«No es duplicada» con otra incidencia abierta: sigue con incidencias", async () => {
+    await prisma.invoiceIssue.create({ data: { invoiceId: id, type: "MATH_MISMATCH", description: "No cuadra" } });
+    expect(await dismiss()).toEqual({ ok: true });
+    expect((await row()).status).toBe("NEEDS_ATTENTION");
+  });
+
+  it("«No es duplicada» con la factura ya validada o con el periodo cerrado: no (revisión 2, punto 5)", async () => {
+    await prisma.invoice.update({ where: { id }, data: { status: "VALIDATED" } });
+    expect(await dismiss()).toEqual({ error: "Esta factura ya no está por revisar. Recarga la página." });
+    expect(await issueStatus()).toBe("OPEN");
+    await prisma.invoice.update({ where: { id }, data: { status: "NEEDS_ATTENTION" } });
+    const r = await row();
+    await prisma.periodClosure.create({ data: { clientId: w.client.id, month: r.accountingPeriodMonth ?? r.periodMonth, year: r.accountingPeriodYear ?? r.periodYear, closedBy: w.admin.id } });
+    expect((await dismiss())?.error).toMatch(/está cerrado/);
+    expect(await issueStatus()).toBe("OPEN");
+  });
+
+  it("«No es duplicada» desde otra asesoría: no se toca", async () => {
+    const otra = await makeFirm("B");
+    for (const user of [otra.admin, otra.worker]) {
+      signInAs(user);
+      expect(await dismiss()).toEqual({ error: "No tienes acceso a esta factura." });
+    }
+    expect(await issueStatus()).toBe("OPEN");
+  });
+
+  it("«Es duplicada»: rechazo con categoría DUPLICATE, el aviso como motivo y la incidencia cerrada", async () => {
+    const fd = new FormData();
+    fd.set("invoiceId", id);
+    fd.set("rejectionReason", "Posible duplicado de la factura OTRA-1.");
+    fd.set("rejectionCategory", "DUPLICATE");
+    expect((await settleAction(rejectInvoice(null, fd))).error).toBeNull();
+    const r = await row();
+    expect([r.status, r.rejectionCategory, r.rejectionReason]).toEqual(["REJECTED", "DUPLICATE", "Posible duplicado de la factura OTRA-1."]);
+    expect(await issueStatus()).toBe("RESOLVED");
+  });
+});
+
+describe("«Es duplicada» del listado: el mismo flujo que rechazar (revisión 1 del PR #10, punto 5)", () => {
+  const quickReject = () => {
+    const fd = new FormData();
+    fd.set("invoiceId", id);
+    return quickRejectDuplicate(null, fd);
+  };
+  beforeEach(async () => {
+    await prisma.invoiceIssue.create({ data: { invoiceId: id, type: "POSSIBLE_DUPLICATE", description: "Posible duplicado." } });
+  });
+  const unchanged = async (status: string) => {
+    expect((await row()).status).toBe(status);
+    expect(await prisma.invoiceIssue.count({ where: { invoiceId: id, status: "OPEN" } })).toBe(1);
+    expect(pendingAfterCallbacks()).toBe(0);
+  };
+
+  it("pendiente: rechaza con DUPLICATE, cierra la incidencia y encola el correo", async () => {
+    expect(await quickReject()).toEqual({ ok: true });
+    const r = await row();
+    expect([r.status, r.rejectionCategory, r.rejectionReason]).toEqual(["REJECTED", "DUPLICATE", "Factura duplicada: ya la habíamos recibido."]);
+    expect(await prisma.invoiceIssue.count({ where: { invoiceId: id, status: "OPEN" } })).toBe(0);
+    expect(pendingAfterCallbacks()).toBe(1);
+  });
+
+  it("el motivo para el cliente nombra la original, no la descripción interna", async () => {
+    const original = await makeInvoice(w.client, { invoiceNumber: "F-100", status: "VALIDATED" });
+    await prisma.invoiceIssue.updateMany({ where: { invoiceId: id }, data: { field: `duplicateOf:${original.id}` } });
+    expect(await quickReject()).toEqual({ ok: true });
+    expect((await row()).rejectionReason).toMatch(/^Factura duplicada: ya recibimos la factura F-100 subida el \d{2}\/\d{2}\/\d{4} \(/);
+  });
+
+  it("desde otra asesoría (admin y gestor): «No tienes acceso», sin cambios y sin correo", async () => {
+    const otra = await makeFirm("B");
+    for (const user of [otra.admin, otra.worker]) {
+      signInAs(user);
+      expect(await quickReject()).toEqual({ error: "No tienes acceso a esta factura." });
+    }
+    await unchanged("PENDING_REVIEW");
+  });
+
+  it("el ADMIN de su propia asesoría: sí", async () => {
+    signInAs(w.admin);
+    expect(await quickReject()).toEqual({ ok: true });
+    expect((await row()).status).toBe("REJECTED");
+    expect(await prisma.invoiceIssue.count({ where: { invoiceId: id, status: "OPEN" } })).toBe(0);
+  });
+
+  it("validada (otro gestor la validó con el listado abierto): no, y no se deshace su validación", async () => {
+    await prisma.invoice.update({ where: { id }, data: { status: "VALIDATED" } });
+    expect((await quickReject())?.error).toBe("Esta factura ya no está por revisar. Recarga la página.");
+    await unchanged("VALIDATED");
+  });
+
+  it("validada entre la comprobación y la escritura: tampoco", async () => {
+    const lock = await holdLock(`SELECT 1 FROM "Invoice" WHERE id = $1 FOR UPDATE`, id);
+    const pending = inFlight(quickReject());
+    await vi.waitFor(async () => expect(await sessionsWaitingForLock()).toBe(1), { timeout: 10_000 });
+    // Sin tocar updatedAt: lo que frena la escritura es el estado del where.
+    await lock.release(`UPDATE "Invoice" SET status = 'VALIDATED' WHERE id = $1`);
+    expect((await pending)?.error).toBe("Esta factura ya no está por revisar. Recarga la página.");
+    await unchanged("VALIDATED");
+  });
+
+  it("con la original rechazada: error, para que el gestor la revise antes", async () => {
+    const original = await makeInvoice(w.client, { invoiceNumber: "F-100", status: "REJECTED" });
+    await prisma.invoiceIssue.updateMany({ where: { invoiceId: id }, data: { field: `duplicateOf:${original.id}` } });
+    expect((await quickReject())?.error).toBe("La factura original está rechazada: revísala antes de rechazar esta como duplicada.");
+    await unchanged("PENDING_REVIEW");
+  });
+
+  it("con la original dividida: rechaza sin nombrarla", async () => {
+    const original = await makeInvoice(w.client, { invoiceNumber: "F-100", status: "SPLIT_SOURCE" });
+    await prisma.invoiceIssue.updateMany({ where: { invoiceId: id }, data: { field: `duplicateOf:${original.id}` } });
+    expect(await quickReject()).toEqual({ ok: true });
+    expect((await row()).rejectionReason).toBe("Factura duplicada: ya la habíamos recibido.");
+  });
+
+  it("con el periodo cerrado: no", async () => {
+    const r = await row();
+    await prisma.periodClosure.create({ data: { clientId: w.client.id, month: r.periodMonth, year: r.periodYear, closedBy: w.admin.id } });
+    expect((await quickReject())?.error).toMatch(/está cerrado/);
+    await unchanged("PENDING_REVIEW");
+  });
+
+  it("analizándose: no", async () => {
+    await prisma.invoice.update({ where: { id }, data: { status: "ANALYZING" } });
+    expect((await quickReject())?.error).toMatch(/analizando/);
+    await unchanged("ANALYZING");
+  });
+
+  it("ya exportada a A3: no", async () => {
+    await prisma.exportBatch.create({ data: { id: "lote-1", format: "a3con", invoiceCount: 1, userId: w.admin.id } });
+    await prisma.exportBatchItem.create({ data: { exportBatchId: "lote-1", invoiceId: id, snapshot: "{}" } });
+    expect((await quickReject())?.error).toMatch(/ya se exportó a A3/);
+    await unchanged("PENDING_REVIEW");
   });
 });

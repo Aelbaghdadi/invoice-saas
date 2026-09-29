@@ -31,7 +31,20 @@ export function isDatabaseError(err: unknown): boolean {
  */
 const OCR_DATA_PRISMA_CODES = new Set(["P2000", "P2007", "P2020", "P2023"]);
 
+/**
+ * El documento no se puede procesar por como es, con un mensaje propio para
+ * el gestor (p. ej. un lote Facturae con varias facturas). Es determinista:
+ * no se reintenta y va como ERR-OCR-002 con su texto.
+ */
+export class DocumentError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DocumentError";
+  }
+}
+
 export function classifyOcrError(err: unknown): OcrErrorCode {
+  if (err instanceof DocumentError) return "ERR-OCR-002";
   if (isDatabaseError(err)) {
     const code = (err as { code?: unknown }).code;
     return typeof code === "string" && OCR_DATA_PRISMA_CODES.has(code) ? "ERR-OCR-002" : "ERR-SYS-001";
@@ -53,4 +66,10 @@ export function userMessageForOcrError(code: OcrErrorCode): string {
     case "ERR-OCR-002": return "No se pudieron leer los datos del documento (ilegible o con formato no válido). Revísala manualmente.";
     default:            return "No se pudo procesar la factura. Vuelve a intentarlo o revísala manualmente.";
   }
+}
+
+/** Mensaje para el gestor de un error concreto: el suyo si es un
+ *  DocumentError; si no, el generico del codigo. */
+export function userMessageForError(err: unknown, code: OcrErrorCode): string {
+  return err instanceof DocumentError ? err.message : userMessageForOcrError(code);
 }

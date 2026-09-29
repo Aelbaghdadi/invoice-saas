@@ -7,7 +7,7 @@
  * ([50 / "" / 5]) y el semaforo sumaba lo que pudiera leer de ella: la
  * pantalla salia en verde y se guardaba una factura con una linea de menos.
  */
-import { hasMoreThanTwoDecimals } from "@/lib/money";
+import { hasMoreThanTwoDecimals, toCents } from "@/lib/money";
 
 export type VatLineText = {
   taxBase?: unknown;
@@ -55,6 +55,10 @@ function parseDecimal(value: string): number | null {
  *  veia un ERR-SYS-001 generico. */
 const MAX_AMOUNT = 1e10;
 
+function isPercent(n: number): boolean {
+  return n >= 0 && n <= 100;
+}
+
 function joinSpanish(items: string[]): string {
   return items.length > 1 ? `${items.slice(0, -1).join(", ")} y ${items[items.length - 1]}` : items[0];
 }
@@ -85,6 +89,15 @@ export function vatLineProblem(line: VatLineText, position: number): string | nu
   if (badSurcharge.length > 0) {
     return `La línea ${position} de IVA tiene un valor que no es un número en ${joinSpanish(badSurcharge)}.`;
   }
+  // Los % van a numeric(5,2): con un 1500 la BD lo rechazaba y el gestor
+  // veia un ERR-SYS-001 generico.
+  const outOfRange = [
+    { label: "el % de IVA", value: text(line.vatRate) },
+    { label: "el % de recargo", value: text(line.equivalenceSurchargeRate) },
+  ].filter((v) => v.value !== "" && !isPercent(parseDecimal(v.value)!)).map((v) => v.label);
+  if (outOfRange.length > 0) {
+    return `La línea ${position} de IVA tiene ${joinSpanish(outOfRange)} fuera de rango: tiene que estar entre 0 y 100.`;
+  }
   // La BD guarda 2 decimales: 1,005 se guardaria como 1,01 y el cuadre que
   // se calculo con 1,005 dejaria de valer.
   const surchargeValues = [
@@ -113,10 +126,18 @@ export function vatLineProblem(line: VatLineText, position: number): string | nu
     return `La línea ${position} de IVA está incompleta: tiene % de recargo de equivalencia pero falta su cuota.`;
   }
   // Y al reves: a A3 llegaria un 0 % con la cuota (revision 2 del PR #7).
-  if (text(line.equivalenceSurchargeAmount) && !text(line.equivalenceSurchargeRate)) {
+  // Una cuota 0 cuenta como vacia, igual que en el export: no hay nada que
+  // mandar y el error obligaba a corregir un campo que la pantalla escondia.
+  if (hasSurchargeAmount(line) && !text(line.equivalenceSurchargeRate)) {
     return `La línea ${position} de IVA está incompleta: tiene cuota de recargo de equivalencia pero falta su %.`;
   }
   return null;
+}
+
+/** ¿Trae cuota de recargo distinta de 0? */
+function hasSurchargeAmount(line: VatLineText): boolean {
+  const amount = parseDecimal(text(line.equivalenceSurchargeAmount));
+  return amount !== null && toCents(amount) !== 0;
 }
 
 /** El primer problema de la lista, o null si todas estan completas o vacias. */
@@ -159,7 +180,8 @@ export function parseVatLineInputs(raw: string): { lines: ParsedVatLineInput[] }
       vatRate: parseDecimal(text(line.vatRate))!,
       vatAmount: parseDecimal(text(line.vatAmount))!,
       equivalenceSurchargeRate: surchargeRate,
-      equivalenceSurchargeAmount: surchargeAmount,
+      // Sin % y con cuota 0: la linea no lleva recargo.
+      equivalenceSurchargeAmount: surchargeRate === null && !hasSurchargeAmount(line) ? null : surchargeAmount,
     });
   }
   return { lines };
@@ -188,6 +210,7 @@ export function amountFieldsProblem(fields: {
     if (!value) continue;
     const n = parseDecimal(value);
     if (n === null) return `${label} no es un número.`;
+    if (label.startsWith("El %") && !isPercent(n)) return `${label} tiene que estar entre 0 y 100.`;
     if (Math.abs(n) >= MAX_AMOUNT) return `${label} es demasiado grande.`;
     if (hasMoreThanTwoDecimals(n)) {
       return `${label} tiene más de 2 decimales. ${label.startsWith("El %") ? "Usa como máximo 2 decimales." : "Redondéalo a céntimos."}`;

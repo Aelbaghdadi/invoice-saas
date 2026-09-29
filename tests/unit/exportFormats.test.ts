@@ -26,8 +26,9 @@ function mkInvoice(overrides: Partial<InvoiceWithClient> = {}): InvoiceWithClien
     irpfRate: 0 as any,
     irpfAmount: 0 as any,
     totalAmount: 121 as any,
-    supplierAccount: "4000001",
-    expenseAccount: "6000001",
+    // Cuentas del sentido de la factura: en una venta, cliente e ingreso.
+    supplierAccount: overrides.type === "SALE" ? "4300001" : "4000001",
+    expenseAccount: overrides.type === "SALE" ? "7000001" : "6000001",
     client: { id: "c1", name: "ACME SL" } as any,
     ...overrides,
   } as InvoiceWithClient;
@@ -186,7 +187,7 @@ describe("validateForA3Export", () => {
     expect(res).toHaveLength(1);
     expect(res[0].severity).toBe("bloqueante");
     expect(res[0].blockers).toEqual([
-      "Falta el NIF del proveedor. Si es un ticket o una factura simplificada, configura la cuenta genérica en la ficha del cliente",
+      "Falta el NIF del proveedor. Si es un ticket o una factura simplificada, configura la cuenta genérica en la ficha del cliente y ponla en la factura desde la revisión",
     ]);
   });
 
@@ -341,6 +342,42 @@ describe("validateForA3Export — facturas emitidas y moneda", () => {
       mkInvoice({ id: "inv-2", currency: null }),
     ]);
     expect(res.flatMap((r) => r.warnings).filter((w) => w.includes("euros"))).toEqual([]);
+  });
+});
+
+describe("validateForA3Export — negativos sin marcar como rectificativa (F-012)", () => {
+  const negativos = { taxBase: -100 as never, vatAmount: -21 as never, totalAmount: -121 as never };
+
+  it("avisa si no está marcada", () => {
+    const [res] = validateForA3Export([mkInvoice(negativos)]);
+    expect(res.severity).toBe("aviso");
+    expect(res.warnings).toContain("Importes negativos sin marcar como rectificativa: si es un abono, márcala en la revisión; si no, corrige el signo");
+  });
+
+  it("también con solo el recargo en negativo (la misma regla que la revisión)", () => {
+    const [res] = validateForA3Export([mkInvoice({
+      vatLines: [{ taxBase: 100, vatRate: 21, vatAmount: 21, equivalenceSurchargeRate: 5.2, equivalenceSurchargeAmount: -5.2 }] as never,
+      totalAmount: 115.8 as never,
+    })]);
+    expect(res.warnings).toContain("Importes negativos sin marcar como rectificativa: si es un abono, márcala en la revisión; si no, corrige el signo");
+  });
+
+  it("marcada, o en positivo: no", () => {
+    const res = validateForA3Export([mkInvoice({ ...negativos, isRectificative: true }), mkInvoice({ id: "inv-2" })]);
+    expect(res.flatMap((r) => r.warnings).filter((w) => w.startsWith("Importes negativos"))).toEqual([]);
+  });
+});
+
+describe("validateForA3Export — cuentas del sentido contrario", () => {
+  it("una validada con cuentas al revés: aviso, no bloqueante", () => {
+    const res = validateForA3Export([mkInvoice({ supplierAccount: "43000001" })]);
+    expect(res[0].severity).toBe("aviso");
+    expect(res[0].warnings).toContain("La cuenta 43000001 es de cliente y esta factura es recibida: usa una cuenta de proveedor (40x o 41x)");
+  });
+
+  it("un rappel no avisa", () => {
+    const res = validateForA3Export([mkInvoice({ expenseAccount: "70900000" })]);
+    expect(res.flatMap((r) => r.warnings).filter((w) => w.startsWith("La cuenta"))).toEqual([]);
   });
 });
 
@@ -607,7 +644,12 @@ describe("validateForA3Export — huecos en la numeración (solo emitidas)", () 
     const entries = res.filter((r) => r.invoiceId === "inv-3");
     expect(entries.map((r) => r.severity)).toEqual(["aviso", "fuera"]);
     expect(entries[0]).toMatchObject({ numberingGap: true, warnings: [expect.stringContaining("falta la factura 2")] });
+    // La caja ámbar dice «se exportan igualmente»: esta no, y se dice.
+    expect(entries[0].warnings[0]).toMatch(/^No va al Excel \(sale abajo, en gris\)\. Salto de numeración/);
     expect(entries[1].warnings.join()).not.toContain("Salto de numeración");
+    // Un salto sobre una que sí se exporta no lleva esa marca.
+    const normal = validateForA3Export([emitida({ id: "inv-1", invoiceNumber: "1" }), emitida({ id: "inv-3", invoiceNumber: "3" })]);
+    expect(normal.find((r) => r.invoiceId === "inv-3")?.warnings[0]).toMatch(/^Salto de numeración/);
   });
 
   it("NO avisa en las recibidas: cada proveedor numera para todos sus clientes", () => {

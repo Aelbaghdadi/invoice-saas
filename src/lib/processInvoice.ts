@@ -7,7 +7,7 @@ import {
   extractInvoiceFromXml,
 } from "@/lib/ocr";
 import {
-  extractFromPdfTextWithGemini,
+  extractPdfWithGemini,
   extractFromDocumentWithGemini,
 } from "@/lib/ocrLlm";
 import { detectIssues } from "@/lib/issueDetector";
@@ -31,12 +31,13 @@ import {
   completeReadSurcharges,
   proposeSurchargesFromTotal,
 } from "@/lib/equivalenceSurcharge";
-import { textMentionsRectificative, applyRectificativeSign } from "@/lib/rectificative";
+import { rectificativeSignHint, textMentionsRectificative, withRectificativeMention } from "@/lib/rectificative";
 import { routeByCif, clientSideCif, routeByText, detectInvoiceType } from "@/lib/invoiceRouting";
 import { lookupProviderClient } from "@/lib/providerRouting";
 import { accountEntryKey } from "@/lib/supplierMatching";
-import { proposeOperationType } from "@/lib/operationTypeProposal";
-import { classifyOcrError, userMessageForOcrError } from "@/lib/ocrErrors";
+import { proposeOperationType, unclassifiedGoodsType } from "@/lib/operationTypeProposal";
+import { classifyOcrError, DocumentError, userMessageForError } from "@/lib/ocrErrors";
+import { closeOpenIssues } from "@/lib/invoiceIssues";
 
 /**
  * Convierte el string de fecha del OCR a Date. Si el OCR devuelve algo
@@ -107,17 +108,12 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
 
           if (ft === "application/pdf" || invoice.filename.endsWith(".pdf")) {
             if (process.env.GEMINI_API_KEY) {
-              try {
-                source = "gemini_text";
-                ocrResult = await extractFromPdfTextWithGemini(base64);
-              } catch (e) {
-                if (e instanceof Error && e.message === "PDF_ESCANEADO") {
-                  source = "gemini_multimodal";
-                  ocrResult = await extractFromDocumentWithGemini(base64, "application/pdf");
-                } else {
-                  throw e;
-                }
-              }
+              // Solo lanza si falla la llamada que no tiene alternativa: la
+              // del texto, o la de la imagen cuando el texto no valia. Si el
+              // texto ya salio (aunque incompleto) y la imagen falla, devuelve
+              // el del texto: el reintento no repite una llamada que ya fue
+              // bien (temperatura 0, saldria lo mismo).
+              ({ source, result: ocrResult } = await extractPdfWithGemini(base64));
             } else {
               source = "document_ai";
               ocrResult = await extractInvoiceFromPdf(base64);
@@ -134,6 +130,9 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
         }
         break; // OCR completado
       } catch (ocrErr) {
+        // Un error del documento no es transitorio aunque su texto lo parezca:
+        // «El XML trae 500 facturas (lote)» casaba con el 500 de la regex.
+        if (ocrErr instanceof DocumentError) throw ocrErr;
         const m = ocrErr instanceof Error ? ocrErr.message : String(ocrErr);
         if (attempt >= MAX_OCR_ATTEMPTS || !isTransientOcrError(m)) throw ocrErr;
         // Backoff corto antes de reintentar (1.2s, 2.4s).
@@ -149,7 +148,16 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     extracted.taxBase = roundCents(extracted.taxBase);
     extracted.vatAmount = roundCents(extracted.vatAmount);
     extracted.totalAmount = roundCents(extracted.totalAmount);
-    extracted.irpfAmount = roundCents(extracted.irpfAmount);
+    // La retencion siempre en positivo: una factura que imprime «IRPF −15 %»
+    // guardaba −15 y la pantalla ya no dejaba ni guardar el borrador. El OCR
+    // no pone el signo de una rectificativa (F-012): lo pone la revision al
+    // marcar la casilla.
+    const positive = (v: number | null) => (v == null ? v : Math.abs(v));
+    extracted.irpfAmount = roundCents(positive(extracted.irpfAmount));
+    // Los % tambien: con 7,005 % la cuota se calculaba con el % sin redondear
+    // y la BD guardaba 7,01, asi que la revision la daba por descuadrada.
+    extracted.vatRate = roundCents(extracted.vatRate);
+    extracted.irpfRate = roundCents(positive(extracted.irpfRate));
     extracted.vatLines = extracted.vatLines.map((l) => ({
       ...l,
       taxBase: roundCents(l.taxBase),
@@ -283,6 +291,12 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       }
     }
     const isUnclassified = isRoutingUpload && routingReason !== null;
+    // En el buzon no se crean incidencias y al clasificar ya no hay texto: la
+    // mencion de rectificativa se guarda para que classifyInvoice la lea.
+    // (Un Facturae rectificativo lo lee classifyInvoice del propio XML.)
+    if (isUnclassified && textMentionsRectificative(ocrResult.rawText)) {
+      extractionData.rawResponse = withRectificativeMention(extractionData.rawResponse);
+    }
 
     // Normalizacion de NIFs y deteccion de tipo de operacion a partir del
     // prefijo del NIF (parser en validators.ts para no tocar OCR).
@@ -415,19 +429,7 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       ai: extracted.supplyType,
     });
     const operationType = intracomProposal.operationType;
-
-    // Detect issues (duplicates, low confidence, math mismatch, IVA no-cero
-    // en intracomunitarias, etc.). En las "Por clasificar" no tiene sentido
-    // (aún no hay cliente real). Va despues de decidir el tipo de operacion
-    // final (el aprendido del tercero incluido): con la pista del prefijo del
-    // NIF, una inversion del sujeto pasivo con cuota 0 salia como desglose
-    // descuadrado (revision 1 del PR #7).
-    const issues = isUnclassified
-      ? []
-      : await detectIssues(invoiceId, extracted, invoice, operationType, { persist: false });
-    const targetStatus: InvoiceStatus = isUnclassified
-      ? "PENDING_ROUTING"
-      : issues.length > 0 ? "NEEDS_ATTENTION" : "PENDING_REVIEW";
+    const goods = isUnclassified ? unclassifiedGoodsType(intracomProposal, extracted.supplyType) : intracomProposal;
 
     // ── Deteccion de retencion IRPF ────────────────────────────────────
     //
@@ -476,7 +478,7 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       const baseParaTipo = vatLines.reduce((acc, l) => acc + l.taxBase, 0);
       const tipoDeducido =
         extracted.irpfAmount != null && baseParaTipo > 0
-          ? parseFloat(((extracted.irpfAmount / baseParaTipo) * 100).toFixed(2))
+          ? parseFloat((Math.abs(extracted.irpfAmount / baseParaTipo) * 100).toFixed(2))
           : null;
       retentionRate =
         extracted.irpfRate ?? tipoDeducido ?? RETENTION_DEFAULT_RATE.PROFESSIONAL;
@@ -495,38 +497,46 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     const finalIrpfRate = retentionRate ?? extracted.irpfRate ?? null;
     const finalIrpfAmount = computedIrpfAmount;
 
-    // ── Rectificativa / abono: solo poner el importe en NEGATIVO ───────
-    //
-    // Si el documento dice "rectificativa" / "nota de crédito" / "factura de
-    // abono" (o ya trae importes negativos), guardamos los importes en negativo.
-    // NO marcamos el flag isRectificative ni el sufijo _R del export: ese
-    // comportamiento queda encapsulado al check, que el gestor activa a mano
-    // si en el futuro se quiere (serie rectificada, tipo, _R, etc.).
-    const hasNegativeLine = vatLines.some((l) => l.taxBase < 0 || l.vatAmount < 0);
-    const hasNegativeTotal = (extracted.totalAmount ?? 0) < 0;
-    const looksRectificative =
-      hasNegativeLine || hasNegativeTotal || textMentionsRectificative(ocrResult.rawText);
+    // Detect issues (duplicates, low confidence, math mismatch, IVA no-cero
+    // en intracomunitarias, etc.). En las "Por clasificar" no tiene sentido
+    // (aún no hay cliente real). Va despues de decidir el tipo de operacion
+    // final (el aprendido del tercero incluido): con la pista del prefijo del
+    // NIF, una inversion del sujeto pasivo con cuota 0 salia como desglose
+    // descuadrado (revision 1 del PR #7). Y despues de la retencion: el
+    // cuadre tiene que hacerse con el IRPF que se va a guardar (recalculado
+    // con el % redondeado), no con el leido; si no, quedaba isValid=false
+    // sin ninguna incidencia (revision 1 del PR #8).
+    const issues = isUnclassified
+      ? []
+      : await detectIssues(invoiceId, { ...extracted, irpfAmount: finalIrpfAmount }, invoice, operationType, { persist: false });
+    // Rectificativa: incidencia en vez de cambiar signos (F-012).
+    if (!isUnclassified) {
+      const hint = rectificativeSignHint({
+        lines: vatLines, taxBase: extracted.taxBase, vatAmount: extracted.vatAmount,
+        totalAmount: extracted.totalAmount, irpfAmount: finalIrpfAmount, retentionBase,
+      }, ocrResult.rawText, extracted.isCorrective === true);
+      if (hint) issues.push({ type: "MANUAL", description: hint, field: "isRectificative" });
+    }
+    const targetStatus: InvoiceStatus = isUnclassified
+      ? "PENDING_ROUTING"
+      : issues.length > 0 ? "NEEDS_ATTENTION" : "PENDING_REVIEW";
 
-    // Si parece abono y vino en positivo, pasamos los importes a negativo.
-    // Misma regla que en revisión (lib/rectificative): si ya trae signos
-    // mixtos/negativos, se respetan.
-    const signed = looksRectificative
-      ? applyRectificativeSign({
-          lines: vatLines,
-          taxBase: extracted.taxBase,
-          vatAmount: extracted.vatAmount,
-          totalAmount: extracted.totalAmount,
-          irpfAmount: finalIrpfAmount,
-          retentionBase,
-        })
-      : {
-          lines: vatLines,
-          taxBase: extracted.taxBase,
-          vatAmount: extracted.vatAmount,
-          totalAmount: extracted.totalAmount,
-          irpfAmount: finalIrpfAmount,
-          retentionBase,
-        };
+    // ── Rectificativa / abono: el OCR NO cambia signos (F-012) ─────────
+    //
+    // Antes, si el texto decia "rectificativa" / "nota de crédito" /
+    // "factura de abono" se negaban todos los importes sin marcar
+    // isRectificative: daba positivo con «no es rectificativa» y una compra
+    // ordinaria pasaba a IVA soportado negativo. Ahora se guardan como se
+    // leyeron y la incidencia de arriba (rectificativeSignHint) avisa. Estos
+    // son los importes que se guardan (con la retencion ya recalculada).
+    const amounts = {
+      lines: vatLines,
+      taxBase: extracted.taxBase,
+      vatAmount: extracted.vatAmount,
+      totalAmount: extracted.totalAmount,
+      irpfAmount: finalIrpfAmount,
+      retentionBase,
+    };
 
     // ── Recargo de equivalencia ─────────────────────────────────────────
     //
@@ -539,38 +549,38 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     // (Client.equivalenceSurchargeCustomer).
     //
     // Por cada linea:
-    // 1) Lo que el OCR/IA leyo en el documento para ESA linea manda, y viene
-    //    ya firmado si es un abono (applyRectificativeSign tambien niega el
-    //    recargo).
+    // 1) Lo que el OCR/IA leyo en el documento para ESA linea manda, con el
+    //    signo impreso (el OCR no lo cambia).
     // 2) Si el cliente esta en RE y la factura no llega a su total por si
     //    sola, se propone el recargo SOLO en las lineas cuya suma explique esa
     //    diferencia, ajustando el ultimo centimo. Asi no se le cuelga recargo
     //    a los portes ni nos desviamos del importe impreso, que es lo que
     //    pasaba al aplicar el mapeo a ciegas linea por linea.
-    const lineSurcharges: { rate: number | null; amount: number | null }[] = signed.lines.map((l) => ({
+    const lineSurcharges: { rate: number | null; amount: number | null }[] = amounts.lines.map((l) => ({
       rate: l.equivalenceSurchargeRate ?? null,
       amount: l.equivalenceSurchargeAmount ?? null,
     }));
-    // Segunda pasada sobre los importes YA FIRMADOS. Normalmente no hace nada
-    // (la propuesta de antes de detectIssues ya dejo el recargo puesto): solo
-    // entra cuando el signo del abono cambia lo que falta para el total.
+    // Segunda pasada con la retencion final. Normalmente no hace nada (la
+    // propuesta de antes de detectIssues ya dejo el recargo puesto): solo
+    // entra cuando la retencion recalculada cambia lo que falta para el total.
     if (clientRecord?.equivalenceSurchargeCustomer) {
-      for (const p of proposeSurchargesFromTotal(signed.lines, signed.totalAmount, signed.irpfAmount)) {
+      for (const p of proposeSurchargesFromTotal(amounts.lines, amounts.totalAmount, amounts.irpfAmount)) {
         lineSurcharges[p.index] = { rate: p.rate, amount: p.amount };
       }
     }
     const totalSurchargeAmount = lineSurcharges.reduce((s, ls) => s + (ls.amount ?? 0), 0);
 
     // isValid final: Σ(bases) + Σ(cuotas) + Σ(recargo) - IRPF = Total, con
-    // los importes YA FIRMADOS (el `isValid` de mas arriba es un diagnostico
-    // de la extraccion cruda del OCR, previo al signo y al recargo).
+    // los importes que se guardan (el `isValid` de mas arriba es un
+    // diagnostico de la extraccion cruda, antes de la retencion recalculada y
+    // del recargo).
     let finalIsValid: boolean | null = null;
-    if (signed.lines.length > 0 && signed.totalAmount !== null) {
-      const sBase = signed.lines.reduce((s, l) => s + l.taxBase, 0);
-      const sAmount = signed.lines.reduce((s, l) => s + l.vatAmount, 0);
+    if (amounts.lines.length > 0 && amounts.totalAmount !== null) {
+      const sBase = amounts.lines.reduce((s, l) => s + l.taxBase, 0);
+      const sAmount = amounts.lines.reduce((s, l) => s + l.vatAmount, 0);
       finalIsValid = isInvoiceBalanced({
         sumBase: sBase, sumAmount: sAmount, sumSurcharge: totalSurchargeAmount,
-        irpf: signed.irpfAmount ?? 0, total: signed.totalAmount,
+        irpf: amounts.irpfAmount ?? 0, total: amounts.totalAmount,
       });
     } else {
       finalIsValid = isValid;
@@ -602,28 +612,28 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
           issuerCif:     finalIssuerCif,
           issuerCountry: finalIssuerCountry,
           operationType,
-          intracomGoodsType:   intracomProposal.goodsType,
-          intracomGoodsSource: intracomProposal.source,
+          intracomGoodsType:   goods.goodsType,
+          intracomGoodsSource: goods.source,
           receiverName:    finalReceiverName,
           receiverCif:     finalReceiverCif,
           receiverCountry: finalReceiverCountry,
           invoiceNumber: extracted.invoiceNumber,
           invoiceDate:   safeParseDate(extracted.invoiceDate),
-          taxBase:       signed.taxBase,
+          taxBase:       amounts.taxBase,
           vatRate:       extracted.vatRate ?? denormVatRate,
-          vatAmount:     signed.vatAmount,
+          vatAmount:     amounts.vatAmount,
           irpfRate:      finalIrpfRate,
-          irpfAmount:    signed.irpfAmount,
+          irpfAmount:    amounts.irpfAmount,
           retentionType,
-          retentionBase: signed.retentionBase,
-          totalAmount:   signed.totalAmount,
+          retentionBase: amounts.retentionBase,
+          totalAmount:   amounts.totalAmount,
           // Si este OCR no ve la moneda se conserva la que ya tenia (p.ej. la
           // heredada de la factura madre al dividir un PDF en USD).
           currency:      extracted.currency ?? invoice.currency,
-          // isValid final: recalculado con los importes YA FIRMADOS y el
-          // recargo de equivalencia por linea (el `isValid` de mas arriba es
-          // un diagnostico de la extraccion cruda, sin firmar ni recargo — se
-          // guarda tal cual en InvoiceExtraction, no aqui).
+          // isValid final: recalculado con los importes que se guardan (la
+          // retencion final) y el recargo de equivalencia por linea (el
+          // `isValid` de mas arriba es un diagnostico de la extraccion cruda
+          // — se guarda tal cual en InvoiceExtraction, no aqui).
           isValid: finalIsValid,
           lastOcrError:  null,
         },
@@ -634,9 +644,9 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
 
       // Reemplazar lineas previas (idempotente: si reproceso, borra y mete).
       await tx.invoiceVatLine.deleteMany({ where: { invoiceId } });
-      if (signed.lines.length > 0) {
+      if (amounts.lines.length > 0) {
         await tx.invoiceVatLine.createMany({
-          data: signed.lines.map((l, i) => ({
+          data: amounts.lines.map((l, i) => ({
             invoiceId,
             position:  i,
             taxBase:   l.taxBase,
@@ -647,6 +657,9 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
           })),
         });
       }
+      // Reprocesar (F-057): las incidencias de la lectura anterior se cierran;
+      // las que sigan aplicando se crean otra vez aqui.
+      await closeOpenIssues(tx, invoiceId, triggeredByUserId);
       if (issues.length > 0) {
         await tx.invoiceIssue.createMany({
           data: issues.map((issue) => ({
@@ -679,7 +692,7 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     const code = classifyOcrError(err);
     // Mensaje LIMPIO para el gestor (nada de stacks de Prisma en la UI). El
     // detalle técnico completo se queda en el log para depuración.
-    const userMsg = `[${code}] ${userMessageForOcrError(code)}`;
+    const userMsg = `[${code}] ${userMessageForError(err, code)}`;
     console.error(`[processInvoice] ${code}:`, err);
     // Mismo fencing que el final: un error de una ejecucion que ya no es la
     // duena no puede pasar a OCR_ERROR una factura rechazada o validada.

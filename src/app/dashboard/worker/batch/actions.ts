@@ -4,6 +4,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { BATCH_REJECT_EXCLUDED_STATUSES, PERIOD_BLOCKING_STATUSES } from "@/lib/invoiceStatuses";
 import { appendAuditLogs } from "@/lib/auditLog";
+import { closeOpenIssues } from "@/lib/invoiceIssues";
 import { revalidatePath } from "next/cache";
 import { canAccessClient } from "@/lib/accessibleClients";
 import type { InvoiceType, InvoiceStatus, PeriodType } from "@prisma/client";
@@ -207,6 +208,8 @@ export async function rejectBatch(
       });
       const doneIds = new Set(done.map((d) => d.id));
       const applied = candidates.filter((c) => doneIds.has(c.id));
+      // F-057: las rechazadas salen del flujo con sus incidencias cerradas.
+      await closeOpenIssues(tx, applied.map((a) => a.id), session.user.id);
       await tx.invoiceStatusHistory.createMany({
         data: applied.map((inv) => ({
           invoiceId: inv.id,

@@ -4,7 +4,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { a3ExclusionBox, generateCsv, generateA3Excel, partitionA3Exportable, suggestFilename, validateForA3Export, type ExportFormat, type ExportConfig } from "@/lib/exportFormats";
 import { attachmentContentDisposition } from "@/lib/contentDisposition";
-import { countExportExclusionBoxes, countExportExclusions, withSplitCounts } from "@/lib/exportExclusions";
+import { countExportExclusionBoxes, withSplitCounts } from "@/lib/exportExclusions";
 import { commitExportBatch, committedBatchState, ExportConflictError, exportStorageKey } from "@/lib/exportBatch";
 import { deleteObject, isStorageConfigured, putObject } from "@/lib/storage";
 import { appError } from "@/lib/errorCodes";
@@ -60,6 +60,18 @@ const EXPORT_ORDER_BY = [
 /** Cuantas facturas con avisos (o que no van al Excel) se mandan a la vista
  *  previa. Las bloqueantes van todas. */
 const PREVIEW_WARNING_LIMIT = 50;
+/** De esos, como mucho estos saltos de numeracion: con 60 saltos los 50 eran
+ *  todos saltos y desaparecian los demas avisos que solo calcula el export. */
+const PREVIEW_GAP_LIMIT = 25;
+
+/** Avisos de la vista previa: los saltos primero (solo los calcula el
+ *  export), hasta PREVIEW_GAP_LIMIT, y el resto del recorte para los demas.
+ *  Con 400 emitidas salteadas se mandaban 399 entradas. */
+function previewWarnings<T extends { numberingGap?: boolean }>(avisos: T[]): T[] {
+  const gaps = avisos.filter((w) => w.numberingGap).slice(0, PREVIEW_GAP_LIMIT);
+  const others = avisos.filter((w) => !w.numberingGap).slice(0, PREVIEW_WARNING_LIMIT - gaps.length);
+  return [...gaps, ...others];
+}
 
 /**
  * Vista previa: recuento y avisos. Solo lectura; la descarga es por POST
@@ -109,7 +121,6 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     count: exportable.length,
     excluded: excluded.length,
-    excludedByReason: countExportExclusions(excluded.map((e) => e.reason)),
     excludedByBox: countExportExclusionBoxes(excluded.map((e) => a3ExclusionBox(e.invoice)!)),
     alreadyExported,
     warningCount: allWarnings.length,
@@ -125,8 +136,7 @@ export async function GET(req: NextRequest) {
     // entera pesaba 1 MB en cada cambio de filtro.
     warnings: [
       ...bySeverity.bloqueante,
-      // Los saltos de numeracion siempre: solo los calcula el export.
-      ...bySeverity.aviso.filter((w, i) => i < PREVIEW_WARNING_LIMIT || w.numberingGap),
+      ...previewWarnings(bySeverity.aviso),
       ...bySeverity.fuera.slice(0, PREVIEW_WARNING_LIMIT),
     ],
   });
@@ -303,8 +313,6 @@ export async function POST(req: NextRequest) {
         "Content-Disposition": attachmentContentDisposition(filename),
         // Cuantas se quedaron fuera del fichero sin marcar, para el aviso.
         "X-Export-Excluded": String(excluded.length),
-        // Desglose por motivo ({"total_cero":n,"dividida":m}), para el aviso.
-        "X-Export-Excluded-Detail": JSON.stringify(countExportExclusions(excluded.map((e) => e.reason))),
         // Por caja, para el mensaje de exito: las grises no «siguen pendientes».
         "X-Export-Excluded-Boxes": JSON.stringify(countExportExclusionBoxes(excluded.map((e) => a3ExclusionBox(e.invoice)!))),
         // Solo con copia guardada: la pantalla enlaza "Volver a descargar"

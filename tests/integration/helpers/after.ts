@@ -16,3 +16,8 @@ export async function runAfterCallbacks() {
 export function discardAfterCallbacks() {
   queue.length = 0;
 }
+
+/** Cuantos after() hay encolados sin ejecutar. */
+export function pendingAfterCallbacks() {
+  return queue.length;
+}

@@ -9,6 +9,7 @@ import {
   Globe, Scissors, Sparkles, Lock,
 } from "lucide-react";
 import { saveInvoiceFields, validateInvoice, rejectInvoice, deferInvoice, confirmThirdPartyName, type ReviewState } from "./actions";
+import { dismissDuplicateIssue } from "../../invoices/actions";
 import dynamic from "next/dynamic";
 const SplitInvoiceModal = dynamic(() => import("./SplitInvoiceModal"), { ssr: false });
 const SplitPdfModal = dynamic(() => import("./SplitPdfModal"), { ssr: false });
@@ -34,15 +35,18 @@ import { Select, type SelectOption } from "@/components/ui/Select";
 import { InvoiceStatusBadge } from "@/components/ui/InvoiceStatusBadge";
 import {
   NEEDS_REVIEW,
+  REVIEWABLE,
   REJECT_CATEGORY_LABEL,
   isReviewReadOnly,
   reviewActionBlockReason,
   reviewLockReason,
+  showsDuplicateWarning,
 } from "@/lib/invoiceStatuses";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { invoiceBalanceDiffCents, isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { amountFieldsProblem, parseVatLineInputs, vatLinesProblem } from "@/lib/vatLineInput";
-import { validationProblems } from "@/lib/invoiceRules";
+import { accountsAgainstDirection, validationProblems } from "@/lib/invoiceRules";
+import { anyNegativeAmount } from "@/lib/rectificative";
 import { percentOf } from "@/lib/money";
 import { describeVatLineMismatch, vatLineMismatches, type VatLineMismatch } from "@/lib/vatLineChecks";
 import { sanitizeAccountingAccountInput, padAccountingAccount } from "@/lib/accountingAccount";
@@ -118,6 +122,11 @@ type IssueData = {
   status: IssueStatus;
   description: string;
   field: string | null;
+  /** POSSIBLE_DUPLICATE: la factura original, si la incidencia la guarda. */
+  duplicateOf: string | null;
+  /** POSSIBLE_DUPLICATE abierta: el motivo que recibe el cliente con «Es
+   *  duplicada». */
+  rejectionReason: string | null;
 };
 
 type SuggestedAccount = {
@@ -423,9 +432,10 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   // Recargo de equivalencia: va por linea de IVA (ver vatLines), no aqui.
   // Solo relevante en compras de clientes minoristas acogidos a RE
   // (sessionContext.equivalenceSurchargeCustomer). Panel plegable, expandido
-  // si ya venia con recargo en alguna linea.
+  // si ya venia con recargo en alguna linea (el % o solo la cuota: si no, el
+  // error de «cuota sin %» pedia corregir un campo escondido).
   const [showSurchargePanel, setShowSurchargePanel] = useState<boolean>(
-    initialVatLines.some((l) => l.equivalenceSurchargeRate != null),
+    initialVatLines.some((l) => l.equivalenceSurchargeRate != null || l.equivalenceSurchargeAmount != null),
   );
 
   // Tipo emitida/recibida — editable en la revisión. Si la factura se subió
@@ -736,6 +746,34 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
 
   // Math semaphore: Total = Σ Bases + Σ Cuotas + Σ Recargo - Retencion IRPF
   const totalNum   = parseFloat(totalAmount) || 0;
+  // Importes negativos sin la casilla de rectificativa (F-012): el OCR ya no
+  // cambia signos, asi que o es un abono sin marcar o un signo mal leido.
+  // La misma regla que el servidor y el export (anyNegativeAmount).
+  const num = (v: string) => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
+  const negativeWithoutRectificative = !isRectificative && anyNegativeAmount({
+    lines: vatLines.map((l) => ({
+      taxBase: num(l.taxBase), vatRate: 0, vatAmount: num(l.vatAmount), equivalenceSurchargeAmount: num(l.equivalenceSurchargeAmount),
+    })),
+    taxBase: null, vatAmount: null, totalAmount: totalNum, irpfAmount: retentionAmount,
+    retentionBase: retentionType ? num(retentionBase) : null,
+  });
+  // Incidencias abiertas del OCR sobre el signo (F-012): «Parece
+  // rectificativa…» o «importes negativos…». Antes no se pintaban y el gestor
+  // no veia por que la factura estaba en «Con incidencias».
+  // Solo mientras no esta marcada: con la casilla ya marcada decian «márcala».
+  const rectificativeIssues = isRectificative
+    ? []
+    : issues.filter((i) => i.field === "isRectificative" && i.status === "OPEN");
+  // Incidencias abiertas arriba del formulario (F-016): solo las que el
+  // formulario no recalcula en vivo. El cuadre (MATH_MISMATCH), la confianza
+  // por campo (LOW_CONFIDENCE) y los avisos MANUAL (signo, intracomunitaria)
+  // ya salen junto a su campo y, tras corregir, la incidencia seguiria
+  // diciendo lo que ya no es cierto.
+  // Solo mientras esta por revisar: hasta F-057 validar y rechazar no cerraban
+  // incidencias, y hay facturas terminadas con incidencias OPEN.
+  const openIssues = showsDuplicateWarning(invoice.status)
+    ? issues.filter((i) => i.status === "OPEN" && (i.type === "POSSIBLE_DUPLICATE" || i.type === "OCR_FAILED"))
+    : [];
   const hasValues  = vatTotals.anyFilled && totalAmount;
   const balanceInput = {
     sumBase: vatTotals.sumBase,
@@ -960,12 +998,67 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     const reopen = reopenRef.current;
     reopenRef.current = false;
     startValidate(async () => {
-      const res = await validateInvoice(null, buildFormData({
+      const fields = {
         nextId: nextPendingId ?? "",
         goodsTypeScope,
         goodsTypeAssignedSeen: assignedGoodsType ?? "",
         ...(reopen ? { reopen: "1" } : {}),
-      }));
+      };
+      let res = await validateInvoice(null, buildFormData(fields));
+      // Posibles duplicados (F-010, F-016): otra ya validada con este numero
+      // y emisor, o un aviso de duplicado abierto. El servidor no valida sin
+      // que el gestor los confirme, todos en una sola confirmacion. Si con el
+      // dialogo abierto aparece otro, vuelve a preguntar con la lista nueva
+      // (con tope, por si acaso).
+      for (let round = 0; round < 3 && res?.duplicateOf?.length; round++) {
+        const duplicates = res.duplicateOf;
+        // En una ya validada es una correccion: se pregunta por guardarla.
+        const again = isValidated ? "¿Guardar la corrección igualmente?" : "¿Validar igualmente?";
+        const ok = await confirm({
+          title: again,
+          message: (
+            <>
+              <ul className="space-y-2">
+                {duplicates.map((dup, i) => (
+                  <li key={i}>
+                    {dup.kind === "validated" ? (
+                      <>
+                        Ya hay otra factura con este número y este emisor:{" "}
+                        <Link href={`/dashboard/worker/review/${dup.id}`} target="_blank" className="font-medium underline">
+                          {dup.label}<span className="sr-only"> (se abre en una pestaña nueva)</span>
+                        </Link>
+                        .
+                      </>
+                    ) : (
+                      <>
+                        {dup.label}{" "}
+                        {dup.id && (
+                          <Link href={`/dashboard/worker/review/${dup.id}`} target="_blank" className="font-medium underline">
+                            Ver la original<span className="sr-only"> (se abre en una pestaña nueva)</span>
+                          </Link>
+                        )}
+                      </>
+                    )}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2">
+                {duplicates.some((d) => d.kind === "openIssue") && "Al validarla, el aviso se cierra. "}
+                {again}
+              </p>
+            </>
+          ),
+          confirmLabel: isValidated ? "Guardar igualmente" : "Validar igualmente",
+          tone: "primary",
+          // Se llega aqui validando con Enter: un segundo Enter no confirma.
+          focusCancel: true,
+        });
+        if (!ok) {
+          setValidateState(null);
+          return;
+        }
+        res = await validateInvoice(null, buildFormData({ ...fields, confirmDuplicate: duplicates.map((d) => d.key).join(",") }));
+      }
       setValidateState(res);
       if (res?.error) {
         error(isValidated
@@ -1098,13 +1191,12 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     if (ok) attemptValidate(true);
   };
 
-  const handleReject = () => {
-    if (!rejectReason.trim()) return;
+  const submitReject = (reason: string, category: string) => {
     startReject(async () => {
       const fd = new FormData();
       fd.set("invoiceId", invoice.id);
-      fd.set("rejectionReason", rejectReason);
-      if (rejectCategory) fd.set("rejectionCategory", rejectCategory);
+      fd.set("rejectionReason", reason);
+      if (category) fd.set("rejectionCategory", category);
       fd.set("nextId", nextPendingId ?? "");
       // Sin el bucket, rechazar en la cola de incidencias saltaba a la
       // siguiente de todo el lote.
@@ -1117,6 +1209,38 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       } else {
         success("Factura rechazada");
         setShowRejectModal(false);
+      }
+    });
+  };
+  const handleReject = () => {
+    if (!rejectReason.trim()) return;
+    submitReject(rejectReason, rejectCategory);
+  };
+
+  // Posible duplicado (F-016). «Es duplicada» la rechaza con la categoria
+  // DUPLICATE y un motivo para el cliente (le llega por correo): se
+  // confirma antes.
+  const [isPendingDismiss, startDismiss] = useTransition();
+  const handleIsDuplicate = async (issue: IssueData) => {
+    const reason = issue.rejectionReason ?? "Factura duplicada: ya la habíamos recibido.";
+    const ok = await confirm({
+      title: "¿Rechazar como duplicada?",
+      message: <>Se rechaza con este motivo, que le llega al cliente: «{reason}»</>,
+      confirmLabel: "Rechazar",
+      tone: "danger",
+    });
+    if (ok) submitReject(reason, "DUPLICATE");
+  };
+  const handleNotDuplicate = (issue: IssueData) => {
+    startDismiss(async () => {
+      const fd = new FormData();
+      fd.set("invoiceId", invoice.id);
+      fd.set("issueId", issue.id);
+      const res = await dismissDuplicateIssue(null, fd);
+      if (res?.error) error(res.error);
+      else {
+        success("Aviso de duplicado descartado");
+        router.refresh();
       }
     });
   };
@@ -1591,6 +1715,60 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
               );
             })()}
 
+            {/* Incidencias abiertas (F-016): antes solo se veian en el
+                listado y el gestor no sabia por que estaba en «Con
+                incidencias». */}
+            {openIssues.length > 0 && (
+              <div className="space-y-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5" data-testid="open-issues">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-amber-700">
+                  {openIssues.length === 1 ? "Incidencia abierta" : `${openIssues.length} incidencias abiertas`}
+                </p>
+                {openIssues.map((issue) => (
+                  <div key={issue.id} className="flex flex-wrap items-start gap-x-3 gap-y-1.5 text-[12px] text-amber-800">
+                    <p className="flex min-w-0 flex-1 items-start gap-2">
+                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+                      <span>
+                        {issue.description}
+                        {issue.duplicateOf && (
+                          <>
+                            {" "}
+                            <Link href={`/dashboard/worker/review/${issue.duplicateOf}`} target="_blank" className="font-medium underline">
+                              Ver la original<span className="sr-only"> (se abre en una pestaña nueva)</span>
+                            </Link>
+                          </>
+                        )}
+                      </span>
+                    </p>
+                    {/* Solo con la factura por revisar y el periodo abierto:
+                        con el periodo cerrado no se toca nada. */}
+                    {issue.type === "POSSIBLE_DUPLICATE" && REVIEWABLE.includes(invoice.status) && !periodClosed && (
+                      <div className="flex flex-shrink-0 gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => handleNotDuplicate(issue)}
+                          disabled={isPendingDismiss || isPendingReject}
+                          aria-busy={isPendingDismiss}
+                          className="flex items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-2.5 py-1 text-[12px] font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+                        >
+                          {isPendingDismiss && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
+                          No es duplicada
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleIsDuplicate(issue)}
+                          disabled={isPendingDismiss || isPendingReject || rejectBlock != null || isExported}
+                          title={rejectBlock ?? (isExported ? "Ya se exportó a A3: no se puede rechazar" : undefined)}
+                          className="rounded-lg bg-red-600 px-2.5 py-1 text-[12px] font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                        >
+                          Es duplicada
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
             {/* Errors — un solo ErrorBox para los tres actions. */}
             {(saveState?.error || validateState?.error || rejectState?.error) && (
               <ErrorBox
@@ -1734,13 +1912,14 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                       } else if (!OPERATION_TYPE_OPTIONS[next].includes(operationType)) {
                         setOperationType(OPERATION_TYPE_OPTIONS[next][0]);
                       }
-                      // Las genericas son de proveedor y gasto: en una emitida
-                      // no valen (y el servidor las rechaza), asi que se vacian.
-                      if (next === "SALE" && genericAccounts?.supplier
-                        && padAccountingAccount(supplierAccountVal.trim()) === padAccountingAccount(genericAccounts.supplier.trim())) {
-                        setSupplierAccount("");
-                        if (genericAccounts.expense && expenseAccountVal.trim() === genericAccounts.expense.trim()) setExpenseAccount("");
-                      }
+                      // Las cuentas del otro sentido (las genericas de
+                      // proveedor y gasto en una emitida, una 43x/7xx en una
+                      // recibida) no valen y el servidor las rechaza: se vacian.
+                      const against = accountsAgainstDirection({
+                        type: next, supplierAccount: supplierAccountVal, expenseAccount: expenseAccountVal,
+                      });
+                      if (against.party) setSupplierAccount("");
+                      if (against.result) setExpenseAccount("");
                     }}
                   />
                   {invoice.typeUnconfirmed && (
@@ -1944,6 +2123,22 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                   }`}
                 />
               </button>
+              {rectificativeIssues.map((issue) => (
+                <p key={issue.id} className="mx-3 mb-2 flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-700">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+                  {issue.description}
+                </p>
+              ))}
+              {negativeWithoutRectificative && rectificativeIssues.length === 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowRectificativePanel(true)}
+                  className="mx-3 mb-2 flex w-[calc(100%-1.5rem)] items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-left text-[12px] text-amber-700"
+                >
+                  <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
+                  Hay importes negativos y no está marcada como rectificativa: si es un abono, márcala; si no, corrige el signo.
+                </button>
+              )}
               {showRectificativePanel && (
                 <div className="space-y-2 border-t border-slate-100 p-3 pt-2">
                   <label className="flex items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2 cursor-pointer">
@@ -1952,7 +2147,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                         Es una rectificativa (abono o corrección)
                       </span>
                       <span className="text-[10px] text-slate-400">
-                        Detección automática si el OCR encuentra líneas con importe negativo
+                        El OCR no la marca: márcala tú. Al marcarla, si todos los importes están en positivo, se guardan en negativo
                       </span>
                     </div>
                     <input
@@ -2343,7 +2538,9 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                 {showSurchargePanel && (
                   <div className="mt-2 space-y-2">
                     {vatLines.map((line, idx) => {
-                      const hasSurcharge = line.equivalenceSurchargeRate !== "" || openSurchargeLines.has(idx);
+                      const hasSurcharge = line.equivalenceSurchargeRate !== ""
+                        || line.equivalenceSurchargeAmount !== ""
+                        || openSurchargeLines.has(idx);
                       return (
                         <div key={idx} className="flex items-center gap-2 rounded-lg border border-slate-200 p-2">
                           <label className="flex w-24 flex-shrink-0 items-center gap-1.5 text-[12px] font-medium text-slate-600">
@@ -2450,7 +2647,9 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
               <legend className="px-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 Cuentas contables
               </legend>
-              {suggestedAccount?.supplierAccount && !invoice.supplierAccount && !accountNameMismatch && (
+              {/* Al cambiar de sentido las cuentas sugeridas se vacian: ya no
+                  estan «auto-asignadas». */}
+              {suggestedAccount?.supplierAccount && !invoice.supplierAccount && !accountNameMismatch && !counterpartyChanged && (
                 <div className="mb-3 flex items-center gap-2 rounded-lg bg-green-50 px-3 py-2 text-[12px] text-green-700">
                   <CheckCheck className="h-4 w-4" />
                   {accountMatchedByName

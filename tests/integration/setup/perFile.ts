@@ -18,6 +18,9 @@ process.env.S3_BUCKET = BUCKET;
 process.env.CRON_SECRET = "cron-test";
 // Sin RESEND_API_KEY: el correo no sale y cuenta como enviado.
 delete process.env.RESEND_API_KEY;
+// Sin GEMINI_API_KEY: los PDF van por el OCR simulado. Con una clave en el
+// entorno, processInvoice llamaria a extractPdfWithGemini y a Gemini de verdad.
+delete process.env.GEMINI_API_KEY;
 
 // Lo unico que se simula: la sesion, next/cache, next/navigation, after() y
 // el OCR. Prisma y Postgres son los reales.
@@ -52,7 +55,12 @@ vi.mock("@/lib/ocr", async (importOriginal) => {
 vi.mock("@/lib/ocrLlm", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/lib/ocrLlm")>();
   const { ocrReply } = await import("../helpers/ocr");
-  return { ...original, extractFromPdfTextWithGemini: () => ocrReply(), extractFromDocumentWithGemini: () => ocrReply() };
+  return {
+    ...original,
+    extractPdfWithGemini: async () => ({ source: "gemini_text" as const, result: await ocrReply() }),
+    extractFromPdfTextWithGemini: async () => ({ result: await ocrReply(), complete: true }),
+    extractFromDocumentWithGemini: () => ocrReply(),
+  };
 });
 
 const { resetDatabase, disconnect } = await import("../helpers/db");

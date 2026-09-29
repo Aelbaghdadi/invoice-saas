@@ -4,14 +4,18 @@ import { after } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
-import { notifyClientInvoiceRejected } from "@/lib/email";
-import { appendAuditLogs } from "@/lib/auditLog";
+import { canAccessClient } from "@/lib/accessibleClients";
+import { notifyRejection, rejectInvoiceCore } from "@/lib/invoiceRejection";
+import { duplicateRejectionReason, findDuplicateOriginal } from "@/lib/duplicates";
+import { REVIEWABLE } from "@/lib/invoiceStatuses";
+import { closedPeriodError, invoicePeriod } from "@/lib/reviewGuards";
 
 export type InvoiceQuickAction = { ok?: boolean; error?: string } | null;
 
+/** WORKER: el cliente asignado. ADMIN: de su asesoria (antes cualquier ADMIN
+ *  pasaba sin mirar la asesoria). */
 async function assertAccess(
-  userId: string,
-  role: string,
+  session: { user: { id: string; role: string; advisoryFirmId?: string | null } },
   invoiceId: string,
 ): Promise<{ error: string } | null> {
   const inv = await prisma.invoice.findUnique({
@@ -19,12 +23,7 @@ async function assertAccess(
     select: { clientId: true },
   });
   if (!inv) return { error: "Factura no encontrada" };
-  if (role === "ADMIN") return null;
-  if (role !== "WORKER") return { error: "No autorizado" };
-  const assignment = await prisma.workerClientAssignment.findUnique({
-    where: { workerId_clientId: { workerId: userId, clientId: inv.clientId } },
-  });
-  if (!assignment) return { error: "No tienes acceso a esta factura." };
+  if (!(await canAccessClient(session, inv.clientId))) return { error: "No tienes acceso a esta factura." };
   return null;
 }
 
@@ -32,8 +31,8 @@ async function assertAccess(
  * Rechazo rapido como duplicado desde el listado. No abre el modal: un
  * clic y listo, porque un duplicado no necesita revision.
  *
- * Usa rejectionCategory=DUPLICATE y un motivo autogenerado que incluye
- * el nombre del fichero duplicado original si se conoce.
+ * Usa rejectionCategory=DUPLICATE y un motivo para el cliente que nombra la
+ * factura original si la incidencia la guarda.
  */
 export async function quickRejectDuplicate(
   _prev: InvoiceQuickAction,
@@ -47,77 +46,39 @@ export async function quickRejectDuplicate(
   const invoiceId = formData.get("invoiceId") as string;
   if (!invoiceId) return { error: "ID no proporcionado" };
 
-  const access = await assertAccess(session.user.id, session.user.role, invoiceId);
+  const access = await assertAccess(session, invoiceId);
   if (access) return access;
 
-  const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
-  if (!invoice) return { error: "Factura no encontrada" };
-  if (invoice.status === "REJECTED" || invoice.status === "VALIDATED") {
-    return { error: "La factura ya está cerrada" };
-  }
-
-  // Construye motivo a partir del issue POSSIBLE_DUPLICATE si existe
+  // Motivo para el cliente (le llega por correo), con la original si la
+  // incidencia la guarda. La descripcion de la incidencia es para el gestor.
   const dupIssue = await prisma.invoiceIssue.findFirst({
     where: { invoiceId, type: "POSSIBLE_DUPLICATE", status: "OPEN" },
+    select: { field: true, invoice: { select: { clientId: true } } },
   });
-  const reason = dupIssue?.description ?? "Factura duplicada detectada desde el listado";
-
-  await prisma.invoice.update({
-    where: { id: invoiceId },
-    data: {
-      status: "REJECTED",
-      rejectionReason: reason,
-      rejectionCategory: "DUPLICATE",
-      reviewedBy: session.user.id,
-    },
-  });
-
-  await prisma.invoiceStatusHistory.create({
-    data: {
-      invoiceId,
-      fromStatus: invoice.status,
-      toStatus: "REJECTED",
-      changedBy: session.user.id,
-      reason,
-    },
-  });
-
-  // Cerrar el issue que motivo el rechazo
-  if (dupIssue) {
-    await prisma.invoiceIssue.update({
-      where: { id: dupIssue.id },
-      data: { status: "RESOLVED", resolvedBy: session.user.id, resolvedAt: new Date() },
-    });
+  const original = dupIssue ? await findDuplicateOriginal(dupIssue.field, dupIssue.invoice.clientId) : null;
+  // Si la original ya esta rechazada, quiza la buena es esta: que el gestor
+  // lo mire antes de rechazarla tambien.
+  if (original?.status === "REJECTED") {
+    return { error: "La factura original está rechazada: revísala antes de rechazar esta como duplicada." };
   }
+  const reason = duplicateRejectionReason(original);
 
-  await appendAuditLogs([{
+  // El mismo flujo que rechazar desde la revision: exportada, estado,
+  // periodo cerrado y escritura condicionada (F-057: cierra todas las
+  // incidencias, no solo la del duplicado).
+  const result = await rejectInvoiceCore({
     invoiceId,
     userId: session.user.id,
-    field: "status",
-    oldValue: invoice.status,
-    newValue: "REJECTED",
-  }]);
-
-  // Notificacion al cliente en background
-  after(async () => {
-    try {
-      const inv = await prisma.invoice.findUnique({
-        where: { id: invoiceId },
-        include: { client: { include: { user: { select: { email: true } } } } },
-      });
-      if (inv?.client?.user?.email) {
-        await notifyClientInvoiceRejected({
-          clientEmail: inv.client.user.email,
-          clientName: inv.client.name,
-          invoiceNumber: inv.invoiceNumber ?? "",
-          filename: inv.filename,
-          reason,
-        });
-      }
-    } catch (e) {
-      console.error("[NOTIFY] quickRejectDuplicate:", e);
-    }
+    reason,
+    category: "DUPLICATE",
+    // Solo por revisar: el listado puede llevar rato abierto y otro gestor
+    // haberla validado (antes se deshacia su validacion).
+    allowedFrom: { statuses: REVIEWABLE, error: "Esta factura ya no está por revisar. Recarga la página." },
+    authorize: async (clientId) => (await canAccessClient(session, clientId)) ? null : { error: "No tienes acceso a esta factura." },
   });
+  if ("error" in result) return { error: typeof result.error === "string" ? result.error : result.error.message };
+
+  after(() => notifyRejection(invoiceId, reason));
 
   revalidatePath("/dashboard/worker/invoices");
   revalidatePath("/dashboard/worker/issues");
@@ -127,7 +88,9 @@ export async function quickRejectDuplicate(
 /**
  * Descartar incidencia POSSIBLE_DUPLICATE sin rechazar la factura ("no
  * es duplicado, son dos facturas distintas del mismo emisor con mismo
- * importe"). Baja a PENDING_REVIEW si no quedan otras incidencias.
+ * importe"). Baja a PENDING_REVIEW si no quedan otras incidencias. Desde el
+ * listado (todas las de duplicado de la factura) y desde la revision («No es
+ * duplicada», F-016: solo la de esa fila, con issueId).
  */
 export async function dismissDuplicateIssue(
   _prev: InvoiceQuickAction,
@@ -140,47 +103,61 @@ export async function dismissDuplicateIssue(
 
   const invoiceId = formData.get("invoiceId") as string;
   if (!invoiceId) return { error: "ID no proporcionado" };
+  // Desde la revision llega la incidencia concreta: se descarta solo esa.
+  // Desde el listado no: se descartan todas las de duplicado de la factura.
+  const issueId = (formData.get("issueId") as string | null) || null;
 
-  const access = await assertAccess(session.user.id, session.user.role, invoiceId);
+  const access = await assertAccess(session, invoiceId);
   if (access) return access;
 
-  const issues = await prisma.invoiceIssue.findMany({
-    where: { invoiceId, type: "POSSIBLE_DUPLICATE", status: "OPEN" },
+  // Lo mismo que la pantalla: solo por revisar y con el periodo abierto.
+  const invoice = await prisma.invoice.findUnique({
+    where: { id: invoiceId },
+    select: { status: true, clientId: true, periodMonth: true, periodYear: true, accountingPeriodMonth: true, accountingPeriodYear: true },
   });
-  if (issues.length === 0) return { error: "No hay incidencias de duplicado" };
+  if (!invoice) return { error: "Factura no encontrada" };
+  if (!REVIEWABLE.includes(invoice.status)) return { error: "Esta factura ya no está por revisar. Recarga la página." };
+  const periodErr = await closedPeriodError(invoice.clientId, [invoicePeriod(invoice)], "descartar el aviso de");
+  if (periodErr) return periodErr;
 
-  await prisma.invoiceIssue.updateMany({
-    where: { id: { in: issues.map((i) => i.id) } },
-    data: {
-      status: "DISMISSED",
-      resolvedBy: session.user.id,
-      resolvedAt: new Date(),
-    },
-  });
+  // Incidencias, estado e historial juntos: si falla a medias no queda en
+  // «Con incidencias» sin ninguna abierta.
+  const dismissed = await prisma.$transaction(async (tx) => {
+    const closed = await tx.invoiceIssue.updateMany({
+      where: { invoiceId, type: "POSSIBLE_DUPLICATE", status: "OPEN", ...(issueId ? { id: issueId } : {}) },
+      data: {
+        status: "DISMISSED",
+        resolvedBy: session.user.id,
+        resolvedAt: new Date(),
+      },
+    });
+    if (closed.count === 0) return false;
 
-  // Si no quedan issues abiertas y estaba en NEEDS_ATTENTION, baja a PENDING_REVIEW
-  const remaining = await prisma.invoiceIssue.count({
-    where: { invoiceId, status: "OPEN" },
-  });
-  if (remaining === 0) {
-    const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
-    if (invoice?.status === "NEEDS_ATTENTION") {
-      await prisma.invoice.update({
-        where: { id: invoiceId },
+    const remaining = await tx.invoiceIssue.count({
+      where: { invoiceId, status: "OPEN" },
+    });
+    if (remaining === 0) {
+      const lowered = await tx.invoice.updateMany({
+        where: { id: invoiceId, status: "NEEDS_ATTENTION" },
         data: { status: "PENDING_REVIEW" },
       });
-      await prisma.invoiceStatusHistory.create({
-        data: {
-          invoiceId,
-          fromStatus: "NEEDS_ATTENTION",
-          toStatus: "PENDING_REVIEW",
-          changedBy: session.user.id,
-          reason: "Duplicado descartado por el gestor",
-        },
-      });
+      if (lowered.count > 0) {
+        await tx.invoiceStatusHistory.create({
+          data: {
+            invoiceId,
+            fromStatus: "NEEDS_ATTENTION",
+            toStatus: "PENDING_REVIEW",
+            changedBy: session.user.id,
+            reason: "Duplicado descartado por el gestor",
+          },
+        });
+      }
     }
-  }
+    return true;
+  });
+  if (!dismissed) return { error: "No hay incidencias de duplicado abiertas" };
 
   revalidatePath("/dashboard/worker/invoices");
+  revalidatePath(`/dashboard/worker/review/${invoiceId}`);
   return { ok: true };
 }

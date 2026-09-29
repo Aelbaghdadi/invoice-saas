@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { parseTaxId } from "@/lib/validators";
 import {
-  missingDataProblems, thirdPartyTaxIdRequired, usesSimplifiedAccount, validationProblems, type RuleInvoice,
+  accountsAgainstDirection, missingDataProblems, thirdPartyTaxIdRequired, usesSimplifiedAccount, validationProblems, type RuleInvoice,
 } from "@/lib/invoiceRules";
 
 const ok: RuleInvoice = {
@@ -80,6 +80,29 @@ describe("validationProblems (F-009, F-014)", () => {
     expect(rules({ expenseAccount: "70000001" })).toEqual(["cuenta_sentido"]);
     // 44x o 2xx son contrapartidas legítimas.
     expect(rules({ type: "SALE", supplierAccount: "44000001", expenseAccount: "20000001" })).toEqual([]);
+  });
+
+  it("compara las cuentas completadas: «4.1» es la 40000001", () => {
+    expect(validationProblems({ ...ok, type: "SALE", supplierAccount: "4.1", expenseAccount: "70000001" })[0]?.message).toBe(
+      "La cuenta 40000001 es de proveedor y esta factura es emitida: usa una cuenta de cliente (43x).",
+    );
+    expect(rules({ supplierAccount: "4.1", expenseAccount: "6.1" })).toEqual([]);
+    // Sin punto se enseña tal cual, como va a la columna H (no 40000010).
+    expect(validationProblems({ ...ok, type: "SALE", supplierAccount: "4000001", expenseAccount: "70000001" })[0]?.message).toBe(
+      "La cuenta 4000001 es de proveedor y esta factura es emitida: usa una cuenta de cliente (43x).",
+    );
+  });
+
+  it("las cuentas que minoran no son del sentido contrario (rappels, devoluciones, descuentos)", () => {
+    for (const account of ["60600000", "60800000", "60900001"]) {
+      expect(rules({ type: "SALE", supplierAccount: "43000001", expenseAccount: account })).toEqual([]);
+    }
+    for (const account of ["70600000", "70800000", "70900001"]) {
+      expect(rules({ expenseAccount: account })).toEqual([]);
+    }
+    // El resto del 60x/70x sigue siendo del sentido contrario.
+    expect(rules({ type: "SALE", supplierAccount: "43000001", expenseAccount: "60000001" })).toEqual(["cuenta_sentido"]);
+    expect(rules({ expenseAccount: "70500000" })).toEqual(["cuenta_sentido"]);
   });
 
   it("sin cuentas", () => {
@@ -162,5 +185,26 @@ describe("NIF del tercero", () => {
 describe("missingDataProblems", () => {
   it("no mira el cuadre", () => {
     expect(missingDataProblems({ ...ok, totalAmount: 500 })).toEqual([]);
+  });
+});
+
+describe("accountsAgainstDirection (al cambiar de sentido se vacían)", () => {
+  it("a emitida: las genéricas de proveedor y gasto, y cualquier 40x/6xx", () => {
+    expect(accountsAgainstDirection({ type: "SALE", supplierAccount: "40099999", expenseAccount: "62900000" }))
+      .toEqual({ party: "40099999", result: "62900000" });
+    expect(accountsAgainstDirection({ type: "SALE", supplierAccount: "4.1", expenseAccount: "6.1" }))
+      .toEqual({ party: "40000001", result: "60000001" });
+  });
+
+  it("a recibida: una 43x y una 7xx", () => {
+    expect(accountsAgainstDirection({ type: "PURCHASE", supplierAccount: "43000001", expenseAccount: "70000001" }))
+      .toEqual({ party: "43000001", result: "70000001" });
+  });
+
+  it("las que encajan, las que minoran y las vacías se quedan", () => {
+    expect(accountsAgainstDirection({ type: "SALE", supplierAccount: "43000001", expenseAccount: "60900000" }))
+      .toEqual({ party: null, result: null });
+    expect(accountsAgainstDirection({ type: "PURCHASE", supplierAccount: "", expenseAccount: null }))
+      .toEqual({ party: null, result: null });
   });
 });

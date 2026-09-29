@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   completionPercent,
+  REVIEWABLE,
+  showsDuplicateWarning,
   PENDING_WORK,
   DONE_WORK,
   NEEDS_REVIEW,
@@ -119,5 +121,16 @@ describe("CLIENT_STATUS_BADGE", () => {
     expect(CLIENT_STATUS_BADGE.VALIDATED.label).toBe("Validada");
     expect(CLIENT_STATUS_BADGE.EXPORTED.label).toBe("Validada");
     expect(CLIENT_STATUS_BADGE.REJECTED.label).toBe("Rechazada");
+  });
+});
+
+describe("aviso y acciones de duplicado: el mismo conjunto en todas las pantallas (revisión 2 del PR #10, punto 6)", () => {
+  it("el aviso solo en las no terminadas", () => {
+    for (const s of ["VALIDATED", "REJECTED", "EXPORTED", "SPLIT_SOURCE"] as const) expect(showsDuplicateWarning(s), s).toBe(false);
+    for (const s of ["PENDING_REVIEW", "NEEDS_ATTENTION", "OCR_ERROR", "ANALYZED", "UPLOADED", "ANALYZING"] as const) expect(showsDuplicateWarning(s), s).toBe(true);
+  });
+
+  it("las acciones, con la factura por revisar (legacy ANALYZED incluido)", () => {
+    expect([...REVIEWABLE].sort()).toEqual(["ANALYZED", "NEEDS_ATTENTION", "OCR_ERROR", "PENDING_REVIEW"]);
   });
 });

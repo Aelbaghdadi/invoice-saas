@@ -1,4 +1,5 @@
 import { GoogleAuth } from "google-auth-library";
+import { DocumentError } from "./ocrErrors";
 import { XMLParser } from "fast-xml-parser";
 import { normalizeCurrency } from "./currency";
 import type { IntracomGoodsTypeName } from "./validators";
@@ -40,6 +41,9 @@ export type ExtractedInvoice = {
   /** Si lo facturado son BIENES o SERVICIOS segun la IA. Solo se usa en
    *  intracomunitarias (compras 3/8, ventas cuenta 700/705); null si no lo sabe. */
   supplyType: IntracomGoodsTypeName | null;
+  /** Facturae: el XML dice que es rectificativa (InvoiceClass OR/CR o bloque
+   *  Corrective). Cuenta como la mencion en el texto de un PDF (F-012). */
+  isCorrective?: boolean;
   /** Desglose de IVA. Vacio si no se pudo extraer. */
   vatLines:      ExtractedVatLine[];
   confidence:    Record<string, number> | null;
@@ -473,8 +477,34 @@ export async function extractInvoiceFromXml(xml: string): Promise<OcrResult> {
   return { extracted, rawJson: xml };
 }
 
+/** ¿Es rectificativa la factura de un Facturae? InvoiceClass OR (original
+ *  rectificativa) o CR (copia rectificativa), o el bloque Corrective de la
+ *  cabecera. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- nodo de fast-xml-parser
+function facturaeInvoiceIsCorrective(inv: any): boolean {
+  const header = inv?.InvoiceHeader ?? inv?.invoiceHeader;
+  const invoiceClass = String(header?.InvoiceClass ?? header?.invoiceClass ?? "").trim().toUpperCase();
+  return invoiceClass === "OR" || invoiceClass === "CR" || (header?.Corrective ?? header?.corrective) != null;
+}
+
+/** ¿El XML Facturae guardado es de una rectificativa? Para classifyInvoice,
+ *  que solo tiene el XML crudo de la extraccion. Busca en el texto en vez de
+ *  parsear: con un adjunto de 18 MB, parsear eran 2,9 s de event loop y
+ *  750 MB de memoria. */
+export function facturaeXmlIsCorrective(xml: string): boolean {
+  return /<(?:[\w-]+:)?InvoiceClass>\s*(?:OR|CR)\s*<\/|<(?:[\w-]+:)?Corrective[\s/>]/i.test(xml);
+}
+
+/** «2026-09-14», «2026-09-14+02:00» o «2026-09-14T10:00:00Z» -> «2026-09-14». */
+function calendarDay(value: string | null): string | null {
+  return value?.match(/^\s*(\d{4}-\d{2}-\d{2})/)?.[1] ?? value;
+}
+
 async function parseFacturaeXml(xml: string): Promise<ExtractedInvoice> {
-  const parser = new XMLParser({ ignoreAttributes: false, removeNSPrefix: true });
+  // parseTagValue: false deja los valores como texto. Si no, «0042» se leia
+  // como 42, «1.10» como 1.1 y «12E4» como 120000: el numero de factura
+  // llegaba alterado a A3. Los importes pasan igual por safeNum.
+  const parser = new XMLParser({ ignoreAttributes: false, removeNSPrefix: true, parseTagValue: false });
   const doc = parser.parse(xml);
 
   // Navigate FacturaE structure (v3.2 / v3.2.2)
@@ -482,6 +512,11 @@ async function parseFacturaeXml(xml: string): Promise<ExtractedInvoice> {
   const parties = facturae?.Parties ?? facturae?.parties;
   const invoices = facturae?.Invoices ?? facturae?.invoices;
   const invoiceNode = invoices?.Invoice ?? invoices?.invoice;
+  // Un lote con varias facturas: antes se leia solo la primera y el resto se
+  // perdia sin avisar. Es determinista (no se reintenta) y se dice.
+  if (Array.isArray(invoiceNode) && invoiceNode.length > 1) {
+    throw new DocumentError(`El XML trae ${invoiceNode.length} facturas (lote): súbelas por separado.`);
+  }
   const inv = Array.isArray(invoiceNode) ? invoiceNode[0] : invoiceNode;
 
   // Seller (issuer)
@@ -496,6 +531,9 @@ async function parseFacturaeXml(xml: string): Promise<ExtractedInvoice> {
 
   // Invoice header
   const header = inv?.InvoiceHeader ?? inv?.invoiceHeader;
+  // En Facturae 3.2 / 3.2.2 la fecha de emision va en InvoiceIssueData; solo
+  // se buscaba en InvoiceHeader y la de un XML real no se leia.
+  const issueData = inv?.InvoiceIssueData ?? inv?.invoiceIssueData;
   const totals = inv?.InvoiceTotals ?? inv?.invoiceTotals;
 
   // Tax lines (IVA repercutido). Facturae permite multiples tipos.
@@ -515,6 +553,19 @@ async function parseFacturaeXml(xml: string): Promise<ExtractedInvoice> {
   };
   const safeStr = (v: unknown): string | null =>
     v != null ? String(v).trim() || null : null;
+
+  // Sociedad: CorporateName. Persona fisica (Individual): nombre y los dos
+  // apellidos; antes se guardaba solo «Juan», y eso iba a la columna F.
+  const partyName = (entity: Record<string, unknown> | null | undefined): string | null => {
+    const corporate = safeStr(entity?.CorporateName ?? entity?.corporateName);
+    if (corporate) return corporate;
+    const parts = [
+      entity?.Name ?? entity?.name,
+      entity?.FirstSurname ?? entity?.firstSurname,
+      entity?.SecondSurname ?? entity?.secondSurname,
+    ].map(safeStr).filter(Boolean);
+    return parts.length > 0 ? parts.join(" ") : null;
+  };
 
   // All fields from XML are deterministic → confidence 1.0
   const confidence: Record<string, number> = {};
@@ -542,15 +593,15 @@ async function parseFacturaeXml(xml: string): Promise<ExtractedInvoice> {
     : null;
 
   return {
-    issuerName:    safeStr(sellerEntity?.CorporateName ?? sellerEntity?.corporateName
-                     ?? sellerEntity?.Name ?? sellerEntity?.name),
+    issuerName:    partyName(sellerEntity),
     issuerCif:     safeStr(sellerTax?.TaxIdentificationNumber ?? sellerTax?.taxIdentificationNumber),
-    receiverName:  safeStr(buyerEntity?.CorporateName ?? buyerEntity?.corporateName
-                     ?? buyerEntity?.Name ?? buyerEntity?.name),
+    receiverName:  partyName(buyerEntity),
     receiverCif:   safeStr(buyerTax?.TaxIdentificationNumber ?? buyerTax?.taxIdentificationNumber),
     invoiceNumber: safeStr(header?.InvoiceNumber ?? header?.invoiceNumber
                      ?? header?.InvoiceSeriesCode ?? header?.invoiceSeriesCode),
-    invoiceDate:   safeStr(header?.IssueDate ?? header?.issueDate),
+    // Solo el dia del calendario: con zona («2026-09-14+02:00») daba Invalid
+    // Date y la factura se guardaba sin fecha.
+    invoiceDate:   calendarDay(safeStr(issueData?.IssueDate ?? issueData?.issueDate ?? header?.IssueDate ?? header?.issueDate)),
     taxBase:       sumBases ?? safeNum(totals?.TotalGrossAmountBeforeTaxes ?? totals?.totalGrossAmountBeforeTaxes
                      ?? firstTax?.TaxableBase?.TotalAmount ?? firstTax?.taxableBase?.totalAmount),
     vatRate:       vatLines.length === 1 ? vatLines[0].vatRate : safeNum(firstTax?.TaxRate ?? firstTax?.taxRate),
@@ -560,14 +611,14 @@ async function parseFacturaeXml(xml: string): Promise<ExtractedInvoice> {
                      ?? totals?.TotalTaxesWithheld ?? totals?.totalTaxesWithheld),
     totalAmount:   safeNum(totals?.InvoiceTotal ?? totals?.invoiceTotal),
     currency:      normalizeCurrency(
-      inv?.InvoiceIssueData?.InvoiceCurrencyCode ?? inv?.invoiceIssueData?.invoiceCurrencyCode
+      issueData?.InvoiceCurrencyCode ?? issueData?.invoiceCurrencyCode
       ?? facturae?.FileHeader?.Batch?.InvoiceCurrencyCode ?? facturae?.fileHeader?.batch?.invoiceCurrencyCode,
     ),
-    // El recargo de equivalencia en Facturae iria como una linea de impuesto
-    // adicional dentro de TaxesOutputs con un TaxTypeCode distinto de IVA;
-    // no lo mapeamos aqui (fuera de alcance) para no inventar una lectura
-    // sin confirmar el formato real. Las lineas quedan sin ese dato; el
-    // gestor lo introduce a mano si aplica.
+    isCorrective: facturaeInvoiceIsCorrective(inv),
+    // El recargo de equivalencia va dentro del mismo Tax de IVA
+    // (EquivalenceSurcharge y EquivalenceSurchargeAmount), no como otra
+    // linea. Todavia no se mapea (tarea aparte): las lineas quedan sin ese
+    // dato y el gestor lo introduce a mano si aplica.
     // Facturae no marca si las lineas son bienes o servicios.
     supplyType: null,
     vatLines,

@@ -9,7 +9,7 @@
 import { isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { formatEur } from "@/lib/format";
 import { isForeignCurrency } from "@/lib/currency";
-import { padAccountingAccount, partyAccountMatchesType, resultAccountMatchesType } from "@/lib/accountingAccount";
+import { normalizePlanAccount, padAccountingAccount, partyAccountMatchesType, resultAccountMatchesType } from "@/lib/accountingAccount";
 
 export type RuleLine = {
   taxBase: number;
@@ -154,19 +154,48 @@ export function currencyProblem(inv: Pick<RuleInvoice, "currency">): RuleProblem
   };
 }
 
+/** Cuentas de resultado del sentido contrario que el PGC usa para minorar
+ *  (devoluciones, descuentos y rappels): 606/608/609 en una emitida (p. ej.
+ *  el rappel que se factura al proveedor) y 706/708/709 en una recibida. */
+const REDUCING_RESULT_ACCOUNT: Record<"PURCHASE" | "SALE", RegExp> = {
+  SALE: /^60[689]/,
+  PURCHASE: /^70[689]/,
+};
+
 /**
- * Cuentas del sentido contrario: una venta con cuenta de proveedor (40x/41x)
- * o de gasto (6xx), o una compra con cuenta de cliente (43x) o de ingreso
- * (7xx). Pasaba con una «No lo sé» abierta como recibida, con «Usar cuenta
- * genérica» (400/629) y cambiada despues a emitida (revision 2 del PR #7).
+ * ¿Que cuentas son del sentido contrario? Una venta con cuenta de proveedor
+ * (40x/41x) o de gasto (6xx), o una compra con cuenta de cliente (43x) o de
+ * ingreso (7xx). Las que minoran (REDUCING_RESULT_ACCOUNT) no cuentan. Se
+ * comparan como se guardan (normalizePlanAccount): «4.1» (Ctrl+Enter sin
+ * salir del campo) no empieza por 40 hasta que se completa a 40000001, y
+ * una 4000001 se queda como esta, que es la que va a la columna H. Lo usan la
+ * validacion y la pantalla, que al cambiar de sentido vacia las que no
+ * encajan.
+ */
+export function accountsAgainstDirection(
+  inv: Pick<RuleInvoice, "type" | "supplierAccount" | "expenseAccount">,
+): { party: string | null; result: string | null } {
+  const party = normalizePlanAccount(inv.supplierAccount ?? "");
+  const result = normalizePlanAccount(inv.expenseAccount ?? "");
+  return {
+    party: party && !partyAccountMatchesType(party, inv.type) ? party : null,
+    result: result && !resultAccountMatchesType(result, inv.type) && !REDUCING_RESULT_ACCOUNT[inv.type].test(result)
+      ? result
+      : null,
+  };
+}
+
+/**
+ * Cuentas del sentido contrario (accountsAgainstDirection). Pasaba con una
+ * «No lo sé» abierta como recibida, con «Usar cuenta genérica» (400/629) y
+ * cambiada despues a emitida (revision 2 del PR #7).
  */
 export function accountDirectionProblem(
   inv: Pick<RuleInvoice, "type" | "supplierAccount" | "expenseAccount">,
 ): RuleProblem | null {
   const isSale = inv.type === "SALE";
-  const party = inv.supplierAccount?.trim();
-  const result = inv.expenseAccount?.trim();
-  if (party && !partyAccountMatchesType(party, inv.type)) {
+  const { party, result } = accountsAgainstDirection(inv);
+  if (party) {
     return {
       rule: "cuenta_sentido",
       message: isSale
@@ -174,7 +203,7 @@ export function accountDirectionProblem(
         : `La cuenta ${party} es de cliente y esta factura es recibida: usa una cuenta de proveedor (40x o 41x).`,
     };
   }
-  if (result && !resultAccountMatchesType(result, inv.type)) {
+  if (result) {
     return {
       rule: "cuenta_sentido",
       message: isSale

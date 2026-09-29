@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import * as XLSX from "xlsx";
 import {
+  a3ExclusionBox,
   a3ExclusionReason,
   generateA3Excel,
   partitionA3Exportable,
@@ -109,10 +110,19 @@ describe("aviso de factura excluida", () => {
     } as unknown as InvoiceWithClient;
     const [res] = validateForA3Export([conImportes]);
     expect(res.severity).toBe("bloqueante");
-    expect(res.blockers[0]).toBe("Rectificativa con total 0 pero con importes en las líneas: revísala");
-    // Con retención distinta de 0 tampoco es «nada que corregir».
+    expect(res.blockers[0]).toBe(
+      "Rectificativa con total 0 pero con importes en las líneas: A3 no admite total 0; regístrala a mano en A3. "
+      + "Si ya la has registrado, no la registres otra vez: seguirá saliendo aquí",
+    );
+    expect(a3ExclusionBox(conImportes)).toBe("a_mano");
+    // Con retención distinta de 0 tampoco es «nada que corregir», y el texto
+    // no habla de las líneas.
     const conRetencion = { ...mkInvoice("rr", 0), isRectificative: true, irpfAmount: 15 } as unknown as InvoiceWithClient;
-    expect(validateForA3Export([conRetencion])[0].severity).toBe("bloqueante");
+    const [ret] = validateForA3Export([conRetencion]);
+    expect(ret.severity).toBe("bloqueante");
+    // Con las líneas a 0 y retención no cuadra (0 − 15 ≠ 0): hay que corregirla.
+    expect(ret.blockers[0]).toBe("Rectificativa con total 0 pero con retención de 15,00 €: no cuadra; corrígela en la revisión");
+    expect(a3ExclusionBox(conRetencion)).toBe("corregir");
   });
 
   it("orden: bloqueantes, avisos y las que no van al Excel", () => {

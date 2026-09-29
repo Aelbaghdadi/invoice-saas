@@ -35,6 +35,10 @@ export const NEEDS_REVIEW: InvoiceStatus[] = [
   "OCR_ERROR",
 ];
 
+/** Por revisar: donde tienen sentido las acciones de duplicado («No es
+ *  duplicada», «Es duplicada»). NEEDS_REVIEW mas el legacy ANALYZED. */
+export const REVIEWABLE: InvoiceStatus[] = [...NEEDS_REVIEW, "ANALYZED"];
+
 /** Trabajo terminado (independientemente de si se valida o rechaza). */
 export const DONE_WORK: InvoiceStatus[] = [
   "VALIDATED",
@@ -44,6 +48,13 @@ export const DONE_WORK: InvoiceStatus[] = [
   // Foto con múltiples tickets que fue dividida en sub-facturas.
   "SPLIT_SOURCE",
 ];
+
+/** El aviso de duplicado (etiqueta del listado, distintivo de admin, bloque
+ *  de la revision) solo en las no terminadas: hasta F-057 validar y rechazar
+ *  no cerraban incidencias, y hay terminadas con el duplicado OPEN. */
+export function showsDuplicateWarning(status: InvoiceStatus): boolean {
+  return !DONE_WORK.includes(status);
+}
 
 /** Calcula el porcentaje completado de un conjunto. */
 export function completionPercent(counts: {
@@ -150,6 +161,7 @@ export const AUDIT_FIELD_LABELS: Record<string, string> = {
   isRectificative: "Rectificativa",
   rectifiedInvoiceNumber: "Factura rectificada",
   rectificativeType: "Tipo de rectificación",
+  rectificativeSign: "Signo de la rectificativa",
   equivalenceSurcharge: "Recargo de equivalencia",
   export: "Exportación",
   reexport: "Por reexportar",

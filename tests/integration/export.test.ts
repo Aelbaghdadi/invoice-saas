@@ -208,13 +208,11 @@ describe("originales divididas en el export (PR #4)", () => {
     ));
     const body = await preview.json();
     expect(body.count).toBe(2);
-    expect(body.excludedByReason).toEqual({ total_cero: 1, dividida: 1, bloqueante: 0 });
     // Por caja: la de total 0 (no rectificativa) hay que corregirla; la dividida no va a A3.
-    expect(body.excludedByBox).toEqual({ corregir: 1, fuera: 1 });
+    expect(body.excludedByBox).toEqual({ corregir: 1, fuera: 1, a_mano: 0 });
     const download = await exportDownload(downloadRequest());
     expect(download.status).toBe(200);
-    expect(JSON.parse(download.headers.get("X-Export-Excluded-Detail")!)).toEqual({ total_cero: 1, dividida: 1, bloqueante: 0 });
-    expect(JSON.parse(download.headers.get("X-Export-Excluded-Boxes")!)).toEqual({ corregir: 1, fuera: 1 });
+    expect(JSON.parse(download.headers.get("X-Export-Excluded-Boxes")!)).toEqual({ corregir: 1, fuera: 1, a_mano: 0 });
     const marked = await prisma.invoice.findMany({ where: { exportBatchId: { not: null } }, select: { invoiceNumber: true } });
     expect(marked.map((i) => i.invoiceNumber).sort()).toEqual(["H1", "H2"]);
   });
@@ -261,7 +259,7 @@ describe("bloqueantes en el export (F-025)", () => {
 
     const body = await preview();
     expect(body.count).toBe(1);
-    expect(body.excludedByReason).toEqual({ total_cero: 0, dividida: 0, bloqueante: 3 });
+    expect(body.excludedByBox).toEqual({ corregir: 3, fuera: 0, a_mano: 0 });
     expect(body.blockingCount).toBe(3);
     expect(body.warnings.map((x: { invoiceNumber: string; severity: string; blockers: string[] }) =>
       [x.invoiceNumber, x.severity, x.blockers])).toEqual([
@@ -273,7 +271,7 @@ describe("bloqueantes en el export (F-025)", () => {
     const download = await exportDownload(downloadRequest());
     expect(download.status).toBe(200);
     expect(download.headers.get("X-Export-Excluded")).toBe("3");
-    expect(JSON.parse(download.headers.get("X-Export-Excluded-Detail")!)).toEqual({ total_cero: 0, dividida: 0, bloqueante: 3 });
+    expect(JSON.parse(download.headers.get("X-Export-Excluded-Boxes")!)).toEqual({ corregir: 3, fuera: 0, a_mano: 0 });
     const marked = await prisma.invoice.findMany({ where: { exportBatchId: { not: null } }, select: { invoiceNumber: true } });
     expect(marked.map((i) => i.invoiceNumber)).toEqual(["BUENA"]);
     for (const { id } of [sinNif, usd, intracom]) {
@@ -287,7 +285,7 @@ describe("bloqueantes en el export (F-025)", () => {
   it("con más de 50 avisos, el salto de numeración se manda igual (solo lo calcula el export)", async () => {
     for (let i = 0; i < 55; i++) await makeInvoice(w.client, { ...april, invoiceNumber: `DESCUADRE-${i}`, totalAmount: 130 });
     // Dos emitidas del propio cliente, 1 y 3, las últimas del periodo: falta la 2.
-    const venta = { ...april, type: "SALE" as const, issuerCif: w.client.cif, issuerName: w.client.name, receiverCif: "B12345674", receiverName: "Cliente final SL" };
+    const venta = { ...april, type: "SALE" as const, issuerCif: w.client.cif, issuerName: w.client.name, receiverCif: "B12345674", receiverName: "Cliente final SL", supplierAccount: "43000001", expenseAccount: "70000001" };
     await makeInvoice(w.client, { ...venta, invoiceNumber: "1", invoiceDate: new Date("2026-04-28") });
     await makeInvoice(w.client, { ...venta, invoiceNumber: "3", invoiceDate: new Date("2026-04-29") });
     const body = await preview();
@@ -295,7 +293,22 @@ describe("bloqueantes en el export (F-025)", () => {
     const gap = body.warnings.find((x: { invoiceNumber: string }) => x.invoiceNumber === "3");
     expect(gap).toMatchObject({ severity: "aviso", numberingGap: true });
     expect(gap.warnings.join()).toContain("falta la factura 2");
-    expect(body.warnings.filter((x: { severity: string }) => x.severity === "aviso")).toHaveLength(51);
+    const avisos = body.warnings.filter((x: { severity: string }) => x.severity === "aviso");
+    expect(avisos).toHaveLength(50);
+    expect(avisos[0]).toBe(gap);
+  });
+
+  it("con muchos saltos de numeración: como mucho 25, y el resto del recorte para los demás avisos", async () => {
+    for (let i = 0; i < 40; i++) await makeInvoice(w.client, { ...april, invoiceNumber: `DESCUADRE-${i}`, totalAmount: 130 });
+    // 1, 3, 5... 121: 60 saltos.
+    const venta = { ...april, type: "SALE" as const, issuerCif: w.client.cif, issuerName: w.client.name, receiverCif: "B12345674", receiverName: "Cliente final SL", supplierAccount: "43000001", expenseAccount: "70000001" };
+    for (let n = 1; n <= 121; n += 2) await makeInvoice(w.client, { ...venta, invoiceNumber: String(n) });
+    const body = await preview();
+    expect(body.warningCountBySeverity.aviso).toBe(100);
+    const avisos = body.warnings.filter((x: { severity: string }) => x.severity === "aviso");
+    expect(avisos).toHaveLength(50);
+    expect(avisos.filter((x: { numberingGap?: boolean }) => x.numberingGap)).toHaveLength(25);
+    expect(avisos.slice(0, 25).every((x: { numberingGap?: boolean }) => x.numberingGap)).toBe(true);
   });
 
   it("orden estable: con la misma fecha desempata el id", async () => {

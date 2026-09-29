@@ -6,8 +6,11 @@ import { canAccessClient } from "@/lib/accessibleClients";
 import { appendAuditLogs } from "@/lib/auditLog";
 import { learnProviderRule } from "@/lib/providerRouting";
 import { detectInvoiceType } from "@/lib/invoiceRouting";
-import { DUPLICATE_SELECT, describeExisting } from "@/lib/issueDetector";
-import { mathIssues } from "@/lib/mathIssues";
+import { duplicateField, findPossibleDuplicate } from "@/lib/duplicates";
+import { intracomVatIssue, mathIssues } from "@/lib/mathIssues";
+import { isInvoiceBalanced } from "@/lib/invoiceBalance";
+import { anyNegativeAmount, hasRectificativeMention, rectificativeSignHint } from "@/lib/rectificative";
+import { facturaeXmlIsCorrective } from "@/lib/ocr";
 import { proposeSurchargesFromTotal } from "@/lib/equivalenceSurcharge";
 import { proposeOperationType } from "@/lib/operationTypeProposal";
 import { parseTaxId, taxIdWithCountry } from "@/lib/validators";
@@ -22,6 +25,18 @@ export type ClassifyState = { ok?: boolean; error?: string } | null;
  * cliente según el tipo y la saca del buzón hacia la cola de revisión normal.
  */
 export async function classifyInvoice(invoiceId: string, clientId: string): Promise<ClassifyState> {
+  // Una server action no lanza a la UI (AGENTS.md): cualquier fallo, tambien
+  // en las lecturas previas a la transaccion, sale como { error } y el gestor
+  // puede reintentar. La transaccion no deja nada a medias.
+  try {
+    return await classify(invoiceId, clientId);
+  } catch (err) {
+    console.error("classifyInvoice", invoiceId, err);
+    return { error: "No se pudo clasificar la factura. Inténtalo de nuevo." };
+  }
+}
+
+async function classify(invoiceId: string, clientId: string): Promise<ClassifyState> {
   const session = await auth();
   if (!session?.user || !["ADMIN", "WORKER"].includes(session.user.role)) {
     return { error: "No autorizado" };
@@ -80,30 +95,25 @@ export async function classifyInvoice(invoiceId: string, clientId: string): Prom
     ? { receiverName: client.name, receiverCif: client.cif }
     : { issuerName: client.name, issuerCif: client.cif, issuerCountry: null };
 
-  // Dedupe básico contra el cliente real (estrategia CIF + nº factura).
+  // Duplicados contra el cliente real, con la misma comprobacion que el OCR
+  // (src/lib/duplicates.ts): antes solo se miraba CIF + numero literal y,
+  // en una venta sin NIF del destinatario, nada.
   const otherCif = isPurchase ? invoice.issuerCif : invoice.receiverCif;
-  let isDuplicate = false;
-  let duplicateDescription: string | null = null;
-  if (otherCif && invoice.invoiceNumber) {
-    const dup = await prisma.invoice.findFirst({
-      where: {
-        clientId,
-        type: effectiveType,
-        id: { not: invoiceId },
-        status: { notIn: ["REJECTED", "PENDING_ROUTING"] },
-        issuerCif: isPurchase ? otherCif : undefined,
-        receiverCif: isPurchase ? undefined : otherCif,
-        invoiceNumber: invoice.invoiceNumber,
-      },
-      select: { id: true, ...DUPLICATE_SELECT },
-    });
-    if (dup) {
-      isDuplicate = true;
-      // Mismo texto que el detector del OCR: el aviso se lee igual venga de
-      // donde venga. Se crea dentro de la transaccion de abajo.
-      duplicateDescription = `Posible duplicado de ${describeExisting(dup)}.`;
-    }
-  }
+  const duplicate = await findPossibleDuplicate({
+    invoiceId,
+    clientId,
+    type: effectiveType,
+    invoiceNumber: invoice.invoiceNumber,
+    issuerCif: isPurchase ? invoice.issuerCif : client.cif,
+    receiverCif: isPurchase ? client.cif : invoice.receiverCif,
+    issuerCountry: isPurchase ? invoice.issuerCountry : null,
+    receiverCountry: isPurchase ? null : invoice.receiverCountry,
+    receiverName: invoice.receiverName,
+    totalAmount: invoice.totalAmount == null ? null : Number(invoice.totalAmount),
+    invoiceDate: invoice.invoiceDate,
+    fileHash: invoice.fileHash,
+  });
+  const isDuplicate = duplicate != null;
 
   // Tipo de operacion con lo aprendido del tercero en el cliente elegido,
   // como en el OCR: el que habia se calculo con el cliente buzon (INTERIOR)
@@ -151,14 +161,58 @@ export async function classifyInvoice(invoiceId: string, clientId: string): Prom
     lines[p.index].equivalenceSurchargeRate = p.rate;
     lines[p.index].equivalenceSurchargeAmount = p.amount;
   }
+  const totalAmount = invoice.totalAmount == null ? null : Number(invoice.totalAmount);
+  const irpfAmount = invoice.irpfAmount == null ? null : Number(invoice.irpfAmount);
   const mathProblems = mathIssues({
     lines,
     taxBase: invoice.taxBase == null ? null : Number(invoice.taxBase),
     vatAmount: invoice.vatAmount == null ? null : Number(invoice.vatAmount),
-    totalAmount: invoice.totalAmount == null ? null : Number(invoice.totalAmount),
-    irpfAmount: invoice.irpfAmount == null ? null : Number(invoice.irpfAmount),
+    totalAmount,
+    irpfAmount,
     operationType: proposal.operationType,
   });
+  // Intracomunitaria con IVA declarado, con el tipo propuesto para el
+  // cliente elegido (el OCR no la mira en «Por clasificar»).
+  const intracomVat = intracomVatIssue({
+    lines,
+    vatAmount: invoice.vatAmount == null ? null : Number(invoice.vatAmount),
+    vatRate: invoice.vatRate == null ? null : Number(invoice.vatRate),
+    operationType: proposal.operationType,
+  });
+  if (intracomVat) mathProblems.push(intracomVat);
+  // Signo (F-012): el OCR no crea incidencias en el buzon. Se miran los
+  // importes guardados y la mencion que dejo el OCR en la extraccion.
+  const signAmounts = {
+    lines,
+    taxBase: invoice.taxBase == null ? null : Number(invoice.taxBase),
+    vatAmount: invoice.vatAmount == null ? null : Number(invoice.vatAmount),
+    totalAmount,
+    irpfAmount,
+    retentionBase: invoice.retentionBase == null ? null : Number(invoice.retentionBase),
+  };
+  // Con negativos ya hay incidencia: no hace falta leer la extraccion.
+  let mentioned = false;
+  if (!anyNegativeAmount(signAmounts)) {
+    const lastExtraction = await prisma.invoiceExtraction.findFirst({
+      where: { invoiceId }, orderBy: { ocrFinishedAt: "desc" }, select: { rawResponse: true, source: true },
+    });
+    mentioned = lastExtraction?.source === "xml_parse"
+      ? facturaeXmlIsCorrective(lastExtraction.rawResponse ?? "")
+      : hasRectificativeMention(lastExtraction?.rawResponse);
+  }
+  const signHint = rectificativeSignHint(signAmounts, null, mentioned);
+  if (signHint) mathProblems.push({ type: "MANUAL", description: signHint, field: "isRectificative" });
+  // isValid con el recargo ya propuesto, como `finalIsValid` en el OCR: el
+  // del buzon se calculo sin recargo y la ficha lo pintaba en rojo.
+  const isValid = lines.length > 0 && totalAmount != null
+    ? isInvoiceBalanced({
+        sumBase: lines.reduce((s, l) => s + l.taxBase, 0),
+        sumAmount: lines.reduce((s, l) => s + l.vatAmount, 0),
+        sumSurcharge: lines.reduce((s, l) => s + (l.equivalenceSurchargeAmount ?? 0), 0),
+        irpf: irpfAmount ?? 0,
+        total: totalAmount,
+      })
+    : invoice.isValid;
   const targetStatus = isDuplicate || mathProblems.length > 0 ? "NEEDS_ATTENTION" : "PENDING_REVIEW";
 
   // Todo en una transaccion que empieza por reclamar la factura: si dos
@@ -175,6 +229,7 @@ export async function classifyInvoice(invoiceId: string, clientId: string): Prom
         operationType: proposal.operationType,
         intracomGoodsType: proposal.goodsType,
         intracomGoodsSource: proposal.source,
+        isValid,
         status: targetStatus,
         routingCandidateIds: [],
         routingReason: null,
@@ -183,7 +238,7 @@ export async function classifyInvoice(invoiceId: string, clientId: string): Prom
     if (claim.count !== 1) return false;
 
     const issues = [
-      ...(duplicateDescription ? [{ type: "POSSIBLE_DUPLICATE" as const, description: duplicateDescription }] : []),
+      ...(duplicate ? [{ type: "POSSIBLE_DUPLICATE" as const, description: duplicate.description, field: duplicateField(duplicate.originalId) }] : []),
       ...mathProblems,
     ];
     if (issues.length > 0) {
@@ -212,12 +267,18 @@ export async function classifyInvoice(invoiceId: string, clientId: string): Prom
       newValue: targetStatus,
     }], tx);
     return true;
-  });
+  }, { timeout: 15_000, maxWait: 5_000 });
   if (!claimed) return { error: "La factura no está pendiente de clasificar" };
 
   // Aprender: este proveedor (otra parte) va a esta empresa, para auto-rutear
   // las siguientes facturas suyas. No-op si no se leyó el CIF del proveedor.
-  await learnProviderRule(client.advisoryFirmId, otherCif, clientId);
+  // La clasificacion ya esta guardada: si aprender falla, no se deshace ni
+  // se le dice al gestor que no se pudo.
+  try {
+    await learnProviderRule(client.advisoryFirmId, otherCif, clientId);
+  } catch (err) {
+    console.error("learnProviderRule", invoiceId, err);
+  }
 
   revalidatePath("/dashboard/worker/clasificar");
   revalidatePath("/dashboard/worker/invoices");
@@ -226,6 +287,15 @@ export async function classifyInvoice(invoiceId: string, clientId: string): Prom
 
 /** Descarta una factura del buzón (no pertenece a ningún cliente del lote). */
 export async function discardUnclassified(invoiceId: string): Promise<ClassifyState> {
+  try {
+    return await discard(invoiceId);
+  } catch (err) {
+    console.error("discardUnclassified", invoiceId, err);
+    return { error: "No se pudo descartar la factura. Inténtalo de nuevo." };
+  }
+}
+
+async function discard(invoiceId: string): Promise<ClassifyState> {
   const session = await auth();
   if (!session?.user || !["ADMIN", "WORKER"].includes(session.user.role)) {
     return { error: "No autorizado" };

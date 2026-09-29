@@ -66,3 +66,29 @@ export function mathIssues(input: {
   }
   return issues;
 }
+
+/**
+ * Operacion intracomunitaria (adquisicion/entrega) con IVA declarado. Van
+ * con IVA 0%; si el OCR deja el 21% por defecto del documento, no puede
+ * colarse hasta el export. Es un aviso (NEEDS_ATTENTION) y no un 0% forzado
+ * a ciegas: puede ser un error real del proveedor que el gestor deba ver. Lo
+ * usan el detector del OCR y la clasificacion manual de «Por clasificar».
+ */
+export function intracomVatIssue(input: {
+  lines: { vatRate: number; vatAmount: number }[];
+  /** Cuota y % de la factura; solo se usan si no hay lineas. */
+  vatAmount: number | null;
+  vatRate: number | null;
+  operationType?: string | null;
+}): MathIssue | null {
+  if (input.operationType !== "INTRACOM" && input.operationType !== "INTRACOM_SERVICIOS") return null;
+  const { lines } = input;
+  const sumVat = lines.length > 0 ? lines.reduce((s, l) => s + l.vatAmount, 0) : (input.vatAmount ?? 0);
+  if (Math.abs(sumVat) <= 0.01) return null;
+  const rate = lines.length === 1 ? lines[0].vatRate : input.vatRate;
+  return {
+    type: "MANUAL",
+    description: `Operación intracomunitaria con IVA declarado${rate != null ? ` (${rate}%)` : ""}: las intracomunitarias suelen ir con IVA 0%. Revisa el desglose antes de exportar.`,
+    field: "vatRate",
+  };
+}

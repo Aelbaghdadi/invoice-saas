@@ -51,6 +51,19 @@ describe("estados de origen en guardar, validar y rechazar", () => {
     expect((await A()).status).toBe("ANALYZING");
   });
 
+  it("rechazar mientras un export tiene la fila más de 5 s: espera y rechaza (sin P2028)", { timeout: 30_000 }, async () => {
+    await prisma.invoice.update({ where: { id }, data: { status: "PENDING_REVIEW", rejectionReason: null } });
+    const lock = await holdLock(`SELECT 1 FROM "Invoice" WHERE id = $1 FOR UPDATE`, id);
+    const t0 = Date.now();
+    const pending = inFlight(reject(id));
+    await vi.waitFor(async () => expect(await sessionsWaitingForLock()).toBe(1), { timeout: 10_000 });
+    // Aqui el tiempo es lo que se prueba: pasar de los 5 s por defecto.
+    await new Promise((resolve) => setTimeout(resolve, 6_000 - (Date.now() - t0)));
+    await lock.release();
+    expect((await pending).error).toBeNull();
+    expect((await A()).status).toBe("REJECTED");
+  });
+
   it("una rechazada no se valida sin «Reabrir y validar»", async () => {
     const r = await validate(reviewForm(id, (await A()).updatedAt, w.client));
     expect(String(r.error)).toMatch(/Reabrir y validar/);

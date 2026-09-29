@@ -7,7 +7,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
 import { revalidatePath, refresh } from "next/cache";
-import { notifyClientInvoiceValidated, notifyClientInvoiceRejected } from "@/lib/email";
+import { notifyClientInvoiceValidated } from "@/lib/email";
 import {
   filterFromInvoice,
   getNextInQueue,
@@ -20,7 +20,7 @@ import {
 import { appendAuditLogs } from "@/lib/auditLog";
 import { canAccessClient } from "@/lib/accessibleClients";
 import { parseTaxId, isPersonaFisica, operationTypeLabel, OPERATION_TYPE_OPTIONS, OPERATION_TYPE_LABEL, type OperationTypeName } from "@/lib/validators";
-import { learnAccountsForDirection } from "@/lib/accountingAccount";
+import { learnAccountsForDirection, normalizePlanAccount } from "@/lib/accountingAccount";
 import { accountEntryKey, entryNameMatches, NO_RELIABLE_NIF_PREFIX } from "@/lib/supplierMatching";
 import {
   isIntracomOperation,
@@ -35,7 +35,9 @@ import { isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { amountFieldsProblem, parseVatLineInputs } from "@/lib/vatLineInput";
 import { validationProblems } from "@/lib/invoiceRules";
 import { percentOf } from "@/lib/money";
-import { applyRectificativeSign } from "@/lib/rectificative";
+import { anyNegativeAmount, applyRectificativeSign, NEGATIVE_AMOUNTS_HINT } from "@/lib/rectificative";
+import { describeExisting, duplicateOriginalId, findByInvoiceNumber, normalizeInvoiceNumber } from "@/lib/duplicates";
+import { closeOpenIssues } from "@/lib/invoiceIssues";
 import { foldSurchargeLines, completeReadSurcharges, surchargeAuditValue } from "@/lib/equivalenceSurcharge";
 import { exportFingerprint, type FingerprintInvoice } from "@/lib/exportFingerprint";
 import { appError, type AppError } from "@/lib/errorCodes";
@@ -48,14 +50,33 @@ import {
   reviewTargetWhere,
   type ReviewAction,
 } from "@/lib/invoiceStatuses";
-import { Prisma, type Invoice } from "@prisma/client";
+import { Prisma, type Invoice, type RejectionCategory } from "@prisma/client";
 import { EXPORT_TRANSACTION_OPTIONS } from "@/lib/exportBatch";
+import { closedPeriodError, conditionalWriteError, invoicePeriod } from "@/lib/reviewGuards";
+import { notifyRejection, rejectInvoiceCore } from "@/lib/invoiceRejection";
+
+/** Un posible duplicado al validar: otra factura ya validada con el mismo
+ *  numero y emisor («validated»), o una incidencia de posible duplicado
+ *  abierta («openIssue»; id null si la incidencia no guarda la original). */
+export type DuplicateWarning = {
+  kind: "validated" | "openIssue";
+  /** Lo que la pantalla devuelve en confirmDuplicate al confirmarlo. */
+  key: string;
+  id: string | null;
+  label: string;
+};
 
 /** Resultado de las server actions de revision. El `error` puede ser:
  *  - AppError: cuando es un fallo "conocido" del dominio (tiene codigo)
  *  - string: legacy / errores sin clasificar aun
  *  - undefined / null: exito */
-export type ReviewState = { error?: AppError | string } | null;
+export type ReviewState = {
+  error?: AppError | string;
+  /** Al validar: los posibles duplicados que el gestor tiene que confirmar,
+   *  todos juntos. La pantalla pide confirmacion y vuelve a validar con
+   *  confirmDuplicate. */
+  duplicateOf?: DuplicateWarning[];
+} | null;
 
 /** WORKER: el cliente tiene que estar asignado. ADMIN: tiene que ser de su
  *  asesoria. Antes solo se comprobaba al WORKER: cualquier otro rol pasaba sin
@@ -66,41 +87,6 @@ async function assertInvoiceAccess(
 ): Promise<ReviewState> {
   if (await canAccessClient(session, clientId)) return null;
   return { error: "No tienes acceso a esta factura." };
-}
-
-/** Periodo en el que cuenta la factura: el contable si lo tiene, si no el del
- *  lote. Mismo criterio que la pagina de revision y que parseAndSave. */
-function invoicePeriod(
-  invoice: Pick<Invoice, "periodMonth" | "periodYear" | "accountingPeriodMonth" | "accountingPeriodYear">,
-): { month: number; year: number } {
-  return {
-    month: invoice.accountingPeriodMonth ?? invoice.periodMonth,
-    year: invoice.accountingPeriodYear ?? invoice.periodYear,
-  };
-}
-
-/** Rechazar y dividir cambian la factura igual que guardar: con el periodo
- *  cerrado no se tocan (mismo criterio que rejectBatch). La pagina ya oculta
- *  los botones, pero puede estar abierta desde antes del cierre. */
-async function closedPeriodError(
-  clientId: string,
-  periods: { month: number; year: number }[],
-  action: string,
-): Promise<{ error: string } | null> {
-  const seen = new Set<string>();
-  for (const { month, year } of periods) {
-    const key = `${month}/${year}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const closure = await prisma.periodClosure.findUnique({
-      where: { clientId_month_year: { clientId, month, year } },
-      select: { reopenedAt: true },
-    });
-    if (closure && !closure.reopenedAt) {
-      return { error: `El periodo ${key} está cerrado: pide a un administrador que lo reabra en Cierres antes de ${action} la factura.` };
-    }
-  }
-  return null;
 }
 
 type FieldData = {
@@ -143,6 +129,9 @@ type FieldData = {
   rectifiedInvoiceSeries: string;
   rectifiedInvoiceNumber: string;
   rectificativeType:      string;  // "BY_DIFFERENCE" / "BY_SUBSTITUTION" / ""
+  /** Claves (DuplicateWarning.key) de los duplicados que el gestor ha
+   *  confirmado, separadas por comas. */
+  confirmDuplicate:       string;
   art80Tres:              string;  // "1" / "0"
 };
 
@@ -172,33 +161,6 @@ function parseVatLines(raw: string): { lines: ParsedVatLine[] } | { error: strin
   // 5,2 / 1,4 / 0,5) y el formulario la reenvia tal cual. Se pliega sobre su
   // linea antes de guardar: en A3 seria un IVA que no existe.
   return { lines: completeReadSurcharges(foldSurchargeLines(parsed.lines).lines) };
-}
-
-/**
- * La escritura condicionada no ha tocado nada (count 0). Si la factura esta
- * ahora en un estado en el que la accion no vale, se dice por que; si no, es
- * que la cambio otra persona (ERR-VALIDATE-003).
- */
-async function conditionalWriteError(
-  invoiceId: string,
-  action: ReviewAction,
-  options: { reopen?: boolean },
-  detail: string,
-): Promise<{ error: string | AppError }> {
-  const now = await prisma.invoice
-    .findUnique({
-      where: { id: invoiceId },
-      select: { status: true, replacedBy: { select: { id: true } }, client: { select: { isUnclassifiedBucket: true } } },
-    })
-    .catch(() => null);
-  const reason = now
-    ? reviewActionBlockReason(now.status, action, options)
-      ?? reviewTargetBlockReason(action, {
-        replacedById: now.replacedBy?.id ?? null,
-        isUnclassifiedBucket: now.client.isUnclassifiedBucket,
-      }, options)
-    : null;
-  return { error: reason ?? appError("ERR-VALIDATE-003", detail) };
 }
 
 async function parseAndSave(
@@ -292,14 +254,9 @@ async function parseAndSave(
   if (amountsError) return { error: amountsError };
   const isRectificativeFlag = data.isRectificative === "1";
 
-  // Validacion de cada linea de IVA antes de calcular nada. Permitimos
-  // importes negativos (abonos / rectificativas) sin exigir marcar el check:
-  // una rectificativa es, de momento, simplemente una factura en negativo.
-  for (const line of vatLines) {
-    if (line.vatRate < 0 || line.vatRate > 100) {
-      return { error: "El % IVA debe estar entre 0 y 100 en todas las lineas" };
-    }
-  }
+  // Importes negativos (abonos / rectificativas) sin exigir marcar el check:
+  // una rectificativa es, de momento, simplemente una factura en negativo. El
+  // % de cada linea (0-100) ya lo comprueba vatLineProblem.
 
   // Totales denormalizados sobre Invoice. vatRate solo tiene sentido cuando
   // hay una unica linea; multi-IVA -> null.
@@ -419,8 +376,11 @@ async function parseAndSave(
     currency:      data.currency === null ? invoice.currency : normalizeCurrency(data.currency),
     accountingPeriodMonth: parseInt2(data.accountingPeriodMonth),
     accountingPeriodYear:  parseInt2(data.accountingPeriodYear),
-    supplierAccount: data.supplierAccount || null,
-    expenseAccount:  data.expenseAccount  || null,
+    // Con punto se completa, como al salir del campo (con Ctrl+Enter sin
+    // salir, «4.1» se guardaba tal cual); sin punto se deja: rellenar por la
+    // derecha una 4000001 la convertia en otra subcuenta (40000010).
+    supplierAccount: normalizePlanAccount(data.supplierAccount) || null,
+    expenseAccount:  normalizePlanAccount(data.expenseAccount)  || null,
     operationType:   submittedOperationType,
     intracomGoodsType,
     intracomGoodsSource,
@@ -440,16 +400,13 @@ async function parseAndSave(
   // (lib/rectificative): si ya hay signos mixtos/negativos, se respetan.
   // Reflejamos el signo en newData y en las lineas que se persisten para que
   // calculo, auditoria y BD usen los mismos valores.
-  const signedLines = isRectificativeFlag
-    ? applyRectificativeSign({
-        lines: vatLines,
-        taxBase: newData.taxBase,
-        vatAmount: newData.vatAmount,
-        totalAmount: newData.totalAmount,
-        irpfAmount: newData.irpfAmount,
-        retentionBase: newData.retentionBase,
-      })
-    : { lines: vatLines, taxBase: newData.taxBase, vatAmount: newData.vatAmount, totalAmount: newData.totalAmount, irpfAmount: newData.irpfAmount, retentionBase: newData.retentionBase };
+  const asTyped = { lines: vatLines, taxBase: newData.taxBase, vatAmount: newData.vatAmount, totalAmount: newData.totalAmount, irpfAmount: newData.irpfAmount, retentionBase: newData.retentionBase };
+  const signedLines = isRectificativeFlag ? applyRectificativeSign(asTyped) : asTyped;
+  // La inversion se audita aparte (F-012): en los campos solo se veia el
+  // importe cambiado, no que lo habia negado la casilla y no el gestor.
+  // applyRectificativeSign devuelve el mismo objeto si respeta los signos.
+  const signInverted = signedLines !== asTyped
+    && (asTyped.lines.some((l) => l.taxBase !== 0 || l.vatAmount !== 0) || (asTyped.totalAmount ?? 0) !== 0);
   newData.taxBase       = signedLines.taxBase;
   newData.vatAmount     = signedLines.vatAmount;
   newData.totalAmount   = signedLines.totalAmount;
@@ -479,6 +436,13 @@ async function parseAndSave(
 
   // Build audit log entries for changed fields
   const auditEntries: { field: string; oldValue: string | null; newValue: string | null }[] = [];
+  if (signInverted) {
+    auditEntries.push({
+      field: "rectificativeSign",
+      oldValue: "importes en positivo",
+      newValue: "importes en negativo (marcada como rectificativa)",
+    });
+  }
   // Reabrir borra el motivo del rechazo: la factura deja de estar rechazada.
   if (options.reopen && invoice.rejectionReason) {
     auditEntries.push({ field: "rejectionReason", oldValue: invoice.rejectionReason, newValue: null });
@@ -553,6 +517,70 @@ async function parseAndSave(
   // exportBatchId null, y si se quedara EXPORTED una correccion que la saca
   // del lote no volveria nunca al Excel.
   const toValidated = (validate && !alreadyValidated) || invoice.status === "EXPORTED";
+
+  // Duplicado al validar (F-010): otra factura del cliente ya validada o
+  // exportada con el mismo numero (normalizado) y, en compras, el mismo CIF de
+  // emisor. Tambien una incidencia de posible duplicado abierta (F-016):
+  // validar la cierra, asi que el gestor tiene que decidir antes.
+  // Se miran los dos y van juntos en una sola confirmacion: antes, confirmar
+  // el aviso abierto se saltaba tambien el control contra una validada que el
+  // mensaje no habia nombrado.
+  //
+  // Corregir una ya validada (o EXPORTED legacy) no es validarla por primera
+  // vez: no pregunta por el aviso abierto y solo vuelve a mirar las validadas
+  // si cambio la clave de duplicado (numero normalizado, CIF del emisor, tipo
+  // o año).
+  const firstValidation = validate && invoice.status !== "VALIDATED" && invoice.status !== "EXPORTED";
+  // El año cuenta: la estrategia A solo compara facturas del mismo año, asi
+  // que pasar la fecha de 2025 a 2026 puede crear un duplicado.
+  const yearOf = (d: Date | null | undefined) => (d && !isNaN(d.getTime()) ? d.getUTCFullYear() : null);
+  const duplicateKeyChanged =
+    newData.type !== invoice.type
+    || normalizeInvoiceNumber(newData.invoiceNumber) !== normalizeInvoiceNumber(invoice.invoiceNumber)
+    || (newData.type !== "SALE" && newData.issuerCif !== invoice.issuerCif)
+    || yearOf(newData.invoiceDate) !== yearOf(invoice.invoiceDate);
+  const checkValidated = firstValidation || (validate && duplicateKeyChanged);
+  //
+  // confirmDuplicate lleva las claves de lo que el gestor vio y confirmo: si
+  // con el dialogo abierto aparece otro (otro gestor valida una tercera
+  // copia), se vuelve a preguntar en vez de saltarselo.
+  if (checkValidated) {
+    const confirmed = new Set(data.confirmDuplicate.split(",").filter(Boolean));
+    const duplicates: DuplicateWarning[] = [];
+    const openDuplicate = firstValidation
+      ? await prisma.invoiceIssue.findFirst({
+        where: { invoiceId, type: "POSSIBLE_DUPLICATE", status: "OPEN" },
+        select: { id: true, description: true, field: true },
+      })
+      : null;
+    if (openDuplicate) {
+      duplicates.push({
+        kind: "openIssue", key: `openIssue:${openDuplicate.id}`,
+        id: duplicateOriginalId(openDuplicate.field), label: openDuplicate.description,
+      });
+    }
+    const validatedDup = newData.invoiceNumber
+      ? await findByInvoiceNumber({
+        clientId: invoice.clientId,
+        type: newData.type,
+        excludeId: invoiceId,
+        invoiceNumber: newData.invoiceNumber,
+        issuerCif: newData.issuerCif,
+        invoiceDate: newData.invoiceDate,
+        onlyValidated: true,
+      })
+      : null;
+    // La misma factura que ya nombra el aviso abierto no se repite.
+    if (validatedDup && !duplicates.some((d) => d.id === validatedDup.id)) {
+      duplicates.push({ kind: "validated", key: `validated:${validatedDup.id}`, id: validatedDup.id, label: describeExisting(validatedDup) });
+    }
+    if (duplicates.some((d) => !confirmed.has(d.key))) {
+      const texts = duplicates.map((d) => d.kind === "validated"
+        ? `Ya hay otra factura validada con este número y este emisor: ${d.label}.`
+        : "Esta factura tiene abierto un aviso de duplicado.");
+      return { error: `${texts.join(" ")} Si no es la misma, confírmalo para validarla.`, duplicateOf: duplicates };
+    }
+  }
 
   // When saving without validating, transition to PENDING_REVIEW if coming from initial states
   // ANALYZED es legacy (pre-refactor); si aun existe en BD se acepta como draft.
@@ -663,6 +691,8 @@ async function parseAndSave(
       // escribieran despues y fallaran, quedaria la factura reabierta (motivo
       // borrado) o validada sin rastro en la auditoria, que es inmutable.
       if (toValidated) {
+        // F-057: validada, sus incidencias dejan de aplicar.
+        await closeOpenIssues(tx, invoiceId, userId);
         await tx.invoiceStatusHistory.create({
           data: {
             invoiceId,
@@ -670,6 +700,18 @@ async function parseAndSave(
             toStatus: "VALIDATED",
             changedBy: userId,
           },
+        });
+      }
+      // Incidencias del signo (F-012): se cierran al guardar con la casilla
+      // marcada, y la de negativos tambien cuando ya no queda ninguno. Si no,
+      // seguian diciendo «márcala» junto a una rectificativa ya marcada.
+      const signIssuesToResolve = isRectificativeFlag ? {}
+        : !anyNegativeAmount(signedLines) ? { description: NEGATIVE_AMOUNTS_HINT }
+        : null;
+      if (signIssuesToResolve) {
+        await tx.invoiceIssue.updateMany({
+          where: { invoiceId, field: "isRectificative", status: "OPEN", ...signIssuesToResolve },
+          data: { status: "RESOLVED", resolvedBy: userId, resolvedAt: new Date() },
         });
       }
       if (auditEntries.length > 0) {
@@ -1070,81 +1112,19 @@ export async function rejectInvoice(
     return { error: "Categoría de rechazo no válida." };
   }
 
-  const invoice = await prisma.invoice.findUnique({
-    where: { id },
-    include: { exportBatchItems: { take: 1, select: { id: true } } },
-  });
-  if (!invoice) return { error: "Factura no encontrada" };
-
-  // Workers can only reject invoices of assigned clients
-  const accessErr = await assertInvoiceAccess(session, invoice.clientId);
-  if (accessErr) return accessErr;
-
-  // Con las flechas se llega a facturas ya terminadas. Una que ya salio en un
-  // Excel esta en la contabilidad de A3: rechazarla aqui no la quita de alli
-  // y al cliente le llegaria un rechazo de algo ya contabilizado.
-  if (invoice.exportBatchItems.length > 0) {
-    return { error: "Esta factura ya se exportó a A3 y no se puede rechazar. Si hay que corregirla, corrígela y vuelve a exportarla." };
-  }
-  // Ya rechazada, en analisis, dividida o por clasificar: no se rechaza. Se
-  // repite en el propio updateMany de abajo.
-  const blocked = reviewActionBlockReason(invoice.status, "reject");
-  if (blocked) return { error: blocked };
-  const periodErr = await closedPeriodError(invoice.clientId, [invoicePeriod(invoice)], "rechazar");
-  if (periodErr) return periodErr;
-
-  // Condicionado al updatedAt leido: si una exportacion la reservo mientras
-  // tanto, no se rechaza una factura que ya esta camino de A3 (F-049).
-  const rejected = await prisma.invoice.updateMany({
-    where: { id, updatedAt: invoice.updatedAt, status: { in: reviewAllowedFrom("reject") } },
-    data: {
-      status: "REJECTED",
-      rejectionReason: reason,
-      ...(category ? { rejectionCategory: category as "ILLEGIBLE" | "INCOMPLETE" | "WRONG_PERIOD" | "DUPLICATE" | "OTHER" } : {}),
-    },
-  });
-  if (rejected.count === 0) {
-    return conditionalWriteError(id, "reject", {}, `updatedAt=${invoice.updatedAt.getTime()} al rechazar`);
-  }
-
-  await prisma.invoiceStatusHistory.create({
-    data: {
-      invoiceId: id,
-      fromStatus: invoice.status,
-      toStatus: "REJECTED",
-      changedBy: session.user.id,
-      reason,
-    },
-  });
-
-  await appendAuditLogs([{
+  // Acceso, exportada, estado, periodo y escritura condicionada: lo mismo
+  // que «Es duplicada» del listado (invoiceRejection).
+  const result = await rejectInvoiceCore({
     invoiceId: id,
     userId: session.user.id,
-    field: "status",
-    oldValue: invoice.status,
-    newValue: "REJECTED",
-  }]);
-
-  // Notify client about rejection
-  after(async () => {
-    try {
-      const inv = await prisma.invoice.findUnique({
-        where: { id },
-        include: { client: { include: { user: { select: { email: true } } } } },
-      });
-      if (inv?.client?.user?.email) {
-        await notifyClientInvoiceRejected({
-          clientEmail: inv.client.user.email,
-          clientName: inv.client.name,
-          invoiceNumber: inv.invoiceNumber ?? "",
-          filename: inv.filename,
-          reason,
-        });
-      }
-    } catch (e) {
-      console.error("[NOTIFY] Error notifying client rejection:", e);
-    }
+    reason,
+    category: (category || null) as RejectionCategory | null,
+    authorize: async (clientId) => (await canAccessClient(session, clientId)) ? null : { error: "No tienes acceso a esta factura." },
   });
+  if ("error" in result) return result;
+  const { invoice } = result;
+
+  after(() => notifyRejection(id, reason));
 
   const nextId = await resolveNextId(id, filterFromInvoice(invoice, bucket), fallbackNext);
   // Mismo motivo que en validateInvoice: prefetch del siguiente puede
@@ -1268,6 +1248,9 @@ async function reserveAndCreateSplit(
         ids.push(child.id);
       }
 
+      // F-057: la original sale del flujo; las hijas generan las suyas al
+      // pasar por el OCR.
+      await closeOpenIssues(tx, invoice.id, userId);
       await tx.invoiceStatusHistory.create({
         data: { invoiceId: invoice.id, fromStatus: invoice.status, toStatus: "SPLIT_SOURCE", changedBy: userId },
       });
@@ -1599,6 +1582,7 @@ function extractFields(fd: FormData): FieldData {
     rectifiedInvoiceSeries: fd.get("rectifiedInvoiceSeries") as string ?? "",
     rectifiedInvoiceNumber: fd.get("rectifiedInvoiceNumber") as string ?? "",
     rectificativeType:      fd.get("rectificativeType")      as string ?? "",
+    confirmDuplicate:       fd.get("confirmDuplicate")       as string ?? "",
     art80Tres:              fd.get("art80Tres")              as string ?? "0",
   };
 }
