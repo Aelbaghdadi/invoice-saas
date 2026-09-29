@@ -3,6 +3,8 @@
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
+import { after } from "next/server";
+import { sendPeriodSummary } from "@/lib/periodSummary";
 
 export async function closePeriod(formData: FormData) {
   const session = await auth();
@@ -17,6 +19,14 @@ export async function closePeriod(formData: FormData) {
   if (!clientId || !month || !year) {
     return { error: "Faltan datos obligatorios." };
   }
+
+  // Solo clientes de su asesoria: sin esto, con el id de otro cliente se
+  // cerraba un periodo ajeno (y ahora, ademas, se le mandaria el resumen).
+  const client = await prisma.client.findFirst({
+    where: { id: clientId, advisoryFirmId: session.user.advisoryFirmId ?? "", isUnclassifiedBucket: false },
+    select: { id: true },
+  });
+  if (!client) return { error: "Cliente no encontrado." };
 
   // Check if already closed
   const existing = await prisma.periodClosure.findUnique({
@@ -43,6 +53,9 @@ export async function closePeriod(formData: FormData) {
       reopenedBy: null,
     },
   });
+
+  // Resumen al cliente (F-040), fuera de la petición.
+  after(() => sendPeriodSummary(clientId, month, year));
 
   revalidatePath("/dashboard/admin/closures");
   return { success: true };

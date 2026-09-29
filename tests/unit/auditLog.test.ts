@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { auditChainHeads, planAuditRecords, type AuditChainRow } from "@/lib/auditLog";
+import { auditChainHeads, checkAuditRecord, planAuditRecords, type AuditChainRow } from "@/lib/auditLog";
 
 function ids(...list: string[]) {
   const queue = [...list];
@@ -118,5 +118,36 @@ describe("auditChainHeads", () => {
 
   it("sin registros no hay cabeza: la cadena empieza en GENESIS", () => {
     expect(auditChainHeads([]).size).toBe(0);
+  });
+});
+
+describe("checkAuditRecord (F-048)", () => {
+  const [first, second] = planAuditRecords(
+    [
+      { invoiceId: "inv1", userId: "u1", field: "status", oldValue: "A", newValue: "B" },
+      { invoiceId: "inv1", userId: "u1", field: "status", oldValue: "B", newValue: "C" },
+    ],
+    new Map(),
+    T0,
+    ids("r1", "r2"),
+  );
+
+  it("una cadena bien escrita no da fallos", () => {
+    expect(checkAuditRecord(first, undefined)).toEqual([]);
+    expect(checkAuditRecord(second, first)).toEqual([]);
+  });
+
+  it("un campo retocado no da su hash", () => {
+    expect(checkAuditRecord({ ...second, newValue: "D" }, first).map((b) => b.reason)).toEqual(["hash_mismatch"]);
+  });
+
+  it("sin anterior, o con uno de otra factura, el enlace está roto", () => {
+    expect(checkAuditRecord(second, undefined).map((b) => b.reason)).toEqual(["broken_link"]);
+    expect(checkAuditRecord(second, { ...first, invoiceId: "inv2" }).map((b) => b.reason)).toEqual(["broken_link"]);
+  });
+
+  it("el prevHash tiene que ser el hash del anterior, y el primero GENESIS", () => {
+    expect(checkAuditRecord(second, { ...first, hash: "otro" }).map((b) => b.reason)).toEqual(["prev_hash_mismatch"]);
+    expect(checkAuditRecord({ ...first, prevHash: "x" }, undefined).map((b) => b.reason)).toEqual(["missing_genesis", "hash_mismatch"]);
   });
 });

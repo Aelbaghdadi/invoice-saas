@@ -72,13 +72,79 @@ export async function putObject(
 export async function getObjectBytes(key: string, options: { timeoutMs?: number } = {}): Promise<Buffer> {
   const client = getClient();
   if (!client) throw new Error("Almacenamiento (S3) no configurado");
-  const res = await client.send(
-    new GetObjectCommand({ Bucket: STORAGE_BUCKET, Key: key }),
-    options.timeoutMs ? { abortSignal: AbortSignal.timeout(options.timeoutMs) } : {},
-  );
-  if (!res.Body) throw new Error(`Objeto sin contenido: ${key}`);
-  const bytes = await res.Body.transformToByteArray();
-  return Buffer.from(bytes);
+  const signal = options.timeoutMs ? AbortSignal.timeout(options.timeoutMs) : undefined;
+  try {
+    const res = await client.send(new GetObjectCommand({ Bucket: STORAGE_BUCKET, Key: key }), signal ? { abortSignal: signal } : {});
+    if (!res.Body) throw new Error(`Objeto sin contenido: ${key}`);
+    const bytes = await res.Body.transformToByteArray();
+    return Buffer.from(bytes);
+  } catch (err) {
+    // Cortado a mitad del cuerpo, el SDK no da un AbortError sino un
+    // «aborted» (ECONNRESET): sin esto no se reconocia como tope.
+    if (signal?.aborted) {
+      const timeout = new Error(`Almacenamiento: timeout (${options.timeoutMs! / 1000} s) descargando ${key}`, { cause: err });
+      timeout.name = "TimeoutError";
+      throw timeout;
+    }
+    throw err;
+  }
+}
+
+/** El almacenamiento no ha mandado nada durante el tope de inactividad. */
+export class StorageIdleError extends Error {
+  constructor(key: string, idleMs: number) {
+    super(`Almacenamiento: ${idleMs / 1000} s sin responder descargando ${key}`);
+    this.name = "StorageIdleError";
+  }
+}
+
+/**
+ * El objeto por trozos, sin cargarlo entero en memoria (la exportacion de los
+ * datos de un cliente, F-044). El tope es de inactividad: salta si Garage
+ * pasa `idleMs` sin mandar nada mientras se le esta pidiendo. No corre
+ * mientras el que lee no pide el trozo siguiente (con la contrapresion, un
+ * navegador lento no corta el original; revision 1 del PR #15, punto 11).
+ */
+export async function getObjectChunks(key: string, options: { idleMs: number }): Promise<AsyncIterable<Uint8Array>> {
+  const client = getClient();
+  if (!client) throw new Error("Almacenamiento (S3) no configurado");
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const arm = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => controller.abort(), options.idleMs);
+  };
+  const idle = (err: unknown) => (controller.signal.aborted ? new StorageIdleError(key, options.idleMs) : err);
+
+  arm();
+  let body: AsyncIterable<Uint8Array>;
+  try {
+    const res = await client.send(new GetObjectCommand({ Bucket: STORAGE_BUCKET, Key: key }), { abortSignal: controller.signal });
+    if (!res.Body) throw new Error(`Objeto sin contenido: ${key}`);
+    body = res.Body as AsyncIterable<Uint8Array>;
+  } catch (err) {
+    throw idle(err);
+  } finally {
+    clearTimeout(timer);
+  }
+  return (async function* () {
+    const it = body[Symbol.asyncIterator]();
+    try {
+      for (;;) {
+        arm();
+        const next = await it.next().catch((err) => {
+          throw idle(err);
+        });
+        clearTimeout(timer);
+        if (next.done) return;
+        yield next.value;
+      }
+    } finally {
+      clearTimeout(timer);
+      // Cortado a mitad (o por el que lee): la conexion se cierra.
+      if (!controller.signal.aborted) controller.abort();
+    }
+  })();
 }
 
 /**

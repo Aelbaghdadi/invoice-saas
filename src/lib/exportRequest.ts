@@ -14,6 +14,10 @@ const exportRequestSchema = z.object({
   year: z.coerce.number().int().min(2000).max(2100),
   type: z.enum(["ALL", "PURCHASE", "SALE"]).default("ALL"),
   format: z.enum(["a3excel"]).default("a3excel"),
+  // Las ya exportadas antes que quien exporta ha visto y confirmado (F-018).
+  // Van los ids, no un «si»: si entre la vista previa y la descarga se
+  // corrige otra, esa no esta confirmada.
+  confirmedReexports: z.array(z.string()).max(10_000).default([]),
 });
 
 export type ExportRequest = z.infer<typeof exportRequestSchema>;
@@ -25,6 +29,7 @@ const FIELD_LABELS: Record<string, string> = {
   year: "año",
   type: "tipo de factura",
   format: "formato",
+  confirmedReexports: "reexportadas confirmadas",
 };
 
 // El trimestre se pide por su primer mes, como lo manda la pantalla.
@@ -50,15 +55,12 @@ export function parseExportRequest(
   return { ok: true, request };
 }
 
-/**
- * Facturas pendientes de exportar para esa peticion, siempre dentro de la
- * asesoria. exportBatchId: null porque exportar no cambia el estado (sigue
- * VALIDATED): sin el filtro, cada exportacion repetia las ya exportadas.
- */
-export function exportInvoiceWhere(request: ExportRequest, firmId: string): Prisma.InvoiceWhereInput {
+type ExportScope = Pick<ExportRequest, "clientId" | "periodType" | "month" | "year" | "type">;
+
+/** Las facturas del cliente, periodo y tipo de la peticion, en cualquier
+ *  estado, siempre dentro de la asesoria. */
+export function exportPeriodWhere(request: ExportScope, firmId: string): Prisma.InvoiceWhereInput {
   return {
-    status: "VALIDATED",
-    exportBatchId: null,
     client: { advisoryFirmId: firmId },
     clientId: request.clientId,
     periodYear: request.year,
@@ -67,6 +69,19 @@ export function exportInvoiceWhere(request: ExportRequest, firmId: string): Pris
       ? { gte: request.month, lte: request.month + 2 }
       : request.month,
     ...(request.type !== "ALL" ? { type: request.type } : {}),
+  };
+}
+
+/**
+ * Facturas pendientes de exportar para esa peticion, siempre dentro de la
+ * asesoria. exportBatchId: null porque exportar no cambia el estado (sigue
+ * VALIDATED): sin el filtro, cada exportacion repetia las ya exportadas.
+ */
+export function exportInvoiceWhere(request: ExportScope, firmId: string): Prisma.InvoiceWhereInput {
+  return {
+    status: "VALIDATED",
+    exportBatchId: null,
+    ...exportPeriodWhere(request, firmId),
   };
 }
 

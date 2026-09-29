@@ -288,6 +288,9 @@ type Props = {
    *  el banner de "procesando" para mostrar una ETA realista. null si
    *  no hay historial todavia o la factura no esta en procesamiento. */
   avgOcrDurationMs?: number | null;
+  /** Cuantas esperan delante en la cola del OCR de este proceso, o null si
+   *  no esta en cola (revision 1 del PR #14, punto 3). */
+  ocrQueueAhead?: number | null;
   /** Cuentas genéricas del cliente para facturas simplificadas (tickets sin
    *  datos). Si hay cuenta proveedor configurada, se muestra el botón "Usar
    *  cuenta genérica" que las vuelca a los campos de cuenta. */
@@ -363,7 +366,7 @@ function fmtDate(d: Date | null | undefined) {
   return new Date(d).toISOString().slice(0, 10);
 }
 
-export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false, initialVatLines, prevId, nextId, nextPendingId = null, position, batchTotal, doneCount = 0, pendingInBucket = 0, periodClosed = false, validateBlockReason = null, splitBlockReason = null, backHref, back = null, extraction, issues, suggestedAccount, accountMatchedByName, accountNameMismatch = false, thirdPartyGoodsType = null, canRememberGoodsType = false, boundingBoxes, queueSuffix = "", bucket = "all", sessionContext, avgOcrDurationMs, genericAccounts }: Props) {
+export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false, initialVatLines, prevId, nextId, nextPendingId = null, position, batchTotal, doneCount = 0, pendingInBucket = 0, periodClosed = false, validateBlockReason = null, splitBlockReason = null, backHref, back = null, extraction, issues, suggestedAccount, accountMatchedByName, accountNameMismatch = false, thirdPartyGoodsType = null, canRememberGoodsType = false, boundingBoxes, queueSuffix = "", bucket = "all", sessionContext, avgOcrDurationMs, ocrQueueAhead = null, genericAccounts }: Props) {
   const { success, error } = useToast();
   const { confirm, dialog: confirmDialog } = useConfirm();
   const { ask: askUnsaved, dialog: unsavedDialog } = useUnsavedChangesDialog();
@@ -798,6 +801,11 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   const rectificativeIssues = isRectificative
     ? []
     : issues.filter((i) => i.field === "isRectificative" && i.status === "OPEN");
+  // Retencion aprendida del tercero que no es un tipo legal (F-073): junto al
+  // campo, mientras el % del formulario siga siendo el guardado (el aprendido).
+  const retentionRateIssues = retentionType && parseFloat(retentionRate) === invoice.irpfRate
+    ? issues.filter((i) => i.field === "irpfRate" && i.status === "OPEN")
+    : [];
   // Incidencias abiertas arriba del formulario (F-016): solo las que el
   // formulario no recalcula en vivo. El cuadre (MATH_MISMATCH), la confianza
   // por campo (LOW_CONFIDENCE) y los avisos MANUAL (signo, intracomunitaria)
@@ -1439,6 +1447,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   // Lo mismo cuando el importe no cuadra o el CIF es el del cliente: antes
   // Enter no hacia nada y el gestor no sabia por que.
   const shakeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const supplierAccountRef = useRef<HTMLInputElement>(null);
+  const expenseAccountRef = useRef<HTMLInputElement>(null);
   const [shake, setShake] = useState<"accounts" | "math" | "cif" | null>(null);
   const triggerShake = (target: "accounts" | "math" | "cif") => {
     if (shakeTimeoutRef.current) clearTimeout(shakeTimeoutRef.current);
@@ -1500,7 +1510,22 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     });
     if (problem) {
       if (problem.rule === "descuadre") triggerShake("math");
-      if (problem.rule === "sin_cuentas") triggerShake("accounts");
+      if (problem.rule === "sin_cuentas") {
+        // Las cuentas suelen quedar fuera de la pantalla: temblar no bastaba
+        // (F-107). Se lleva al gestor a la primera vacía y se dice cuál falta.
+        triggerShake("accounts");
+        const missing = [
+          !supplierAccountVal.trim() && { input: supplierAccountRef.current, label: type === "SALE" ? "la cuenta de cliente (43x)" : "la cuenta de proveedor (4xx)" },
+          !expenseAccountVal.trim() && { input: expenseAccountRef.current, label: type === "SALE" ? "la cuenta de ingreso (7xx)" : "la cuenta de gasto (6xx)" },
+        ].filter((m): m is { input: HTMLInputElement | null; label: string } => Boolean(m));
+        const first = missing[0]?.input;
+        first?.scrollIntoView({ block: "center", behavior: "smooth" });
+        first?.focus({ preventScroll: true });
+        error(missing.length === 0
+          ? problem.message
+          : `Falta ${missing.map((m) => m.label).join(" y ")}: rellénala${missing.length > 1 ? "s" : ""} antes de validar.`);
+        return false;
+      }
       error(problem.message);
       return false;
     }
@@ -2043,6 +2068,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
               <OcrProcessingBanner
                 startedAt={invoice.createdAt}
                 avgDurationMs={avgOcrDurationMs ?? undefined}
+                queueAhead={ocrQueueAhead}
                 invoiceId={invoice.id}
                 status={invoice.status}
                 updatedAt={invoice.updatedAt}
@@ -2816,6 +2842,12 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                     }`}
                   />
                 </button>
+                {retentionRateIssues.map((issue) => (
+                  <p key={issue.id} className="mt-1 flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-700">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+                    {issue.description}
+                  </p>
+                ))}
                 {showRetentionPanel && (
                   <div className="mt-2 space-y-2">
                     <div className="flex items-center justify-end">
@@ -3091,6 +3123,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                     {type === "SALE" ? "Cuenta cliente (43x)" : "Cuenta proveedor (4xx)"}
                   </label>
                   <input
+                    ref={supplierAccountRef}
+                    aria-label={type === "SALE" ? "Cuenta cliente" : "Cuenta proveedor"}
                     className={`${inputClass} ${shake === "accounts" && !supplierAccountVal.trim() ? "animate-shake" : ""}`}
                     value={supplierAccountVal}
                     onChange={(e) => setSupplierAccount(sanitizeAccountingAccountInput(e.target.value))}
@@ -3103,6 +3137,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                     {type === "SALE" ? "Cuenta ingreso (7xx)" : "Cuenta gasto (6xx)"}
                   </label>
                   <input
+                    ref={expenseAccountRef}
+                    aria-label={type === "SALE" ? "Cuenta ingreso" : "Cuenta gasto"}
                     className={`${inputClass} ${shake === "accounts" && !expenseAccountVal.trim() ? "animate-shake" : ""}`}
                     value={expenseAccountVal}
                     onChange={(e) => {

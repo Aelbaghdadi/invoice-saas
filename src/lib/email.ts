@@ -86,6 +86,55 @@ async function send(template: string, to: string, subject: string, html: string)
   }
 }
 
+/** Resend admite hasta 100 correos por llamada a batch.send. */
+export const EMAIL_BATCH_SIZE = 100;
+
+type Message = { to: string; subject: string; html: string };
+
+/**
+ * Varios correos de la misma plantilla con el envío en lote de Resend
+ * (F-040): una llamada por cada 100, no una por destinatario. Mismo tope de
+ * tiempo y mismos registros que send(); devuelve ok: false si falla alguna
+ * tanda.
+ */
+async function sendMany(template: string, messages: Message[]): Promise<EmailResult> {
+  if (messages.length === 0) return { ok: true };
+  if (!resend) {
+    for (const m of messages) console.log(`[EMAIL-DEV] ${template} | To: ${maskEmail(m.to)} | Subject: ${m.subject}`);
+    return { ok: true };
+  }
+  let ok = true;
+  for (let i = 0; i < messages.length; i += EMAIL_BATCH_SIZE) {
+    const chunk = messages.slice(i, i + EMAIL_BATCH_SIZE);
+    const recipients = chunk.map((m) => maskEmail(m.to)).join(", ");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const timeout = new Promise<"timeout">((resolve) => {
+        timer = setTimeout(() => resolve("timeout"), EMAIL_TIMEOUT_MS);
+      });
+      const request = resend.batch.send(
+        chunk.map((m) => ({ from: FROM, ...m })),
+        { signal: AbortSignal.timeout(EMAIL_TIMEOUT_MS) } as Parameters<typeof resend.batch.send>[1],
+      );
+      const result = await Promise.race([request, timeout]);
+      if (result === "timeout") {
+        console.error(`[EMAIL] No se ha enviado «${template}» a ${recipients}: timeout (${EMAIL_TIMEOUT_MS / 1000} s sin respuesta)`);
+        ok = false;
+      } else if (result.error) {
+        console.error(`[EMAIL] No se ha enviado «${template}» a ${recipients}: ${result.error.name}: ${result.error.message}`);
+        ok = false;
+      }
+    } catch (err) {
+      const detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+      console.error(`[EMAIL] No se ha enviado «${template}» a ${recipients}: ${detail}`);
+      ok = false;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return ok ? { ok: true } : { ok: false };
+}
+
 // ─── base template ──────────────────────────────────────────────────────────
 
 function wrap(opts: {
@@ -240,41 +289,57 @@ function periodInSentence(periodType: PeriodTypeName, month: number, year: numbe
 }
 
 /**
- * Notify client when their invoices have been validated
+ * Resumen al cliente cuando se cierra un periodo (F-040): cuántas se han
+ * validado, las rechazadas con su motivo y las que quedan pendientes. Antes
+ * salía un correo por cada factura validada. El rechazo sigue avisándose al
+ * momento (notifyClientInvoiceRejected).
  */
-export async function notifyClientInvoiceValidated(params: {
+export async function notifyClientPeriodSummary(params: {
   clientEmail: string;
   clientName: string;
-  invoiceNumber: string;
-  filename: string;
+  periodType: PeriodTypeName;
+  periodMonth: number;
+  periodYear: number;
+  validated: number;
+  rejected: { ref: string; reason: string }[];
+  pending: number;
 }) {
-  const invoiceRef = escapeHtml(params.invoiceNumber || params.filename);
-
+  const period = periodLabel(params.periodType, params.periodMonth, params.periodYear);
+  const periodText = periodInSentence(params.periodType, params.periodMonth, params.periodYear);
+  const n = (count: number, singular: string, plural: string) => `${count} ${count === 1 ? singular : plural}`;
+  const rejectedList = params.rejected.length > 0
+    ? `<p style="margin:0 0 8px;font-size:14px;color:#475569;line-height:1.6">Rechazadas:</p>
+       <ul style="margin:0 0 20px;padding-left:20px;font-size:14px;color:#475569;line-height:1.6">
+         ${params.rejected.map((r) => `<li><strong style="color:#0f172a">${escapeHtml(r.ref)}</strong>: ${escapeHtml(r.reason)}</li>`).join("")}
+       </ul>`
+    : "";
   const body = `
     <p style="margin:0 0 4px;font-size:15px;color:#475569;line-height:1.7">
       Hola <strong style="color:#0f172a">${escapeHtml(params.clientName)}</strong>,
     </p>
     <p style="margin:0;font-size:15px;color:#475569;line-height:1.7">
-      Tu factura ha sido revisada y <strong style="color:#16a34a">validada</strong> por nuestro equipo.
+      Hemos cerrado ${periodText}. Este es el resumen de tus facturas:
     </p>
     ${detailCard(
-      detailRow("Factura", invoiceRef) +
-      detailRow("Estado", "&#10003; Validada", "#16a34a")
+      detailRow("Validadas", String(params.validated), "#16a34a") +
+      detailRow("Rechazadas", String(params.rejected.length), params.rejected.length > 0 ? "#dc2626" : "#0f172a") +
+      detailRow("Pendientes", String(params.pending), params.pending > 0 ? "#d97706" : "#0f172a")
     )}
+    ${rejectedList}
     <p style="margin:0;font-size:13px;color:#94a3b8;line-height:1.6">
       Puedes consultar todos los detalles desde tu portal de cliente.
     </p>`;
 
   await send(
-    "factura-validada",
+    "resumen-periodo",
     params.clientEmail,
-    `Factura validada: ${invoiceRef}`,
+    `Resumen de ${period}: ${n(params.validated, "validada", "validadas")}, ${n(params.rejected.length, "rechazada", "rechazadas")}`,
     wrap({
-      preheader: `Tu factura ${invoiceRef} ha sido validada correctamente.`,
-      heroIcon: "&#9989;",
-      heroColor: "#16a34a",
-      heroBg: "#f0fdf4",
-      title: "Factura validada",
+      preheader: `Resumen de tus facturas: ${period}.`,
+      heroIcon: "&#128203;",
+      heroColor: "#2563eb",
+      heroBg: "#eff6ff",
+      title: `Periodo cerrado: ${period}`,
       body,
       ctaText: "Ver en mi portal",
       ctaUrl: `${APP_URL}/dashboard/client/invoices`,
@@ -473,21 +538,17 @@ export async function notifyWorkersNewUpload(params: {
       Accede a tu panel para comenzar la revisión.
     </p>`;
 
-  for (const email of params.workerEmails) {
-    await send(
-      "nuevas-facturas-gestor",
-      email,
-      `${params.clientName} — ${params.count} factura${plural} nueva${plural} (${period})`,
-      wrap({
-        preheader: `${escapeHtml(params.clientName)} ha subido ${params.count} factura${plural} para ${periodText}.`,
-        heroIcon: "&#128229;",
-        heroColor: "#2563eb",
-        heroBg: "#eff6ff",
-        title: single ? "Nueva factura pendiente" : "Nuevas facturas pendientes",
-        body,
-        ctaText: "Revisar facturas",
-        ctaUrl: `${APP_URL}/dashboard/worker/invoices`,
-      }),
-    );
-  }
+  const html = wrap({
+    preheader: `${escapeHtml(params.clientName)} ha subido ${params.count} factura${plural} para ${periodText}.`,
+    heroIcon: "&#128229;",
+    heroColor: "#2563eb",
+    heroBg: "#eff6ff",
+    title: single ? "Nueva factura pendiente" : "Nuevas facturas pendientes",
+    body,
+    ctaText: "Revisar facturas",
+    ctaUrl: `${APP_URL}/dashboard/worker/invoices`,
+  });
+  const subject = `${params.clientName} — ${params.count} factura${plural} nueva${plural} (${period})`;
+  // Un envío en lote para todos los gestores del cliente (F-040).
+  await sendMany("nuevas-facturas-gestor", params.workerEmails.map((to) => ({ to, subject, html })));
 }

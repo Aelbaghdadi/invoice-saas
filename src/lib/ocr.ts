@@ -1,5 +1,6 @@
 import { GoogleAuth } from "google-auth-library";
-import { DocumentError } from "./ocrErrors";
+import { DocumentError, OcrHttpError } from "./ocrErrors";
+import { parseRetryAfter } from "./retryBackoff";
 import { XMLParser } from "fast-xml-parser";
 import { normalizeCurrency } from "./currency";
 import type { IntracomGoodsTypeName } from "./validators";
@@ -66,12 +67,24 @@ function getAuthClient(): GoogleAuth {
 
 /** Obtiene un access token de Google usando las credenciales de la variable de entorno */
 async function getAccessToken(): Promise<string> {
-  const auth = getAuthClient();
-  const client = await auth.getClient();
-  const { token } = await client.getAccessToken();
-  if (!token) throw new Error("Google Auth no devolvió un token de acceso");
-  return token;
+  // Con tope: gaxios no pone ninguno, y un token colgado retenía un hueco de
+  // la cola del OCR para siempre (revision 1 del PR #14). «timeout» en el
+  // mensaje: es un error transitorio y se reintenta.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Google Auth: timeout (${ACCESS_TOKEN_TIMEOUT_MS / 1000} s sin token)`)), ACCESS_TOKEN_TIMEOUT_MS);
+  });
+  try {
+    const auth = getAuthClient();
+    const { token } = await Promise.race([auth.getClient().then((client) => client.getAccessToken()), timeout]);
+    if (!token) throw new Error("Google Auth no devolvió un token de acceso");
+    return token;
+  } finally {
+    clearTimeout(timer);
+  }
 }
+
+const ACCESS_TOKEN_TIMEOUT_MS = 30_000;
 
 /**
  * Extrae el valor monetario de una entidad de Document AI.
@@ -415,7 +428,7 @@ async function extractWithDocumentAI(
 
   if (!res.ok) {
     const err = await res.text();
-    throw new Error(`Document AI respondió ${res.status}: ${err}`);
+    throw new OcrHttpError(`Document AI respondió ${res.status}: ${err}`, res.status, parseRetryAfter(res.headers.get("retry-after")));
   }
 
   const data = await res.json();

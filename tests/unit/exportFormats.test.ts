@@ -723,4 +723,11 @@ describe("exportFilename", () => {
   it("sin cliente usa 'cliente'", () => {
     expect(exportFilename(null, "a3excel", 1, 2026)).toBe("facturas_cliente_2026-01_a3excel.xlsx");
   });
+
+  it("trimestral: «T3», no el primer mes (F-041)", () => {
+    expect(exportFilename("ACME SL", "a3excel", 7, 2026, "QUARTERLY")).toBe("facturas_ACME_SL_2026-T3_a3excel.xlsx");
+    expect(exportFilename("ACME SL", "a3excel", 10, 2026, "QUARTERLY")).toBe("facturas_ACME_SL_2026-T4_a3excel.xlsx");
+    expect(suggestFilename([mkInvoice()], "a3excel", 1, 2026, "QUARTERLY")).toBe("facturas_ACME_SL_2026-T1_a3excel.xlsx");
+    expect(exportFilename("ACME SL", "a3excel", 7, 2026, "MONTHLY")).toBe("facturas_ACME_SL_2026-07_a3excel.xlsx");
+  });
 });

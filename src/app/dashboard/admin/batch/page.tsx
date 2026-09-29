@@ -5,17 +5,20 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Badge } from "@/components/ui/Badge";
 import {
-  Layers, ArrowRight, PenLine, Loader2,
+  Layers, ArrowRight, PenLine, Loader2, Download,
 } from "lucide-react";
 import Link from "next/link";
-import type { InvoiceType, PeriodType } from "@prisma/client";
-import { completionPercent, isBatchRejectable } from "@/lib/invoiceStatuses";
+import type { Prisma } from "@prisma/client";
+import { completionPercent } from "@/lib/invoiceStatuses";
 import { periodLabel } from "@/lib/period";
-import { QUEUE_ORDER } from "@/lib/reviewQueue";
+import { exportPageHref } from "@/lib/exportPage";
+import { exportReadiness } from "@/lib/exportReadiness";
 import { reviewHref } from "@/lib/reviewNavigation";
 import { AutoRefresh } from "@/components/ui/AutoRefresh";
 import { BatchFilters } from "@/components/batch/BatchFilters";
 import { ClientAccordionSection } from "@/components/batch/ClientAccordionSection";
+import { BatchWindowNote } from "@/components/batch/BatchWindowNote";
+import { batchKey, batchWindowWhere, groupBatches, loadBatchRows, type BatchGroup } from "@/lib/batchGroups";
 import { BatchActions } from "@/app/dashboard/worker/batch/BatchActions";
 
 // La pagina muestra estados de OCR en curso — la marcamos dynamic para
@@ -27,39 +30,24 @@ export const dynamic = "force-dynamic";
 // "Revisar (n)", que recorre todas las pendientes (incidencias y listas); su
 // numero es el de la cola: antes contaba facturas aun en OCR (que no estan
 // en ella) y no las de Error OCR (que si).
-type BatchGroup = {
-  clientId: string;
-  clientName: string;
-  clientCif: string;
-  periodType: PeriodType;
-  periodMonth: number;
-  periodYear: number;
-  type: InvoiceType;
-  total: number;
-  attentionCount: number;     // NEEDS_ATTENTION + OCR_ERROR + PENDING_REVIEW con issue OPEN
-  cleanCount: number;         // PENDING_REVIEW sin issues
-  processingCount: number;    // UPLOADED + ANALYZING + ANALYZED (legacy)
-  /** Solo UPLOADED + ANALYZING: lo que el OCR tiene de verdad en marcha. */
-  ocrRunning: number;
-  validated: number;
-  rejected: number;
-  exported: number;
-  ocrError: number;
-  /** Lo que tocaria "Rechazar lote" (mismo criterio que la accion). */
-  rejectable: number;
-  rejectableValidated: number;
-  /** Primera pendiente del lote en el orden de la cola (QUEUE_ORDER). */
-  firstPendingId: string | null;
+type AdminBatchGroup = BatchGroup & {
+  /** Lo que se llevaria «Exportar» (exportReadiness): lo que se marcaria. */
+  pendingExport: number;
+  /** Validadas sin lote que no van al Excel hasta corregirlas (bloqueantes). */
+  blockedExport: number;
 };
 
 export default async function BatchPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ clientId?: string; year?: string; month?: string; type?: string; estado?: string }>;
+  searchParams?: Promise<{ clientId?: string; year?: string; month?: string; type?: string; estado?: string; historico?: string }>;
 }) {
   const session = await auth();
   if (!session?.user || session.user.role !== "ADMIN") redirect("/login");
-  const firmId = session.user.advisoryFirmId ?? undefined;
+  // Sin asesoria no hay lotes que ver: con el filtro a undefined, Prisma no
+  // filtraba y salian los de todas.
+  const firmId = session.user.advisoryFirmId;
+  if (!firmId) redirect("/login");
 
   // Filtros (URL): cliente / año / mes / tipo / estado.
   const sp = (await searchParams) ?? {};
@@ -71,11 +59,12 @@ export default async function BatchPage({
   // Clientes de la firma para el desplegable de filtros.
   const clientOptions = await prisma.client.findMany({
     where: { advisoryFirmId: firmId, isUnclassifiedBucket: false },
-    select: { id: true, name: true },
+    select: { id: true, name: true, cif: true },
     orderBy: { name: "asc" },
   });
   const requestedClient =
     sp.clientId && clientOptions.some((c) => c.id === sp.clientId) ? sp.clientId : null;
+  const showHistory = sp.historico === "1";
   const hasFilters = Boolean(requestedClient || yearNum || monthNum || typeParam);
 
   // URL de esta pantalla con los filtros activos y el estado dado: para
@@ -88,100 +77,55 @@ export default async function BatchPage({
     if (monthNum) p.set("month", String(monthNum));
     if (typeParam) p.set("type", typeParam);
     if (estadoValue !== "pendientes") p.set("estado", estadoValue);
+    if (showHistory) p.set("historico", "1");
     const qs = p.toString();
     return qs ? `${basePath}?${qs}` : basePath;
   };
   const thisListHref = listHref(estado);
+  // El mismo listado con la ventana al reves (todo el historico o lo reciente).
+  const historyToggleHref = (() => {
+    const url = new URL(thisListHref, "http://x");
+    if (showHistory) url.searchParams.delete("historico");
+    else url.searchParams.set("historico", "1");
+    return `${url.pathname}${url.search}`;
+  })();
 
-  const invoices = await prisma.invoice.findMany({
-    where: {
-      // Excluir el buzón "Sin clasificar" (sus facturas son PENDING_ROUTING):
-      // no es un cliente real, no debe aparecer como un lote más.
-      client: { advisoryFirmId: firmId, isUnclassifiedBucket: false },
-      ...(requestedClient ? { clientId: requestedClient } : {}),
-      ...(yearNum ? { periodYear: yearNum } : {}),
-      ...(monthNum ? { periodMonth: monthNum } : {}),
-      ...(typeParam ? { type: typeParam } : {}),
-    },
-    include: {
-      client: { select: { id: true, name: true, cif: true } },
-      issues: { where: { status: "OPEN" }, select: { id: true } },
-      // Salio alguna vez en un Excel (ver isBatchRejectable).
-      exportBatchItems: { take: 1, select: { id: true } },
-    },
-    // Dentro de cada lote, el orden de la cola de revision: la primera que
-    // abren los botones es la 1 de N y no una pospuesta.
-    orderBy: [{ periodYear: "desc" }, { periodMonth: "desc" }, ...QUEUE_ORDER],
-  });
+  // Solo las columnas que se pintan, y por defecto la ventana reciente
+  // (F-030): antes se leia el historico entero en cada carga.
+  const baseWhere: Prisma.InvoiceWhereInput = {
+    // Excluir el buzón "Sin clasificar" (sus facturas son PENDING_ROUTING):
+    // no es un cliente real, no debe aparecer como un lote más.
+    client: { advisoryFirmId: firmId, isUnclassifiedBucket: false },
+    ...(requestedClient ? { clientId: requestedClient } : {}),
+    ...(yearNum ? { periodYear: yearNum } : {}),
+    ...(monthNum ? { periodMonth: monthNum } : {}),
+    ...(typeParam ? { type: typeParam } : {}),
+  };
+  // Con año elegido o «ver todo el histórico», sin ventana.
+  const windowed = !yearNum && !showHistory;
+  const invoices = await loadBatchRows(windowed ? await batchWindowWhere(baseWhere) : baseWhere);
 
-  // Group by client + period
-  const groupMap = new Map<string, BatchGroup>();
+  // Lo que se llevaria la siguiente exportacion, con su misma decision
+  // (partitionA3Exportable): sin las que el Excel deja fuera para siempre, y
+  // las bloqueantes aparte, que hay que corregir antes.
+  const readiness = await exportReadiness(
+    invoices.filter((inv) => inv.status === "VALIDATED" && inv.exportBatchId == null).map((inv) => inv.id),
+    firmId,
+  );
 
+  const clientsById = new Map(clientOptions.map((c) => [c.id, { name: c.name, cif: c.cif }]));
+  const exportCounts = new Map<string, { pendingExport: number; blockedExport: number }>();
   for (const inv of invoices) {
-    // La original de una division no es una factura mas: sus hijas ya estan
-    // en la lista. Contarla dejaba el lote sin llegar nunca a "Completado".
-    if (inv.status === "SPLIT_SOURCE") continue;
-    const key = `${inv.clientId}-${inv.periodYear}-${inv.periodMonth}-${inv.periodType}-${inv.type}`;
-    let g = groupMap.get(key);
-    if (!g) {
-      g = {
-        clientId: inv.clientId,
-        clientName: inv.client.name,
-        clientCif: inv.client.cif,
-        periodType: inv.periodType,
-        periodMonth: inv.periodMonth,
-        periodYear: inv.periodYear,
-        type: inv.type,
-        total: 0,
-        attentionCount: 0,
-        cleanCount: 0,
-        processingCount: 0,
-        ocrRunning: 0,
-        validated: 0,
-        rejected: 0,
-        exported: 0,
-        ocrError: 0,
-        rejectable: 0,
-        rejectableValidated: 0,
-        firstPendingId: null,
-      };
-      groupMap.set(key, g);
-    }
-    g.total++;
-    const hasOpenIssue = inv.issues.length > 0;
-
-    // Exportar no cambia el estado. Sin mirar el historial las exportadas
-    // salian como validadas y no cuadraban con lo que "Rechazar lote" anuncia
-    // que va a tocar. Se mira el historial, no exportBatchId: al corregir una
-    // factura exportada el puntero se pone a null y sigue estando en A3.
-    const isExported = inv.status === "EXPORTED"
-      || (inv.status === "VALIDATED" && inv.exportBatchItems.length > 0);
-    if (isExported) g.exported++;
-    else if (inv.status === "VALIDATED") g.validated++;
-    else if (inv.status === "REJECTED") g.rejected++;
-    else if (inv.status === "NEEDS_ATTENTION" || inv.status === "OCR_ERROR") {
-      g.attentionCount++;
-      if (inv.status === "OCR_ERROR") g.ocrError++;
-      if (!g.firstPendingId) g.firstPendingId = inv.id;
-    }
-    else if (inv.status === "PENDING_REVIEW") {
-      if (hasOpenIssue) g.attentionCount++;
-      else g.cleanCount++;
-      if (!g.firstPendingId) g.firstPendingId = inv.id;
-    }
-    else {
-      // UPLOADED / ANALYZING / ANALYZED
-      g.processingCount++;
-      if (inv.status === "UPLOADED" || inv.status === "ANALYZING") g.ocrRunning++;
-    }
-
-    if (isBatchRejectable(inv)) {
-      g.rejectable++;
-      if (inv.status === "VALIDATED") g.rejectableValidated++;
-    }
+    if (!readiness.exportable.has(inv.id) && !readiness.blocked.has(inv.id)) continue;
+    const counts = exportCounts.get(batchKey(inv)) ?? { pendingExport: 0, blockedExport: 0 };
+    if (readiness.exportable.has(inv.id)) counts.pendingExport++;
+    else counts.blockedExport++;
+    exportCounts.set(batchKey(inv), counts);
   }
-
-  const groups = Array.from(groupMap.values());
+  const groups: AdminBatchGroup[] = groupBatches(invoices, clientsById).map((g) => ({
+    ...g,
+    ...(exportCounts.get(batchKey(g)) ?? { pendingExport: 0, blockedExport: 0 }),
+  }));
 
   // Media historica de duracion OCR de la firma para la ETA. Fallback 10s.
   const anyProcessing = groups.some((g) => g.ocrRunning > 0);
@@ -225,7 +169,8 @@ export default async function BatchPage({
     if (estado === "todos") return true;
     if (estado === "cerrados") return closed;
     if (estado === "por_cerrar") return !closed && allDone;
-    return !closed && !allDone; // pendientes
+    // Pendientes: por revisar, o terminado pero sin llevar a A3 (F-041).
+    return (!closed && !allDone) || (allDone && (g.pendingExport > 0 || g.blockedExport > 0));
   });
   const hiddenCount = groups.length - visibleGroups.length;
   const hiddenPlural = hiddenCount !== 1 ? "s" : "";
@@ -236,17 +181,23 @@ export default async function BatchPage({
   const clientGroupsMap = new Map<string, {
     clientId: string; clientName: string; clientCif: string;
     lotes: typeof visibleGroups; attentionSum: number; invoiceSum: number; allDone: boolean;
+    /** Lotes terminados con algo por exportar. */
+    readySum: number;
+    /** Lotes con bloqueantes (validadas que no van al Excel sin corregir). */
+    blockedSum: number;
   }>();
   for (const g of visibleGroups) {
     let cg = clientGroupsMap.get(g.clientId);
     if (!cg) {
-      cg = { clientId: g.clientId, clientName: g.clientName, clientCif: g.clientCif, lotes: [], attentionSum: 0, invoiceSum: 0, allDone: true };
+      cg = { clientId: g.clientId, clientName: g.clientName, clientCif: g.clientCif, lotes: [], attentionSum: 0, invoiceSum: 0, allDone: true, readySum: 0, blockedSum: 0 };
       clientGroupsMap.set(g.clientId, cg);
     }
     cg.lotes.push(g);
     cg.attentionSum += g.attentionCount;
     cg.invoiceSum += g.total;
     if (g.validated + g.rejected + g.exported !== g.total) cg.allDone = false;
+    else if (g.pendingExport > 0) cg.readySum++;
+    if (g.blockedExport > 0) cg.blockedSum++;
   }
   const clientGroups = Array.from(clientGroupsMap.values());
   clientGroups.sort((a, b) =>
@@ -258,15 +209,20 @@ export default async function BatchPage({
   // una vista a otra (cambiar los search params no la remonta).
   const singleClient = clientGroups.length === 1;
 
+  // Lo que cambia cuando avanza el OCR: con otra firma, el refresco
+  // automático vuelve a su ritmo inicial (F-081).
+  const refreshSignature = groups.map((g) => `${g.processingCount}/${g.attentionCount}/${g.cleanCount}`).join("|");
+
   return (
     <div>
-      {anyProcessing && <AutoRefresh intervalMs={5000} />}
+      {anyProcessing && <AutoRefresh signature={refreshSignature} />}
       <PageHeader
         title="Lotes de facturas"
         description="Facturas agrupadas por cliente y periodo"
       />
 
       <BatchFilters clients={clientOptions} basePath={basePath} />
+      {!yearNum && <BatchWindowNote showHistory={showHistory} toggleHref={historyToggleHref} />}
 
       {/* Tres vacios distintos: sin facturas, sin nada pendiente (con el
           filtro por defecto) y sin resultados para los filtros elegidos. */}
@@ -296,7 +252,8 @@ export default async function BatchPage({
                   {" · "}
                 </>
               )}
-              <Link href={basePath} className="font-medium text-blue-600 hover:underline">
+              {/* El mismo destino que «Limpiar»: sin filtros, pero sin perder el histórico. */}
+              <Link href={showHistory ? `${basePath}?historico=1` : basePath} className="font-medium text-blue-600 hover:underline">
                 Quitar filtros
               </Link>
             </>
@@ -314,7 +271,9 @@ export default async function BatchPage({
               invoiceCount={cg.invoiceSum}
               attentionCount={cg.attentionSum}
               allDone={cg.allDone}
-              defaultOpen={singleClient || cg.attentionSum > 0}
+              readyCount={cg.readySum}
+              blockedCount={cg.blockedSum}
+              defaultOpen={singleClient || cg.attentionSum > 0 || cg.readySum > 0 || cg.blockedSum > 0}
               storageKey={singleClient ? undefined : cg.clientId}
             >
           {cg.lotes.map((g) => {
@@ -346,9 +305,17 @@ export default async function BatchPage({
                       <Badge variant={g.type === "PURCHASE" ? "blue" : "purple"}>
                         {g.type === "PURCHASE" ? "Recibidas" : "Emitidas"}
                       </Badge>
+                      {allDone && g.pendingExport > 0 && (
+                        <Badge variant="blue">Listo para exportar</Badge>
+                      )}
+                      {g.blockedExport > 0 && (
+                        <Badge variant="yellow">
+                          {g.blockedExport} por corregir antes de exportar
+                        </Badge>
+                      )}
                       {closed ? (
                         <Badge variant="slate">Periodo cerrado</Badge>
-                      ) : allDone ? (
+                      ) : allDone && g.blockedExport === 0 ? (
                         <Badge variant="green">Completado</Badge>
                       ) : hasWork ? (
                         <Badge variant={g.attentionCount > 0 ? "yellow" : "blue"}>
@@ -373,10 +340,20 @@ export default async function BatchPage({
                         // incidencias y por las listas, y el numero del boton
                         // es el de facturas que va a recorrer.
                         href={reviewHref(g.firstPendingId, { back: thisListHref })}
+                        prefetch={false}
                         className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-blue-700 transition-colors"
                       >
                         <PenLine className="h-3.5 w-3.5" />
                         Revisar ({g.attentionCount + g.cleanCount})
+                      </Link>
+                    )}
+                    {g.pendingExport > 0 && (
+                      <Link
+                        href={exportPageHref({ clientId: g.clientId, periodType: g.periodType, month: g.periodMonth, year: g.periodYear, type: g.type })}
+                        className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-[12px] font-semibold text-slate-700 hover:bg-slate-50 transition-colors"
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                        Exportar ({g.pendingExport})
                       </Link>
                     )}
                     <Link

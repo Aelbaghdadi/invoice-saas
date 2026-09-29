@@ -60,7 +60,8 @@ export default async function AdminDashboard() {
     totalClients,
     recentInvoices,
     recentLogs,
-    clientProgress,
+    statusCounts,
+    firmClients,
   ] = await Promise.all([
     prisma.invoice.count({ where: { client: { advisoryFirmId: firmId, isUnclassifiedBucket: false } } }),
     prisma.invoice.count({ where: { status: { in: PENDING_WORK }, client: { advisoryFirmId: firmId, isUnclassifiedBucket: false } } }),
@@ -82,14 +83,19 @@ export default async function AdminDashboard() {
       orderBy: { createdAt: "desc" },
       include: { user: true, invoice: { include: { client: true } } },
     }),
+    // Recuento por cliente y estado (F-030): antes se cargaban todas las
+    // facturas de todos los clientes para contarlas aqui.
+    prisma.invoice.groupBy({
+      by: ["clientId", "status"],
+      where: { client: { advisoryFirmId: firmId, isUnclassifiedBucket: false } },
+      _count: { _all: true },
+    }),
     prisma.client.findMany({
       where: { advisoryFirmId: firmId, isUnclassifiedBucket: false },
-      include: {
-        invoices: { select: { status: true } },
-      },
+      select: { id: true, name: true },
       orderBy: { name: "asc" },
     }),
-  ]).catch(() => [0, 0, 0, 0, 0, [], [], []] as const);
+  ]).catch(() => [0, 0, 0, 0, 0, [], [], [], []] as const);
 
   // ── Stat cards (all from DB) ──────────────────────────────────────────
   // Chips de icono unificados en navy: un solo color de marca, sin arcoíris
@@ -135,13 +141,21 @@ export default async function AdminDashboard() {
   };
 
   // ── Clients with pending invoices (for "progress" section) ────────────
-  const clientsWithWork = (clientProgress as any[])
-    .map((c: any) => {
-      const total     = c.invoices.length;
-      const pending   = c.invoices.filter((i: any) => PENDING_WORK.includes(i.status)).length;
-      const validated = c.invoices.filter((i: any) => i.status === "VALIDATED").length;
-      const rejected  = c.invoices.filter((i: any) => i.status === "REJECTED").length;
-      const exported  = c.invoices.filter((i: any) => i.status === "EXPORTED").length;
+  const countsByClient = new Map<string, Map<string, number>>();
+  for (const row of statusCounts) {
+    const byStatus = countsByClient.get(row.clientId) ?? new Map<string, number>();
+    byStatus.set(row.status, row._count._all);
+    countsByClient.set(row.clientId, byStatus);
+  }
+  const clientsWithWork = firmClients
+    .map((c) => {
+      const byStatus = countsByClient.get(c.id) ?? new Map<string, number>();
+      const count = (status: string) => byStatus.get(status) ?? 0;
+      const total     = [...byStatus.values()].reduce((a, b) => a + b, 0);
+      const pending   = PENDING_WORK.reduce((sum, status) => sum + count(status), 0);
+      const validated = count("VALIDATED");
+      const rejected  = count("REJECTED");
+      const exported  = count("EXPORTED");
       const done      = validated + rejected + exported;
       const pct       = completionPercent({ total, validated, rejected, exported });
       return { id: c.id, name: c.name, total, pending, done, pct };

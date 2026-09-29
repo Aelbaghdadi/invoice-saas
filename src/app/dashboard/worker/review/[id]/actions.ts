@@ -7,7 +7,6 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { redirect, RedirectType } from "next/navigation";
 import { revalidatePath, refresh } from "next/cache";
-import { notifyClientInvoiceValidated } from "@/lib/email";
 import {
   filterFromInvoice,
   getNextInQueue,
@@ -320,6 +319,9 @@ async function parseAndSave(
       : null;
   const retentionRateNum = retentionType ? parse(data.retentionRate) : null;
   const retentionBaseNum = retentionType ? parse(data.retentionBase) : null;
+  // Retencion aprendida que no es un tipo legal (F-073): la incidencia vale
+  // mientras se guarde ese mismo %; con otro (o sin retencion), se cierra.
+  const irpfRateChanged = retentionRateNum !== (invoice.irpfRate == null ? null : Number(invoice.irpfRate));
   // Cuota: si el form la mando, la usamos; si no, calculamos.
   const retentionAmountNum = retentionType
     ? (parse(data.retentionAmount)
@@ -749,6 +751,12 @@ async function parseAndSave(
           data: { status: "RESOLVED", resolvedBy: userId, resolvedAt: new Date() },
         });
       }
+      if (irpfRateChanged) {
+        await tx.invoiceIssue.updateMany({
+          where: { invoiceId, field: "irpfRate", status: "OPEN" },
+          data: { status: "RESOLVED", resolvedBy: userId, resolvedAt: new Date() },
+        });
+      }
       if (auditEntries.length > 0) {
         await appendAuditLogs(
           auditEntries.map((e) => ({
@@ -949,25 +957,8 @@ export async function validateInvoice(
     return null;
   }
 
-  // Notify client via email (after response)
-  after(async () => {
-    try {
-      const inv = await prisma.invoice.findUnique({
-        where: { id },
-        include: { client: { include: { user: { select: { email: true } } } } },
-      });
-      if (inv?.client?.user?.email) {
-        await notifyClientInvoiceValidated({
-          clientEmail: inv.client.user.email,
-          clientName: inv.client.name,
-          invoiceNumber: inv.invoiceNumber ?? "",
-          filename: inv.filename,
-        });
-      }
-    } catch (e) {
-      console.error("[NOTIFY] Error notifying client:", e);
-    }
-  });
+  // Sin correo al cliente por cada validada (F-040): recibe un resumen al
+  // cerrarse el periodo (sendPeriodSummary). El rechazo sí se avisa al momento.
 
   // Invalidar el cache de la siguiente factura: Next.js la habia
   // prefetcheado mientras la actual aun estaba PENDING, asi que el

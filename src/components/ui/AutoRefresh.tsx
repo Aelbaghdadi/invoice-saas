@@ -1,27 +1,22 @@
 "use client";
 
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useProgressiveRefresh } from "./useProgressiveRefresh";
 
 type Props = {
-  /** Periodo de refresco en ms. Por defecto 5s. */
-  intervalMs?: number;
+  /** Lo que se ve y puede cambiar con el refresco (p. ej. cuántas facturas
+   *  siguen en OCR por lote). Si cambia, se vuelve a refrescar a menudo. */
+  signature: string;
 };
 
 /**
- * Componente "invisible" que llama a `router.refresh()` cada N ms. Se
- * monta condicionalmente en paginas que necesitan refrescar mientras
- * hay trabajo de fondo (p.ej. lotes con facturas analizandose en OCR).
+ * Componente "invisible" que refresca la página mientras hay trabajo de
+ * fondo (p. ej. lotes con facturas analizándose en OCR). La página padre
+ * deja de montarlo cuando ya no queda nada en proceso.
  *
- * `router.refresh()` re-ejecuta el RSC sin perder estado cliente; en
- * cuanto la condicion deje de cumplirse (no quedan facturas en
- * procesamiento) la pagina padre dejara de montarlo y el ciclo para.
+ * Ritmo (F-081): de 5 s hasta 60 s mientras no cambie nada, en pausa con la
+ * pestaña oculta y parado tras 10 minutos sin cambios (useProgressiveRefresh).
  */
-export function AutoRefresh({ intervalMs = 5000 }: Props) {
-  const router = useRouter();
-  useEffect(() => {
-    const id = setInterval(() => router.refresh(), intervalMs);
-    return () => clearInterval(id);
-  }, [router, intervalMs]);
+export function AutoRefresh({ signature }: Props) {
+  useProgressiveRefresh(signature);
   return null;
 }

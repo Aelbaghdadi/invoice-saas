@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { AlertTriangle, Loader2, RefreshCw } from "lucide-react";
 import type { InvoiceStatus } from "@prisma/client";
 import { STUCK_ANALYZING_MS, isOcrStalled } from "@/lib/invoiceStatuses";
+import { useProgressiveRefresh } from "./useProgressiveRefresh";
 
 type Props = {
   /** Cuando arrancó el procesado (createdAt de la Invoice). */
@@ -16,6 +17,8 @@ type Props = {
   invoiceId: string;
   status: InvoiceStatus;
   updatedAt: Date | string;
+  /** Cuantas esperan delante en la cola del OCR, o null si no esta en cola. */
+  queueAhead?: number | null;
 };
 
 /**
@@ -23,11 +26,11 @@ type Props = {
  * Tiene tres funciones:
  *  1) Comunicar al gestor que el OCR está corriendo (no es una pantalla rota).
  *  2) Dar una estimacion del tiempo (segun media historica de la firma).
- *  3) Auto-refrescar la pagina via `router.refresh()` cada 3s para que
- *     en cuanto el OCR termine, la pantalla cambie sola sin que el gestor
- *     tenga que recargar.
+ *  3) Auto-refrescar la pagina (useProgressiveRefresh: de 5 s a 60 s, en
+ *     pausa con la pestaña oculta) para que en cuanto el OCR termine, la
+ *     pantalla cambie sola sin que el gestor tenga que recargar.
  */
-export function OcrProcessingBanner({ startedAt, avgDurationMs = 10000, invoiceId, status, updatedAt }: Props) {
+export function OcrProcessingBanner({ startedAt, avgDurationMs = 10000, invoiceId, status, updatedAt, queueAhead = null }: Props) {
   const router = useRouter();
   const [elapsedMs, setElapsedMs] = useState(() => Date.now() - new Date(startedAt).getTime());
   const [now, setNow] = useState(() => Date.now());
@@ -39,14 +42,11 @@ export function OcrProcessingBanner({ startedAt, avgDurationMs = 10000, invoiceI
       setElapsedMs(Date.now() - new Date(startedAt).getTime());
       setNow(Date.now());
     }, 500);
-    const refreshTimer = setInterval(() => {
-      router.refresh();
-    }, 3000);
-    return () => {
-      clearInterval(tickTimer);
-      clearInterval(refreshTimer);
-    };
-  }, [router, startedAt]);
+    return () => clearInterval(tickTimer);
+  }, [startedAt]);
+  // Refresco con ritmo (F-081): antes, cada 3 s sin fin y también con la
+  // pestaña en segundo plano.
+  useProgressiveRefresh(`${status}:${new Date(updatedAt).getTime()}:${queueAhead ?? ""}`);
 
   const elapsedSec = Math.max(0, Math.floor(elapsedMs / 1000));
   const avgSec = Math.max(1, Math.floor(avgDurationMs / 1000));
@@ -61,6 +61,28 @@ export function OcrProcessingBanner({ startedAt, avgDurationMs = 10000, invoiceI
   // parado (un redeploy o un OOM cortaron el OCR) y no va a terminar solo; en
   // UPLOADED puede estar esperando turno (reproceso masivo, hijas de una
   // division), asi que el texto es neutro.
+  // En la cola del OCR: se analizara sola. Sin esto, pasados unos minutos
+  // salia «lánzalo ahora», y Reprocesar una que ya espera no hacia nada.
+  if (queueAhead != null) {
+    return (
+      <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3">
+        <div className="flex items-center gap-3">
+          <Loader2 className="h-5 w-5 flex-shrink-0 animate-spin text-blue-600" />
+          <div className="min-w-0 flex-1">
+            <p className="text-[13px] font-medium text-blue-900">
+              {queueAhead === 0
+                ? "En cola: es la siguiente; se analizará sola."
+                : `En cola: ${queueAhead} por delante; se analizará sola.`}
+            </p>
+            <p className="mt-0.5 text-[11px] text-blue-700/80">
+              Se analizan unas pocas facturas a la vez. No hace falta reprocesarla.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (isOcrStalled(status, updatedAt, now)) {
     const stopped = status === "ANALYZING";
     const reprocess = () => {

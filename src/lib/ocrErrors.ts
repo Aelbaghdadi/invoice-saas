@@ -8,6 +8,19 @@
 export type OcrErrorCode = "ERR-OCR-001" | "ERR-OCR-002" | "ERR-OCR-003" | "ERR-OCR-004" | "ERR-SYS-001";
 
 /**
+ * El proveedor de OCR (Gemini, Document AI) respondio con un error HTTP. Lleva
+ * el Retry-After, si vino, para que el reintento espere lo que pide (F-029).
+ * El mensaje es el de siempre («Gemini Flash respondió 429: …»): la
+ * clasificacion de errores sigue leyendolo.
+ */
+export class OcrHttpError extends Error {
+  constructor(message: string, readonly status: number, readonly retryAfterMs: number | null) {
+    super(message);
+    this.name = "OcrHttpError";
+  }
+}
+
+/**
  * Un error de la base de datos (una FK que falla al guardar la auditoria,
  * una transaccion caducada...) no dice nada del documento. Antes su mensaje
  * ("Invalid `prisma.auditLog.create()` invocation") caia en ERR-OCR-002 y el
@@ -43,13 +56,30 @@ export class DocumentError extends Error {
   }
 }
 
+/**
+ * El original de la factura no esta en el almacenamiento (NoSuchKey). No se
+ * reintenta: no va a aparecer. La clave va en `cause` y en el log, no en el
+ * mensaje: el timestamp que lleva casaba a veces con «500» o «503» de la
+ * regex de transitorios (revision 2 del PR #15, punto 2).
+ */
+export class OriginalMissingError extends Error {
+  constructor(options?: { cause?: unknown }) {
+    super("Almacenamiento: el original no está", options);
+    this.name = "OriginalMissingError";
+  }
+}
+
 export function classifyOcrError(err: unknown): OcrErrorCode {
   if (err instanceof DocumentError) return "ERR-OCR-002";
+  if (err instanceof OriginalMissingError) return "ERR-OCR-004";
   if (isDatabaseError(err)) {
     const code = (err as { code?: unknown }).code;
     return typeof code === "string" && OCR_DATA_PRISMA_CODES.has(code) ? "ERR-OCR-002" : "ERR-SYS-001";
   }
   const lower = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  // Antes que «timeout»: una descarga que pasa del tope es un fallo de
+  // descarga, no un analisis lento.
+  if (lower.startsWith("almacenamiento")) return "ERR-OCR-004";
   if (lower.includes("timeout") || lower.includes("timed out")) return "ERR-OCR-003";
   if (lower.includes("download") || lower.includes("storage") || lower.includes("404")) return "ERR-OCR-004";
   if (lower.includes("invalid") || lower.includes("corrupt") || lower.includes("malformed")) return "ERR-OCR-002";
@@ -71,5 +101,9 @@ export function userMessageForOcrError(code: OcrErrorCode): string {
 /** Mensaje para el gestor de un error concreto: el suyo si es un
  *  DocumentError; si no, el generico del codigo. */
 export function userMessageForError(err: unknown, code: OcrErrorCode): string {
-  return err instanceof DocumentError ? err.message : userMessageForOcrError(code);
+  if (err instanceof DocumentError) return err.message;
+  // «Vuelve a procesarla» no va a funcionar nunca: el fichero no esta
+  // (revision 2 del PR #15, punto 3). Se queda para el tope de tiempo.
+  if (err instanceof OriginalMissingError) return "El archivo original no está en el almacenamiento. Hay que volver a subirlo.";
+  return userMessageForOcrError(code);
 }

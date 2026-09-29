@@ -1,0 +1,162 @@
+// F-043: informe de uso por asesoría, con lo que ya hay en la BD.
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { prisma } from "./helpers/db";
+import { makeFirm, makeInvoice } from "./helpers/factories";
+import { usageReport } from "@/lib/usageReport";
+import { fakeS3 } from "./helpers/fakeS3";
+import { facturaeXml } from "./helpers/fixtures";
+import { stubOcr } from "./helpers/ocr";
+import { processInvoice } from "@/lib/processInvoice";
+import type { ExtractedInvoice } from "@/lib/ocr";
+
+describe("informe de uso (F-043)", () => {
+  it("cuadra con lo sembrado, por mes de Madrid, y no cuenta otra asesoría", async () => {
+    const now = new Date("2026-09-30T10:00:00Z");
+    const a = await makeFirm("A");
+    // makeFirm deja dos facturas, un cliente, admin, gestor y usuario del
+    // portal, creados ahora: fuera de estos meses. Se llevan a octubre.
+    await prisma.invoice.updateMany({ where: { clientId: a.client.id }, data: { createdAt: new Date("2026-10-15T10:00:00Z") } });
+    await prisma.client.update({ where: { id: a.client.id }, data: { createdAt: new Date("2026-08-10T10:00:00Z") } });
+    await prisma.user.updateMany({ where: { id: { in: [a.admin.id, a.worker.id, a.clientUser.id] } }, data: { createdAt: new Date("2026-08-10T10:00:00Z") } });
+
+    const at = (iso: string) => ({ createdAt: new Date(iso) });
+    // Subidas: una el 1 de septiembre a las 00:30 en Madrid (31 de agosto en
+    // UTC), otra en agosto, y la hija de una división, que no cuenta.
+    const sep = await makeInvoice(a.client, at("2026-08-31T22:30:00Z"));
+    const aug = await makeInvoice(a.client, at("2026-08-20T10:00:00Z"));
+    await makeInvoice(a.client, { ...at("2026-09-05T10:00:00Z"), splitFromId: sep.id });
+    // OCR: dos en septiembre (una reproceso), un XML en agosto, un fallo en septiembre.
+    const extraction = (invoiceId: string, source: string, iso: string, isReprocess = false) =>
+      prisma.invoiceExtraction.create({ data: { invoiceId, source, isReprocess, ...at(iso) } });
+    await extraction(sep.id, "gemini_multimodal", "2026-09-02T10:00:00Z");
+    await extraction(sep.id, "gemini_multimodal", "2026-09-03T10:00:00Z", true);
+    await extraction(aug.id, "xml_parse", "2026-08-21T10:00:00Z");
+    const history = (invoiceId: string, fromStatus: string | null, toStatus: string, iso: string) =>
+      prisma.invoiceStatusHistory.create({ data: { invoiceId, fromStatus: fromStatus as never, toStatus: toStatus as never, ...at(iso) } });
+    await history(aug.id, "ANALYZING", "OCR_ERROR", "2026-09-04T10:00:00Z");
+    // Validadas: la misma dos veces en septiembre cuenta una; otra en agosto.
+    await history(sep.id, "PENDING_REVIEW", "VALIDATED", "2026-09-06T10:00:00Z");
+    await history(sep.id, "PENDING_REVIEW", "VALIDATED", "2026-09-07T10:00:00Z");
+    await history(aug.id, "PENDING_REVIEW", "VALIDATED", "2026-08-25T10:00:00Z");
+    // Exportadas: las dos en septiembre, una de ellas en dos lotes.
+    for (const id of [sep.id, aug.id, sep.id]) {
+      const batch = await prisma.exportBatch.create({ data: { format: "a3excel", invoiceCount: 1, userId: a.admin.id } });
+      await prisma.exportBatchItem.create({ data: { exportBatchId: batch.id, invoiceId: id, snapshot: "{}", ...at("2026-09-10T10:00:00Z") } });
+    }
+    // El borde de la ventana (3 meses: desde el 1 de julio en Madrid, que es
+    // el 30 de junio a las 22:00 en UTC): la de las 00:30 del 1 de julio entra
+    // y la de las 23:30 del 30 de junio no.
+    await makeInvoice(a.client, at("2026-06-30T22:30:00Z"));
+    await makeInvoice(a.client, at("2026-06-30T21:30:00Z"));
+    // Un cliente nuevo en septiembre.
+    await prisma.client.create({ data: { name: "Nuevo SL", cif: "B77777777", advisoryFirmId: a.firm.id, ...at("2026-09-12T10:00:00Z") } });
+
+    // Lo mismo en otra asesoría, que no se puede colar.
+    const b = await makeFirm("B");
+    const other = await makeInvoice(b.client, at("2026-09-02T10:00:00Z"));
+    await extraction(other.id, "gemini_multimodal", "2026-09-02T10:00:00Z");
+    await history(other.id, "PENDING_REVIEW", "VALIDATED", "2026-09-06T10:00:00Z");
+
+    const report = await usageReport(a.firm.id, now, 3);
+    expect(report.map((m) => m.month)).toEqual(["2026-09", "2026-08", "2026-07"]);
+    expect(report[0]).toEqual({
+      month: "2026-09", uploaded: 1, ocrAnalyses: 3, ocrReprocesses: 1, ocrFailures: 1, xmlParsed: 0,
+      validated: 1, exported: 2, clients: 2, staffUsers: 2, portalUsers: 1,
+    });
+    expect(report[1]).toEqual({
+      month: "2026-08", uploaded: 1, ocrAnalyses: 0, ocrReprocesses: 0, ocrFailures: 0, xmlParsed: 1,
+      validated: 1, exported: 0, clients: 1, staffUsers: 2, portalUsers: 1,
+    });
+    expect(report[2]).toMatchObject({ month: "2026-07", uploaded: 1, clients: 0, staffUsers: 0, portalUsers: 0 });
+  });
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("con processInvoice de verdad: un PDF leído por Gemini por texto cuenta como análisis de OCR", async () => {
+    // Con clave, un PDF va por extractPdfWithGemini (simulado: «gemini_text»).
+    vi.stubEnv("GEMINI_API_KEY", "clave-de-prueba");
+    const a = await makeFirm("A");
+    const upload = async (key: string) => {
+      fakeS3().put(key, "%PDF-1.4");
+      return (await makeInvoice(a.client, { storageKey: key, fileType: "application/pdf", status: "UPLOADED", invoiceNumber: null, totalAmount: null })).id;
+    };
+    const ok = await upload("k-uso-1");
+    stubOcr(async () => ({
+      rawJson: "{}",
+      extracted: {
+        issuerName: "Proveedor SL", issuerCif: "B12345674", receiverName: a.client.name, receiverCif: a.client.cif,
+        invoiceNumber: "U-1", invoiceDate: "2026-09-10", taxBase: 100, vatRate: 21, vatAmount: 21,
+        irpfRate: null, irpfAmount: null, totalAmount: 121, currency: "EUR", supplyType: null,
+        vatLines: [{ taxBase: 100, vatRate: 21, vatAmount: 21 }], confidence: null,
+      } as ExtractedInvoice,
+    }));
+    await processInvoice(ok, a.worker.id);
+    expect((await prisma.invoiceExtraction.findFirstOrThrow({ where: { invoiceId: ok } })).source).toBe("gemini_text");
+    // Otra que falla sin remedio (PDF ilegible): análisis, y fallido.
+    const bad = await upload("k-uso-2");
+    stubOcr(async () => { throw new Error("Invalid PDF structure"); });
+    await processInvoice(bad, a.worker.id);
+
+    // Fallos que no llegaron al proveedor: un XML ilegible y un original que
+    // no está en el almacenamiento. No son análisis de OCR.
+    const xml = (await makeInvoice(a.client, { storageKey: "k-uso-xml", fileType: "application/xml", status: "UPLOADED" })).id;
+    // Un lote Facturae con dos facturas: DocumentError, sin OCR.
+    fakeS3().put("k-uso-xml", facturaeXml().replace(/<Invoice>[\s\S]*<\/Invoice>/, (m) => m + m));
+    await processInvoice(xml, a.worker.id);
+    const lost = (await makeInvoice(a.client, { storageKey: "k-uso-no-esta", fileType: "application/pdf", status: "UPLOADED" })).id;
+    await processInvoice(lost, a.worker.id);
+    const reasons = await prisma.invoiceStatusHistory.findMany({ where: { invoiceId: { in: [xml, lost] }, toStatus: "OCR_ERROR" }, select: { reason: true } });
+    expect(reasons).toHaveLength(2);
+    expect(reasons.map((r) => r.reason)).toContainEqual(expect.stringMatching(/^\[ERR-OCR-004\]/));
+
+    let [month] = await usageReport(a.firm.id, new Date(), 1);
+    expect(month).toMatchObject({ ocrAnalyses: 2, ocrReprocesses: 0, ocrFailures: 1, xmlParsed: 0 });
+
+    // Reprocesar la que salió bien y que ahora falle: un análisis más, y
+    // cuenta como reproceso aunque acabe en «Error OCR».
+    await prisma.invoice.update({ where: { id: ok }, data: { status: "UPLOADED" } });
+    await processInvoice(ok, a.worker.id);
+    expect((await prisma.invoice.findUniqueOrThrow({ where: { id: ok } })).status).toBe("OCR_ERROR");
+    [month] = await usageReport(a.firm.id, new Date(), 1);
+    expect(month).toMatchObject({ ocrAnalyses: 3, ocrReprocesses: 1, ocrFailures: 2 });
+  });
+
+  it("el historial de otra asesoría no cambia las cifras ni hace lenta la consulta de fallos", { timeout: 120_000 }, async () => {
+    const a = await makeFirm("A");
+    const b = await makeFirm("B");
+    // A: 500 facturas con un fallo cada una; 20 de ellas ya habían terminado
+    // otro análisis antes (reprocesos).
+    const now = Date.now();
+    const aIds = Array.from({ length: 500 }, (_, i) => `a-${i}`);
+    await prisma.invoice.createMany({ data: aIds.map((id) => ({
+      id, clientId: a.client.id, filename: `${id}.pdf`, storageKey: id, fileType: "application/pdf", type: "PURCHASE" as const, periodMonth: 9, periodYear: 2026,
+    })) });
+    await prisma.invoiceStatusHistory.createMany({ data: aIds.flatMap((invoiceId, i) => [
+      ...(i < 20 ? [{ invoiceId, fromStatus: "ANALYZING" as const, toStatus: "PENDING_REVIEW" as const, createdAt: new Date(now - 60_000) }] : []),
+      { invoiceId, fromStatus: "ANALYZING" as const, toStatus: "OCR_ERROR" as const, createdAt: new Date(now - 30_000) },
+    ]) });
+    const expected = { ocrFailures: 500 };
+    const [before] = await usageReport(a.firm.id, new Date(), 1);
+    expect(before).toMatchObject(expected);
+    expect(before.ocrReprocesses).toBe(20);
+
+    // B: 3.000 facturas y 60.000 filas de historial.
+    const bIds = Array.from({ length: 3_000 }, (_, i) => `b-${i}`);
+    await prisma.invoice.createMany({ data: bIds.map((id) => ({
+      id, clientId: b.client.id, filename: `${id}.pdf`, storageKey: id, fileType: "application/pdf", type: "PURCHASE" as const, periodMonth: 9, periodYear: 2026,
+    })) });
+    for (let k = 0; k < 20; k++) {
+      await prisma.invoiceStatusHistory.createMany({ data: bIds.map((invoiceId) => ({
+        invoiceId, fromStatus: "ANALYZING" as const, toStatus: "OCR_ERROR" as const, createdAt: new Date(now - k * 1000),
+      })) });
+    }
+    const started = Date.now();
+    const [after] = await usageReport(a.firm.id, new Date(), 1);
+    const elapsed = Date.now() - started;
+    expect(after).toMatchObject(expected);
+    expect(after.ocrReprocesses).toBe(20);
+    // Con un EXISTS por fallo, cada uno recorría las 60.000 filas: segundos.
+    // Numerando, una pasada.
+    expect(elapsed).toBeLessThan(1_000);
+  });
+});

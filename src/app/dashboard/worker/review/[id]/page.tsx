@@ -1,5 +1,6 @@
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { ocrQueuePosition } from "@/lib/ocrQueue";
 import { duplicateOriginalId, duplicateRejectionReason, findDuplicateOriginal } from "@/lib/duplicates";
 import { canAccessClient } from "@/lib/accessibleClients";
 import { accountsForDirection } from "@/lib/accountingAccount";
@@ -304,6 +305,7 @@ export default async function ReviewPage({
         queueSuffix={queueSuffix}
         bucket={bucket}
         avgOcrDurationMs={avgOcrDurationMs}
+        ocrQueueAhead={invoiceRaw.status === "UPLOADED" ? ocrQueuePosition(invoiceRaw.id) : null}
         genericAccounts={{
           supplier: invoice.client.simplifiedSupplierAccount,
           expense: invoice.client.simplifiedExpenseAccount,

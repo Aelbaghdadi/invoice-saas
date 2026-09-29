@@ -4,7 +4,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
-import { appendAuditLogs } from "@/lib/auditLog";
+import { appendAuditLogs, AUDIT_TRANSACTION_OPTIONS } from "@/lib/auditLog";
 import { processInvoice } from "@/lib/processInvoice";
 import { ocrErrorsToReprocessWhere } from "@/lib/invoiceListing";
 import type { InvoiceStatus } from "@prisma/client";
@@ -41,43 +41,55 @@ export async function reprocessAllOcrErrors() {
   // Mismo where con el que cuenta el boton del listado.
   const invoices = await prisma.invoice.findMany({
     where: ocrErrorsToReprocessWhere(firmId),
-    select: { id: true, status: true },
+    select: { id: true },
   });
 
   if (invoices.length === 0) {
     return { error: "No hay facturas en Error OCR" };
   }
 
-  const auditEntries = invoices.map((inv) => ({
-    invoiceId: inv.id,
-    userId,
-    field: "status",
-    oldValue: inv.status,
-    // Mismo valor que el reproceso de una sola factura: es el que la
-    // auditoria sabe traducir ("Subida (reprocesar)").
-    newValue: "UPLOADED (reprocess)",
-  }));
-
-  for (const inv of invoices) {
-    await prisma.invoice.update({
-      where: { id: inv.id },
-      data: { status: "UPLOADED", lastOcrError: null },
-    });
-
-    await prisma.invoiceStatusHistory.create({
-      data: {
-        invoiceId: inv.id,
-        fromStatus: inv.status as InvoiceStatus,
-        toStatus: "UPLOADED",
-        changedBy: userId,
-        reason: "Reprocesado masivo de Error OCR",
-      },
-    });
+  // Cambios, historial y auditoria en una transaccion (F-048), y solo de las
+  // que siguen en Error OCR al escribir: entre la lectura y la escritura otro
+  // puede haberla reprocesado o rechazado (revision 1 del PR #15, punto 8).
+  let invoiceIds: string[];
+  try {
+    invoiceIds = await prisma.$transaction(async (tx) => {
+      // Una sola sentencia que devuelve las que cambian: en READ COMMITTED,
+      // si otra transaccion tenia alguna, el where se vuelve a evaluar al
+      // soltarla. Una por factura, en serie, pasaba de 30 s hacia las 18.000
+      // (revision 2 del PR #15, punto 4).
+      const changed = (await tx.invoice.updateManyAndReturn({
+        where: { id: { in: invoices.map((inv) => inv.id) }, status: "OCR_ERROR" },
+        data: { status: "UPLOADED", lastOcrError: null },
+        select: { id: true },
+      })).map((r) => r.id);
+      await tx.invoiceStatusHistory.createMany({
+        data: changed.map((invoiceId) => ({
+          invoiceId,
+          fromStatus: "OCR_ERROR" as InvoiceStatus,
+          toStatus: "UPLOADED" as InvoiceStatus,
+          changedBy: userId,
+          reason: "Reprocesado masivo de Error OCR",
+        })),
+      });
+      await appendAuditLogs(changed.map((invoiceId) => ({
+        invoiceId,
+        userId,
+        field: "status",
+        oldValue: "OCR_ERROR",
+        // Mismo valor que el reproceso de una sola factura: es el que la
+        // auditoria sabe traducir ("Subida (reprocesar)").
+        newValue: "UPLOADED (reprocess)",
+      })), tx);
+      return changed;
+    }, AUDIT_TRANSACTION_OPTIONS);
+  } catch (err) {
+    console.error("[reprocessAllOcrErrors]", err);
+    return { error: "No se pudieron reprocesar las facturas. Inténtalo de nuevo." };
   }
-
-  await appendAuditLogs(auditEntries);
-
-  const invoiceIds = invoices.map((i) => i.id);
+  if (invoiceIds.length === 0) {
+    return { error: "No hay facturas en Error OCR" };
+  }
 
   after(async () => {
     for (const id of invoiceIds) {

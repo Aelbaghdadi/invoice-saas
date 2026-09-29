@@ -24,8 +24,8 @@ si se toca algo.
                   ┌──────────────────┼────────────────────┐
                   ▼                  ▼                    ▼
             ┌──────────┐     ┌──────────────┐     ┌──────────────┐
-            │ Postgres │     │  Document AI │     │   Supabase   │
-            │(Supabase)│     │  (OCR)       │     │   Storage    │
+            │ Postgres │     │ Gemini (OCR) │     │    Garage    │
+            │          │     │ o Document AI│     │     (S3)     │
             └──────────┘     └──────────────┘     └──────────────┘
 ```
 
@@ -57,10 +57,10 @@ importante:
 ### Estados de Invoice
 
 ```
-UPLOADED
-   │
+UPLOADED   (también mientras espera turno en la cola del OCR)
+   │  claim (ocrAttempts + 1)
    ▼
-ANALYZING ────► OCR_ERROR (Document AI falló)
+ANALYZING ────► OCR_ERROR (el OCR falló tras sus reintentos)
    │
    ▼
 PENDING_REVIEW ◄────► NEEDS_ATTENTION
@@ -84,12 +84,18 @@ export para mostrar "ya exportada" en la UI sin perder el estado.
 
 ### 1. Subida y procesado
 
-1. Cliente sube PDF → `POST /api/invoices/upload`.
-2. PDF va a Supabase Storage. Se crea `Invoice` con `status=UPLOADED`.
-3. `POST /api/invoices/[id]/process` (llamado por el upload, no por
-   cron) cambia a `ANALYZING` y llama a `processInvoice()`.
+1. Cliente sube PDF → `POST /api/uploads` (un fichero por petición).
+2. El fichero va al almacenamiento. Se crea `Invoice` con `status=UPLOADED`.
+3. En un `after()` de esa misma petición, `processInvoice()` pide turno en
+   la cola del OCR (`ocrQueue.ts`: `OCR_CONCURRENCY` a la vez, 4 por
+   defecto). Mientras espera, la factura sigue en `UPLOADED`. Con hueco, el
+   claim la pasa a `ANALYZING` (y sube `ocrAttempts`, la valla del OCR).
+   «Reprocesar» (`POST /api/invoices/[id]/process`) usa la misma cola, pero
+   delante.
 4. `processInvoice()` orquesta:
-   - `ocr.ts` (Document AI) → extrae campos.
+   - `ocrLlm.ts` (Gemini) → extrae campos; `ocr.ts` (Document AI) solo si no
+     hay `GEMINI_API_KEY`. Reintentos con backoff exponencial y
+     `Retry-After`, con un plazo total de 4 minutos.
    - `parseTaxId()` normaliza NIFs (quita guiones, detecta prefijo
      país).
    - **Pre-rellena la parte cliente**: en `PURCHASE`, el receptor =
@@ -235,10 +241,12 @@ trivial. Una query rota aquí es un leak entre asesorías.
 
 ## Cron jobs
 
-Configurados en `vercel.json`:
+Se disparan con una Scheduled Task de Coolify (DEPLOY.md §5):
 
-- `/api/cron/retry-stuck` — re-procesa facturas atascadas en
-  `ANALYZING` durante > 10 min. Cada 5 min.
+- `/api/cron/retry-stuck` — relanza las facturas que llevan más de 5 min
+  en `UPLOADED` sin empezar (p. ej. la cola perdida en un redeploy) o
+  atascadas en `ANALYZING`, y pasa a `OCR_ERROR` las que agotaron los
+  reintentos.
 - `/api/cron/closure-reminders` — recuerda cerrar el periodo el
   día 1 de cada mes.
 

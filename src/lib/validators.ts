@@ -10,6 +10,8 @@
 const NIF_LETTERS = "TRWAGMYFPDXBNJZSQVHLCKE";
 
 const CIF_PREFIXES = "ABCDEFGHJNPQRSUVW";
+const CIF_DIGIT_CONTROL = "ABEH";
+const CIF_LETTER_CONTROL = "NPQRSW";
 
 /** Validate a Spanish NIF (DNI + letter) */
 function isValidDNI(nif: string): boolean {
@@ -53,8 +55,14 @@ function isValidCIF(cif: string): boolean {
   const control = (10 - (total % 10)) % 10;
 
   const checkChar = match[3];
-  // Some CIF types use letter, others digit, some accept both
-  const controlLetter = String.fromCharCode(64 + control); // A=1, B=2...
+  // Con control 0 la letra es la J, no la «@» de 64 + 0 (F-076).
+  const controlLetter = "JABCDEFGHI"[control];
+  // Sociedades anonimas y limitadas, comunidades de bienes y de propietarios
+  // llevan digito; organismos publicos, entidades religiosas, no residentes y
+  // similares, letra; el resto, cualquiera de los dos. Aceptar los dos con
+  // cualquier prefijo dejaba pasar B9132416J (el bueno es B91324160).
+  if (CIF_DIGIT_CONTROL.includes(match[1])) return checkChar === String(control);
+  if (CIF_LETTER_CONTROL.includes(match[1])) return checkChar === controlLetter;
   return checkChar === String(control) || checkChar === controlLetter;
 }
 

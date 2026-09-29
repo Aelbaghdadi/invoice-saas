@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ClipboardList, ArrowRight } from "lucide-react";
 import { AuditFilters } from "./AuditFilters";
+import { VerifyChainButton } from "./VerifyChainButton";
 import { auditFieldLabel, formatAuditValue, auditActor } from "@/lib/invoiceStatuses";
 import { formatDateTimeEs, madridDayBounds } from "@/lib/dates";
 import { Pagination } from "@/components/ui/Pagination";
@@ -122,6 +123,8 @@ export default async function AuditLogPage({ searchParams }: Props) {
         title="Registro de auditoría"
         description="Historial completo de cambios realizados en las facturas"
       />
+
+      <VerifyChainButton />
 
       <AuditFilters users={allUsers} fields={fieldOptions} />
 

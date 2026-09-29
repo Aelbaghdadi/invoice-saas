@@ -5,9 +5,18 @@ import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 // Lo que responde el send de Resend en cada test.
 let resendReply: (payload: unknown, options?: { signal?: AbortSignal }) => Promise<unknown> =
   async () => ({ data: null, error: null });
+// Envío en lote (F-040): cada llamada a batch.send, con su lista de correos.
+const batchCalls: { to: string; subject: string }[][] = [];
+let batchReply: () => Promise<unknown> = async () => ({ data: { data: [] }, error: null });
 vi.mock("resend", () => ({
   Resend: class {
     emails = { send: (payload: unknown, options?: { signal?: AbortSignal }) => resendReply(payload, options) };
+    batch = {
+      send: (payload: { to: string; subject: string }[]) => {
+        batchCalls.push(payload);
+        return batchReply();
+      },
+    };
   },
 }));
 
@@ -107,6 +116,62 @@ describe("envío con Resend", () => {
     })).resolves.toEqual({ ok: false });
     expect(String(log.mock.calls[0][0])).toContain("recordatorio-cierre");
     log.mockRestore();
+  });
+});
+
+describe("aviso de subida a los gestores: envío en lote (F-040)", () => {
+  const upload = (workerEmails: string[]) => email.notifyWorkersNewUpload({
+    workerEmails, clientName: "Cliente SL", count: 5, periodMonth: 4, periodYear: 2026,
+  });
+
+  it("una llamada a batch.send para todos los gestores, con las 5 facturas en el asunto", async () => {
+    batchCalls.length = 0;
+    batchReply = async () => ({ data: { data: [] }, error: null });
+    await upload(["ana@dominio.es", "luis@dominio.es", "eva@dominio.es"]);
+    expect(batchCalls).toHaveLength(1);
+    expect(batchCalls[0].map((m) => m.to)).toEqual(["ana@dominio.es", "luis@dominio.es", "eva@dominio.es"]);
+    expect(batchCalls[0][0].subject).toContain("5 facturas nuevas");
+  });
+
+  it("de 100 en 100 (el máximo de Resend)", async () => {
+    batchCalls.length = 0;
+    await upload(Array.from({ length: 150 }, (_, i) => `g${i}@dominio.es`));
+    expect(batchCalls.map((c) => c.length)).toEqual([100, 50]);
+  });
+
+  it("un error del lote se registra enmascarado y no lanza", async () => {
+    batchCalls.length = 0;
+    batchReply = async () => ({ data: null, error: { name: "rate_limit_exceeded", message: "Too many requests" } });
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(upload(["ana@dominio.es"])).resolves.toBeUndefined();
+    const line = String(log.mock.calls[0][0]);
+    expect(line).toContain("nuevas-facturas-gestor");
+    expect(line).toContain("a***@dominio.es");
+    expect(line).not.toContain("ana@dominio.es");
+    log.mockRestore();
+    batchReply = async () => ({ data: { data: [] }, error: null });
+  });
+});
+
+describe("resumen del periodo al cliente (F-040)", () => {
+  it("validadas, rechazadas con su motivo y pendientes; el motivo escapado", async () => {
+    let sent: { to: string; subject: string; html: string } | null = null;
+    resendReply = async (payload) => {
+      sent = payload as typeof sent;
+      return { data: { id: "1" }, error: null };
+    };
+    await email.notifyClientPeriodSummary({
+      clientEmail: "cliente@dominio.es", clientName: "Cliente SL", periodType: "QUARTERLY", periodMonth: 7, periodYear: 2026,
+      validated: 5, rejected: [{ ref: "F-9", reason: "Ilegible <script>" }], pending: 0,
+    });
+    expect(sent!.to).toBe("cliente@dominio.es");
+    expect(sent!.subject).toBe("Resumen de T3 2026: 5 validadas, 1 rechazada");
+    expect(sent!.html).toContain("F-9");
+    expect(sent!.html).toContain("Ilegible &lt;script&gt;");
+    expect(sent!.html).not.toContain("<script>");
+    // Preheader: «Resumen de tus facturas: T3 2026.», no «de el T3».
+    expect(sent!.html).toContain("Resumen de tus facturas: T3 2026.");
+    expect(sent!.html).not.toContain("de el T3");
   });
 });
 

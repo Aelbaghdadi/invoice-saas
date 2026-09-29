@@ -5,10 +5,11 @@ import { prisma } from "@/lib/prisma";
 import { a3ExclusionBox, generateCsv, generateA3Excel, partitionA3Exportable, suggestFilename, validateForA3Export, type ExportFormat, type ExportConfig } from "@/lib/exportFormats";
 import { attachmentContentDisposition } from "@/lib/contentDisposition";
 import { countExportExclusionBoxes, withSplitCounts } from "@/lib/exportExclusions";
-import { commitExportBatch, committedBatchState, ExportConflictError, exportStorageKey } from "@/lib/exportBatch";
+import { commitExportBatch, committedBatchState, ExportConflictError, exportStorageKey, findReexports } from "@/lib/exportBatch";
 import { deleteObject, isStorageConfigured, putObject } from "@/lib/storage";
 import { appError } from "@/lib/errorCodes";
-import { exportInvoiceWhere, exportPostHeadersError, parseExportRequest } from "@/lib/exportRequest";
+import { exportInvoiceWhere, exportPeriodWhere, exportPostHeadersError, parseExportRequest } from "@/lib/exportRequest";
+import { PENDING_WORK } from "@/lib/invoiceStatuses";
 
 type AdminContext = { userId: string; firmId: string };
 
@@ -115,11 +116,24 @@ export async function GET(req: NextRequest) {
   const alreadyExported = await prisma.invoice.count({
     where: { ...where, exportBatchId: { not: null } },
   });
+  // Las del periodo que aun no estan validadas (F-041): no entran en este
+  // Excel, y exportar sin saberlo deja el periodo a medias en A3.
+  const notValidated = await prisma.invoice.count({
+    where: { ...exportPeriodWhere(parsed.request, admin.firmId), status: { in: PENDING_WORK } },
+  });
   // Las que el Excel deja fuera (total 0 u original de una division) no
   // cuentan como exportables: no se van a marcar.
   const { exportable, excluded } = partitionA3Exportable(previewInvoices);
+  // Corregidas despues de exportarse (F-018): en A3 ya hay una con el mismo
+  // NIF y numero. Van al Excel, pero quien exporta tiene que saberlo.
+  const reexports = await findReexports(exportable, admin.firmId);
   return NextResponse.json({
     count: exportable.length,
+    notValidated,
+    reexportCount: reexports.length,
+    reexports: reexports.slice(0, PREVIEW_WARNING_LIMIT),
+    // Todos los ids: la descarga los manda de vuelta como confirmados.
+    reexportIds: reexports.map((r) => r.invoiceId),
     excluded: excluded.length,
     excludedByBox: countExportExclusionBoxes(excluded.map((e) => a3ExclusionBox(e.invoice)!)),
     alreadyExported,
@@ -203,6 +217,18 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Las ya exportadas antes, solo con confirmacion (F-018): sin ella, A3
+  // rechazaria el fichero o duplicaria asientos sin que nadie lo supiera.
+  const reexports = await findReexports(invoices, firmId);
+  const confirmed = new Set(request.confirmedReexports);
+  const unconfirmed = reexports.filter((r) => !confirmed.has(r.invoiceId));
+  if (unconfirmed.length > 0) {
+    return NextResponse.json(
+      { error: appError("ERR-EXPORT-008", `sin confirmar: ${unconfirmed.map((r) => r.invoiceId).join(",")}`) },
+      { status: 409 },
+    );
+  }
+
   const client = await prisma.client.findUnique({
     where: { id: clientId },
     select: { exportConfig: true },
@@ -213,12 +239,12 @@ export async function POST(req: NextRequest) {
 
   // Primero el fichero, en memoria. Hasta que exista no se escribe nada en
   // la BD: un fallo aqui no deja ninguna factura marcada (F-001).
-  const filename = suggestFilename(invoices, format, month, year);
+  const filename = suggestFilename(invoices, format, month, year, periodType);
   let body: Uint8Array<ArrayBuffer>;
   let contentType: string;
   try {
     if (format === "a3excel") {
-      body = new Uint8Array(generateA3Excel(invoices, exportConfig));
+      body = new Uint8Array(generateA3Excel(invoices, exportConfig, reexports));
       contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
     } else {
       body = new TextEncoder().encode(generateCsv(invoices, format, exportConfig));

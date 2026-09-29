@@ -3,6 +3,8 @@ import type { FieldBoundingBoxes, BoundingBox } from "./boundingBoxes";
 import { normalizeCurrency } from "./currency";
 import { normalizeGoodsType } from "./intracomGoods";
 import { isValidNIF } from "./validators";
+import { OcrHttpError } from "./ocrErrors";
+import { parseRetryAfter, retryDelayFromGoogleBody } from "./retryBackoff";
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL ?? "gemini-2.5-flash-lite";
 
@@ -453,7 +455,10 @@ async function callGemini(
 
   if (!res.ok) {
     const err = await res.text();
-    throw new Error(`Gemini Flash respondió ${res.status}: ${err}`);
+    // La espera, de la cabecera o, si no viene, del cuerpo (RetryInfo), que es
+    // donde suele ponerla Google.
+    const retryAfterMs = parseRetryAfter(res.headers.get("retry-after")) ?? retryDelayFromGoogleBody(err);
+    throw new OcrHttpError(`Gemini Flash respondió ${res.status}: ${err}`, res.status, retryAfterMs);
   }
 
   const data = await res.json();

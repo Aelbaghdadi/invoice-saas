@@ -28,8 +28,31 @@ arrancar:
   para que `garage` resuelva en la red interna.
 
 Opcionales: `RESEND_API_KEY` + `EMAIL_FROM` (emails; sin clave son no-op),
-Document AI (`GOOGLE_*`, fallback de OCR), `CRON_SECRET` (ver §5),
+Document AI (`GOOGLE_*`; **solo se usa si no hay `GEMINI_API_KEY`**, no es
+un fallback: si Gemini falla, se reintenta con Gemini y la factura acaba en
+«Error OCR»), `OCR_CONCURRENCY` (análisis a la vez, 4 por defecto; ver §5 bis),
+`CRON_SECRET` (ver §5),
 `ALERT_WEBHOOK_URL` (avisos de errores, ver §8).
+
+## 2 bis. Conexiones a la BD
+
+La app abre **como mucho 20 conexiones** a su Postgres (`max` del pool, en
+[`src/lib/prisma.ts`](src/lib/prisma.ts)), y ninguna consulta puede pasar de
+**15 s** (`statement_timeout`): una colgada se corta en vez de retener su
+conexión. Pedir conexión espera como mucho 10 s.
+
+dev y prod están en el mismo servidor, cada una con su Postgres. En cada uno:
+
+| Quién | Conexiones, como mucho |
+|---|---|
+| La app (un proceso `next start`) | 20 |
+| `prisma migrate deploy` al arrancar (no usa el pool) | 1, unos segundos |
+| Reservadas para superusuario (`superuser_reserved_connections`) | 3 |
+| `psql`, backups, un script a mano | unas pocas |
+
+El `max_connections` del Postgres de Coolify (100 por defecto) lo cubre con
+margen. Si algún día se levantan varias réplicas de la app contra el mismo
+Postgres, son 20 por réplica: súbelo o baja el `max`.
 
 ## 3. Migraciones
 
@@ -90,11 +113,17 @@ Los dos aceptan GET y POST con la misma comprobación del secreto: usa el que
 permita la Scheduled Task.
 
 Si no configuras los crons, la app funciona; solo no se ejecutan esas tareas
-periódicas. Una factura con el análisis parado (un redeploy a mitad del OCR)
-no se relanza sola: en la revisión sale «El análisis se ha parado» con un
-botón «Reprocesar».
+periódicas. Pero `retry-stuck` es **lo único** que recoge lo que un redeploy
+deja a medias: las facturas que estaban analizándose y las que esperaban en la
+cola del OCR (§5 bis), que siguen en «Subida». Sin el cron no se relanzan
+solas: en la revisión sale «El análisis se ha parado» con un botón
+«Reprocesar».
 
-## 5 bis. Parada y Redeploy: periodo de gracia de al menos 120 s
+**Excepción:** `retry-stuck` no relanza las que ya llevan 3 análisis o más
+(`ocrAttempts ≥ 3`, p. ej. una reprocesada varias veces). Si una de esas se
+queda en «Subida» tras un redeploy, hay que pulsar «Reprocesar» a mano.
+
+## 5 bis. Parada y Redeploy: periodo de gracia de al menos 240 s
 
 El OCR de las facturas recién subidas corre en segundo plano (`after()`)
 dentro del propio proceso de Next. Al parar el contenedor (Redeploy,
@@ -105,12 +134,29 @@ Con SIGTERM, Next deja de aceptar peticiones y espera a que terminen los
 
 - **Dónde:** en Coolify 4.1.0 o posterior, la aplicación → *Advanced* →
   *Operations* → **«Stop Grace Period»** (por defecto, 30 s). Ponlo en
-  **120 s como mínimo**: un OCR con reintentos puede tardar más de un
-  minuto. En versiones anteriores de Coolify la parada son 30 s fijos.
-- **Qué cubre:** 120 s bastan para terminar un OCR en curso, no un lote
+  **240 s como mínimo** (300 s si se usa Document AI): un OCR con reintentos
+  no empieza otro intento pasados 4 minutos, pero con Gemini (30 s por
+  llamada) cuatro intentos ya son unos 2 minutos, y con Document AI (60 s por
+  llamada), más. En versiones anteriores de Coolify la parada son 30 s fijos.
+- **Qué cubre:** ese margen basta para terminar los OCR en curso, no un lote
   entero: el Reprocesar masivo y `retry-stuck` procesan las facturas en
   serie. Lo que quede sin terminar lo recoge `retry-stuck` en su siguiente
   ejecución, así que conviene tenerlo programado (§5).
+- **La cola del OCR:** como mucho `OCR_CONCURRENCY` análisis a la vez (4 por
+  defecto); en una subida de 200 PDFs, el resto espera en «Subida». Con
+  SIGTERM la cola deja de arrancar análisis: los que ya corren terminan y los
+  que esperan siguen en «Subida» sin gastar intento. La cola vive en memoria:
+  con el redeploy se pierde, y esas facturas las relanza `retry-stuck` cuando
+  llevan 5 minutos sin empezar.
+- **La cola es una para todas las asesorías del proceso,** en orden de
+  llegada: una subida de 200 PDF de una asesoría retrasa unos 8 minutos el OCR
+  de las demás (con 4 a la vez y unos 10 s por factura). Con una sola asesoría
+  en producción no importa; con varias, sube `OCR_CONCURRENCY` si el
+  proveedor lo admite. «Reprocesar» a mano va siempre delante.
+- **Avisos de subida a los gestores:** se juntan en memoria (un aviso por
+  subida, no por fichero) y salen al pasar 1 minuto sin ficheros nuevos, o a
+  los 5 minutos de la primera. Un redeploy pierde los que estaban esperando:
+  no se reintentan; las facturas siguen en Lotes y en el panel.
 - `docker-entrypoint.sh` arranca con `exec node node_modules/next/dist/bin/next start`:
   Node es el PID 1 y recibe el SIGTERM sin depender de que npm lo reenvíe
   (con `npx next start` npm también lo reenviaba y esperaba; no era lo que
@@ -216,3 +262,40 @@ SELECT count(*) FROM "Invoice"
 WHERE status IN ('UPLOADED', 'ANALYZING') AND "updatedAt" < now() - interval '15 minutes';
 ```
 
+
+## 9. Cadena de auditoría
+
+Desde F-048, cada escritura en la auditoría bloquea la cadena de su factura
+(`pg_advisory_xact_lock`) hasta el final de la transacción del cambio: dos
+escrituras a la vez ya no dejan dos eslabones con el mismo anterior. Las que
+se escribieron antes pueden estar bifurcadas.
+
+**Antes de pensar en un índice único**, el equipo tiene que ejecutar esta
+consulta (solo lectura) en producción. Si da más de 0 en cualquiera de las
+dos columnas, el índice no se puede crear sin decidir antes qué hacer con
+esos eslabones:
+
+```sql
+-- Eslabones que cuelgan del mismo anterior que otro de la misma factura.
+--   con_anterior: dos o más con el mismo prevId;
+--   genesis:      dos o más primeros eslabones (prevId NULL) en una factura.
+SELECT
+  count(*) FILTER (WHERE "prevId" IS NOT NULL)                       AS grupos_con_anterior,
+  coalesce(sum(n - 1) FILTER (WHERE "prevId" IS NOT NULL), 0)        AS eslabones_de_mas_con_anterior,
+  count(*) FILTER (WHERE "prevId" IS NULL)                           AS facturas_con_genesis_repetido,
+  coalesce(sum(n - 1) FILTER (WHERE "prevId" IS NULL), 0)            AS genesis_de_mas
+FROM (
+  SELECT "invoiceId", "prevId", count(*) AS n
+  FROM "AuditLog"
+  GROUP BY "invoiceId", "prevId"
+  HAVING count(*) > 1
+) AS bifurcaciones;
+```
+
+Un `UNIQUE ("prevId")` a secas no cubre los génesis repetidos: en Postgres
+los NULL son distintos entre sí. El índice que cubre los dos casos sería
+`UNIQUE ("invoiceId", "prevId") NULLS NOT DISTINCT` (Postgres 15 o más), en
+una migración nueva.
+
+El botón «Verificar la cadena» de Auditoría (admin) recorre la de su asesoría
+y dice qué eslabón falla, bifurcaciones incluidas.

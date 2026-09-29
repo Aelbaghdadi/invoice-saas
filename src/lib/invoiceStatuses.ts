@@ -183,6 +183,8 @@ export const AUDIT_FIELD_LABELS: Record<string, string> = {
   equivalenceSurcharge: "Recargo de equivalencia",
   export: "Exportación",
   reexport: "Por reexportar",
+  // F-044: el admin descargó todos los datos del cliente (ZIP).
+  dataExport: "Descarga de datos del cliente",
   duplicate_warning: "Posible duplicado",
   // Los borra «Reabrir y validar».
   rejectionReason: "Motivo del rechazo",

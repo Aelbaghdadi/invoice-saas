@@ -44,7 +44,7 @@ export async function GET(
   // Un lote de otra asesoria da el mismo 404 que uno que no existe.
   const batch = await prisma.exportBatch.findFirst({
     where: firmExportBatchWhere(id, firmId),
-    select: { id: true, format: true, clientId: true, periodMonth: true, periodYear: true },
+    select: { id: true, format: true, clientId: true, periodType: true, periodMonth: true, periodYear: true },
   });
   if (!batch) {
     return NextResponse.json({ error: appError("ERR-EXPORT-007", `batch=${id}`) }, { status: 404 });
@@ -63,7 +63,7 @@ export async function GET(
         select: { name: true },
       })
     : null;
-  const filename = exportFilename(client?.name ?? null, format, batch.periodMonth ?? 0, batch.periodYear ?? 0);
+  const filename = exportFilename(client?.name ?? null, format, batch.periodMonth ?? 0, batch.periodYear ?? 0, batch.periodType);
 
   // GET directo, sin HeadObject antes: un 404 del almacenamiento es "no hay
   // copia"; cualquier otro fallo (Garage caido) es un error y se registra, no

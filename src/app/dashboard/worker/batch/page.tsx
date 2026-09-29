@@ -8,49 +8,27 @@ import {
   Layers, AlertTriangle, PenLine, ArrowRight, CheckCircle2, Loader2,
 } from "lucide-react";
 import Link from "next/link";
-import type { InvoiceType, PeriodType } from "@prisma/client";
-import { completionPercent, isBatchRejectable, PERIOD_BLOCKING_STATUSES } from "@/lib/invoiceStatuses";
+import type { Prisma } from "@prisma/client";
+import { completionPercent, PERIOD_BLOCKING_STATUSES } from "@/lib/invoiceStatuses";
+import { batchWindowWhere, groupBatches, loadBatchRows } from "@/lib/batchGroups";
 import { periodLabel } from "@/lib/period";
-import { QUEUE_ORDER } from "@/lib/reviewQueue";
 import { reviewHref } from "@/lib/reviewNavigation";
 import { BatchActions } from "./BatchActions";
 import { getAccessibleClientIds } from "@/lib/accessibleClients";
 import { AutoRefresh } from "@/components/ui/AutoRefresh";
 import { BatchFilters } from "@/components/batch/BatchFilters";
 import { ClientAccordionSection } from "@/components/batch/ClientAccordionSection";
+import { BatchWindowNote } from "@/components/batch/BatchWindowNote";
 
 // Esta pagina muta visualmente cada vez que avanza el OCR de fondo —
 // la marcamos dynamic para que no quede cacheada entre cargas.
 export const dynamic = "force-dynamic";
 
-type BatchGroup = {
-  clientId: string;
-  clientName: string;
-  clientCif: string;
-  periodType: PeriodType;
-  periodMonth: number;
-  periodYear: number;
-  type: InvoiceType;
-  total: number;
-  // Buckets operativos (alineados con reviewQueue.ts):
-  attentionCount: number;     // NEEDS_ATTENTION + OCR_ERROR + PENDING_REVIEW con issue OPEN
-  cleanCount: number;         // PENDING_REVIEW sin issues
-  processingCount: number;    // UPLOADED + ANALYZING + ANALYZED (legacy)
-  validated: number;
-  rejected: number;
-  exported: number;
-  ocrError: number;
-  /** Lo que tocaria "Rechazar lote" (mismo criterio que la accion). */
-  rejectable: number;
-  rejectableValidated: number;
-  firstAttentionId: string | null;
-  firstCleanId: string | null;
-};
 
 export default async function WorkerBatchPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ clientId?: string; year?: string; month?: string; type?: string; estado?: string }>;
+  searchParams?: Promise<{ clientId?: string; year?: string; month?: string; type?: string; estado?: string; historico?: string }>;
 }) {
   const session = await auth();
   if (!session?.user || !["ADMIN", "WORKER"].includes(session.user.role)) redirect("/login");
@@ -82,6 +60,7 @@ export default async function WorkerBatchPage({
   const yearNum = sp.year ? parseInt(sp.year, 10) : null;
   const monthNum = sp.month ? parseInt(sp.month, 10) : null;
   const typeParam = sp.type === "PURCHASE" || sp.type === "SALE" ? sp.type : null;
+  const showHistory = sp.historico === "1";
   const hasFilters = Boolean(requestedClient || yearNum || monthNum || typeParam);
 
   // URL de esta pantalla con los filtros activos y el estado dado: para
@@ -94,116 +73,47 @@ export default async function WorkerBatchPage({
     if (monthNum) p.set("month", String(monthNum));
     if (typeParam) p.set("type", typeParam);
     if (estadoValue !== "pendientes") p.set("estado", estadoValue);
+    if (showHistory) p.set("historico", "1");
     const qs = p.toString();
     return qs ? `${basePath}?${qs}` : basePath;
   };
   const thisListHref = listHref(estado);
+  // El mismo listado con la ventana al reves (todo el historico o lo reciente).
+  const historyToggleHref = (() => {
+    const url = new URL(thisListHref, "http://x");
+    if (showHistory) url.searchParams.delete("historico");
+    else url.searchParams.set("historico", "1");
+    return `${url.pathname}${url.search}`;
+  })();
 
   // Clientes para el desplegable de filtros (los asignados al gestor).
   const clientOptions = await prisma.client.findMany({
     where: { id: { in: clientIds }, isUnclassifiedBucket: false },
-    select: { id: true, name: true },
+    select: { id: true, name: true, cif: true },
     orderBy: { name: "asc" },
   });
 
-  // Cargamos facturas + issues abiertas para decidir buckets sin 2ª query.
-  const invoices = await prisma.invoice.findMany({
-    where: {
-      clientId: requestedClient ? requestedClient : { in: clientIds },
-      ...(yearNum ? { periodYear: yearNum } : {}),
-      ...(monthNum ? { periodMonth: monthNum } : {}),
-      ...(typeParam ? { type: typeParam } : {}),
-    },
-    include: {
-      client: { select: { id: true, name: true, cif: true } },
-      issues: { where: { status: "OPEN" }, select: { id: true } },
-      // Si salio alguna vez en un Excel: es lo que decide "exportada" y lo
-      // que "Rechazar lote" no puede tocar.
-      exportBatchItems: { take: 1, select: { id: true } },
-    },
-    // Dentro de cada lote, el orden de la cola: si la mas antigua estaba
-    // pospuesta, se entraba por ella y la revision marcaba "103 de 103".
-    orderBy: [{ periodYear: "desc" }, { periodMonth: "desc" }, ...QUEUE_ORDER],
-  });
+  // Solo las columnas que se pintan, y por defecto la ventana reciente
+  // (F-030): antes se leia el historico entero en cada carga.
+  // Sin el tipo: el cierre mira el periodo entero (mas abajo).
+  const periodBase: Prisma.InvoiceWhereInput = {
+    clientId: requestedClient ? requestedClient : { in: clientIds },
+    ...(yearNum ? { periodYear: yearNum } : {}),
+    ...(monthNum ? { periodMonth: monthNum } : {}),
+  };
+  // Con año elegido o «ver todo el histórico», sin ventana. La ventana se
+  // calcula una vez, sobre el periodo entero, y el tipo va aparte.
+  const windowed = !yearNum && !showHistory;
+  const periodWhere = windowed ? await batchWindowWhere(periodBase) : periodBase;
+  const invoices = await loadBatchRows(typeParam ? { AND: [periodWhere, { type: typeParam }] } : periodWhere);
+  const clientsById = new Map(clientOptions.map((c) => [c.id, { name: c.name, cif: c.cif }]));
 
-  // Group by client + period + type
-  const groupMap = new Map<string, BatchGroup>();
-
-  for (const inv of invoices) {
-    // La original de una division no es una factura mas: sus hijas ya estan
-    // en la lista. Contarla la dejaba "en analisis OCR" para siempre y el lote
-    // no llegaba nunca a "por cerrar".
-    if (inv.status === "SPLIT_SOURCE") continue;
-    const key = `${inv.clientId}-${inv.periodYear}-${inv.periodMonth}-${inv.periodType}-${inv.type}`;
-    let g = groupMap.get(key);
-    if (!g) {
-      g = {
-        clientId: inv.clientId,
-        clientName: inv.client.name,
-        clientCif: inv.client.cif,
-        periodType: inv.periodType,
-        periodMonth: inv.periodMonth,
-        periodYear: inv.periodYear,
-        type: inv.type,
-        total: 0,
-        attentionCount: 0,
-        cleanCount: 0,
-        processingCount: 0,
-        validated: 0,
-        rejected: 0,
-        exported: 0,
-        ocrError: 0,
-        rejectable: 0,
-        rejectableValidated: 0,
-        firstAttentionId: null,
-        firstCleanId: null,
-      };
-      groupMap.set(key, g);
-    }
-    g.total++;
-    const hasOpenIssue = inv.issues.length > 0;
-
-    // Clasificacion en buckets. Prioridad: terminal > atencion > clean > processing.
-    // Exportar no cambia el estado, asi que "exportada" se mira por el
-    // historial de exportaciones; el estado EXPORTED es legacy. Se mira el
-    // historial y no exportBatchId porque al corregir una factura exportada
-    // ese puntero se pone a null (vuelve a la cola) y seguiria estando en A3.
-    const isExported = inv.status === "EXPORTED"
-      || (inv.status === "VALIDATED" && inv.exportBatchItems.length > 0);
-    if (isExported) g.exported++;
-    else if (inv.status === "VALIDATED") g.validated++;
-    else if (inv.status === "REJECTED") g.rejected++;
-    else if (inv.status === "NEEDS_ATTENTION" || inv.status === "OCR_ERROR") {
-      g.attentionCount++;
-      if (inv.status === "OCR_ERROR") g.ocrError++;
-      if (!g.firstAttentionId) g.firstAttentionId = inv.id;
-    }
-    else if (inv.status === "PENDING_REVIEW") {
-      if (hasOpenIssue) {
-        g.attentionCount++;
-        if (!g.firstAttentionId) g.firstAttentionId = inv.id;
-      } else {
-        g.cleanCount++;
-        if (!g.firstCleanId) g.firstCleanId = inv.id;
-      }
-    }
-    else {
-      // UPLOADED / ANALYZING / ANALYZED
-      g.processingCount++;
-    }
-
-    if (isBatchRejectable(inv)) {
-      g.rejectable++;
-      if (inv.status === "VALIDATED") g.rejectableValidated++;
-    }
-  }
-
-  const groups = Array.from(groupMap.values());
+  const groups = groupBatches(invoices, clientsById);
 
   // Media historica de duracion OCR a nivel de firma. La usamos para
   // dar una ETA decente en los lotes con facturas analizandose. Si no
   // hay historial todavia, fallback a 10s.
-  const anyProcessing = Array.from(groupMap.values()).some((g) => g.processingCount > 0);
+  const anyProcessing = groups.some((g) => g.processingCount > 0);
   let avgOcrSec = 10;
   if (anyProcessing && session.user.advisoryFirmId) {
     const agg = await prisma.invoiceExtraction.aggregate({
@@ -252,11 +162,7 @@ export default async function WorkerBatchPage({
   // compras pendientes (la accion lo revalida y lo rechaza, pero confunde).
   const periodInvoices = typeParam
     ? await prisma.invoice.findMany({
-        where: {
-          clientId: requestedClient ? requestedClient : { in: clientIds },
-          ...(yearNum ? { periodYear: yearNum } : {}),
-          ...(monthNum ? { periodMonth: monthNum } : {}),
-        },
+        where: periodWhere,
         select: { clientId: true, periodYear: true, periodMonth: true, status: true },
       })
     : invoices;
@@ -328,17 +234,22 @@ export default async function WorkerBatchPage({
   // una vista a otra (cambiar los search params no la remonta).
   const singleClient = clientGroups.length === 1;
 
+  // Lo que cambia cuando avanza el OCR: con otra firma, el refresco
+  // automático vuelve a su ritmo inicial (F-081).
+  const refreshSignature = groups.map((g) => `${g.processingCount}/${g.attentionCount}/${g.cleanCount}`).join("|");
+
   return (
     <div>
       {/* Auto-refresh cada 5s si hay alguna factura en analisis OCR,
           para que las cards reflejen el progreso sin tocar F5. */}
-      {anyProcessing && <AutoRefresh intervalMs={5000} />}
+      {anyProcessing && <AutoRefresh signature={refreshSignature} />}
       <PageHeader
         title="Lotes de facturas"
         description="Sesiones de trabajo agrupadas por cliente y periodo — empieza por los que tienen incidencias"
       />
 
       <BatchFilters clients={clientOptions} basePath={basePath} />
+      {!yearNum && <BatchWindowNote showHistory={showHistory} toggleHref={historyToggleHref} />}
 
       {/* Tres vacios distintos: sin facturas, sin nada pendiente (con el
           filtro por defecto) y sin resultados para los filtros elegidos. */}
@@ -368,7 +279,8 @@ export default async function WorkerBatchPage({
                   {" · "}
                 </>
               )}
-              <Link href={basePath} className="font-medium text-blue-600 hover:underline">
+              {/* El mismo destino que «Limpiar»: sin filtros, pero sin perder el histórico. */}
+              <Link href={showHistory ? `${basePath}?historico=1` : basePath} className="font-medium text-blue-600 hover:underline">
                 Quitar filtros
               </Link>
             </>
@@ -450,7 +362,9 @@ export default async function WorkerBatchPage({
                     {g.firstAttentionId && (
                       <Link
                         href={reviewHref(g.firstAttentionId, { bucket: "attention", back: thisListHref })}
-                        prefetch
+                        // Sin precarga: con prefetch se traía la revisión entera de cada
+                        // tarjeta visible (F-081). loading.tsx da la respuesta inmediata.
+                        prefetch={false}
                         className="flex items-center gap-1.5 rounded-lg bg-amber-500 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-amber-600 transition-colors"
                       >
                         <AlertTriangle className="h-3.5 w-3.5" />
@@ -460,7 +374,9 @@ export default async function WorkerBatchPage({
                     {g.firstCleanId && (
                       <Link
                         href={reviewHref(g.firstCleanId, { bucket: "clean", back: thisListHref })}
-                        prefetch
+                        // Sin precarga: con prefetch se traía la revisión entera de cada
+                        // tarjeta visible (F-081). loading.tsx da la respuesta inmediata.
+                        prefetch={false}
                         className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-blue-700 transition-colors"
                       >
                         <PenLine className="h-3.5 w-3.5" />

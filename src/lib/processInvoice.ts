@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { getObjectBytes, isStorageConfigured } from "@/lib/storage";
+import { getObjectBytes, isStorageConfigured, isStorageNotFound } from "@/lib/storage";
 import type { InvoiceStatus, Prisma } from "@prisma/client";
 import {
   extractInvoiceFromPdf,
@@ -41,7 +41,9 @@ import { routeByCif, clientSideCif, routeByText, detectInvoiceType } from "@/lib
 import { lookupProviderClient, normalizeProviderNif } from "@/lib/providerRouting";
 import { accountEntryKey } from "@/lib/supplierMatching";
 import { proposeOperationType, unclassifiedGoodsType } from "@/lib/operationTypeProposal";
-import { classifyOcrError, DocumentError, userMessageForError } from "@/lib/ocrErrors";
+import { classifyOcrError, DocumentError, OcrHttpError, OriginalMissingError, userMessageForError } from "@/lib/ocrErrors";
+import { retryDelayMs } from "@/lib/retryBackoff";
+import { runQueuedOcr } from "@/lib/ocrQueue";
 import { closeOpenIssues } from "@/lib/invoiceIssues";
 
 /**
@@ -71,7 +73,31 @@ async function transitionStatus(
   });
 }
 
-export async function processInvoice(invoiceId: string, triggeredByUserId: string) {
+/**
+ * Topes de espera fuera del proveedor de OCR. La descarga de S3 no tenia
+ * ninguno: un Garage colgado retenia un hueco de la cola para siempre y, con
+ * OCR_CONCURRENCY colgados, se paraba el OCR de todo el proceso (revision 1
+ * del PR #14). Un objeto para que los tests lo puedan acortar.
+ */
+export const OCR_WAITS = {
+  storageMs: 30_000,
+  /** No se empieza otro intento si pasaria de este plazo desde el claim. */
+  retryBudgetMs: 4 * 60_000,
+};
+
+/**
+ * Analiza una factura cuando haya hueco en la cola del OCR (F-029): como
+ * mucho OCR_CONCURRENCY a la vez en este proceso. Mientras espera sigue en
+ * UPLOADED. La promesa se resuelve al terminar el analisis, no al encolarla:
+ * quien no quiera esperar (el «Reprocesar» de la pantalla) lo lanza en un
+ * after(). Con `priority` pasa delante de la cola; si ya esperaba, se
+ * adelanta. Si ya esperaba sin prioridad, vuelve al momento sin hacer nada.
+ */
+export async function processInvoice(invoiceId: string, triggeredByUserId: string, options: { priority?: boolean } = {}) {
+  await runQueuedOcr(invoiceId, () => analyzeInvoice(invoiceId, triggeredByUserId), options);
+}
+
+async function analyzeInvoice(invoiceId: string, triggeredByUserId: string) {
   // Claim atomico: solo arranca si sigue en UPLOADED. El fencing token de
   // esta ejecucion es el ocrAttempts que deja el propio UPDATE; leido despues
   // con otra consulta podria ser ya el de un claim posterior.
@@ -101,15 +127,15 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     // proveedor (Gemini/Document AI) falla a veces de forma puntual y al
     // reprocesar va — lo automatizamos para no dejar la factura en Error OCR
     // por un hipo. Los fallos deterministas (archivo inválido) no se reintentan.
-    const MAX_OCR_ATTEMPTS = 3;
+    const MAX_OCR_ATTEMPTS = 4;
     for (let attempt = 1; ; attempt++) {
       try {
         if (ft.includes("xml")) {
           source = "xml_parse";
-          const xmlText = (await getObjectBytes(invoice.storageKey)).toString("utf-8");
+          const xmlText = (await downloadOriginal(invoice.storageKey)).toString("utf-8");
           ocrResult = await extractInvoiceFromXml(xmlText);
         } else {
-          const base64 = (await getObjectBytes(invoice.storageKey)).toString("base64");
+          const base64 = (await downloadOriginal(invoice.storageKey)).toString("base64");
 
           if (ft === "application/pdf" || invoice.filename.endsWith(".pdf")) {
             if (process.env.GEMINI_API_KEY) {
@@ -137,11 +163,18 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       } catch (ocrErr) {
         // Un error del documento no es transitorio aunque su texto lo parezca:
         // «El XML trae 500 facturas (lote)» casaba con el 500 de la regex.
-        if (ocrErr instanceof DocumentError) throw ocrErr;
+        if (ocrErr instanceof DocumentError || ocrErr instanceof OriginalMissingError) throw ocrErr;
         const m = ocrErr instanceof Error ? ocrErr.message : String(ocrErr);
-        if (attempt >= MAX_OCR_ATTEMPTS || !isTransientOcrError(m)) throw ocrErr;
-        // Backoff corto antes de reintentar (1.2s, 2.4s).
-        await new Promise((r) => setTimeout(r, 1200 * attempt));
+        if (attempt >= MAX_OCR_ATTEMPTS || !isTransientError(ocrErr, m)) throw ocrErr;
+        // Exponencial con jitter, o lo que pida el proveedor en Retry-After
+        // (F-029): antes 1,2 y 2,4 s fijos para todas a la vez.
+        const retryAfterMs = ocrErr instanceof OcrHttpError ? ocrErr.retryAfterMs : null;
+        const delay = retryDelayMs(attempt, retryAfterMs);
+        // Plazo total: con Document AI (60 s por llamada) 4 intentos pasaban
+        // de 5 minutos, el corte del cron, y del periodo de gracia de un
+        // redeploy (revision 1 del PR #14, punto 6).
+        if (Date.now() - ocrStartedAt.getTime() + delay > OCR_WAITS.retryBudgetMs) throw ocrErr;
+        await new Promise((r) => setTimeout(r, delay));
       }
     }
 
@@ -839,6 +872,42 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
  *  deterministas (archivo inválido/corrupto) no se reintentan: fallarían igual.
  *  Solo reintentamos patrones claramente transitorios (timeout, rate limit,
  *  red, 5xx) para no malgastar llamadas en errores que no se van a recuperar. */
+/**
+ * ¿Merece otro intento? Con la respuesta HTTP del proveedor, por su estado:
+ * 408, 429 y 5xx. El texto no sirve para eso: lleva el cuerpo, y un 403 con
+ * «503» dentro (el numero de proyecto, por ejemplo) se reintentaba (revision 1
+ * del PR #14, punto 4). La regex queda para los errores de red, que no traen
+ * estado.
+ */
+function isTransientError(err: unknown, message: string): boolean {
+  if (err instanceof OcrHttpError) return err.status === 408 || err.status === 429 || err.status >= 500;
+  return isAbortError(err) || isTransientOcrError(message);
+}
+
+/** El SDK de S3 corta con AbortError («Request aborted») al pasar el tope. */
+function isAbortError(err: unknown): boolean {
+  const name = (err as { name?: unknown } | null)?.name;
+  return name === "AbortError" || name === "TimeoutError";
+}
+
+/**
+ * El original desde Garage. Si no esta, OriginalMissingError (ERR-OCR-004), y
+ * no el generico: el SDK lo da como NoSuchKey y se clasificaba como un fallo
+ * del OCR, tambien en el informe de uso (revision 1 del PR #15, punto 15). No
+ * se reintenta: no va a aparecer.
+ */
+async function downloadOriginal(key: string): Promise<Buffer> {
+  try {
+    return await getObjectBytes(key, { timeoutMs: OCR_WAITS.storageMs });
+  } catch (err) {
+    if (isStorageNotFound(err)) {
+      console.error(`[processInvoice] el original no está en el almacenamiento: ${key}`);
+      throw new OriginalMissingError({ cause: err });
+    }
+    throw err;
+  }
+}
+
 function isTransientOcrError(msg: string): boolean {
   const m = msg.toLowerCase();
   if (m.includes("invalid") || m.includes("corrupt") || m.includes("malformed")) return false;

@@ -2,9 +2,10 @@
  * Cadena de hash para AuditLog.
  *
  * Cada registro de auditoria contiene el hash del registro anterior y
- * su propio hash. Esto detecta cualquier modificacion o borrado: si
- * alguien retoca una fila o la elimina, el siguiente eslabon ya no
- * cuadra y `verifyInvoiceAuditChain()` lo destapa.
+ * su propio hash, y el id del anterior (prevId). Esto detecta cualquier
+ * modificacion o borrado: si alguien retoca una fila o la elimina, el
+ * siguiente eslabon ya no cuadra y `verifyFirmAuditChains()` lo destapa
+ * (salvo el borrado del ultimo, que nada apunta).
  *
  * Importante: la BD tiene un trigger (PostgreSQL) que prohibe UPDATE
  * y DELETE sobre AuditLog. La cadena de hash es la "segunda capa" —
@@ -109,13 +110,12 @@ export async function appendAuditLogs(
 }
 
 /**
- * Transaccion propia de appendAuditLogs. Con el timeout por defecto de Prisma
- * (5 s), unos miles de entradas con la BD cargada no caben: la llamada lanza
- * despues de que el llamador ya ha escrito su cambio fuera de transaccion
- * (p. ej. el reproceso masivo de «Error OCR», que ya ha pasado las facturas a
- * UPLOADED y se queda sin programar el OCR).
+ * Plazo de las transacciones que escriben auditoria de muchas facturas (la
+ * propia de appendAuditLogs, el reproceso masivo, rechazar un lote, la
+ * descarga de un cliente): con el de Prisma por defecto (5 s), unos miles
+ * de entradas con la BD cargada no caben.
  */
-const AUDIT_TRANSACTION_OPTIONS = { timeout: 30_000, maxWait: 5_000 } as const;
+export const AUDIT_TRANSACTION_OPTIONS = { timeout: 30_000, maxWait: 5_000 } as const;
 
 /**
  * Una consulta para las cabezas de todas las cadenas y un createMany por
@@ -124,6 +124,7 @@ const AUDIT_TRANSACTION_OPTIONS = { timeout: 30_000, maxWait: 5_000 } as const;
  */
 async function writeAuditLogs(tx: Prisma.TransactionClient, entries: AuditEntry[]): Promise<void> {
   const invoiceIds = [...new Set(entries.map((e) => e.invoiceId))];
+  await lockAuditChains(tx, invoiceIds);
   const existing = await tx.auditLog.findMany({
     where: { invoiceId: { in: invoiceIds } },
     select: { id: true, invoiceId: true, prevId: true, hash: true, createdAt: true },
@@ -132,6 +133,35 @@ async function writeAuditLogs(tx: Prisma.TransactionClient, entries: AuditEntry[
   for (let i = 0; i < records.length; i += AUDIT_INSERT_CHUNK) {
     await tx.auditLog.createMany({ data: records.slice(i, i + AUDIT_INSERT_CHUNK) });
   }
+}
+
+/**
+ * Clave de los bloqueos de la cadena de auditoria (pg_advisory_xact_lock con
+ * dos enteros): la primera separa estos bloqueos de cualquier otro que use la
+ * app; la segunda es el cubo de la factura (lockAuditChains).
+ */
+const AUDIT_LOCK_NAMESPACE = 48_048;
+
+/**
+ * Una escritura por factura a la vez, hasta el final de la transaccion (F-048).
+ * Sin esto, dos escrituras simultaneas leian la misma cabeza y dejaban dos
+ * eslabones con el mismo prevId: la cadena se bifurcaba.
+ *
+ * Por cubos (hashtext(id) & 4095), sin repetir y en orden de cubo: como mucho
+ * AUDIT_LOCK_BUCKETS entradas en la tabla de bloqueos por transaccion. Con uno
+ * por factura, un export o un reproceso de mas de ~12.800 facturas la agotaba
+ * y fallaba siempre (revision 1 del PR #15, punto 6). Dos facturas en el mismo
+ * cubo solo se esperan de mas; y como el orden es el del cubo, dos
+ * transacciones con varios en comun no se bloquean mutuamente.
+ */
+export const AUDIT_LOCK_BUCKETS = 4096;
+
+async function lockAuditChains(tx: Prisma.TransactionClient, invoiceIds: string[]): Promise<void> {
+  if (invoiceIds.length === 0) return;
+  // executeRaw: pg_advisory_xact_lock devuelve void, que queryRaw no sabe leer.
+  await tx.$executeRaw`
+    SELECT pg_advisory_xact_lock(${AUDIT_LOCK_NAMESPACE}::int, k)
+    FROM (SELECT DISTINCT hashtext(id) & ${AUDIT_LOCK_BUCKETS - 1}::int AS k FROM unnest(${invoiceIds}::text[]) AS id ORDER BY k) AS buckets`;
 }
 
 /**
@@ -168,10 +198,10 @@ export function auditChainHeads(rows: AuditChainRow[]): Map<string, AuditChainHe
  * Encadena las entradas nuevas detras de la cabeza de cada factura, en el
  * orden en que llegan. Mismo `computeAuditHash` y mismos campos que siempre.
  *
- * El createdAt de cada eslabon queda al menos 1 ms por detras del anterior:
- * la verificacion recorre la cadena por createdAt, y dos registros de la
- * misma factura en el mismo milisegundo se leian en cualquier orden y
- * salian como cadena rota sin que nadie la hubiera tocado.
+ * El createdAt de cada eslabon queda al menos 1 ms por detras del anterior,
+ * para que el orden por fecha (la pantalla de Auditoria, auditoria.csv de
+ * la descarga de un cliente) sea el de la cadena. La verificacion ya no
+ * depende de el: sigue prevId.
  */
 export function planAuditRecords(
   entries: AuditEntry[],
@@ -232,109 +262,130 @@ export type AuditChainBreak = {
   invoiceId: string;
   expectedPrevHash: string;
   actualPrevHash: string;
-  reason: "prev_hash_mismatch" | "hash_mismatch" | "broken_link" | "missing_genesis";
+  /**
+   * - hash_mismatch: el registro no da su propio hash (se ha retocado);
+   * - prev_hash_mismatch: su prevHash no es el hash del eslabon anterior;
+   * - missing_genesis: sin anterior, pero su prevHash no es GENESIS;
+   * - broken_link: el anterior no existe o es de otra factura (se ha borrado);
+   * - fork: otro registro de la misma factura cuelga del mismo anterior.
+   */
+  reason: "prev_hash_mismatch" | "hash_mismatch" | "broken_link" | "missing_genesis" | "fork";
+};
+
+/** Registros por consulta al verificar. */
+const VERIFY_PAGE_SIZE = 5_000;
+/** Eslabones rotos que se devuelven como mucho (el recuento es completo). */
+const MAX_REPORTED_BREAKS = 100;
+
+type VerifyRow = {
+  id: string;
+  invoiceId: string;
+  userId: string;
+  field: string;
+  oldValue: string | null;
+  newValue: string | null;
+  createdAt: Date;
+  prevId: string | null;
+  prevHash: string;
+  hash: string;
 };
 
 /**
- * Verifica la integridad de la cadena de auditoria de una factura.
- * Devuelve la lista de eslabones rotos. Si la cadena esta intacta
- * devuelve [].
+ * Comprueba un registro contra el anterior de su cadena (el de su prevId).
+ * `prev` es undefined si el prevId no existe. Mismo computeAuditHash que al
+ * escribir.
  */
-async function verifyInvoiceAuditChain(
-  invoiceId: string,
-): Promise<AuditChainBreak[]> {
-  const records = await prisma.auditLog.findMany({
-    where: { invoiceId },
-    orderBy: { createdAt: "asc" },
-  });
-
+export function checkAuditRecord(r: VerifyRow, prev: { invoiceId: string; hash: string } | undefined): AuditChainBreak[] {
   const breaks: AuditChainBreak[] = [];
-  let expectedPrevHash = "GENESIS";
-  let expectedPrevId: string | null = null;
-
-  for (const r of records) {
-    // El primer registro debe tener prevHash="GENESIS" y prevId=null.
-    // Los siguientes deben encadenar con el anterior.
-    if (r.prevHash !== expectedPrevHash) {
-      breaks.push({
-        recordId: r.id,
-        invoiceId,
-        expectedPrevHash,
-        actualPrevHash: r.prevHash,
-        reason: expectedPrevHash === "GENESIS" ? "missing_genesis" : "prev_hash_mismatch",
-      });
-    }
-    if (r.prevId !== expectedPrevId) {
-      breaks.push({
-        recordId: r.id,
-        invoiceId,
-        expectedPrevHash,
-        actualPrevHash: r.prevHash,
-        reason: "broken_link",
-      });
-    }
-
-    // Recalculamos el hash y comparamos con el almacenado.
-    const recomputed = computeAuditHash({
-      id: r.id,
-      invoiceId: r.invoiceId,
-      userId: r.userId,
-      field: r.field,
-      oldValue: r.oldValue,
-      newValue: r.newValue,
-      createdAt: r.createdAt,
-      prevHash: r.prevHash,
-    });
-    if (recomputed !== r.hash) {
-      breaks.push({
-        recordId: r.id,
-        invoiceId,
-        expectedPrevHash: recomputed,
-        actualPrevHash: r.hash,
-        reason: "hash_mismatch",
-      });
-    }
-
-    expectedPrevHash = r.hash;
-    expectedPrevId = r.id;
+  const at = (reason: AuditChainBreak["reason"], expected: string, actual: string) =>
+    breaks.push({ recordId: r.id, invoiceId: r.invoiceId, expectedPrevHash: expected, actualPrevHash: actual, reason });
+  if (r.prevId === null) {
+    if (r.prevHash !== "GENESIS") at("missing_genesis", "GENESIS", r.prevHash);
+  } else if (!prev || prev.invoiceId !== r.invoiceId) {
+    at("broken_link", "", r.prevHash);
+  } else if (prev.hash !== r.prevHash) {
+    at("prev_hash_mismatch", prev.hash, r.prevHash);
   }
-
+  const recomputed = computeAuditHash(r);
+  if (recomputed !== r.hash) at("hash_mismatch", recomputed, r.hash);
   return breaks;
 }
 
-/** Verifica TODAS las cadenas de auditoria de una firma. Util para el
- *  panel admin: "verificar integridad" muestra el numero de cadenas
- *  rotas y los eslabones afectados. */
-export async function verifyFirmAuditChains(firmId: string): Promise<{
+/**
+ * Verifica todas las cadenas de auditoria de una asesoria (F-048), por
+ * tandas de VERIFY_PAGE_SIZE registros y siguiendo prevId: cada registro se
+ * compara con el suyo anterior, sin cargar la cadena entera en memoria (la
+ * version de antes leia todas las de cada factura y las ordenaba por
+ * createdAt). Aparte, una consulta busca bifurcaciones: dos registros de la
+ * misma factura con el mismo anterior.
+ *
+ * Borrar el ultimo eslabon de una cadena no se detecta (no queda nada que lo
+ * apunte); para eso esta el trigger que impide borrar.
+ */
+export async function verifyFirmAuditChains(firmId: string, options: { pageSize?: number } = {}): Promise<{
   totalInvoices: number;
   intactChains: number;
   brokenChains: number;
+  checkedRecords: number;
   breaks: AuditChainBreak[];
 }> {
-  // Tomamos solo invoices con al menos un AuditLog (las que aun no han
-  // sido tocadas no tienen cadena).
-  const invoices = await prisma.invoice.findMany({
-    where: {
-      client: { advisoryFirmId: firmId },
-      auditLogs: { some: {} },
-    },
-    select: { id: true },
-  });
+  const pageSize = options.pageSize ?? VERIFY_PAGE_SIZE;
+  const scope = { invoice: { client: { advisoryFirmId: firmId } } };
+  const invoiceIds = new Set<string>();
+  const brokenInvoiceIds = new Set<string>();
+  const breaks: AuditChainBreak[] = [];
+  const report = (found: AuditChainBreak[]) => {
+    for (const b of found) {
+      brokenInvoiceIds.add(b.invoiceId);
+      if (breaks.length < MAX_REPORTED_BREAKS) breaks.push(b);
+    }
+  };
 
-  const allBreaks: AuditChainBreak[] = [];
-  for (const inv of invoices) {
-    const b = await verifyInvoiceAuditChain(inv.id);
-    allBreaks.push(...b);
+  let checkedRecords = 0;
+  let after: string | undefined;
+  for (;;) {
+    const rows: VerifyRow[] = await prisma.auditLog.findMany({
+      where: { ...scope, ...(after ? { id: { gt: after } } : {}) },
+      orderBy: { id: "asc" },
+      take: pageSize,
+      select: {
+        id: true, invoiceId: true, userId: true, field: true, oldValue: true, newValue: true,
+        createdAt: true, prevId: true, prevHash: true, hash: true,
+      },
+    });
+    if (rows.length === 0) break;
+    const prevIds = [...new Set(rows.flatMap((r) => (r.prevId ? [r.prevId] : [])))];
+    const prevs = new Map(
+      (await prisma.auditLog.findMany({ where: { id: { in: prevIds } }, select: { id: true, invoiceId: true, hash: true } }))
+        .map((p) => [p.id, p]),
+    );
+    for (const r of rows) {
+      invoiceIds.add(r.invoiceId);
+      report(checkAuditRecord(r, r.prevId ? prevs.get(r.prevId) : undefined));
+    }
+    checkedRecords += rows.length;
+    after = rows[rows.length - 1].id;
   }
 
-  // Una factura tiene cadena rota si tiene >=1 break.
-  const brokenInvoiceIds = new Set(allBreaks.map((b) => b.invoiceId));
+  // Bifurcaciones: el primero (por createdAt) de cada grupo es el bueno.
+  const forks = await prisma.$queryRaw<{ invoiceId: string; ids: string[] }[]>`
+    SELECT a."invoiceId", array_agg(a.id ORDER BY a."createdAt", a.id) AS ids
+    FROM "AuditLog" a
+    JOIN "Invoice" i ON i.id = a."invoiceId"
+    JOIN "Client" c ON c.id = i."clientId"
+    WHERE c."advisoryFirmId" = ${firmId}
+    GROUP BY a."invoiceId", a."prevId"
+    HAVING count(*) > 1`;
+  for (const f of forks) {
+    report(f.ids.slice(1).map((id) => ({ recordId: id, invoiceId: f.invoiceId, expectedPrevHash: "", actualPrevHash: "", reason: "fork" as const })));
+  }
 
   return {
-    totalInvoices: invoices.length,
-    intactChains: invoices.length - brokenInvoiceIds.size,
+    totalInvoices: invoiceIds.size,
+    intactChains: invoiceIds.size - brokenInvoiceIds.size,
     brokenChains: brokenInvoiceIds.size,
-    breaks: allBreaks,
+    checkedRecords,
+    breaks,
   };
 }
 
