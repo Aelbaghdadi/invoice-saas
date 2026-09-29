@@ -283,7 +283,15 @@ function zipWriter(sink: (chunk: Uint8Array) => Promise<void>) {
         pending.length = 0;
         throw failure;
       }
-      await sink(chunk);
+      try {
+        await sink(chunk);
+      } catch (err) {
+        // El navegador ha cortado la descarga: lo que falle a partir de aqui
+        // no es de un original, y no se piden mas a Garage.
+        failure = err;
+        pending.length = 0;
+        throw err;
+      }
     }
   };
   return {

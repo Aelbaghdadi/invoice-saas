@@ -114,6 +114,26 @@ describe("descargar los datos de un cliente (F-044)", () => {
     expect(total).toBeGreaterThan(2 * 5 * 64 * 1024);
   });
 
+  it("si el navegador corta la descarga, no se piden más originales", async () => {
+    for (let i = 0; i < 20; i++) await makeInvoice(w.client, { storageKey: `corte-${i}` });
+    let opened = 0;
+    let sent = 0;
+    async function* pdf() {
+      for (let i = 0; i < 4; i++) yield new Uint8Array(16 * 1024);
+    }
+    const client = { id: w.client.id, name: w.client.name, cif: w.client.cif };
+    const cut = new Error("el navegador ha cerrado la conexión");
+    await expect(writeClientDataZip(client, "test", async (chunk) => {
+      sent += chunk.length;
+      if (sent > 100 * 1024) throw cut;
+    }, async () => {
+      opened++;
+      return pdf();
+    })).rejects.toBe(cut);
+    // Se corta en el segundo original (64 KB cada uno): como mucho uno más.
+    expect(opened).toBeLessThanOrEqual(2);
+  });
+
   it("un cliente sin facturas da un ZIP válido con el LEEME.txt", async () => {
     const empty = await prisma.client.create({ data: { name: "Vacío SL", cif: "B55555555", advisoryFirmId: w.firm.id } });
     signInAs(w.admin);
