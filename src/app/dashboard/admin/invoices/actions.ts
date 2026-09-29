@@ -54,14 +54,15 @@ export async function reprocessAllOcrErrors() {
   let invoiceIds: string[];
   try {
     invoiceIds = await prisma.$transaction(async (tx) => {
-      const changed: string[] = [];
-      for (const inv of invoices) {
-        const reset = await tx.invoice.updateMany({
-          where: { id: inv.id, status: "OCR_ERROR" },
-          data: { status: "UPLOADED", lastOcrError: null },
-        });
-        if (reset.count === 1) changed.push(inv.id);
-      }
+      // Una sola sentencia que devuelve las que cambian: en READ COMMITTED,
+      // si otra transaccion tenia alguna, el where se vuelve a evaluar al
+      // soltarla. Una por factura, en serie, pasaba de 30 s hacia las 18.000
+      // (revision 2 del PR #15, punto 4).
+      const changed = (await tx.invoice.updateManyAndReturn({
+        where: { id: { in: invoices.map((inv) => inv.id) }, status: "OCR_ERROR" },
+        data: { status: "UPLOADED", lastOcrError: null },
+        select: { id: true },
+      })).map((r) => r.id);
       await tx.invoiceStatusHistory.createMany({
         data: changed.map((invoiceId) => ({
           invoiceId,
