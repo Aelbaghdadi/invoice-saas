@@ -34,6 +34,26 @@ un fallback: si Gemini falla, se reintenta con Gemini y la factura acaba en
 `CRON_SECRET` (ver §5),
 `ALERT_WEBHOOK_URL` (avisos de errores, ver §8).
 
+## 2 bis. Conexiones a la BD
+
+La app abre **como mucho 20 conexiones** a su Postgres (`max` del pool, en
+[`src/lib/prisma.ts`](src/lib/prisma.ts)), y ninguna consulta puede pasar de
+**15 s** (`statement_timeout`): una colgada se corta en vez de retener su
+conexión. Pedir conexión espera como mucho 10 s.
+
+dev y prod están en el mismo servidor, cada una con su Postgres. En cada uno:
+
+| Quién | Conexiones, como mucho |
+|---|---|
+| La app (un proceso `next start`) | 20 |
+| `prisma migrate deploy` al arrancar (no usa el pool) | 1, unos segundos |
+| Reservadas para superusuario (`superuser_reserved_connections`) | 3 |
+| `psql`, backups, un script a mano | unas pocas |
+
+El `max_connections` del Postgres de Coolify (100 por defecto) lo cubre con
+margen. Si algún día se levantan varias réplicas de la app contra el mismo
+Postgres, son 20 por réplica: súbelo o baja el `max`.
+
 ## 3. Migraciones
 
 Automáticas: el contenedor ejecuta `prisma migrate deploy` en el arranque
