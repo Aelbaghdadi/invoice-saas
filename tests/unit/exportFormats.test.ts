@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
 import * as XLSX from "xlsx";
+import { Prisma } from "@prisma/client";
 import {
   generateCsv,
   generateA3Excel,
   suggestFilename,
+  exportFilename,
   validateForA3Export,
   type InvoiceWithClient,
 } from "@/lib/exportFormats";
@@ -179,19 +181,60 @@ describe("validateForA3Export", () => {
     expect(validateForA3Export([mkInvoice()])).toEqual([]);
   });
 
-  it("warns on missing NIF (purchase → issuerCif)", () => {
+  it("sin NIF en una operación nacional: bloqueante (F-025)", () => {
     const res = validateForA3Export([mkInvoice({ issuerCif: null })]);
     expect(res).toHaveLength(1);
-    expect(res[0].warnings).toContain("NIF vacío");
+    expect(res[0].severity).toBe("bloqueante");
+    expect(res[0].blockers).toEqual([
+      "Falta el NIF del proveedor. Si es un ticket o una factura simplificada, configura la cuenta genérica en la ficha del cliente",
+    ]);
   });
 
-  it("warns on missing supplier/expense accounts", () => {
+  it("una venta nacional sin NIF: solo aviso", () => {
+    const [res] = validateForA3Export([mkInvoice({ type: "SALE", receiverCif: null })]);
+    expect(res).toMatchObject({ severity: "aviso", blockers: [], warnings: ["Sin NIF: en esta operación no es obligatorio, pero irá a A3 sin NIF"] });
+  });
+
+  it("sin NIF en una importación: solo aviso (puede ser un proveedor extranjero)", () => {
+    const [res] = validateForA3Export([mkInvoice({ issuerCif: null, operationType: "IMPORTACION" })]);
+    expect(res.severity).toBe("aviso");
+    expect(res.warnings).toContain("Sin NIF: en esta operación no es obligatorio, pero irá a A3 sin NIF");
+  });
+
+  it("sin NIF con la cuenta genérica de simplificadas: aviso, no bloquea", () => {
+    const [res] = validateForA3Export([mkInvoice({
+      issuerCif: null, supplierAccount: "4009999",
+      client: { id: "c1", name: "ACME SL", simplifiedSupplierAccount: "4009999" } as InvoiceWithClient["client"],
+    })]);
+    expect(res).toMatchObject({ severity: "aviso", blockers: [], warnings: ["Sin NIF: en esta operación no es obligatorio, pero irá a A3 sin NIF"] });
+  });
+
+  it("sin cuentas: bloqueante", () => {
     const res = validateForA3Export([
       mkInvoice({ supplierAccount: null, expenseAccount: null }),
     ]);
-    expect(res[0].warnings).toEqual(
-      expect.arrayContaining(["Sin cuenta proveedor", "Sin cuenta gasto"]),
-    );
+    expect(res[0].severity).toBe("bloqueante");
+    expect(res[0].blockers).toEqual(["Sin cuenta proveedor", "Sin cuenta gasto"]);
+  });
+
+  it("sin número, fecha, total o líneas: bloqueante", () => {
+    expect(validateForA3Export([mkInvoice({ invoiceNumber: null })])[0].blockers).toEqual(["Número de factura vacío"]);
+    expect(validateForA3Export([mkInvoice({ invoiceDate: null })])[0].blockers).toEqual(["Fecha vacía"]);
+    // Sin líneas y con total 121: antes salía una fila 0/0/0 sin aviso.
+    const sinLineas = validateForA3Export([mkInvoice({ taxBase: null, vatAmount: null, vatRate: null })])[0];
+    expect(sinLineas.blockers).toEqual(["Sin líneas de IVA con base distinta de 0"]);
+  });
+
+  it("las bloqueantes van primero y no se recorta la lista", () => {
+    const invoices = [
+      ...Array.from({ length: 25 }, (_, i) => mkInvoice({ id: `aviso-${i}`, totalAmount: new Prisma.Decimal(130) })),
+      mkInvoice({ id: "bloq", issuerCif: null }),
+    ];
+    const res = validateForA3Export(invoices);
+    expect(res).toHaveLength(26);
+    expect(res[0]).toMatchObject({ invoiceId: "bloq", severity: "bloqueante" });
+    expect(res.slice(1).every((r) => r.severity === "aviso")).toBe(true);
+    expect(res.slice(1).map((r) => r.invoiceId)).toEqual(invoices.slice(0, 25).map((i) => i.id));
   });
 
   it("warns on Base+IVA mismatch vs Total", () => {
@@ -283,13 +326,13 @@ describe("validateForA3Export — facturas emitidas y moneda", () => {
     const res = validateForA3Export([
       mkInvoice({ type: "SALE", supplierAccount: null, expenseAccount: null }),
     ]);
-    expect(res[0].warnings).toEqual(expect.arrayContaining(["Sin cuenta cliente", "Sin cuenta ingreso"]));
-    expect(res[0].warnings).not.toContain("Sin cuenta proveedor");
+    expect(res[0].blockers).toEqual(["Sin cuenta cliente", "Sin cuenta ingreso"]);
   });
 
-  it("avisa si los importes no están en euros", () => {
+  it("importes en otra moneda: bloqueante", () => {
     const res = validateForA3Export([mkInvoice({ currency: "USD" })]);
-    expect(res[0].warnings.some((w) => w.includes("USD"))).toBe(true);
+    expect(res[0].severity).toBe("bloqueante");
+    expect(res[0].blockers).toEqual(["Importes en USD: A3 solo admite euros. Conviértelos y márcala en euros en la revisión"]);
   });
 
   it("no avisa en euros ni cuando la moneda no se detectó", () => {
@@ -499,13 +542,24 @@ describe("generateA3Excel — prefijo de pais en la columna E", () => {
 });
 
 describe("validateForA3Export — pais del NIF", () => {
-  it("avisa de la intracomunitaria sin pais detectado (la portuguesa que no imprime el prefijo)", () => {
-    const res = validateForA3Export([mkInvoice({
+  it("la intracomunitaria sin pais detectado es bloqueante (la portuguesa que no imprime el prefijo)", () => {
+    const [res] = validateForA3Export([mkInvoice({
       operationType: "INTRACOM" as any,
       issuerCountry: null,
       vatAmount: 0 as any, taxBase: 100 as any, totalAmount: 100 as any,
     })]);
-    expect(res.some((r) => r.warnings.some((w) => w.includes("sin país en el NIF")))).toBe(true);
+    expect(res.severity).toBe("bloqueante");
+    expect(res.blockers).toEqual([
+      "El NIF del proveedor no lleva el prefijo del país: en una operación intracomunitaria hace falta el NIF-IVA (p. ej. PT515160873)",
+    ]);
+  });
+
+  it("la intracomunitaria sin NIF es bloqueante", () => {
+    const [res] = validateForA3Export([mkInvoice({
+      operationType: "INTRACOM_SERVICIOS", issuerCif: null,
+      vatAmount: new Prisma.Decimal(0), totalAmount: new Prisma.Decimal(100),
+    })]);
+    expect(res.blockers).toEqual(["Falta el NIF-IVA del proveedor: en una operación intracomunitaria hace falta para el modelo 349 y para A3"]);
   });
 
   it("no avisa si la intracomunitaria ya trae el pais", () => {
@@ -514,7 +568,7 @@ describe("validateForA3Export — pais del NIF", () => {
       issuerCountry: "PT" as any,
       vatAmount: 0 as any, taxBase: 100 as any, totalAmount: 100 as any,
     })]);
-    expect(res.flatMap((r) => r.warnings).filter((w) => w.includes("sin país en el NIF"))).toEqual([]);
+    expect(res.flatMap((r) => [...r.blockers, ...r.warnings]).filter((w) => w.includes("prefijo del país"))).toEqual([]);
   });
 
   it("avisa del NIF extranjero marcado como operacion interior", () => {
@@ -527,12 +581,16 @@ describe("validateForA3Export — pais del NIF", () => {
   });
 });
 
-describe("validateForA3Export — huecos en la numeración", () => {
-  it("avisa con un mensaje claro cuando falta un numero del mismo emisor", () => {
+describe("validateForA3Export — huecos en la numeración (solo emitidas)", () => {
+  /** Emitida del cliente: las numera el, y tienen que ir correlativas. */
+  const emitida = (over: Record<string, unknown>) =>
+    mkInvoice({ type: "SALE", ...over } as any);
+
+  it("avisa con un mensaje claro cuando falta un numero", () => {
     const res = validateForA3Export([
-      mkInvoice({ id: "inv-1", invoiceNumber: "1" }),
-      mkInvoice({ id: "inv-2", invoiceNumber: "2" }),
-      mkInvoice({ id: "inv-4", invoiceNumber: "4" }),
+      emitida({ id: "inv-1", invoiceNumber: "1" }),
+      emitida({ id: "inv-2", invoiceNumber: "2" }),
+      emitida({ id: "inv-4", invoiceNumber: "4" }),
     ]);
     const hit = res.find((r) => r.invoiceId === "inv-4");
     const msg = hit?.warnings.find((w) => w.includes("Salto de numeración"));
@@ -541,54 +599,86 @@ describe("validateForA3Export — huecos en la numeración", () => {
     expect(res.find((r) => r.invoiceId === "inv-1")).toBeUndefined();
   });
 
+  it("un salto sobre una factura que no va al Excel sale como aviso aparte, no en la caja gris", () => {
+    const res = validateForA3Export([
+      emitida({ id: "inv-1", invoiceNumber: "1" }),
+      emitida({ id: "inv-3", invoiceNumber: "3", _count: { splitInvoices: 2 } }),
+    ]);
+    const entries = res.filter((r) => r.invoiceId === "inv-3");
+    expect(entries.map((r) => r.severity)).toEqual(["aviso", "fuera"]);
+    expect(entries[0]).toMatchObject({ numberingGap: true, warnings: [expect.stringContaining("falta la factura 2")] });
+    expect(entries[1].warnings.join()).not.toContain("Salto de numeración");
+  });
+
+  it("NO avisa en las recibidas: cada proveedor numera para todos sus clientes", () => {
+    // Caso real: entre dos facturas de Galma a la misma tienda hay 29 numeros
+    // que fue a otras tiendas. Avisar de eso era una falsa alarma por factura.
+    const res = validateForA3Export([
+      mkInvoice({ id: "inv-1", invoiceNumber: "F261208" }),
+      mkInvoice({ id: "inv-2", invoiceNumber: "F261238" }),
+    ]);
+    expect(res.some((r) => r.warnings.some((w) => w.includes("Salto de numeración")))).toBe(false);
+  });
+
   it("con varios huecos usa plural y los enumera", () => {
     const res = validateForA3Export([
-      mkInvoice({ id: "inv-1", invoiceNumber: "1" }),
-      mkInvoice({ id: "inv-5", invoiceNumber: "5" }),
+      emitida({ id: "inv-1", invoiceNumber: "1" }),
+      emitida({ id: "inv-5", invoiceNumber: "5" }),
     ]);
     expect(res[0].warnings.join()).toContain("faltan las facturas 2, 3 y 4");
   });
 
   it("entiende el formato NNNN/AAAA", () => {
     const res = validateForA3Export([
-      mkInvoice({ id: "inv-1", invoiceNumber: "EXP-0006/2026" }),
-      mkInvoice({ id: "inv-2", invoiceNumber: "EXP-0008/2026" }),
+      emitida({ id: "inv-1", invoiceNumber: "EXP-0006/2026" }),
+      emitida({ id: "inv-2", invoiceNumber: "EXP-0008/2026" }),
     ]);
     expect(res[0].warnings.join()).toContain("falta la factura EXP-0007/2026");
   });
 
   it("no avisa si la numeracion es correlativa", () => {
     const res = validateForA3Export([
-      mkInvoice({ id: "inv-1", invoiceNumber: "1" }),
-      mkInvoice({ id: "inv-2", invoiceNumber: "2" }),
+      emitida({ id: "inv-1", invoiceNumber: "1" }),
+      emitida({ id: "inv-2", invoiceNumber: "2" }),
     ]);
     expect(res.some((r) => r.warnings.some((w) => w.includes("Salto de numeración")))).toBe(false);
   });
 
-  it("no mezcla emisores distintos", () => {
+  it("no mezcla clientes distintos: cada uno lleva su numeracion", () => {
     const res = validateForA3Export([
-      mkInvoice({ id: "inv-1", issuerCif: "B11111111", invoiceNumber: "1" }),
-      mkInvoice({ id: "inv-2", issuerCif: "B22222222", invoiceNumber: "3" }),
+      emitida({ id: "inv-1", issuerCif: "B11111111", invoiceNumber: "1" }),
+      emitida({ id: "inv-2", issuerCif: "B22222222", invoiceNumber: "3" }),
     ]);
     expect(res.some((r) => r.warnings.some((w) => w.includes("Salto de numeración")))).toBe(false);
   });
 
-  it("en emitidas agrupa por el emisor (el cliente), no por cada receptor", () => {
+  it("agrupa por el emisor (el cliente), no por cada receptor", () => {
     const res = validateForA3Export([
-      mkInvoice({ id: "inv-1", type: "SALE", issuerCif: "B87654321", receiverCif: "B11111111", invoiceNumber: "1" }),
-      mkInvoice({ id: "inv-3", type: "SALE", issuerCif: "B87654321", receiverCif: "B22222222", invoiceNumber: "3" }),
+      emitida({ id: "inv-1", issuerCif: "B87654321", receiverCif: "B11111111", invoiceNumber: "1" }),
+      emitida({ id: "inv-3", issuerCif: "B87654321", receiverCif: "B22222222", invoiceNumber: "3" }),
     ]);
     expect(res.find((r) => r.invoiceId === "inv-3")?.warnings.join()).toContain("falta la factura 2");
   });
 
   it("se acumula junto a otros avisos de la misma factura", () => {
     const res = validateForA3Export([
-      mkInvoice({ id: "inv-1", invoiceNumber: "1" }),
-      mkInvoice({ id: "inv-3", invoiceNumber: "3", supplierAccount: null }),
+      emitida({ id: "inv-1", invoiceNumber: "1" }),
+      emitida({ id: "inv-3", invoiceNumber: "3", supplierAccount: null }),
     ]);
     const hit = res.find((r) => r.invoiceId === "inv-3");
-    expect(hit?.warnings).toEqual(
-      expect.arrayContaining(["Sin cuenta proveedor", expect.stringContaining("Salto de numeración")]),
+    expect(hit?.blockers).toEqual(["Sin cuenta cliente"]);
+    expect(hit?.warnings).toEqual([expect.stringContaining("Salto de numeración")]);
+  });
+});
+
+describe("exportFilename", () => {
+  it("da el mismo nombre que suggestFilename con el cliente del lote", () => {
+    expect(exportFilename("ACME SL", "a3excel", 4, 2026)).toBe(
+      suggestFilename([mkInvoice()], "a3excel", 4, 2026),
     );
+  });
+
+  it("sin cliente usa 'cliente'", () => {
+    expect(exportFilename(null, "a3excel", 1, 2026)).toBe("facturas_cliente_2026-01_a3excel.xlsx");
   });
 });

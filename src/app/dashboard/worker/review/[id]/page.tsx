@@ -7,12 +7,14 @@ import { ReviewForm } from "./ReviewForm";
 import {
   filterFromInvoice,
   getQueuePosition,
+  parseBackHref,
   parseBucket,
   queueToSearchParams,
 } from "@/lib/reviewQueue";
 import { extractBoundingBoxes } from "@/lib/boundingBoxes";
 import { extractGeminiBoundingBoxes } from "@/lib/ocrLlm";
 import { accountEntryKey, entryNameMatches } from "@/lib/supplierMatching";
+import { reviewTargetBlockReason } from "@/lib/invoiceStatuses";
 
 // La cola se calcula en cada render — el conteo cambia segun otro
 // gestor valide/rechace facturas. Forzamos dinamico para que el "X de N"
@@ -24,7 +26,7 @@ export default async function ReviewPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams?: Promise<{ bucket?: string }>;
+  searchParams?: Promise<{ bucket?: string; back?: string }>;
 }) {
   const session = await auth();
   if (!session?.user || !["ADMIN", "WORKER"].includes(session.user.role))
@@ -33,6 +35,8 @@ export default async function ReviewPage({
   const { id } = await params;
   const sp = (await searchParams) ?? {};
   const bucket = parseBucket(sp.bucket);
+  // Listado del que se vino, con sus filtros y su pagina: "Volver" lleva ahi.
+  const back = parseBackHref(sp.back);
 
   const invoice = await prisma.invoice.findUnique({
     where: { id },
@@ -44,6 +48,10 @@ export default async function ReviewPage({
       // el historial y no exportBatch, porque al corregirla el puntero se
       // pone a null y el aviso desaparecia justo cuando mas falta hace.
       exportBatchItems: { orderBy: { createdAt: "desc" }, take: 1, select: { createdAt: true } },
+      // Una rechazada que el cliente ya sustituyo no se reabre.
+      replacedBy: { select: { id: true } },
+      // Una original que ya tiene hijas no se vuelve a dividir.
+      _count: { select: { splitInvoices: true } },
     },
   });
   if (!invoice) notFound();
@@ -68,17 +76,36 @@ export default async function ReviewPage({
   // (?bucket=clean|attention|all) y lo preservamos al navegar entre facturas.
   const queueFilter = filterFromInvoice(invoice, bucket);
   const queue = await getQueuePosition(id, queueFilter);
+  // prevId/nextId: el lote entero (flechas). nextPendingId: la siguiente
+  // pendiente (a donde van Validar, Rechazar y Posponer).
   const prevId = queue.prevId;
   const nextId = queue.nextId;
+  const nextPendingId = queue.nextPendingId;
   const position = queue.index >= 0 ? queue.index + 1 : 1;
   const total = queue.total;
-  const queueParams = queueToSearchParams(queueFilter).toString();
+
+  // Con "<" es habitual abrir facturas de periodos ya cerrados: se avisa al
+  // abrirla en vez de dejar editar y fallar al guardar. Mismo criterio que la
+  // action (periodo contable si lo tiene, si no el del lote).
+  const closure = await prisma.periodClosure.findUnique({
+    where: {
+      clientId_month_year: {
+        clientId: invoice.clientId,
+        month: invoice.accountingPeriodMonth ?? invoice.periodMonth,
+        year: invoice.accountingPeriodYear ?? invoice.periodYear,
+      },
+    },
+    select: { reopenedAt: true },
+  }).catch(() => null);
+  const periodClosed = closure != null && closure.reopenedAt == null;
+  const queueParams = queueToSearchParams({ ...queueFilter, back }).toString();
   const queueSuffix = queueParams ? `?${queueParams}` : "";
 
-  const backHref =
+  const backHref = back ?? (
     session.user.role === "ADMIN"
       ? `/dashboard/admin/invoices`
-      : `/dashboard/worker/invoices`;
+      : `/dashboard/worker/invoices`
+  );
 
   // Bounding boxes: cada extractor guarda coordenadas en formato diferente.
   // document_ai       → formato entities de Document AI.
@@ -223,7 +250,10 @@ export default async function ReviewPage({
   };
 
   return (
-    <div className="-m-6 flex h-[calc(100vh-64px)] flex-col overflow-hidden">
+    // Alto: la pantalla menos la barra superior (56 px) y el aviso legal de
+    // abajo (38 px). Con los 64 de antes sobraba media barra de botones, que
+    // quedaba tapada bajo el aviso.
+    <div className="-m-6 flex h-[calc(100dvh-94px)] flex-col overflow-hidden">
       <ReviewForm
         /* Se remonta al terminar el OCR: el formulario copia los props a su
            estado al montar, y si se abria en analisis se quedaba vacio y al
@@ -235,9 +265,24 @@ export default async function ReviewPage({
         initialVatLines={initialVatLines}
         prevId={prevId}
         nextId={nextId}
+        nextPendingId={nextPendingId}
+        doneCount={queue.doneCount}
+        pendingInBucket={queue.pendingInBucket}
+        periodClosed={periodClosed}
+        splitBlockReason={reviewTargetBlockReason("split", {
+          replacedById: null,
+          isUnclassifiedBucket: invoice.client.isUnclassifiedBucket,
+          splitChildren: invoice._count.splitInvoices,
+        })}
+        validateBlockReason={reviewTargetBlockReason(
+          "validate",
+          { replacedById: invoice.replacedBy?.id ?? null, isUnclassifiedBucket: invoice.client.isUnclassifiedBucket },
+          { reopen: invoice.status === "REJECTED" },
+        )}
         position={position}
         batchTotal={total}
         backHref={backHref}
+        back={back}
         extraction={extractionData}
         boundingBoxes={boundingBoxes}
         issues={issuesData}

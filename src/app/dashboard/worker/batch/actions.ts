@@ -58,7 +58,7 @@ export async function closePeriodFromBatch(
   }
 
   const parsed = parseBatchParams(formData);
-  if (!parsed) return { error: "Parametros invalidos" };
+  if (!parsed) return { error: "Parámetros inválidos" };
 
   const access = await assertBatchAccess(session, parsed.clientId);
   if (access) return access;
@@ -163,7 +163,7 @@ export async function rejectBatch(
     where: { clientId_month_year: { clientId: parsed.clientId, month: parsed.month, year: parsed.year } },
   });
   if (closure && !closure.reopenedAt) {
-    return { error: `Periodo ${parsed.month}/${parsed.year} cerrado: reábrelo antes de rechazar el lote` };
+    return { error: `El periodo ${parsed.month}/${parsed.year} está cerrado: pide a un administrador que lo reabra antes de rechazar el lote.` };
   }
 
   // Mismo criterio que isBatchRejectable (lo que cuentan las pantallas de

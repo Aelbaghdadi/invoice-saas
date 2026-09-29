@@ -1,4 +1,5 @@
 import { equivalenceSurchargeRateForVat } from "./validators";
+import { percentOf, toCents } from "@/lib/money";
 
 /**
  * Recargo de equivalencia: normalizacion y propuesta.
@@ -44,7 +45,9 @@ export function isStandardVatRate(rate: number): boolean {
   return VALID_VAT_RATES.has(rate);
 }
 
-const round2 = (n: number) => parseFloat(n.toFixed(2));
+// Mismo redondeo que el resto (src/lib/money.ts): con toFixed, 118,75 al
+// 5,2 % daba 6,17 y el impreso (y percentOf) 6,18 (revision 2 del PR #7).
+const round2 = (n: number) => toCents(n) / 100;
 
 /**
  * Pliega sobre su linea de IVA las "lineas" que en realidad son el recargo.
@@ -107,7 +110,7 @@ export function completeReadSurcharges<T extends SurchargeLine>(lines: T[]): T[]
   return lines.map((l) => {
     const line = { ...l };
     if (line.equivalenceSurchargeRate != null && line.equivalenceSurchargeAmount == null) {
-      line.equivalenceSurchargeAmount = round2((line.taxBase * line.equivalenceSurchargeRate) / 100);
+      line.equivalenceSurchargeAmount = percentOf(line.taxBase, line.equivalenceSurchargeRate);
     } else if (line.equivalenceSurchargeAmount != null && line.equivalenceSurchargeRate == null) {
       const mapped = equivalenceSurchargeRateForVat(line.vatRate);
       if (mapped != null) line.equivalenceSurchargeRate = mapped;
@@ -151,14 +154,14 @@ export function proposeSurchargesFromTotal(
       // Una linea cuyo recargo daria 0,00 no explica ninguna diferencia, y
       // como candidata solo sirve para colarse en los empates y marcar con
       // "recargo 5,2 % de 0,00" una linea que no lleva recargo.
-      && round2((c.taxBase * c.rate) / 100) !== 0);
+      && percentOf(c.taxBase, c.rate) !== 0);
   // 2^n combinaciones: con mas de 8 lineas de IVA (jamas visto) no se intenta.
   if (candidates.length === 0 || candidates.length > 8) return [];
 
   let best: { picked: typeof candidates; diff: number } | null = null;
   for (let mask = 1; mask < (1 << candidates.length); mask++) {
     const picked = candidates.filter((_, i) => mask & (1 << i));
-    const sum = picked.reduce((s, c) => s + round2((c.taxBase * c.rate) / 100), 0);
+    const sum = picked.reduce((s, c) => s + percentOf(c.taxBase, c.rate), 0);
     const diff = Math.abs(round2(sum - missing));
     if (!best || diff < best.diff || (diff === best.diff && picked.length > best.picked.length)) {
       best = { picked, diff };
@@ -169,7 +172,7 @@ export function proposeSurchargesFromTotal(
   const proposals = best.picked.map((c) => ({
     index: c.index,
     rate: c.rate,
-    amount: round2((c.taxBase * c.rate) / 100),
+    amount: percentOf(c.taxBase, c.rate),
   }));
   // El ajuste del centimo va a la linea de mayor importe, que es donde menos
   // se nota y donde el proveedor acumula su redondeo.

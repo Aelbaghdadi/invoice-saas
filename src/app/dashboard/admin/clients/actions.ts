@@ -4,7 +4,6 @@ import { prisma } from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
-import { after } from "next/server";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { randomBytes, randomUUID } from "crypto";
@@ -98,19 +97,24 @@ export async function createClient(_prev: State, formData: FormData): Promise<St
 
   let inviteToken: string | undefined;
   let userEmail: string | undefined;
+  let createdClientId: string | undefined;
 
   try {
     await prisma.$transaction(async (tx) => {
-      const email = parsed.data.email;
+      // El email se guarda en minusculas («¿Olvidaste tu contraseña?» lo
+      // busca asi). El username, tal cual se tecleo: el login lo compara
+      // exacto y es lo que se le da al cliente para entrar.
+      const typedEmail = parsed.data.email;
+      const email = typedEmail?.toLowerCase();
       let portalUserId: string | null = null;
 
       // El usuario de portal es opcional: muchas asesorias gestionan las
       // facturas ellas mismas y no dan acceso al cliente.
-      if (email && passwordHash) {
+      if (typedEmail && email && passwordHash) {
         const user = await tx.user.create({
           data: {
             // El cliente inicia sesión con su username; por defecto = su email.
-            username: email,
+            username: typedEmail,
             email,
             passwordHash,
             name: contactName,
@@ -134,7 +138,7 @@ export async function createClient(_prev: State, formData: FormData): Promise<St
         userEmail = email;
       }
 
-      await tx.client.create({
+      const created = await tx.client.create({
         data: {
           name: parsed.data.name,
           cif: parsed.data.cif.toUpperCase(),
@@ -144,23 +148,28 @@ export async function createClient(_prev: State, formData: FormData): Promise<St
           userId: portalUserId,
         },
       });
+      createdClientId = created.id;
     });
   } catch (err) {
     return { error: duplicateFieldMessage(err) };
   }
 
-  // Send invitation email after the response is sent
+  // La invitacion se envia antes de volver y no en after(): si falla, el
+  // administrador tiene que saberlo (F-039). El cliente ya esta creado, asi
+  // que no se devuelve error al formulario (repetirlo chocaria con el CIF):
+  // el listado avisa y explica como puede entrar el cliente igualmente.
   if (inviteToken && userEmail) {
     const appUrl = process.env.NEXTAUTH_URL ?? "http://localhost:3000";
     const inviteUrl = `${appUrl}/login/reset-password?token=${inviteToken}`;
 
-    after(() => {
-      sendClientInvitationEmail({
-        to: userEmail!,
-        clientName: contactName,
-        inviteUrl,
-      });
+    const invitation = await sendClientInvitationEmail({
+      to: userEmail,
+      clientName: contactName,
+      inviteUrl,
     });
+    if (!invitation.ok && createdClientId) {
+      redirect(`/dashboard/admin/clients?invitacion=no-enviada&cliente=${createdClientId}`);
+    }
   }
 
   redirect("/dashboard/admin/clients");

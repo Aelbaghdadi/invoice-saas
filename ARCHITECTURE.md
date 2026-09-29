@@ -247,14 +247,92 @@ Ambos requieren header `Authorization: Bearer $CRON_SECRET`.
 ## Testing
 
 - **Unit (Vitest)**: en `tests/unit/`. Foco en `lib/`: validators,
-  exportFormats, auditLog, reviewQueue.
+  exportFormats, auditLog, reviewQueue. **Corren en el build de la imagen
+  Docker** (`RUN npx vitest run tests/unit`, F-032), sin `.env` ni base de
+  datos: si uno falla, no hay imagen. Por eso en `tests/unit` no puede haber
+  tests que necesiten Postgres, variables de entorno o red.
+- **Integración contra Postgres (F-033)**: en `tests/integration/`, fuera de
+  la barrera del build y del `include` de `vitest.config.ts`, que solo recoge
+  `tests/unit/**`. Tienen su propia config (`vitest.integration.config.ts`) y
+  se lanzan con `npm run test:integration` (ver abajo).
 - **E2E (Playwright)**: en `tests/e2e/`. Flujos críticos: login,
   subir factura, validar, exportar.
 
-Convención: tests **no mockean Prisma**. Usan una DB Postgres de
-test (Supabase tier gratis o local). Si añades tests que pasan en
-local pero fallan en CI, lo más probable es que tengas datos
-sucios; siempre limpia con `prisma.$transaction` o seed específico.
+Convención: tests **no mockean Prisma**. Los que usan Prisma van contra
+una DB Postgres de test y por eso fuera de `tests/unit`.
+
+### Tests de integración
+
+**Base de datos.** Solo usan `TEST_DATABASE_URL`, nunca `DATABASE_URL` (en
+local apunta a Supabase). Cada test la vacía, así que el harness no arranca
+si:
+- falta o no es Postgres;
+- el nombre de la base de datos no es de pruebas, con límite de palabra
+  (`facturocr_test`, `test`, `tests-local`; no `latest` ni `facturas`), esté
+  donde esté: un túnel SSH o un volcado de producción en localhost también
+  son «locales»;
+- la URL lleva parámetros que cambian el destino (`?host=`, `?dbname=`…);
+- la base de datos a la que conecta de verdad no se llama así;
+- tiene tablas y no es del harness. La primera vez, sobre una base de datos
+  vacía, se crea el marcador `"_facturocr_test"."marker"` (en su propio
+  schema: Prisma no migra un `public` con tablas ajenas); después solo se
+  toca si lo tiene. Una BD de tests creada antes de este marcador hay que
+  borrarla y crearla de nuevo.
+
+Al arrancar dice por stderr a qué host y base de datos va.
+
+**Zona horaria.** Las fechas de Prisma son `timestamp(3)` sin zona, en UTC.
+Los tests no pueden depender de la zona del Postgres (uno instalado en
+Windows suele ir en hora de Madrid): en SQL crudo, «hace n minutos» es
+`utcMinutesAgoSql(n)` (`(now() AT TIME ZONE 'UTC') - interval …`), nunca
+`now()` a secas.
+
+Un Postgres local, por ejemplo con Docker:
+
+```bash
+docker run -d --name facturocr-test -p 55432:5432 \
+  -e POSTGRES_PASSWORD=test -e POSTGRES_DB=facturocr_test postgres:16
+export TEST_DATABASE_URL=postgresql://postgres:test@127.0.0.1:55432/facturocr_test
+npm run test:integration
+```
+
+(o con un Postgres instalado: `createdb facturocr_test` y la URL
+correspondiente).
+
+Cuánto tarda depende de la máquina: de unos 25-30 s en Linux a unos 100 s en
+Windows con un Postgres local. Lo que más pesa es el lote de 3.000 facturas.
+
+**Qué hace el harness.**
+- `globalSetup` aplica las migraciones con `prisma migrate deploy` contra
+  `TEST_DATABASE_URL` (las mismas que en producción; nunca `reset`).
+- Antes de cada test se vacían (TRUNCATE) solo las tablas de los modelos de
+  Prisma (`Prisma.ModelName`), tras comprobar otra vez el marcador. Los
+  ficheros corren uno detrás de otro: comparten la BD.
+- Solo se simulan la sesión (`@/lib/auth`, con `signInAs`), `next/cache`,
+  `next/navigation`, `after()` (se encola; el test lo ejecuta con
+  `runAfterCallbacks`), el OCR (Document AI y Gemini, con `stubOcr`; el
+  parser Facturae es el real) y S3 (un servidor en memoria por fichero, que
+  puede ir lento o caerse con `fakeS3().setMode(...)`). Prisma y Postgres son
+  los reales. Sin `RESEND_API_KEY`, el correo no sale.
+- Factorías (`helpers/factories.ts`): `makeFirm("A")` crea una asesoría con
+  admin, gestor asignado, cliente con portal y facturas; `makeTwoFirms()`,
+  dos, para los tests de aislamiento entre asesorías.
+- Carreras: `holdLock(sql)` (`helpers/locks.ts`) abre una transacción que
+  bloquea (`LOCK TABLE`, `SELECT … FOR UPDATE`) y la mantiene hasta
+  `release()`, para parar una acción a mitad y cruzarle otra. Para parar una
+  acción entre su lectura y su escritura sirve
+  `LOCK TABLE "PeriodClosure" IN ACCESS EXCLUSIVE MODE` (la comprobación de
+  periodo cerrado va justo antes del UPDATE). Nada de esperas por tiempo: se
+  espera con `vi.waitFor` a algo observable (`sessionsWaitingForLock()`, las
+  claves del S3 falso, el estado), y el S3 falso retiene lecturas con
+  `setMode("hold")` hasta `releaseGets()`.
+- Lo que se lanza sin `await` va envuelto en `inFlight(...)`
+  (`helpers/inflight.ts`). Al acabar cada test, pase o falle, se sueltan los
+  bloqueos (la transacción caduca sola a los 20 s) y se espera a lo que quedó
+  en vuelo, para que nada escriba en los datos del test siguiente.
+- Cada carrera se ha comprobado con un mutante: quitando del código la
+  condición que protege (el `updatedAt` del rechazo, `reviewTargetWhere`,
+  el token `ocrAttempts`, `assertInvoiceAccess`...), su test falla.
 
 ## Limitaciones conocidas / deuda
 

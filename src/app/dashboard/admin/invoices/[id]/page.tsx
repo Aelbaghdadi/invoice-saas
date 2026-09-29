@@ -2,25 +2,15 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { notFound, redirect } from "next/navigation";
 import { Badge } from "@/components/ui/Badge";
+import { InvoiceStatusBadge } from "@/components/ui/InvoiceStatusBadge";
 import { ChevronLeft, Building2, Calendar, Hash, Euro, Percent, User } from "lucide-react";
 import Link from "next/link";
 import { AdminInvoiceViewer } from "./AdminInvoiceViewer";
 import { ReprocesarButton } from "./ReprocesarButton";
-import { formatAuditValue, STATUS_LABELS } from "@/lib/invoiceStatuses";
-import { formatDateEs } from "@/lib/dates";
-
-const STATUS_BADGE: Record<string, { label: string; variant: any }> = {
-  UPLOADED:  { label: "Subida",      variant: "blue" },
-  ANALYZING: { label: "En análisis", variant: "yellow" },
-  ANALYZED:  { label: "Analizada",   variant: "yellow" },
-  OCR_ERROR: { label: "Error OCR",   variant: "red" },
-  VALIDATED: { label: "Validada",    variant: "green" },
-  REJECTED:  { label: "Rechazada",   variant: "red" },
-  EXPORTED:        { label: "Exportada",      variant: "slate" },
-  PENDING_REVIEW:  { label: "Pte. revisión",  variant: "blue" },
-  NEEDS_ATTENTION: { label: "Con incidencias", variant: "yellow" },
-  SPLIT_SOURCE:    { label: "Dividida",        variant: "purple" },
-};
+import { auditFieldLabel, formatAuditValue, STATUS_LABELS } from "@/lib/invoiceStatuses";
+import { formatDateEs, formatDateTimeEs } from "@/lib/dates";
+import { formatEur } from "@/lib/format";
+import { periodLabel } from "@/lib/period";
 
 function Field({ label, value, icon: Icon }: { label: string; value?: string | null; icon?: any }) {
   return (
@@ -53,8 +43,6 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
   if (!invoice) notFound();
   if (invoice.client.advisoryFirmId !== firmId) notFound();
 
-  const s = STATUS_BADGE[invoice.status] ?? STATUS_BADGE.UPLOADED;
-
   return (
     <div>
       <Link href="/dashboard/admin/invoices" className="mb-4 flex items-center gap-1.5 text-[13px] text-slate-500 hover:text-slate-700">
@@ -66,7 +54,7 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
         <div>
           <h1 className="text-[18px] font-semibold text-slate-900">{invoice.filename}</h1>
           <div className="mt-1.5 flex items-center gap-2">
-            <Badge variant={s.variant}>{s.label}</Badge>
+            <InvoiceStatusBadge status={invoice.status} />
             <Badge variant={invoice.type === "PURCHASE" ? "blue" : "purple"}>
               {invoice.type === "PURCHASE" ? "Recibida" : "Emitida"}
             </Badge>
@@ -121,7 +109,7 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
                           <p className="mt-0.5 text-[12px] text-slate-500">{entry.reason}</p>
                         )}
                         <p className="mt-0.5 text-[11px] text-slate-400">
-                          {formatDateEs(entry.createdAt)}
+                          {formatDateTimeEs(entry.createdAt)}
                         </p>
                       </div>
                     </div>
@@ -146,14 +134,14 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
                     <div className="min-w-0 flex-1">
                       <p className="text-[13px] text-slate-700">
                         <span className="font-semibold">{log.user.name}</span> modificó{" "}
-                        <span className="font-mono text-[12px] text-slate-500">{log.field}</span>
+                        <span className="font-medium text-slate-500">{auditFieldLabel(log.field)}</span>
                       </p>
                       <p className="text-[12px] text-slate-400">
                         {formatAuditValue(log.oldValue)} → {formatAuditValue(log.newValue)}
                       </p>
                     </div>
                     <p className="flex-shrink-0 text-[11px] text-slate-400">
-                      {formatDateEs(log.createdAt)}
+                      {formatDateTimeEs(log.createdAt)}
                     </p>
                   </li>
                 ))}
@@ -173,7 +161,7 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
                 value={invoice.invoiceDate ? formatDateEs(invoice.invoiceDate) : null}
                 icon={Calendar}
               />
-              <Field label="Período" value={`${new Date(0, invoice.periodMonth - 1).toLocaleString("es", { month: "long" })} ${invoice.periodYear}`} icon={Calendar} />
+              <Field label="Periodo" value={periodLabel(invoice.periodType, invoice.periodMonth, invoice.periodYear)} icon={Calendar} />
             </div>
           </div>
 
@@ -190,10 +178,10 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
           <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <h2 className="mb-4 text-[14px] font-semibold text-slate-800">Importes</h2>
             <div className="space-y-4">
-              <Field label="Base imponible" value={invoice.taxBase ? `€${invoice.taxBase}` : null} icon={Euro} />
-              <Field label="% IVA" value={invoice.vatRate ? `${invoice.vatRate}%` : null} icon={Percent} />
-              <Field label="Cuota IVA" value={invoice.vatAmount ? `€${invoice.vatAmount}` : null} icon={Euro} />
-              <Field label="Total" value={invoice.totalAmount ? `€${invoice.totalAmount}` : null} icon={Euro} />
+              <Field label="Base imponible" value={invoice.taxBase != null ? formatEur(invoice.taxBase.toString()) : null} icon={Euro} />
+              <Field label="% IVA" value={invoice.vatRate != null ? `${Number(invoice.vatRate).toLocaleString("es-ES")}%` : null} icon={Percent} />
+              <Field label="Cuota IVA" value={invoice.vatAmount != null ? formatEur(invoice.vatAmount.toString()) : null} icon={Euro} />
+              <Field label="Total" value={invoice.totalAmount != null ? formatEur(invoice.totalAmount.toString()) : null} icon={Euro} />
             </div>
 
             {invoice.isValid !== null && (

@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { Users, Plus, Building2, Shield } from "lucide-react";
+import { Users, Plus, Building2 } from "lucide-react";
 import Link from "next/link";
 
 const AVATAR_COLORS = [
@@ -67,7 +67,7 @@ export default async function WorkersPage() {
           <table className="w-full">
             <thead>
               <tr className="border-b border-slate-100">
-                {["Gestor", "Email", "Rol", "Clientes asignados", "Acciones"].map((h) => (
+                {["Gestor", "Email", "Clientes asignados", "Acciones"].map((h) => (
                   <th key={h} className="px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                     {h}
                   </th>
@@ -87,12 +87,6 @@ export default async function WorkersPage() {
                   </td>
                   <td className="px-5 py-3.5 text-[13px] text-slate-500">{worker.email}</td>
                   <td className="px-5 py-3.5">
-                    <div className="flex items-center gap-1.5 text-[13px] text-slate-500">
-                      <Shield className="h-3.5 w-3.5 text-slate-300" />
-                      Gestor
-                    </div>
-                  </td>
-                  <td className="px-5 py-3.5">
                     <div className="flex items-center gap-1.5 text-[13px] text-slate-600">
                       <Building2 className="h-3.5 w-3.5 text-slate-400" />
                       {worker._count.assignedClients} cliente{worker._count.assignedClients !== 1 ? "s" : ""}
@@ -103,7 +97,7 @@ export default async function WorkersPage() {
                       href={`/dashboard/admin/workers/${worker.id}`}
                       className="text-[13px] font-medium text-blue-600 hover:text-blue-700"
                     >
-                      Gestionar
+                      Ver
                     </Link>
                   </td>
                 </tr>

@@ -5,18 +5,15 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ClipboardList, ArrowRight } from "lucide-react";
 import { AuditFilters } from "./AuditFilters";
-import { IntegrityCheck } from "./IntegrityCheck";
-import { formatAuditValue } from "@/lib/invoiceStatuses";
+import { auditFieldLabel, formatAuditValue } from "@/lib/invoiceStatuses";
+import { formatDateTimeEs, madridDayBounds } from "@/lib/dates";
+import { Pagination } from "@/components/ui/Pagination";
+import { parsePage, pageWindow } from "@/lib/listing";
+import Link from "next/link";
 
-const FIELD_LABELS: Record<string, string> = {
-  status: "Estado", issuerName: "Emisor", issuerCif: "CIF emisor",
-  receiverName: "Receptor", receiverCif: "CIF receptor",
-  invoiceNumber: "Nº factura", invoiceDate: "Fecha",
-  taxBase: "Base imponible", vatRate: "% IVA", vatAmount: "Cuota IVA",
-  irpfRate: "% IRPF", irpfAmount: "Cuota IRPF", totalAmount: "Total",
-  export: "Exportación", duplicate_warning: "Duplicado",
-  reexport: "Pdte. de reexportar", equivalenceSurcharge: "Recargo equiv.",
-};
+/** Registros por pagina. Mas que en facturas: son filas cortas y se leen en
+ *  secuencia. */
+const AUDIT_PAGE_SIZE = 50;
 
 function initials(name: string) {
   return name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase();
@@ -51,6 +48,7 @@ export default async function AuditLogPage({ searchParams }: Props) {
   const field = params.field ?? "";
   const dateFrom = params.from ?? "";
   const dateTo = params.to ?? "";
+  const page = parsePage(params.page);
 
   // Build where clause
   const where: Record<string, unknown> = {
@@ -60,15 +58,23 @@ export default async function AuditLogPage({ searchParams }: Props) {
   if (userId) where.userId = userId;
   if (field) where.field = field;
 
-  if (dateFrom || dateTo) {
+  // Dias de Madrid, los mismos con los que se pinta la columna Fecha: con
+  // dias UTC, un cambio de las 01:15 del 25 quedaba fuera de "Desde 25". Una
+  // fecha que no se entiende se ignora (antes daba Invalid Date y la consulta
+  // fallaba en silencio: "Sin registros").
+  const fromBounds = dateFrom ? madridDayBounds(dateFrom) : null;
+  const toBounds = dateTo ? madridDayBounds(dateTo) : null;
+  if (fromBounds || toBounds) {
     where.createdAt = {
-      ...(dateFrom ? { gte: new Date(dateFrom) } : {}),
-      ...(dateTo ? { lte: new Date(dateTo + "T23:59:59.999Z") } : {}),
+      ...(fromBounds ? { gte: fromBounds.start } : {}),
+      ...(toBounds ? { lt: toBounds.end } : {}),
     };
   }
 
   if (q) {
     where.OR = [
+      // Por numero de factura: es como se busca una factura concreta.
+      { invoice: { invoiceNumber: { contains: q, mode: "insensitive" } } },
       { invoice: { filename: { contains: q, mode: "insensitive" } } },
       { invoice: { client: { name: { contains: q, mode: "insensitive" } } } },
       { field: { contains: q, mode: "insensitive" } },
@@ -76,11 +82,17 @@ export default async function AuditLogPage({ searchParams }: Props) {
     ];
   }
 
+  // Paginado en BD. Antes se cortaba en 200 registros sin decirlo: lo mas
+  // antiguo no se podia ver y parecia que no existia.
+  const total = await prisma.auditLog.count({ where }).catch(() => 0);
+  const window = pageWindow(page, total, AUDIT_PAGE_SIZE);
+
   const [logs, allUsers, distinctFields] = await Promise.all([
     prisma.auditLog.findMany({
       where,
-      orderBy: { createdAt: "desc" },
-      take: 200,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      skip: window.skip,
+      take: window.take,
       include: {
         user: true,
         invoice: { include: { client: true } },
@@ -99,7 +111,10 @@ export default async function AuditLogPage({ searchParams }: Props) {
     }).catch(() => []),
   ]);
 
-  const fields = distinctFields.map((d) => d.field);
+  // Por nombre legible, que es lo que se lee en el desplegable.
+  const fieldOptions = distinctFields
+    .map((d) => ({ value: d.field, label: auditFieldLabel(d.field) }))
+    .sort((a, b) => a.label.localeCompare(b.label, "es"));
 
   return (
     <div>
@@ -108,9 +123,7 @@ export default async function AuditLogPage({ searchParams }: Props) {
         description="Historial completo de cambios realizados en las facturas"
       />
 
-      <IntegrityCheck />
-
-      <AuditFilters users={allUsers} fields={fields} />
+      <AuditFilters users={allUsers} fields={fieldOptions} />
 
       <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
         {logs.length === 0 ? (
@@ -124,7 +137,7 @@ export default async function AuditLogPage({ searchParams }: Props) {
         ) : (
           <div className="overflow-x-auto">
             <div className="px-5 py-3 border-b border-slate-100">
-              <p className="text-[12px] text-slate-400">{logs.length} registro{logs.length !== 1 ? "s" : ""}</p>
+              <p className="text-[12px] text-slate-400">{window.total} registro{window.total !== 1 ? "s" : ""}</p>
             </div>
             <table className="w-full">
               <thead>
@@ -138,9 +151,10 @@ export default async function AuditLogPage({ searchParams }: Props) {
                 {logs.map((log) => (
                   <tr key={log.id} className="hover:bg-slate-50/60 transition-colors">
                     <td className="px-5 py-3 text-[12px] text-slate-500 whitespace-nowrap">
-                      {log.createdAt.toLocaleDateString("es-ES", { day: "2-digit", month: "short", year: "numeric" })}
+                      {/* Hora de Madrid, no la del servidor (UTC). */}
+                      {formatDateTimeEs(log.createdAt).split(" ")[0]}
                       {" "}
-                      <span className="text-slate-400">{log.createdAt.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}</span>
+                      <span className="text-slate-400">{formatDateTimeEs(log.createdAt).split(" ")[1]}</span>
                     </td>
                     <td className="px-5 py-3">
                       <div className="flex items-center gap-2">
@@ -150,13 +164,21 @@ export default async function AuditLogPage({ searchParams }: Props) {
                         <span className="text-[13px] font-medium text-slate-700">{log.user.name}</span>
                       </div>
                     </td>
-                    <td className="px-5 py-3 max-w-[160px]">
-                      <p className="truncate text-[13px] text-slate-600">{log.invoice.filename}</p>
+                    <td className="px-5 py-3 max-w-[180px]">
+                      {/* Numero de factura y no el fichero ("Cliente3_Factura_4.pdf"
+                          no dice cual es); el fichero queda en el tooltip. */}
+                      <Link
+                        href={`/dashboard/worker/review/${log.invoice.id}`}
+                        className="block truncate text-[13px] text-slate-600 hover:text-blue-600 hover:underline"
+                        title={log.invoice.filename}
+                      >
+                        {log.invoice.invoiceNumber ?? log.invoice.filename}
+                      </Link>
                     </td>
                     <td className="px-5 py-3 text-[13px] text-slate-500">{log.invoice.client.name}</td>
                     <td className="px-5 py-3">
                       <span className="rounded-lg bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
-                        {FIELD_LABELS[log.field] ?? log.field}
+                        {auditFieldLabel(log.field)}
                       </span>
                     </td>
                     <td className="px-5 py-3">
@@ -170,6 +192,21 @@ export default async function AuditLogPage({ searchParams }: Props) {
                 ))}
               </tbody>
             </table>
+            <Pagination
+              window={window}
+              noun="registros"
+              hrefFor={(p) => {
+                const sp = new URLSearchParams();
+                if (q) sp.set("q", q);
+                if (userId) sp.set("user", userId);
+                if (field) sp.set("field", field);
+                if (dateFrom) sp.set("from", dateFrom);
+                if (dateTo) sp.set("to", dateTo);
+                if (p > 1) sp.set("page", String(p));
+                const qs = sp.toString();
+                return qs ? `/dashboard/admin/audit?${qs}` : "/dashboard/admin/audit";
+              }}
+            />
           </div>
         )}
       </div>

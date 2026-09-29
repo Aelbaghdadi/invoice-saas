@@ -23,7 +23,7 @@ export default async function ClientUploadPage() {
     <div>
       <PageHeader
         title="Subir facturas"
-        description="Carga tus facturas en PDF o XML para que sean procesadas automáticamente."
+        description="Sube tus facturas en PDF, XML o foto para que se procesen automáticamente."
       />
       <div className="max-w-2xl">
         <UploadForm clientId={client.id} />

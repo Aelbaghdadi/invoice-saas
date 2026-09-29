@@ -15,6 +15,7 @@
  */
 
 import type { InvoiceStatus } from "@prisma/client";
+import { OPERATION_TYPE_LABEL, INTRACOM_GOODS_TYPE_LABEL } from "@/lib/validators";
 
 /** Pte. de que el gestor haga algo (revisar, re-procesar o subir). */
 export const PENDING_WORK: InvoiceStatus[] = [
@@ -65,7 +66,9 @@ export const STATUS_LABELS: Record<InvoiceStatus, string> = {
   ANALYZING:        "En análisis",
   ANALYZED:         "Analizada",       // legacy
   OCR_ERROR:        "Error OCR",
-  PENDING_REVIEW:   "Pte. revisión",
+  // "Pte." no es la abreviatura de pendiente, y "Pdte." en otras pantallas.
+  // Sin abreviar es igual de corto y no hay duda.
+  PENDING_REVIEW:   "Por revisar",
   NEEDS_ATTENTION:  "Con incidencias",
   VALIDATED:        "Validada",
   REJECTED:         "Rechazada",
@@ -76,6 +79,111 @@ export const STATUS_LABELS: Record<InvoiceStatus, string> = {
   // contadores normales hasta que se asigna a su cliente real.
   PENDING_ROUTING:  "Por clasificar",
 };
+
+/** Color del distintivo de cada estado. Estaba copiado en cada pantalla, y
+ *  un estado que faltaba en una copia salia como "Subida". */
+export const STATUS_BADGE_VARIANT: Record<InvoiceStatus, "blue" | "yellow" | "green" | "slate" | "red" | "purple" | "orange"> = {
+  UPLOADED:        "blue",
+  ANALYZING:       "yellow",
+  ANALYZED:        "yellow",
+  OCR_ERROR:       "red",
+  PENDING_REVIEW:  "blue",
+  NEEDS_ATTENTION: "yellow",
+  VALIDATED:       "green",
+  REJECTED:        "red",
+  EXPORTED:        "slate",
+  SPLIT_SOURCE:    "purple",
+  PENDING_ROUTING: "orange",
+};
+
+type StatusBadge = { label: string; variant: (typeof STATUS_BADGE_VARIANT)[InvoiceStatus] };
+
+const EN_PROCESO: StatusBadge = { label: "En proceso", variant: "yellow" };
+const VALIDADA: StatusBadge = { label: "Validada", variant: "green" };
+
+/**
+ * Estado de una factura tal como lo ve el cliente. Los estados internos del
+ * gestor ("Por revisar", "Con incidencias", "Error OCR") no los puede
+ * resolver el y le alarmaban: para el todo eso es "En proceso", igual que el
+ * contador de su panel. Solo el rechazo le pide algo (subir otra version).
+ * Aqui y no en el portal porque tambien lo usa la API de subida (el aviso de
+ * duplicado lleva el estado de la factura que ya estaba).
+ */
+export const CLIENT_STATUS_BADGE: Record<InvoiceStatus, StatusBadge> = {
+  UPLOADED:        EN_PROCESO,
+  ANALYZING:       EN_PROCESO,
+  ANALYZED:        EN_PROCESO, // legacy
+  PENDING_REVIEW:  EN_PROCESO,
+  NEEDS_ATTENTION: EN_PROCESO,
+  OCR_ERROR:       EN_PROCESO,
+  PENDING_ROUTING: EN_PROCESO,
+  VALIDATED:       VALIDADA,
+  EXPORTED:        VALIDADA, // legacy: validada y ya exportada
+  REJECTED:        { label: "Rechazada", variant: "red" },
+  SPLIT_SOURCE:    { label: "Dividida", variant: "purple" },
+};
+
+/**
+ * Nombre de cada campo de la auditoria tal como lo ve el gestor. Habia tres
+ * copias que no coincidian (pantalla de auditoria, su filtro y la actividad
+ * reciente del panel) y a ninguna le constaban campos que si se auditan, asi
+ * que salian en crudo: "operationType", "isRectificative"...
+ */
+export const AUDIT_FIELD_LABELS: Record<string, string> = {
+  status: "Estado",
+  type: "Tipo (emitida/recibida)",
+  issuerName: "Emisor",
+  issuerCif: "CIF emisor",
+  receiverName: "Receptor",
+  receiverCif: "CIF receptor",
+  invoiceNumber: "Nº factura",
+  invoiceDate: "Fecha",
+  taxBase: "Base imponible",
+  vatRate: "% IVA",
+  vatAmount: "Cuota IVA",
+  irpfRate: "% IRPF",
+  irpfAmount: "Cuota IRPF",
+  totalAmount: "Total",
+  currency: "Moneda",
+  operationType: "Tipo de operación",
+  intracomGoodsType: "Bienes o servicios",
+  isRectificative: "Rectificativa",
+  rectifiedInvoiceNumber: "Factura rectificada",
+  rectificativeType: "Tipo de rectificación",
+  equivalenceSurcharge: "Recargo de equivalencia",
+  export: "Exportación",
+  reexport: "Por reexportar",
+  duplicate_warning: "Posible duplicado",
+  // Los borra «Reabrir y validar».
+  rejectionReason: "Motivo del rechazo",
+  rejectionCategory: "Categoría del rechazo",
+};
+
+/** Categorias de rechazo: el desplegable del rechazo, el aviso de una factura
+ *  ya rechazada y la auditoria dicen lo mismo. */
+export const REJECT_CATEGORY_LABEL: Record<string, string> = {
+  ILLEGIBLE: "Ilegible",
+  INCOMPLETE: "Incompleta",
+  WRONG_PERIOD: "Periodo incorrecto",
+  DUPLICATE: "Duplicada",
+  OTHER: "Otro",
+};
+
+/** Nombre legible de un campo de la auditoria (el propio nombre si no se conoce). */
+export function auditFieldLabel(field: string): string {
+  return AUDIT_FIELD_LABELS[field] ?? field;
+}
+
+/**
+ * El mismo nombre para ir dentro de una frase («cambió motivo del rechazo en
+ * …»): inicial en minuscula, salvo en siglas («CIF emisor» sigue igual).
+ */
+export function auditFieldLabelInline(field: string): string {
+  const label = auditFieldLabel(field);
+  const [first, second] = label;
+  if (!first || (second && second !== second.toLowerCase())) return label;
+  return first.toLowerCase() + label.slice(1);
+}
 
 /** Tipo de operación (emitida/recibida) para la UI. */
 export const OPERATION_LABELS: Record<string, string> = {
@@ -92,14 +200,25 @@ export const OPERATION_LABELS: Record<string, string> = {
  */
 export function formatAuditValue(value: string | null | undefined): string {
   if (value == null || value === "") return "—";
-  const reproc = value.match(/^(.+?)\s*\(reprocess\)$/i);
+  // "(reprocess masivo)" es como lo escribia el reproceso en bloque: la
+  // auditoria es inmutable y esas filas se siguen viendo.
+  const reproc = value.match(/^(.+?)\s*\(reprocess(?: masivo)?\)$/i);
   if (reproc) {
     const base = reproc[1];
     const label =
       STATUS_LABELS[base as InvoiceStatus] ?? OPERATION_LABELS[base] ?? base;
     return `${label} (reprocesar)`;
   }
-  return STATUS_LABELS[value as InvoiceStatus] ?? OPERATION_LABELS[value] ?? value;
+  if (value === "true") return "Sí";
+  if (value === "false") return "No";
+  return (
+    STATUS_LABELS[value as InvoiceStatus]
+    ?? OPERATION_LABELS[value]
+    ?? OPERATION_TYPE_LABEL[value as keyof typeof OPERATION_TYPE_LABEL]
+    ?? INTRACOM_GOODS_TYPE_LABEL[value as keyof typeof INTRACOM_GOODS_TYPE_LABEL]
+    ?? REJECT_CATEGORY_LABEL[value]
+    ?? value
+  );
 }
 
 /** Estados que impiden cerrar un periodo: facturas aun sin procesar del todo.
@@ -136,4 +255,210 @@ export function isBatchRejectable(invoice: {
 }): boolean {
   const seExporto = (invoice.exportBatchItems?.length ?? 0) > 0;
   return !seExporto && !BATCH_REJECT_EXCLUDED_STATUSES.includes(invoice.status);
+}
+
+/**
+ * Condicion con la que el OCR escribe su resultado (F-008): la factura sigue
+ * en ANALYZING y con el mismo `ocrAttempts` que dejo su claim. `ocrAttempts`
+ * hace de fencing token: si mientras analizaba alguien la rechazo, la dividio
+ * o la valido, o el cron la relanzo (otro claim, otro numero), esta ejecucion
+ * ya no es la duena y no pisa nada.
+ */
+export function ocrFenceWhere(invoiceId: string, ocrAttempts: number) {
+  return { id: invoiceId, status: "ANALYZING" as const, ocrAttempts };
+}
+
+/** Maximo de intentos de OCR que relanza el cron de rescate. */
+export const MAX_OCR_RETRIES = 3;
+
+/**
+ * Cuanto tiene que llevar una factura en ANALYZING sin tocarse para darla por
+ * parada (un redeploy o un OOM mataron el after() a mitad del OCR). Lo usan
+ * el cron, el reproceso manual y el banner de la revision: los tres tienen
+ * que coincidir o el banner ofreceria un Reprocesar que /process rechaza.
+ */
+export const STUCK_ANALYZING_MS = 5 * 60 * 1000;
+
+export function stuckAnalyzingCutoff(now: number = Date.now()): Date {
+  return new Date(now - STUCK_ANALYZING_MS);
+}
+
+/** Para la pantalla: el analisis lleva parado mas del corte. */
+export function isOcrStalled(status: InvoiceStatus, updatedAt: Date | string, now: number = Date.now()): boolean {
+  if (status !== "UPLOADED" && status !== "ANALYZING") return false;
+  return new Date(updatedAt).getTime() < stuckAnalyzingCutoff(now).getTime();
+}
+
+/**
+ * Facturas atascadas en ANALYZING: sin tocar desde `cutoff`. El cron la usa
+ * al leer y otra vez en el propio updateMany que las devuelve a UPLOADED, para
+ * no resetear una que el OCR ha terminado entre la lectura y la escritura.
+ */
+export function stuckAnalyzingWhere(cutoff: Date) {
+  return { status: "ANALYZING" as const, updatedAt: { lt: cutoff }, ocrAttempts: { lt: MAX_OCR_RETRIES } };
+}
+
+/**
+ * Paradas en ANALYZING que ya agotaron los reintentos: el cron las pasa a
+ * OCR_ERROR para que la revision se desbloquee y salga su Reprocesar.
+ */
+export function exhaustedAnalyzingWhere(cutoff: Date) {
+  return { status: "ANALYZING" as const, updatedAt: { lt: cutoff }, ocrAttempts: { gte: MAX_OCR_RETRIES } };
+}
+
+/**
+ * Reproceso manual de una parada en ANALYZING, sin limite de intentos: la
+ * ejecucion colgada, si despierta, queda vallada por ocrAttempts.
+ */
+export function manualStuckAnalyzingWhere(invoiceId: string, cutoff: Date) {
+  return { id: invoiceId, status: "ANALYZING" as const, updatedAt: { lt: cutoff } };
+}
+
+export const OCR_RETRIES_EXHAUSTED_ERROR = "Se agotaron los reintentos del análisis";
+
+// ── Estados de origen de las acciones de la revision (F-015, F-008) ──────────
+
+/** Acciones del gestor sobre una factura en la pantalla de revision. */
+export type ReviewAction = "save" | "validate" | "reject" | "split";
+
+// Sale de STATUS_LABELS (Record<InvoiceStatus, …>): un estado nuevo en el
+// enum no compila hasta tener etiqueta, y entonces entra aqui solo.
+const ALL_STATUSES = Object.keys(STATUS_LABELS) as InvoiceStatus[];
+
+/**
+ * Estados en los que no se guarda, valida, rechaza ni divide:
+ *  - UPLOADED / ANALYZING: el OCR en curso pisaria el cambio al terminar, o el
+ *    cambio pisaria lo que el OCR aun no ha escrito.
+ *  - SPLIT_SOURCE: la original de una division; lo que vale son sus hijas.
+ *    Validarla contabilizaria dos veces.
+ *  - PENDING_ROUTING: aun sin cliente real; se clasifica en su pantalla.
+ */
+export const REVIEW_LOCKED_STATUSES: InvoiceStatus[] = [
+  "UPLOADED", "ANALYZING", "SPLIT_SOURCE", "PENDING_ROUTING",
+];
+
+/**
+ * Estados desde los que el servidor acepta la accion. Va en el propio
+ * updateMany (status: { in }), no solo en una lectura previa: entre leer y
+ * escribir la factura puede haber pasado a otro estado.
+ *
+ * Una REJECTED solo se valida con `reopen` ("Reabrir y validar", explicito),
+ * y entonces solo desde REJECTED.
+ */
+export function reviewAllowedFrom(action: ReviewAction, options: { reopen?: boolean } = {}): InvoiceStatus[] {
+  const open = ALL_STATUSES.filter((s) => !REVIEW_LOCKED_STATUSES.includes(s));
+  switch (action) {
+    case "save":
+      return open;
+    case "validate":
+      return options.reopen ? ["REJECTED"] : open.filter((s) => s !== "REJECTED");
+    case "reject":
+    case "split":
+      // EXPORTED es legacy: ya esta en la contabilidad del cliente.
+      return open.filter((s) => s !== "REJECTED" && s !== "EXPORTED");
+  }
+}
+
+const ACTION_VERB: Record<ReviewAction, string> = {
+  save: "guardar",
+  validate: "validar",
+  reject: "rechazar",
+  split: "dividir",
+};
+
+/** Por que no se puede hacer la accion en ese estado, o null si se puede. */
+export function reviewActionBlockReason(
+  status: InvoiceStatus,
+  action: ReviewAction,
+  options: { reopen?: boolean } = {},
+): string | null {
+  if (reviewAllowedFrom(action, options).includes(status)) return null;
+  switch (status) {
+    case "UPLOADED":
+    case "ANALYZING":
+      return "La factura se está analizando: espera a que termine el análisis para cambiarla.";
+    case "SPLIT_SOURCE":
+      return "Esta factura se dividió en otras y es solo de consulta: trabaja con las facturas que salieron de ella.";
+    case "PENDING_ROUTING":
+      return "Esta factura está por clasificar: asígnale su cliente en «Por clasificar» antes de revisarla.";
+    case "REJECTED":
+      if (action === "validate") return "La factura está rechazada: para validarla usa «Reabrir y validar».";
+      if (action === "reject") return "Esta factura ya está rechazada.";
+      return `La factura está rechazada: no se puede ${ACTION_VERB[action]}.`;
+    case "EXPORTED":
+      return `Esta factura ya se exportó a A3 y no se puede ${ACTION_VERB[action]}.`;
+    default:
+      return options.reopen && action === "validate"
+        ? "La factura ya no está rechazada. Recarga la página para ver cómo está ahora."
+        : `No se puede ${ACTION_VERB[action]} esta factura en su estado actual. Recarga la página.`;
+  }
+}
+
+/**
+ * Motivo por el que la pantalla de revision no deja guardar, validar,
+ * rechazar ni dividir la factura, o null si esta abierta. Es el mismo texto
+ * que devuelve el servidor, para el title de los botones.
+ */
+export function reviewLockReason(status: InvoiceStatus): string | null {
+  return REVIEW_LOCKED_STATUSES.includes(status) ? reviewActionBlockReason(status, "save") : null;
+}
+
+/**
+ * Solo de consulta: la original de una division (se trabaja con sus hijas) y
+ * la que esta por clasificar (primero se le asigna cliente). Las que se estan
+ * analizando no: en cuanto termina el OCR se pueden revisar.
+ */
+export function isReviewReadOnly(status: InvoiceStatus): boolean {
+  return status === "SPLIT_SOURCE" || status === "PENDING_ROUTING";
+}
+
+// ── Condiciones de la factura, no solo de su estado ─────────────────────────
+
+/** Lo que hay que saber de la factura, ademas del estado, para validarla. */
+export type ReviewTarget = {
+  /** Id de la version corregida que subio el cliente, si la hay. */
+  replacedById: string | null;
+  /** Esta en el cliente tecnico del buzon «Sin clasificar». */
+  isUnclassifiedBucket: boolean;
+  /** Facturas que salieron de esta al dividirla (solo cuenta para dividir). */
+  splitChildren?: number;
+};
+
+export const ALREADY_SPLIT_ERROR = "Esta factura ya se dividió: trabaja con las facturas que salieron de ella.";
+
+export const UNCLASSIFIED_VALIDATE_ERROR = "Esta factura está en «Sin clasificar» y no tiene cliente: no se puede validar.";
+
+export const REPLACED_REOPEN_ERROR = "El cliente ya subió una versión corregida de esta factura: valida esa en su lugar.";
+
+/**
+ * Motivo por el que no se puede hacer la accion aunque el estado lo permita,
+ * o null.
+ *  - Una del buzon «Sin clasificar» (p. ej. una descartada al clasificar que
+ *    se reabre) no se valida: quedaria VALIDATED en el cliente tecnico, que
+ *    no sale en ningun listado ni en el export.
+ *  - Una rechazada que el cliente ya sustituyo (su version corregida lleva
+ *    replacesId = esta) no se reabre: irian las dos a A3.
+ */
+export function reviewTargetBlockReason(
+  action: ReviewAction,
+  target: ReviewTarget,
+  options: { reopen?: boolean } = {},
+): string | null {
+  // Una original con hijas (VALIDATED de antes de la reserva) no se vuelve a
+  // dividir: saldrian C3 y C4 ademas de C1 y C2, y doble computo.
+  if (action === "split") return (target.splitChildren ?? 0) > 0 ? ALREADY_SPLIT_ERROR : null;
+  if (action !== "validate") return null;
+  if (target.isUnclassifiedBucket) return UNCLASSIFIED_VALIDATE_ERROR;
+  if (options.reopen && target.replacedById) return REPLACED_REOPEN_ERROR;
+  return null;
+}
+
+/** La misma condicion, para el where del updateMany. */
+export function reviewTargetWhere(action: ReviewAction, options: { reopen?: boolean } = {}) {
+  if (action === "split") return { splitInvoices: { none: {} } };
+  if (action !== "validate") return {};
+  return {
+    client: { isUnclassifiedBucket: false },
+    ...(options.reopen ? { replacedBy: { is: null } } : {}),
+  };
 }

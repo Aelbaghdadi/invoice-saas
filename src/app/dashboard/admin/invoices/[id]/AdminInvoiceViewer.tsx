@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Loader2, FileText, Image as ImageIcon, ExternalLink } from "lucide-react";
+import { Loader2, FileText, Image as ImageIcon, Download } from "lucide-react";
 import PdfViewer from "@/components/ui/PdfViewerDynamic";
+import ImageViewer from "@/components/ui/ImageViewer";
 
 type Props = { invoiceId: string; fileType: string; filename: string };
 
@@ -36,12 +37,11 @@ export function AdminInvoiceViewer({ invoiceId, fileType, filename }: Props) {
         {url && (
           <a
             href={url}
-            target="_blank"
-            rel="noreferrer"
+            download
             className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-blue-700"
           >
-            <ExternalLink className="h-3.5 w-3.5" />
-            Abrir archivo
+            <Download className="h-3.5 w-3.5" />
+            Descargar archivo
           </a>
         )}
       </div>
@@ -57,19 +57,12 @@ export function AdminInvoiceViewer({ invoiceId, fileType, filename }: Props) {
     );
   }
 
-  if (isImage) {
-    return (
-      <div className="flex h-full items-center justify-center overflow-auto bg-[#1e1e2e] p-6">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={url}
-          alt={filename}
-          className="max-h-full max-w-full rounded-lg shadow-2xl object-contain"
-        />
-      </div>
-    );
-  }
-
-  // PDF
-  return <PdfViewer url={url} />;
+  // Los visores crecen con flex-1: necesitan un padre flex con alto fijo.
+  // Colgados directamente del contenedor de 600 px de la ficha, el PDF
+  // ampliado se cortaba por abajo sin scroll.
+  return (
+    <div className="flex h-full flex-col">
+      {isImage ? <ImageViewer url={url} alt={filename} /> : <PdfViewer url={url} />}
+    </div>
+  );
 }

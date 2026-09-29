@@ -8,11 +8,15 @@ import {
   taxIdWithCountry,
   type OperationTypeName,
 } from "@/lib/validators";
-import { isForeignCurrency } from "@/lib/currency";
+import { currencyProblem, missingDataProblems, type RuleInvoice } from "@/lib/invoiceRules";
 import { goodsTypeFromSaleAccount } from "@/lib/intracomGoods";
-import { invoiceBalanceDiffCents } from "@/lib/invoiceBalance";
+import { invoiceBalanceDiffCents, isInvoiceBalanced } from "@/lib/invoiceBalance";
+import { describeVatLineMismatch, vatLineMismatches, type CheckedLine } from "@/lib/vatLineChecks";
+import { toCents } from "@/lib/money";
+import { formatEur } from "@/lib/format";
 import { findNumberingGaps } from "@/lib/invoiceNumbering";
 import { isStandardVatRate, isSurchargeRate } from "@/lib/equivalenceSurcharge";
+import { exportExclusionReason, type ExportExclusionBox, type ExportExclusionReason } from "@/lib/exportExclusions";
 
 export type ExportFormat = "sage50" | "contasol" | "a3con" | "a3excel";
 
@@ -24,6 +28,8 @@ export type ExportConfig = {
 
 export type InvoiceWithClient = Invoice & {
   client: Client;
+  /** Cuantas hijas tiene si se dividio: la original no va al Excel. */
+  _count?: { splitInvoices?: number };
   /** Desglose por tipo de IVA. Cuando esta presente y tiene >0 elementos,
    *  los exportadores emiten una fila por linea (a3 asesor "repetir fila
    *  cambiando %IVA y cuota"). Cuando esta vacio se cae a los campos
@@ -62,6 +68,29 @@ function getExportLines(inv: InvoiceWithClient): ExportVatLine[] {
     equivalenceSurchargeRate: 0,
     equivalenceSurchargeAmount: 0,
   }];
+}
+
+/** ¿Todo a 0? Bases, cuotas, recargo y retencion. Solo asi una rectificativa
+ *  a cero no tiene nada que llevar a A3 (revision 2 del PR #7). */
+function allAmountsZero(inv: InvoiceWithClient): boolean {
+  const zero = (v: number | null | undefined) => v == null || toCents(Number(v)) === 0;
+  return checkedLines(inv).every((l) =>
+    zero(l.taxBase) && zero(l.vatAmount) && zero(l.equivalenceSurchargeAmount))
+    && zero(inv.irpfAmount == null ? null : Number(inv.irpfAmount));
+}
+
+/** Lineas para vatLineMismatches: como getExportLines, pero sin convertir
+ *  en 0 un recargo que no esta (null). Con 0, una cuota de recargo sin % daba
+ *  «la base × 0 % da 0,00 €» en el export mientras el formulario callaba. */
+function checkedLines(inv: InvoiceWithClient): CheckedLine[] {
+  if (!inv.vatLines || inv.vatLines.length === 0) return getExportLines(inv);
+  return inv.vatLines.map((l) => ({
+    taxBase: Number(l.taxBase),
+    vatRate: Number(l.vatRate),
+    vatAmount: Number(l.vatAmount),
+    equivalenceSurchargeRate: l.equivalenceSurchargeRate == null ? null : Number(l.equivalenceSurchargeRate),
+    equivalenceSurchargeAmount: l.equivalenceSurchargeAmount == null ? null : Number(l.equivalenceSurchargeAmount),
+  }));
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -182,10 +211,24 @@ export function suggestFilename(
   month: number,
   year: number,
 ): string {
-  const clientName = invoices[0]?.client.name.replace(/\s+/g, "_") ?? "cliente";
+  return exportFilename(invoices[0]?.client.name ?? null, format, month, year);
+}
+
+/** Nombre del fichero de un export a partir del cliente y el periodo. Lo usa
+ *  tambien "Volver a descargar", que ya no tiene las facturas a mano. */
+export function exportFilename(
+  clientName: string | null,
+  format: ExportFormat,
+  month: number,
+  year: number,
+): string {
+  const name = clientName?.replace(/\s+/g, "_") ?? "cliente";
   const mm = String(month).padStart(2, "0");
-  const ext = format === "a3excel" ? "xlsx" : "csv";
-  return `facturas_${clientName}_${year}-${mm}_${format}.${ext}`;
+  return `facturas_${name}_${year}-${mm}_${format}.${exportExtension(format)}`;
+}
+
+export function exportExtension(format: ExportFormat): "xlsx" | "csv" {
+  return format === "a3excel" ? "xlsx" : "csv";
 }
 
 // ─── A3 Excel export (.xlsx) ────────────────────────────────────────────────
@@ -272,23 +315,135 @@ function buildA3Row(
   ];
 }
 
+export type A3Severity = "bloqueante" | "aviso" | "fuera";
+
 export type A3ValidationWarning = {
   invoiceId: string;
   invoiceNumber: string | null;
+  /** bloqueante: no entra en el fichero ni se marca como exportada hasta que
+   *  se corrija. fuera: tampoco entra, pero no hay nada que corregir (la
+   *  original de una division, una rectificativa a cero); su texto va en
+   *  warnings. aviso: entra, pero conviene mirarlo. */
+  severity: A3Severity;
+  /** Por que se queda fuera (vacio si solo tiene avisos). */
+  blockers: string[];
+  /** Lo que conviene mirar pero no impide exportarla. */
   warnings: string[];
+  /** Lleva un aviso de salto de numeracion: solo lo calcula el export, asi
+   *  que la vista previa lo manda siempre, aunque recorte los demas avisos. */
+  numberingGap?: boolean;
 };
 
-/** Validate invoices before A3 export, returns warnings (non-blocking) */
+function ruleInvoice(inv: InvoiceWithClient): RuleInvoice {
+  const isPurchase = inv.type === "PURCHASE";
+  return {
+    type: isPurchase ? "PURCHASE" : "SALE",
+    invoiceNumber: inv.invoiceNumber,
+    invoiceDate: inv.invoiceDate,
+    totalAmount: inv.totalAmount == null ? null : Number(inv.totalAmount),
+    irpfAmount: inv.irpfAmount == null ? null : Number(inv.irpfAmount),
+    lines: getExportLines(inv),
+    isRectificative: Boolean(inv.isRectificative),
+    thirdPartyTaxId: isPurchase ? inv.issuerCif : inv.receiverCif,
+    thirdPartyCountry: (isPurchase ? inv.issuerCountry : inv.receiverCountry) ?? null,
+    operationType: inv.operationType ?? null,
+    supplierAccount: inv.supplierAccount,
+    expenseAccount: inv.expenseAccount,
+    simplifiedSupplierAccount: inv.client?.simplifiedSupplierAccount ?? null,
+    currency: inv.currency ?? null,
+  };
+}
+
+/**
+ * Lo que impide exportar una factura (F-025): los mismos datos minimos que
+ * exige validar (invoiceRules). Una validada antes de estas reglas puede no
+ * tenerlos: se queda fuera del fichero y sin marcar, igual que las de total
+ * 0, hasta que se corrija.
+ *
+ * El descuadre NO bloquea a proposito: las validadas antes del PR #7 se
+ * validaron con una tolerancia de 2 centimos, y A3 no recibe el total
+ * (calcula el asiento con base, cuota y retencion), asi que el fichero sale
+ * bien. Se queda como aviso.
+ *
+ * El NIF usa el mismo texto que validar (con la pista de la cuenta generica),
+ * para no confundirlo con el aviso «Sin NIF: en esta operación no es
+ * obligatorio...» de las que pueden ir sin el.
+ */
+export function a3BlockingProblems(inv: InvoiceWithClient): string[] {
+  const rule = ruleInvoice(inv);
+  const isPurchase = rule.type === "PURCHASE";
+  const blockers: string[] = [];
+  const currency = currencyProblem(rule);
+  if (currency) blockers.push(`Importes en ${inv.currency}: A3 solo admite euros. Conviértelos y márcala en euros en la revisión`);
+  for (const problem of missingDataProblems(rule)) {
+    switch (problem.rule) {
+      case "sin_nif":
+      case "sin_nif_iva":
+        // El export solo lo usa un administrador: no puede mandarle a
+        // «pedir a un administrador» que configure la generica.
+        blockers.push(problem.message
+          .replace("pide a un administrador que configure la cuenta genérica del cliente", "configura la cuenta genérica en la ficha del cliente")
+          .replace(/\.$/, ""));
+        break;
+      case "sin_numero":
+        blockers.push("Número de factura vacío");
+        break;
+      case "sin_fecha":
+        blockers.push("Fecha vacía");
+        break;
+      case "sin_lineas":
+        blockers.push("Sin líneas de IVA con base distinta de 0");
+        break;
+      case "sin_total":
+        blockers.push("Total vacío");
+        break;
+      case "sin_cuentas":
+        if (!inv.supplierAccount?.trim()) blockers.push(isPurchase ? "Sin cuenta proveedor" : "Sin cuenta cliente");
+        if (!inv.expenseAccount?.trim()) blockers.push(isPurchase ? "Sin cuenta gasto" : "Sin cuenta ingreso");
+        break;
+    }
+  }
+  return blockers;
+}
+
+/**
+ * Revisa las facturas antes de exportar. Una entrada por factura con algo
+ * que decir, con su severidad: «bloqueante» (no entra en el fichero hasta
+ * que se corrija), «aviso» (entra) o «fuera» (no entra y no hay nada que
+ * corregir: la original de una division, una rectificativa todo a cero).
+ * Primero las bloqueantes, luego los avisos y al final las de fuera; dentro
+ * de cada una, en el orden de las facturas. Sin recortar: eso lo hace la
+ * vista previa.
+ */
 export function validateForA3Export(invoices: InvoiceWithClient[]): A3ValidationWarning[] {
   const results: A3ValidationWarning[] = [];
 
   for (const inv of invoices) {
+    // Lo que no hace falta llevar a A3 no se revisa ni va a la caja roja
+    // (revision 1 del PR #7): la original de una division (van sus hijas) y
+    // una rectificativa a cero (A3 no acepta importes cero).
+    const outside = a3ExclusionReason(inv);
+    if (a3ExclusionBox(inv) === "fuera") {
+      results.push({
+        invoiceId: inv.id, invoiceNumber: inv.invoiceNumber, severity: "fuera", blockers: [],
+        warnings: [outside === "dividida"
+          ? "Es la original de una división: van al Excel las facturas que salieron de ella, no esta"
+          : "Rectificativa con total 0: no va al Excel (A3 no acepta importes cero)"],
+      });
+      continue;
+    }
+    const blockers = a3BlockingProblems(inv);
     const warnings: string[] = [];
     const isPurchase = inv.type === "PURCHASE";
     const nif = isPurchase ? inv.issuerCif : inv.receiverCif;
     const country = isPurchase ? inv.issuerCountry : inv.receiverCountry;
 
-    if (!nif) warnings.push("NIF vacío");
+    // Sin NIF donde no es obligatorio (ventas nacionales, importaciones,
+    // inversion del sujeto pasivo, tickets con la cuenta generica) no
+    // bloquea: se avisa. En intracomunitarias si bloquea (NIF-IVA, arriba).
+    if (!nif && !blockers.some((b) => b.includes("NIF"))) {
+      warnings.push("Sin NIF: en esta operación no es obligatorio, pero irá a A3 sin NIF");
+    }
 
     // El codigo de la columna G sale de un mapa unico compartido por las dos
     // hojas, pero en expedidas los codigos significan otra cosa: el 4 es
@@ -303,9 +458,6 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
         + `(exportaría el código ${OPERATION_TYPE_CODE[inv.operationType as OperationTypeName]}, que en expedidas significa otra cosa)`,
       );
     }
-    if (!inv.invoiceDate) warnings.push("Fecha vacía");
-    if (!inv.supplierAccount) warnings.push(isPurchase ? "Sin cuenta proveedor" : "Sin cuenta cliente");
-    if (!inv.expenseAccount) warnings.push(isPurchase ? "Sin cuenta gasto" : "Sin cuenta ingreso");
 
     // Intracomunitaria con IVA declarado: mismo aviso que en revision, pero
     // aqui es la ultima linea de defensa antes de que el fichero salga hacia
@@ -318,16 +470,8 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
       if (Math.abs(sumVat) > 0.01) {
         warnings.push("Operación intracomunitaria con IVA declarado (debería ir a 0%)");
       }
-      // El pais solo se detecta si el prefijo venia IMPRESO en la factura.
-      // Una portuguesa que ponga "NIF 515160873" a secas se guarda sin pais y
-      // sale sin prefijo, que es justo lo que A3 rechaza. El gestor lo arregla
-      // tecleando el prefijo en la revision (parseTaxId lo vuelve a separar).
-      if (!country || country.trim() === "ES") {
-        warnings.push(
-          "Operación intracomunitaria sin país en el NIF: A3 la rechazará "
-          + "(«el NIF no existe en la tabla»). Corrige el NIF en la revisión con su prefijo, p.ej. PT515160873",
-        );
-      }
+      // Sin pais en el NIF (la portuguesa que imprime "NIF 515160873" a
+      // secas) es bloqueante: lo pone a3BlockingProblems (sin_nif_iva).
     }
     // Prefijo extranjero con operacion Interior: el NIF sale con prefijo pero
     // la columna G va a 1, y el 303/349 sale mal. Uno de los dos esta mal.
@@ -360,16 +504,15 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
       }
     }
 
-    if (isForeignCurrency(inv.currency)) {
-      warnings.push(`Importes en ${inv.currency}: A3 solo admite euros. Conviértelos y márcala en euros en la revisión`);
-    }
-
-    // Total = 0: A3 rechaza asientos de valor cero. Lo marcamos como
-    // warning serio para que el gestor o lo corrija o lo excluya del
-    // export. En `generateA3Excel` se filtra fuera automáticamente.
+    // Se queda fuera del fichero (ver a3ExclusionReason): no se marca como
+    // exportada y sigue pendiente hasta que se corrija.
     const totalNum = Number(inv.totalAmount ?? 0);
-    if (Math.abs(totalNum) < 0.005) {
-      warnings.push("Total = 0 (excluida del export — A3 no acepta importes cero)");
+    if (outside === "total_cero") {
+      // Una rectificativa a cero con importes (-100 al 21 % y +110 al 10 %)
+      // cuadra, pero A3 nunca recibiria esos importes del 303.
+      blockers.unshift(inv.isRectificative
+        ? "Rectificativa con total 0 pero con importes en las líneas: revísala"
+        : "Total = 0: no entra en el Excel ni se marca como exportada (A3 no acepta importes cero). Corrígela en la revisión");
     }
 
     // Un "tipo de IVA" que en realidad es el del recargo (5,2 / 1,4 / 0,5)
@@ -388,6 +531,19 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
       );
     }
 
+    // Cada cuota tiene que ser su base × % (F-022): el total no lo ve si las
+    // cuotas estan cruzadas entre tipos, y A3 se lleva el desglose tal cual.
+    for (const m of vatLineMismatches(checkedLines(inv), inv.operationType)) {
+      warnings.push(describeVatLineMismatch(m));
+    }
+    // Cuota de recargo sin %: vatLineMismatches no la mira (no hay % con el
+    // que comparar), pero a A3 le llegaria M = 0 y N = la cuota.
+    checkedLines(inv).forEach((l, i) => {
+      if (l.equivalenceSurchargeRate == null && l.equivalenceSurchargeAmount != null && toCents(l.equivalenceSurchargeAmount) !== 0) {
+        warnings.push(`Línea ${i + 1}: cuota de recargo sin %: A3 recibirá 0 %`);
+      }
+    });
+
     // Base + IVA + Recargo - IRPF = Total. Suma sobre las lineas si las hay.
     if (inv.totalAmount && Math.abs(totalNum) >= 0.005) {
       const lines = getExportLines(inv);
@@ -396,29 +552,44 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
       const sumSurcharge = lines.reduce((s, l) => s + l.equivalenceSurchargeAmount, 0);
       const irpf    = inv.irpfAmount ? Number(inv.irpfAmount) : 0;
       if (Math.abs(sumBase) > 0 || Math.abs(sumAmt) > 0) {
-        const diff = Math.abs(invoiceBalanceDiffCents({
-          sumBase, sumAmount: sumAmt, sumSurcharge, irpf, total: totalNum,
-        }));
-        if (diff > 0) warnings.push(`Descuadre Base+IVA vs Total: ${(diff / 100).toFixed(2)}`);
+        const balance = { sumBase, sumAmount: sumAmt, sumSurcharge, irpf, total: totalNum };
+        if (!isInvoiceBalanced(balance)) {
+          warnings.push(`Descuadre Base+IVA vs Total: ${formatEur(Math.abs(invoiceBalanceDiffCents(balance)) / 100)}`);
+        }
       }
     }
 
-    if (warnings.length > 0) {
-      results.push({ invoiceId: inv.id, invoiceNumber: inv.invoiceNumber, warnings });
+    if (blockers.length > 0 || warnings.length > 0) {
+      results.push({
+        invoiceId: inv.id, invoiceNumber: inv.invoiceNumber,
+        severity: blockers.length > 0 ? "bloqueante" : "aviso",
+        blockers, warnings,
+      });
     }
   }
 
-  // Huecos en la numeracion: siempre por EMISOR (quien numera) + sentido:
-  // en recibidas cada proveedor lleva su secuencia y en emitidas es la del
-  // propio cliente. Sin NIF no hay grupo fiable donde ubicarla (ya avisa
-  // "NIF vacío" por separado).
+  // Huecos en la numeracion: SOLO en emitidas.
+  //
+  // Las emitidas las numera el propio cliente y tienen que ir correlativas,
+  // asi que un salto es una factura que falta o un numero que se salto al
+  // emitirla. En las recibidas no: cada proveedor numera para TODOS sus
+  // clientes a la vez, asi que entre dos facturas suyas hay saltos siempre
+  // (Galma le factura a un monton de tiendas y entre una suya y la siguiente
+  // se cuelan 30 de otras). Avisar de eso era ruido en cada exportacion.
+  // Confirmado por el asesor el 2026-09-24.
+  //
+  // Se agrupa por emisor, que en emitidas es el propio cliente: una asesoria
+  // exporta varios clientes a la vez y cada uno lleva su numeracion. Sin NIF
+  // no hay grupo fiable (la falta de NIF ya se avisa o bloquea por separado).
+  // Map en vez de results.find: con miles de facturas era cuadratico.
+  const byInvoiceId = new Map(results.map((r) => [r.invoiceId, r]));
   const bySeries = new Map<string, InvoiceWithClient[]>();
   for (const inv of invoices) {
+    if (inv.type !== "SALE") continue;
     if (!inv.issuerCif) continue;
-    const key = `${inv.type}:${inv.issuerCif}`;
-    const list = bySeries.get(key) ?? [];
+    const list = bySeries.get(inv.issuerCif) ?? [];
     list.push(inv);
-    bySeries.set(key, list);
+    bySeries.set(inv.issuerCif, list);
   }
   for (const group of bySeries.values()) {
     const gaps = findNumberingGaps(group.map((i) => ({ id: i.id, invoiceNumber: i.invoiceNumber })));
@@ -431,16 +602,77 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
       const more = gap.missing.length > shown.length ? ` (y ${gap.missing.length - shown.length} más)` : "";
       const who = `${inv.issuerName ?? "el emisor"} (${inv.issuerCif})`;
       const warning =
-        `Salto de numeración de ${who}: entre la ${gap.previousNumber} y la ${inv.invoiceNumber} `
+        `Salto de numeración en las facturas emitidas de ${who}: entre la ${gap.previousNumber} y la ${inv.invoiceNumber} `
         + `${gap.missing.length === 1 ? "falta la factura" : "faltan las facturas"} ${list}${more}. `
-        + `Revisa si falta subirla o si el emisor se saltó el número`;
-      const existing = results.find((r) => r.invoiceId === invoiceId);
-      if (existing) existing.warnings.push(warning);
-      else results.push({ invoiceId, invoiceNumber: inv.invoiceNumber, warnings: [warning] });
+        + `Revisa si falta subirla o si se saltó el número al emitirla`;
+      const existing = byInvoiceId.get(invoiceId);
+      // De una «fuera» no puede colgar: saldria en la caja gris, bajo «no hay
+      // nada que corregir». Va en una entrada de aviso aparte.
+      if (existing && existing.severity !== "fuera") {
+        existing.warnings.push(warning);
+        existing.numberingGap = true;
+      } else {
+        const entry: A3ValidationWarning = {
+          invoiceId, invoiceNumber: inv.invoiceNumber, severity: "aviso", blockers: [], warnings: [warning], numberingGap: true,
+        };
+        results.push(entry);
+        if (!existing) byInvoiceId.set(invoiceId, entry);
+      }
     }
   }
 
-  return results;
+  // En el orden de las facturas: las entradas de los saltos se anadian al
+  // final y el recorte de la vista previa se las llevaba las primeras.
+  const position = new Map(invoices.map((inv, i) => [inv.id, i]));
+  results.sort((a, b) => (position.get(a.invoiceId) ?? 0) - (position.get(b.invoiceId) ?? 0));
+
+  // Estable: dentro de cada gravedad se mantiene el orden de las facturas.
+  return [
+    ...results.filter((r) => r.severity === "bloqueante"),
+    ...results.filter((r) => r.severity === "aviso"),
+    ...results.filter((r) => r.severity === "fuera"),
+  ];
+}
+
+/**
+ * Por que una factura se queda fuera del Excel de A3, o null si entra:
+ *  - total_cero: A3 rechaza asientos de importe cero (puede pasar cuando una
+ *    rectificativa anula exactamente a la original y se exportan juntas).
+ *  - dividida: es la original de una division; van las facturas que
+ *    salieron de ella, o contaria dos veces.
+ *  - bloqueante: le falta algo de a3BlockingProblems (F-025).
+ */
+export function a3ExclusionReason(inv: InvoiceWithClient): ExportExclusionReason | null {
+  return exportExclusionReason(inv) ?? (a3BlockingProblems(inv).length > 0 ? "bloqueante" : null);
+}
+
+/** En que caja va una excluida (ver ExportExclusionBox), o null si entra en
+ *  el fichero. Es la misma decision que da severidad «fuera» en
+ *  validateForA3Export. */
+export function a3ExclusionBox(inv: InvoiceWithClient): ExportExclusionBox | null {
+  const reason = a3ExclusionReason(inv);
+  if (!reason) return null;
+  if (reason === "dividida") return "fuera";
+  if (reason === "total_cero" && inv.isRectificative && allAmountsZero(inv)) return "fuera";
+  return "corregir";
+}
+
+/**
+ * Separa lo que entra en el Excel de lo que no. La usan el generador y la
+ * ruta de exportacion: solo lo que va en el fichero se marca como exportado
+ * y entra en el lote (F-009).
+ */
+export function partitionA3Exportable<T extends InvoiceWithClient>(
+  invoices: T[],
+): { exportable: T[]; excluded: { invoice: T; reason: ExportExclusionReason }[] } {
+  const exportable: T[] = [];
+  const excluded: { invoice: T; reason: ExportExclusionReason }[] = [];
+  for (const invoice of invoices) {
+    const reason = a3ExclusionReason(invoice);
+    if (reason) excluded.push({ invoice, reason });
+    else exportable.push(invoice);
+  }
+  return { exportable, excluded };
 }
 
 /** Generate A3 Excel workbook as Buffer */
@@ -450,14 +682,9 @@ export function generateA3Excel(
 ): Buffer {
   const wb = XLSX.utils.book_new();
 
-  // Filtrar facturas con total = 0: A3 rechaza asientos de importe cero
-  // (puede pasar cuando una rectificativa anula exactamente a la original
-  // y se intentan exportar juntas). El gestor recibe el warning previo
-  // en validateForA3Export para que sepa lo que ha pasado.
-  const exportable = invoices.filter((i) => {
-    const total = Number(i.totalAmount ?? 0);
-    return Math.abs(total) >= 0.005;
-  });
+  // Las excluidas (ver a3ExclusionReason) no salen en el fichero; el gestor
+  // las ve antes en los avisos de validateForA3Export.
+  const { exportable } = partitionA3Exportable(invoices);
 
   const purchases = exportable.filter((i) => i.type === "PURCHASE");
   const sales = exportable.filter((i) => i.type === "SALE");

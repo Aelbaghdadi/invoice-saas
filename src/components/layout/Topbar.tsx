@@ -28,6 +28,8 @@ const ROUTE_LABELS: Record<string, string> = {
   "/dashboard/worker/invoices":    "Facturas",
   "/dashboard/worker/upload":      "Subir facturas",
   "/dashboard/worker/batch":       "Lotes",
+  "/dashboard/worker/clasificar":  "Por clasificar",
+  "/dashboard/worker/groups":      "Grupos de empresas",
   "/dashboard/worker/issues":      "Incidencias",
   "/dashboard/worker/review":      "Revisión",
   "/dashboard/client":             "Panel de control",
@@ -49,7 +51,7 @@ function pageTitleFrom(pathname: string): string {
     const candidate = "/" + segments.slice(0, i).join("/");
     if (ROUTE_LABELS[candidate]) return ROUTE_LABELS[candidate];
   }
-  return "Dashboard";
+  return "Panel";
 }
 
 export function Topbar({ userName, onMenuClick }: TopbarProps) {
@@ -66,11 +68,14 @@ export function Topbar({ userName, onMenuClick }: TopbarProps) {
     .toUpperCase();
 
   // Fecha del día como detalle de cabecera (sin lógica: solo informativo).
-  const today = new Date().toLocaleDateString("es-ES", {
+  // Mayúscula solo en la primera letra: con `capitalize` salía
+  // "Jueves, 25 De Septiembre".
+  const weekdayDate = new Date().toLocaleDateString("es-ES", {
     weekday: "long",
     day: "numeric",
     month: "long",
   });
+  const today = weekdayDate.charAt(0).toUpperCase() + weekdayDate.slice(1);
 
   return (
     <header className="relative z-30 flex h-14 flex-shrink-0 items-center justify-between border-b border-slate-200/70 bg-white px-3 shadow-[0_1px_3px_rgb(2_15_40_/_0.03)] sm:px-6">
@@ -79,7 +84,7 @@ export function Topbar({ userName, onMenuClick }: TopbarProps) {
         <button
           onClick={onMenuClick}
           className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 lg:hidden"
-          aria-label="Abrir menu"
+          aria-label="Abrir menú"
         >
           <Menu className="h-4.5 w-4.5" />
         </button>
@@ -101,7 +106,7 @@ export function Topbar({ userName, onMenuClick }: TopbarProps) {
       <div className="flex items-center gap-3">
         <span
           suppressHydrationWarning
-          className="hidden text-[12px] capitalize text-slate-400 md:block"
+          className="hidden text-[12px] text-slate-400 md:block"
         >
           {today}
         </span>

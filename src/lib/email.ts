@@ -1,10 +1,13 @@
 import { Resend } from "resend";
+import { BRAND } from "@/lib/brand";
+import { MONTH_NAMES, periodLabel, quarterFromMonth, type PeriodTypeName } from "@/lib/period";
 
 const resend = process.env.RESEND_API_KEY
   ? new Resend(process.env.RESEND_API_KEY)
   : null;
 
-const FROM = process.env.EMAIL_FROM ?? "FacturOCR <noreply@facturocr.com>";
+// Solo cambia el nombre visible: el dominio es el verificado en Resend.
+const FROM = process.env.EMAIL_FROM ?? `${BRAND} <noreply@facturocr.com>`;
 const APP_URL = process.env.NEXTAUTH_URL ?? "http://localhost:3000";
 
 function escapeHtml(str: string): string {
@@ -18,16 +21,68 @@ function escapeHtml(str: string): string {
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-async function send(to: string, subject: string, html: string) {
+export type EmailResult = { ok: true } | { ok: false };
+
+/**
+ * Para los logs: «a***@dominio.es». El dominio se deja entero (ayuda a ver
+ * si falla un proveedor concreto) y del usuario solo la inicial.
+ */
+export function maskEmail(email: string): string {
+  const at = email.lastIndexOf("@");
+  if (at <= 0) return "***";
+  return `${email[0]}***${email.slice(at)}`;
+}
+
+/** Tope de espera de un envio (Resend no pone ninguno). */
+export const EMAIL_TIMEOUT_MS = 10_000;
+
+/**
+ * Envia un correo. Resend no lanza: devuelve { data, error }, y antes solo se
+ * miraba la excepcion, asi que una clave caducada o un dominio sin verificar
+ * se tragaban en silencio (F-039). Registra la plantilla y el destinatario
+ * enmascarado y devuelve { ok: false } si falla; quien necesite saberlo
+ * (invitacion, restablecer contraseña) mira el resultado.
+ */
+async function send(template: string, to: string, subject: string, html: string): Promise<EmailResult> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
   if (!resend) {
-    console.log(`[EMAIL-DEV] To: ${to} | Subject: ${subject}`);
-    return;
+    // Sin RESEND_API_KEY no se envia nada y cuenta como enviado: cambiarlo
+    // haria saltar el aviso de invitacion donde el correo aun no esta
+    // montado. El destinatario, enmascarado tambien aqui.
+    console.log(`[EMAIL-DEV] ${template} | To: ${maskEmail(to)} | Subject: ${subject}`);
+    return { ok: true };
   }
 
   try {
-    await resend.emails.send({ from: FROM, to, subject, html });
+    // Tope de EMAIL_TIMEOUT_MS: Resend no pone timeout, y la invitacion se
+    // espera antes de volver (un servidor que acepta y no responde dejaba al
+    // administrador en «Creando...» unos 5 minutos). El signal cancela la
+    // peticion (Resend 6.9 lo pasa a fetch aunque su tipo no lo declare); la
+    // carrera garantiza el tope aunque una version futura lo ignore.
+    const timeout = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), EMAIL_TIMEOUT_MS);
+    });
+    const request = resend.emails.send(
+      { from: FROM, to, subject, html },
+      { signal: AbortSignal.timeout(EMAIL_TIMEOUT_MS) } as Parameters<typeof resend.emails.send>[1],
+    );
+    const result = await Promise.race([request, timeout]);
+    if (result === "timeout") {
+      console.error(`[EMAIL] No se ha enviado «${template}» a ${maskEmail(to)}: timeout (${EMAIL_TIMEOUT_MS / 1000} s sin respuesta)`);
+      return { ok: false };
+    }
+    const { error } = result;
+    if (error) {
+      console.error(`[EMAIL] No se ha enviado «${template}» a ${maskEmail(to)}: ${error.name}: ${error.message}`);
+      return { ok: false };
+    }
+    return { ok: true };
   } catch (err) {
-    console.error("[EMAIL] Error sending:", err);
+    const detail = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    console.error(`[EMAIL] No se ha enviado «${template}» a ${maskEmail(to)}: ${detail}`);
+    return { ok: false };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -96,7 +151,7 @@ function wrap(opts: {
                 <span style="color:#fff;font-size:12px;font-weight:800;letter-spacing:0.5px">F</span>
               </td>
               <td style="padding-left:10px;vertical-align:middle">
-                <span style="font-size:16px;font-weight:700;color:#0f172a;letter-spacing:-0.3px">FacturOCR</span>
+                <span style="font-size:16px;font-weight:700;color:#0f172a;letter-spacing:-0.3px">${BRAND}</span>
               </td>
             </tr></table>
           </td>
@@ -130,7 +185,7 @@ function wrap(opts: {
       <!-- Footer -->
       <tr><td style="padding:24px 40px 28px" class="inner">
         <p style="margin:0 0 4px;font-size:12px;color:#94a3b8;line-height:1.5">
-          Este email fue enviado automáticamente por FacturOCR.
+          Este email fue enviado automáticamente por ${BRAND}.
         </p>
         <p style="margin:0;font-size:12px;color:#cbd5e1;line-height:1.5">
           Si no esperabas este mensaje, puedes ignorarlo.
@@ -143,7 +198,7 @@ function wrap(opts: {
     <table role="presentation" width="560" cellpadding="0" cellspacing="0" border="0">
       <tr><td style="padding:20px 0;text-align:center">
         <span style="font-size:11px;color:#94a3b8">
-          Enviado con FacturOCR &mdash; Automatiza tu contabilidad
+          Enviado con ${BRAND} &mdash; Automatiza tu contabilidad
         </span>
       </td></tr>
     </table>
@@ -175,10 +230,14 @@ function detailCard(rows: string): string {
 
 // ─── notification templates ─────────────────────────────────────────────────
 
-const MONTHS = [
-  "", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
-  "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
-];
+/** Periodo en mitad de una frase: "enero de 2026" o "el T3 de 2026". El de
+ *  periodLabel ("Enero 2026") es para etiquetas; dentro de una frase el mes
+ *  va en minuscula ("Recuerda subir tus facturas de enero de 2026"). */
+function periodInSentence(periodType: PeriodTypeName, month: number, year: number): string {
+  if (periodType === "QUARTERLY") return `el T${quarterFromMonth(month)} de ${year}`;
+  const name = MONTH_NAMES[month - 1];
+  return name ? `${name.toLowerCase()} de ${year}` : `${month}/${year}`;
+}
 
 /**
  * Notify client when their invoices have been validated
@@ -207,6 +266,7 @@ export async function notifyClientInvoiceValidated(params: {
     </p>`;
 
   await send(
+    "factura-validada",
     params.clientEmail,
     `Factura validada: ${invoiceRef}`,
     wrap({
@@ -239,7 +299,7 @@ export async function notifyClientInvoiceRejected(params: {
       Hola <strong style="color:#0f172a">${escapeHtml(params.clientName)}</strong>,
     </p>
     <p style="margin:0;font-size:15px;color:#475569;line-height:1.7">
-      Tu factura ha sido <strong style="color:#dc2626">rechazada</strong> y requiere tu atencion.
+      Tu factura ha sido <strong style="color:#dc2626">rechazada</strong> y requiere tu atención.
     </p>
     ${detailCard(
       detailRow("Factura", invoiceRef) +
@@ -251,6 +311,7 @@ export async function notifyClientInvoiceRejected(params: {
     </p>`;
 
   await send(
+    "factura-rechazada",
     params.clientEmail,
     `Factura rechazada: ${invoiceRef}`,
     wrap({
@@ -272,10 +333,10 @@ export async function notifyClientInvoiceRejected(params: {
 export async function sendPasswordResetEmail(params: {
   to: string;
   resetUrl: string;
-}) {
+}): Promise<EmailResult> {
   const body = `
     <p style="margin:0 0 16px;font-size:15px;color:#475569;line-height:1.7">
-      Hemos recibido una solicitud para restablecer la contraseña de tu cuenta en FacturOCR.
+      Hemos recibido una solicitud para restablecer la contraseña de tu cuenta en ${BRAND}.
     </p>
     <p style="margin:0 0 8px;font-size:15px;color:#475569;line-height:1.7">
       Haz clic en el botón de abajo para crear una nueva contraseña. Este enlace expirará en <strong style="color:#0f172a">1 hora</strong>.
@@ -284,11 +345,12 @@ export async function sendPasswordResetEmail(params: {
       Si no solicitaste este cambio, puedes ignorar este email. Tu contraseña seguirá siendo la misma.
     </p>`;
 
-  await send(
+  return send(
+    "restablecer-contrasena",
     params.to,
-    "Restablecer contraseña - FacturOCR",
+    `Restablecer contraseña - ${BRAND}`,
     wrap({
-      preheader: "Restablece tu contraseña de FacturOCR. El enlace expira en 1 hora.",
+      preheader: `Restablece tu contraseña de ${BRAND}. El enlace expira en 1 hora.`,
       heroIcon: "&#128274;",
       heroColor: "#2563eb",
       heroBg: "#eff6ff",
@@ -307,13 +369,13 @@ export async function sendClientInvitationEmail(params: {
   to: string;
   clientName: string;
   inviteUrl: string;
-}) {
+}): Promise<EmailResult> {
   const body = `
     <p style="margin:0 0 4px;font-size:15px;color:#475569;line-height:1.7">
       Hola <strong style="color:#0f172a">${escapeHtml(params.clientName)}</strong>,
     </p>
     <p style="margin:0 0 16px;font-size:15px;color:#475569;line-height:1.7">
-      Te damos la bienvenida a <strong style="color:#0f172a">FacturOCR</strong>. Tu cuenta ha sido creada y está lista para usar.
+      Te damos la bienvenida a <strong style="color:#0f172a">${BRAND}</strong>. Tu cuenta ha sido creada y está lista para usar.
     </p>
     <p style="margin:0 0 8px;font-size:15px;color:#475569;line-height:1.7">
       Para acceder a tu portal, primero necesitas establecer tu contraseña haciendo clic en el botón de abajo. Este enlace expirará en <strong style="color:#0f172a">72 horas</strong>.
@@ -322,15 +384,16 @@ export async function sendClientInvitationEmail(params: {
       Si no esperabas esta invitación, puedes ignorar este email.
     </p>`;
 
-  await send(
+  return send(
+    "invitacion-cliente",
     params.to,
-    "Bienvenido a FacturOCR — Establece tu contraseña",
+    `Bienvenido a ${BRAND} — Establece tu contraseña`,
     wrap({
-      preheader: "Tu cuenta en FacturOCR ha sido creada. Establece tu contraseña para acceder.",
+      preheader: `Tu cuenta en ${BRAND} ha sido creada. Establece tu contraseña para acceder.`,
       heroIcon: "&#128273;",
       heroColor: "#2563eb",
       heroBg: "#eff6ff",
-      title: "Bienvenido a FacturOCR",
+      title: `Bienvenido a ${BRAND}`,
       body,
       ctaText: "Establecer contraseña",
       ctaUrl: params.inviteUrl,
@@ -346,26 +409,28 @@ export async function sendClosureReminder(params: {
   clientName: string;
   month: number;
   year: number;
-}) {
-  const period = `${MONTHS[params.month]} ${params.year}`;
+}): Promise<EmailResult> {
+  const period = periodLabel("MONTHLY", params.month, params.year);
+  const periodText = periodInSentence("MONTHLY", params.month, params.year);
 
   const body = `
     <p style="margin:0 0 4px;font-size:15px;color:#475569;line-height:1.7">
       Hola <strong style="color:#0f172a">${escapeHtml(params.clientName)}</strong>,
     </p>
     <p style="margin:0 0 16px;font-size:15px;color:#475569;line-height:1.7">
-      Te recordamos que el periodo <strong style="color:#0f172a">${period}</strong> está pendiente de cierre.
+      Te recordamos que el periodo de <strong style="color:#0f172a">${periodText}</strong> está pendiente de cierre.
       Por favor, asegúrate de haber subido todas las facturas correspondientes a este periodo antes de que se proceda al cierre.
     </p>
     <p style="margin:0;font-size:13px;color:#94a3b8;line-height:1.6">
       Si ya has subido todo, puedes ignorar este mensaje. Tu asesoría se encargará del cierre.
     </p>`;
 
-  await send(
+  return send(
+    "recordatorio-cierre",
     params.clientEmail,
-    `Recordatorio: cierre pendiente ${period}`,
+    `Recordatorio: cierre pendiente de ${periodText}`,
     wrap({
-      preheader: `Recuerda subir tus facturas de ${period} antes del cierre.`,
+      preheader: `Recuerda subir tus facturas de ${periodText} antes del cierre.`,
       heroIcon: "&#128197;",
       heroColor: "#f59e0b",
       heroBg: "#fffbeb",
@@ -386,12 +451,18 @@ export async function notifyWorkersNewUpload(params: {
   count: number;
   periodMonth: number;
   periodYear: number;
+  /** Sin él se asume mensual (antes un trimestre salía como su primer mes). */
+  periodType?: PeriodTypeName;
 }) {
-  const period = `${MONTHS[params.periodMonth]} ${params.periodYear}`;
+  const periodType = params.periodType ?? "MONTHLY";
+  const period = periodLabel(periodType, params.periodMonth, params.periodYear);
+  const periodText = periodInSentence(periodType, params.periodMonth, params.periodYear);
+  const single = params.count === 1;
+  const plural = single ? "" : "s";
 
   const body = `
     <p style="margin:0;font-size:15px;color:#475569;line-height:1.7">
-      Se han subido <strong style="color:#0f172a">${params.count} factura${params.count > 1 ? "s" : ""}</strong> nuevas para revisar.
+      Se ${single ? "ha" : "han"} subido <strong style="color:#0f172a">${params.count} factura${plural}</strong> nueva${plural} para revisar.
     </p>
     ${detailCard(
       detailRow("Cliente", escapeHtml(params.clientName)) +
@@ -404,14 +475,15 @@ export async function notifyWorkersNewUpload(params: {
 
   for (const email of params.workerEmails) {
     await send(
+      "nuevas-facturas-gestor",
       email,
-      `${params.clientName} — ${params.count} factura${params.count > 1 ? "s" : ""} nuevas (${period})`,
+      `${params.clientName} — ${params.count} factura${plural} nueva${plural} (${period})`,
       wrap({
-        preheader: `${params.clientName} ha subido ${params.count} facturas para ${period}.`,
+        preheader: `${escapeHtml(params.clientName)} ha subido ${params.count} factura${plural} para ${periodText}.`,
         heroIcon: "&#128229;",
         heroColor: "#2563eb",
         heroBg: "#eff6ff",
-        title: "Nuevas facturas pendientes",
+        title: single ? "Nueva factura pendiente" : "Nuevas facturas pendientes",
         body,
         ctaText: "Revisar facturas",
         ctaUrl: `${APP_URL}/dashboard/worker/invoices`,

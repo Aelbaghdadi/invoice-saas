@@ -1,21 +1,13 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { sendClosureReminder } from "@/lib/email";
-import { timingSafeEqual } from "crypto";
-
-function verifyCronSecret(header: string | null): boolean {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return false;
-  const expected = `Bearer ${secret}`;
-  if (!header || header.length !== expected.length) return false;
-  return timingSafeEqual(Buffer.from(header), Buffer.from(expected));
-}
+import { verifyCronSecret } from "@/lib/cronAuth";
 
 /**
  * Monthly cron: sends reminders to clients whose previous month is not yet closed.
  * Runs on the 5th of each month (configured in vercel.json).
  */
-export async function GET(req: Request) {
+async function handle(req: Request) {
   if (!verifyCronSecret(req.headers.get("authorization"))) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -34,6 +26,7 @@ export async function GET(req: Request) {
   });
 
   let sent = 0;
+  let failed = 0;
 
   for (const client of clients) {
     // Check if period is already closed
@@ -47,18 +40,28 @@ export async function GET(req: Request) {
       },
     });
 
-    // Skip if already closed (and not reopened), or reminder already sent
+    // Skip if already closed (and not reopened). No se guarda si ya se
+    // mando el recordatorio: cada ejecucion lo reenvia (una vez al mes).
     if (closure && !closure.reopenedAt) continue;
 
-    await sendClosureReminder({
+    const result = await sendClosureReminder({
       clientEmail: client.email!,
       clientName: client.name,
       month: targetMonth,
       year: targetYear,
     });
 
-    sent++;
+    // Solo cuenta lo que Resend acepto; el motivo de cada fallo ya esta en
+    // el log de send.
+    if (result.ok) sent++;
+    else failed++;
   }
 
-  return NextResponse.json({ sent, month: targetMonth, year: targetYear });
+  return NextResponse.json({ sent, failed, month: targetMonth, year: targetYear });
 }
+
+// GET y POST con el mismo handler y la misma comprobacion del secreto: la
+// Scheduled Task de Coolify (o un cron externo) puede llamar con cualquiera
+// de los dos (F-007; antes un POST daba 405).
+export const GET = handle;
+export const POST = handle;

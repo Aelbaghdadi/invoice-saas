@@ -5,6 +5,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { ChevronLeft, Mail, Users, FileText, Calendar } from "lucide-react";
 import Link from "next/link";
 import { PENDING_WORK } from "@/lib/invoiceStatuses";
+import { formatDateEs } from "@/lib/dates";
 import { AssignmentsPanel } from "./AssignmentsPanel";
 import { DeleteWorkerButton } from "./DeleteWorkerButton";
 
@@ -36,13 +37,19 @@ export default async function WorkerDetailPage({ params }: { params: Promise<{ i
   });
   if (!worker) notFound();
 
+  const assignedClientIds = worker.assignedClients.map((a) => a.clientId);
+
+  // Sin el cliente tecnico "Sin clasificar": no es un cliente real y no se
+  // asigna. Si ya estaba asignado de antes, se sigue listando para poder
+  // quitarlo (si no, el gestor no se podria eliminar nunca).
   const allClients = await prisma.client.findMany({
-    where: { advisoryFirmId: firmId },
+    where: {
+      advisoryFirmId: firmId,
+      OR: [{ isUnclassifiedBucket: false }, { id: { in: assignedClientIds } }],
+    },
     orderBy: { name: "asc" },
     select: { id: true, name: true, cif: true },
   });
-
-  const assignedClientIds = worker.assignedClients.map((a) => a.clientId);
 
   // Invoice stats across assigned clients
   const [totalInvoices, pendingInvoices] = assignedClientIds.length
@@ -110,7 +117,7 @@ export default async function WorkerDetailPage({ params }: { params: Promise<{ i
             </div>
             <div className="flex items-center gap-2 text-slate-500">
               <Calendar className="h-4 w-4 text-slate-300" />
-              Alta: {new Date(worker.createdAt).toLocaleDateString("es-ES")}
+              Alta: {formatDateEs(worker.createdAt)}
             </div>
           </div>
         </div>

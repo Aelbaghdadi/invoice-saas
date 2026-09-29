@@ -21,6 +21,7 @@ import {
   Inbox,
   Boxes,
 } from "lucide-react";
+import { BRAND } from "@/lib/brand";
 
 type NavItem = {
   href: string;
@@ -115,9 +116,10 @@ type SidebarProps = {
   collapsed?: boolean;
 };
 
+// Mismo texto que la entrada del menu y el titulo de la pagina a la que lleva.
 const BATCH_LINKS: Record<Role, { href: string; label: string }> = {
-  ADMIN:  { href: "/dashboard/worker/upload", label: "Nuevo lote" },
-  WORKER: { href: "/dashboard/worker/upload", label: "Nuevo lote" },
+  ADMIN:  { href: "/dashboard/worker/upload", label: "Subir facturas" },
+  WORKER: { href: "/dashboard/worker/upload", label: "Subir facturas" },
   CLIENT: { href: "/dashboard/client/upload", label: "Subir facturas" },
 };
 
@@ -135,6 +137,11 @@ export function Sidebar({ role, userName, firmName, firmLogo, collapsed = false 
   const sections = NAV_SECTIONS[role];
   const batchLink = BATCH_LINKS[role];
 
+  const isActive = (href: string) => {
+    if (href === ROOTS[role]) return pathname === href;
+    return pathname.startsWith(href);
+  };
+
   // Estado de secciones abiertas, persistido en localStorage. Por defecto
   // solo "Diario" abierto: "Otros" se pliega para reducir ruido visual,
   // el usuario lo abre si lo necesita y se queda guardado.
@@ -143,6 +150,15 @@ export function Sidebar({ role, userName, firmName, firmLogo, collapsed = false 
       sections.filter((s) => s.label && s.label !== "Otros").map((s) => s.label!),
     );
   });
+
+  // La seccion de la pantalla actual se muestra abierta aunque este plegada
+  // (se llega desde un enlace del panel y si no el menu no marcaria nada),
+  // salvo que el usuario la pliegue estando en esta misma ruta.
+  const activeSection = sections.find(
+    (s) => s.label && s.items.some((i) => isActive(i.href)),
+  )?.label;
+  const [dismissedPath, setDismissedPath] = useState<string | null>(null);
+  const forcedOpenSection = dismissedPath === pathname ? undefined : activeSection;
 
   // Hidratar desde localStorage tras el mount (evitar mismatch SSR).
   useEffect(() => {
@@ -157,10 +173,11 @@ export function Sidebar({ role, userName, firmName, firmLogo, collapsed = false 
     }
   }, []);
 
-  const toggleSection = (label: string) => {
+  const toggleSection = (label: string, isOpen: boolean) => {
+    if (isOpen && label === forcedOpenSection) setDismissedPath(pathname);
     setOpenSections((prev) => {
       const next = new Set(prev);
-      if (next.has(label)) next.delete(label);
+      if (isOpen) next.delete(label);
       else next.add(label);
       try {
         window.localStorage.setItem(STORAGE_KEY, JSON.stringify(Array.from(next)));
@@ -169,11 +186,6 @@ export function Sidebar({ role, userName, firmName, firmLogo, collapsed = false 
       }
       return next;
     });
-  };
-
-  const isActive = (href: string) => {
-    if (href === ROOTS[role]) return pathname === href;
-    return pathname.startsWith(href);
   };
 
   const initials = userName
@@ -235,12 +247,12 @@ export function Sidebar({ role, userName, firmName, firmLogo, collapsed = false 
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src="/brand/faktury-icon.svg"
-              alt="Faktury"
+              alt={BRAND}
               className={collapsed ? "h-7 w-7 flex-shrink-0" : "h-8 w-8 flex-shrink-0"}
             />
             {!collapsed && (
               <p className="text-[14px] font-semibold text-slate-800 tracking-tight">
-                Faktury
+                {BRAND}
               </p>
             )}
           </>
@@ -270,12 +282,12 @@ export function Sidebar({ role, userName, firmName, firmLogo, collapsed = false 
               </div>
             );
           }
-          const isOpen = openSections.has(section.label);
+          const isOpen = openSections.has(section.label) || section.label === forcedOpenSection;
           return (
             <div key={section.label} className={idx > 0 ? "mt-4" : ""}>
               <button
                 type="button"
-                onClick={() => toggleSection(section.label!)}
+                onClick={() => toggleSection(section.label!, isOpen)}
                 className="flex w-full items-center justify-between rounded-md px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400 transition-colors hover:text-slate-600"
               >
                 {section.label}
@@ -334,7 +346,7 @@ export function Sidebar({ role, userName, firmName, firmLogo, collapsed = false 
             separador fino. Solo texto: a este tamaño un isotipo no se lee. */}
         {!collapsed && (
           <p className="mt-1 border-t border-slate-100 pt-2 text-center text-[9px] font-medium uppercase tracking-[0.14em] text-slate-300">
-            Powered by <span className="text-slate-400">Faktury</span>
+            Con la tecnología de <span className="text-slate-400">{BRAND}</span>
           </p>
         )}
       </div>

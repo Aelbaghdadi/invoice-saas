@@ -1,28 +1,26 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
-  Download, FileDown, CheckCircle2, AlertCircle,
+  Download, FileDown, CheckCircle2,
   Loader2, AlertTriangle,
 } from "lucide-react";
 import type { A3ValidationWarning as A3Warning } from "@/lib/exportFormats";
 import { Select } from "@/components/ui/Select";
-import { quarterStartMonth, QUARTER_OPTIONS } from "@/lib/period";
+import { ErrorBox } from "@/components/ui/ErrorBox";
+import type { AppError } from "@/lib/errorCodes";
+import { quarterStartMonth, periodLabel, MONTH_OPTIONS, QUARTER_OPTIONS } from "@/lib/period";
+import { filenameFromContentDisposition } from "@/lib/contentDisposition";
+import { describeExportExclusionBoxes, parseExportExclusionBoxes, type ExportExclusionBoxCounts } from "@/lib/exportExclusions";
 
 type ClientOption = { id: string; name: string; cif: string };
 
 type Props = { clients: ClientOption[] };
 
-const MONTHS = [
-  { v: 1,  l: "Enero" },   { v: 2,  l: "Febrero" }, { v: 3,  l: "Marzo" },
-  { v: 4,  l: "Abril" },   { v: 5,  l: "Mayo" },    { v: 6,  l: "Junio" },
-  { v: 7,  l: "Julio" },   { v: 8,  l: "Agosto" },  { v: 9,  l: "Septiembre" },
-  { v: 10, l: "Octubre" }, { v: 11, l: "Noviembre"},{ v: 12, l: "Diciembre" },
-];
-
 const FORMATS = [
-  { v: "a3excel",  l: "A3 Excel",  desc: "A3asesor — Excel con cuentas contables (.xlsx)" },
+  { v: "a3excel",  l: "A3 Excel",  desc: "A3 Asesor — Excel con cuentas contables (.xlsx)" },
 ];
 
 const TYPES = [
@@ -37,6 +35,7 @@ const YEARS      = Array.from({ length: 5 }, (_, i) => THIS_YEAR - i);
 
 
 export function ExportForm({ clients }: Props) {
+  const router = useRouter();
   const [clientId,   setClientId]   = useState(clients[0]?.id ?? "");
   const [periodType, setPeriodType] = useState<"MONTHLY" | "QUARTERLY">("MONTHLY");
   const [month,      setMonth]      = useState(now.getMonth() + 1);
@@ -46,25 +45,45 @@ export function ExportForm({ clients }: Props) {
   const [format,     setFormat]     = useState("a3excel");
 
   const [count,    setCount]    = useState<number | null>(null);
-  // Avisos de validacion A3 (NIF vacio, descuadres, tipo de operacion que no
-  // corresponde al sentido...). Se recortan a 20 en el servidor.
+  // Avisos de validacion A3, todos, las bloqueantes primero (F-025): las
+  // bloqueantes no entran en el Excel; los avisos no impiden exportar.
   const [warnings,     setWarnings]     = useState<A3Warning[]>([]);
   const [warningCount, setWarningCount] = useState(0);
+  // Cuantas hay de cada gravedad: de avisos y «no van» llegan solo las
+  // primeras, y el resto se dice con «y N más».
+  const [severityCounts, setSeverityCounts] = useState<Partial<Record<A3Warning["severity"], number>>>({});
   // Facturas del periodo que ya salieron en un Excel anterior: no se vuelven
   // a incluir, pero hay que decirlo o el recuento no se entiende.
   const [alreadyExported, setAlreadyExported] = useState(0);
+  // Las que el Excel deja fuera (total 0, divididas en otras): no se marcan
+  // y siguen pendientes. El desglose es para el aviso.
+  const [excluded, setExcluded] = useState(0);
+  const [excludedDetail, setExcludedDetail] = useState<string | null>(null);
   const [counting, setCounting] = useState(false);
-  const [success,  setSuccess]  = useState(false);
-  const [error,    setError]    = useState<string | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  // Tras descargar: cuantas se quedaron fuera del fichero y el lote, si se
+  // guardo su copia (null = sin exito).
+  const [success,  setSuccess]  = useState<{ excluded: number; boxes: Partial<ExportExclusionBoxCounts>; batchId: string | null } | null>(null);
+  const [error,    setError]    = useState<AppError | string | null>(null);
 
   // ── fetch preview count ─────────────────────────────────────────────────
   const effectiveMonth = periodType === "QUARTERLY" ? quarterStartMonth(quarter) : month;
 
-  const fetchCount = useCallback(async () => {
+  // keepMessages: tras una descarga se relee el recuento sin borrar el aviso
+  // de exito o de error que acaba de ponerse; al cambiar filtros si se borran.
+  // Cada vista previa lleva su numero: si vuelve otra mas reciente antes, la
+  // vieja se descarta y no pinta el recuento de otros filtros.
+  const requestSeq = useRef(0);
+
+  const fetchCount = useCallback(async (keepMessages = false) => {
     if (!clientId) return;
+    const seq = ++requestSeq.current;
+    const stale = () => seq !== requestSeq.current;
     setCounting(true);
-    setSuccess(false);
-    setError(null);
+    if (!keepMessages) {
+      setSuccess(null);
+      setError(null);
+    }
     try {
       const sp = new URLSearchParams({
         clientId,
@@ -74,63 +93,113 @@ export function ExportForm({ clients }: Props) {
         type, format, preview: "1",
       });
       const res  = await fetch(`/api/export?${sp}`);
+      if (stale()) return;
+      if (!res.ok) {
+        // Sin esto un 401 dejaba count a 0 y salia "No hay facturas
+        // exportables", que es falso: el recuento no se sabe.
+        const failure = await readApiError(res, "No se ha podido cargar la vista previa. Recarga la página.");
+        if (stale()) return;
+        setError(failure);
+        setCount(null);
+        setWarnings([]);
+        setWarningCount(0);
+        setSeverityCounts({});
+        setAlreadyExported(0);
+        setExcluded(0);
+        setExcludedDetail(null);
+        return;
+      }
       const data = await res.json();
+      if (stale()) return;
       setCount(data.count ?? 0);
       setWarnings(data.warnings ?? []);
       setWarningCount(data.warningCount ?? 0);
+      setSeverityCounts(data.warningCountBySeverity ?? {});
       setAlreadyExported(data.alreadyExported ?? 0);
+      setExcluded(data.excluded ?? 0);
+      setExcludedDetail(describeExportExclusionBoxes((data.excludedByBox ?? {}) as Partial<ExportExclusionBoxCounts>));
     } catch {
+      if (stale()) return;
+      // Todo a cero: si no, seguian los avisos de "N con total 0" del filtro
+      // anterior.
       setCount(null);
       setWarnings([]);
       setWarningCount(0);
+      setSeverityCounts({});
+      setAlreadyExported(0);
+      setExcluded(0);
+      setExcludedDetail(null);
     } finally {
-      setCounting(false);
+      if (!stale()) setCounting(false);
     }
   }, [clientId, periodType, effectiveMonth, year, type, format]);
 
   useEffect(() => { fetchCount(); }, [fetchCount]);
 
   // ── download ────────────────────────────────────────────────────────────
+  // Mientras se descarga, los filtros quedan deshabilitados: la vista previa
+  // del final usa los del clic, y con otro cliente elegido pintaba el
+  // recuento y los avisos del anterior.
   const handleDownload = async () => {
-    if (!count) return;
-    const sp = new URLSearchParams({
-      clientId, periodType, month: String(effectiveMonth), year: String(year), type, format,
-    });
+    // Sin este freno, un doble clic creaba dos lotes con las mismas facturas
+    // (asientos duplicados en A3) o sacaba el error de "nada que exportar".
+    if (!count || downloading) return;
     // Se descarga con fetch y NO con un <a href>: al exportar, el servidor
     // marca las facturas como exportadas, y con el enlace a secas un fallo
     // (500, sesion caducada, 404 por filtros) se anunciaba igual como exito.
     // El gestor se quedaba sin fichero y sin poder volver a sacar esas
     // facturas, porque ya constaban exportadas.
     setError(null);
-    setSuccess(false);
+    setSuccess(null);
+    setDownloading(true);
     try {
-      const res = await fetch(`/api/export?${sp}`);
+      // POST: la descarga marca facturas, y un GET lo dispara cualquier enlace.
+      const res = await fetch("/api/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientId, periodType, month: effectiveMonth, year, type, format }),
+      });
       if (!res.ok) {
-        let msg = "No se ha podido generar el Excel. Vuelve a intentarlo.";
-        try {
-          const data = await res.json();
-          if (data?.error) msg = String(data.error);
-        } catch { /* la respuesta no era JSON: se queda el mensaje generico */ }
-        setError(msg);
-        fetchCount();
+        // Sin un error de la API (p. ej. un corte del proxy) no se sabe si el
+        // lote llego a registrarse: se manda al historial, no a repetir.
+        setError(await readApiError(
+          res,
+          "No se ha podido completar la exportación. Antes de repetirla, recarga la página y mira el historial: si aparece, descárgala desde allí.",
+        ));
+        fetchCount(true);
+        // Un 502/504 del proxy puede llegar despues de que el lote se
+        // registrara: el mensaje manda al historial, y tiene que estar al dia.
+        router.refresh();
         return;
       }
       const blob = await res.blob();
-      // Nombre del fichero que propone el servidor (Content-Disposition).
-      const disposition = res.headers.get("Content-Disposition") ?? "";
-      const match = disposition.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = match ? decodeURIComponent(match[1]) : "export.xlsx";
+      // Nombre del fichero que propone el servidor (Content-Disposition).
+      a.download = filenameFromContentDisposition(res.headers.get("Content-Disposition"), "export.xlsx");
+      // En el DOM y revocando con retraso: fuera del DOM o revocado justo
+      // despues del click, Firefox y Safari pueden no descargar nada (F-127).
+      document.body.appendChild(a);
       a.click();
-      URL.revokeObjectURL(url);
-      setSuccess(true);
-      // Las descargadas ya constan exportadas: se refresca el recuento.
-      setTimeout(() => { fetchCount(); setSuccess(false); }, 2500);
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      setSuccess({
+        excluded: Number(res.headers.get("X-Export-Excluded")) || 0,
+        boxes: parseExportExclusionBoxes(res.headers.get("X-Export-Excluded-Boxes")),
+        batchId: res.headers.get("X-Export-Batch-Id"),
+      });
+      // Las descargadas ya constan exportadas: se refresca el recuento ya,
+      // no a los 2,5 s, o el boton seguia ofreciendo las mismas facturas.
+      fetchCount(true);
+      // El lote nuevo aparece en el historial, con su "Volver a descargar".
+      router.refresh();
     } catch {
-      setError("Error de conexión al generar el Excel. Comprueba si se ha descargado antes de repetirlo.");
-      fetchCount();
+      setError("Error de conexión durante la exportación. Antes de repetirla, recarga la página y mira el historial: si aparece, descárgala desde allí con «Volver a descargar».");
+      fetchCount(true);
+      router.refresh();
+    } finally {
+      setDownloading(false);
     }
   };
 
@@ -144,20 +213,22 @@ export function ExportForm({ clients }: Props) {
 
         {/* Client */}
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+          <label htmlFor="export-client" className="mb-3 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
             Cliente
-          </p>
+          </label>
           <Select
+            id="export-client"
             value={clientId}
             onChange={setClientId}
+            disabled={downloading}
             options={clients.map((c) => ({ value: c.id, label: `${c.name} — ${c.cif}` }))}
           />
         </div>
 
         {/* Period */}
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-            Período
+        <div role="group" aria-labelledby="export-period-label" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <p id="export-period-label" className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+            Periodo
           </p>
           {/* Toggle mensual / trimestral */}
           <div className="mb-3 flex gap-2">
@@ -166,7 +237,9 @@ export function ExportForm({ clients }: Props) {
                 key={pt}
                 type="button"
                 onClick={() => setPeriodType(pt)}
-                className={`flex-1 rounded-lg border px-3 py-2 text-[12px] font-medium transition ${
+                disabled={downloading}
+                aria-pressed={periodType === pt}
+                className={`flex-1 rounded-lg border px-3 py-2 text-[12px] font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${
                   periodType === pt
                     ? "border-blue-500 bg-blue-50 text-blue-700"
                     : "border-slate-200 text-slate-500 hover:bg-slate-50"
@@ -179,28 +252,37 @@ export function ExportForm({ clients }: Props) {
           <div className="grid grid-cols-2 gap-3">
             {periodType === "MONTHLY" ? (
               <Select
+                id="export-month"
+                aria-label="Mes"
                 value={String(month)}
                 onChange={(v) => setMonth(Number(v))}
-                options={MONTHS.map((m) => ({ value: String(m.v), label: m.l }))}
+                disabled={downloading}
+                options={MONTH_OPTIONS}
               />
             ) : (
               <Select
+                id="export-quarter"
+                aria-label="Trimestre"
                 value={String(quarter)}
                 onChange={(v) => setQuarter(Number(v))}
+                disabled={downloading}
                 options={QUARTER_OPTIONS.map((q) => ({ value: String(q.value), label: q.label }))}
               />
             )}
             <Select
+              id="export-year"
+              aria-label="Año"
               value={String(year)}
               onChange={(v) => setYear(Number(v))}
+              disabled={downloading}
               options={YEARS.map((y) => ({ value: String(y), label: String(y) }))}
             />
           </div>
         </div>
 
         {/* Type */}
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+        <div role="group" aria-labelledby="export-type-label" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <p id="export-type-label" className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
             Tipo de factura
           </p>
           <div className="flex gap-2">
@@ -209,7 +291,9 @@ export function ExportForm({ clients }: Props) {
                 key={t.v}
                 type="button"
                 onClick={() => setType(t.v)}
-                className={`flex-1 rounded-xl border px-3 py-2 text-[12px] font-medium transition ${
+                disabled={downloading}
+                aria-pressed={type === t.v}
+                className={`flex-1 rounded-lg border px-3 py-2 text-[12px] font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${
                   type === t.v
                     ? "border-blue-500 bg-blue-50 text-blue-700"
                     : "border-slate-200 text-slate-500 hover:bg-slate-50"
@@ -222,8 +306,8 @@ export function ExportForm({ clients }: Props) {
         </div>
 
         {/* Format */}
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <p className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+        <div role="group" aria-labelledby="export-format-label" className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <p id="export-format-label" className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
             Software contable destino
           </p>
           <div className="space-y-2">
@@ -232,7 +316,9 @@ export function ExportForm({ clients }: Props) {
                 key={f.v}
                 type="button"
                 onClick={() => setFormat(f.v)}
-                className={`flex w-full items-start gap-3 rounded-xl border px-4 py-3 text-left transition ${
+                disabled={downloading}
+                aria-pressed={format === f.v}
+                className={`flex w-full items-start gap-3 rounded-xl border px-4 py-3 text-left transition disabled:cursor-not-allowed disabled:opacity-60 ${
                   format === f.v
                     ? "border-blue-500 bg-blue-50"
                     : "border-slate-100 hover:bg-slate-50"
@@ -271,11 +357,7 @@ export function ExportForm({ clients }: Props) {
 
             <div className="space-y-3 text-[13px]">
               <Row label="Cliente"   value={selectedClient?.name ?? "—"} />
-              <Row label="Período"   value={
-                periodType === "QUARTERLY"
-                  ? `T${quarter} ${year}`
-                  : `${MONTHS.find(m => m.v === month)?.l} ${year}`
-              } />
+              <Row label="Periodo"   value={periodLabel(periodType, effectiveMonth, year)} />
               <Row label="Tipo"      value={TYPES.find(t => t.v === type)?.l ?? "—"} />
               <Row label="Formato"   value={selectedFormat?.l ?? "—"} />
             </div>
@@ -298,9 +380,20 @@ export function ExportForm({ clients }: Props) {
 
             {count === 0 && !counting && (
               <p className="mt-2 text-center text-[12px] text-amber-600">
-                {alreadyExported > 0
-                  ? `Todas las facturas de este periodo (${alreadyExported}) ya se exportaron antes. Solo vuelven a salir si las corriges en la revisión.`
-                  : "No hay facturas exportables con estos filtros."}
+                {excluded > 0
+                  ? excluded === 1
+                    ? `La única factura pendiente no puede ir al Excel${detailSuffix(excludedDetail)}. Mira el aviso de abajo.`
+                    : `Ninguna de las ${excluded} facturas pendientes puede ir al Excel${detailSuffix(excludedDetail)}. Mira los avisos de abajo.`
+                  : alreadyExported > 0
+                    ? `Todas las facturas de este periodo (${alreadyExported}) ya se exportaron antes. Solo vuelven a salir si las corriges en la revisión.`
+                    : "No hay facturas exportables con estos filtros."}
+              </p>
+            )}
+            {count !== 0 && excluded > 0 && !counting && (
+              <p className="mt-2 text-center text-[12px] text-amber-600">
+                {excluded === 1
+                  ? `1 factura se queda fuera del Excel y no se marca como exportada${detailSuffix(excludedDetail)}.`
+                  : `${excluded} facturas se quedan fuera del Excel y no se marcan como exportadas${detailSuffix(excludedDetail)}.`}
               </p>
             )}
             {count !== 0 && alreadyExported > 0 && !counting && (
@@ -315,34 +408,30 @@ export function ExportForm({ clients }: Props) {
           {/* Avisos de validación A3: la última oportunidad de ver un error
               antes de que el fichero entre en la contabilidad del cliente. */}
           {warningCount > 0 && !counting && (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
-              <p className="flex items-center gap-2 text-[13px] font-semibold text-amber-800">
-                <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-                {warningCount === 1
-                  ? "1 factura con avisos"
-                  : `${warningCount} facturas con avisos`}
-              </p>
-              <ul className="mt-2 space-y-1.5">
-                {warnings.map((w) => (
-                  <li key={w.invoiceId} className="text-[12px] text-amber-700">
-                    {/* Enlace a la revision: una validada se puede corregir mientras
-                        el periodo no este cerrado, y sin enlace habia que buscarla a mano. */}
-                    <Link
-                      href={`/dashboard/worker/review/${w.invoiceId}`}
-                      className="font-medium underline decoration-amber-300 underline-offset-2 hover:text-amber-900"
-                    >
-                      {w.invoiceNumber || "Sin número"}
-                    </Link>
-                    {" — "}
-                    {w.warnings.join("; ")}
-                  </li>
-                ))}
-              </ul>
-              {warningCount > warnings.length && (
-                <p className="mt-2 text-[11px] text-amber-600">
-                  Y {warningCount - warnings.length} más. Se exportan igualmente: los avisos no bloquean.
-                </p>
-              )}
+            <div className="space-y-3">
+              <WarningList
+                tone="red"
+                title={(n) => n === 1
+                  ? "1 factura no se puede exportar"
+                  : `${n} facturas no se pueden exportar`}
+                note="No entran en el Excel ni se marcan como exportadas: siguen pendientes hasta que las corrijas en la revisión."
+                items={warnings.filter((w) => w.severity === "bloqueante")}
+                total={severityCounts.bloqueante}
+              />
+              <WarningList
+                tone="amber"
+                title={(n) => n === 1 ? "1 factura con avisos" : `${n} facturas con avisos`}
+                note="Se exportan igualmente: los avisos no bloquean, pero conviene mirarlos."
+                items={warnings.filter((w) => w.severity === "aviso")}
+                total={severityCounts.aviso}
+              />
+              <WarningList
+                tone="slate"
+                title={(n) => n === 1 ? "1 factura no va al Excel" : `${n} facturas no van al Excel`}
+                note="No hace falta llevarlas a A3 y no hay nada que corregir."
+                items={warnings.filter((w) => w.severity === "fuera")}
+                total={severityCounts.fuera}
+              />
             </div>
           )}
 
@@ -350,29 +439,51 @@ export function ExportForm({ clients }: Props) {
           {success && (
             <div className="flex items-center gap-2 rounded-xl bg-green-50 px-4 py-3 text-[13px] text-green-700">
               <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
-              Exportación completada. Las facturas han sido marcadas como Exportadas.
+              <span>
+                Exportación completada. Las facturas del Excel han quedado marcadas como exportadas.
+                {successExclusionText(success)}
+                {/* Enlace propio: router.refresh() no siempre llega a pintar el
+                    historial (Next 16 aborta a veces el refresco entre los
+                    prefetch), y este fichero tiene que poder bajarse otra vez. */}
+                {success.batchId && (
+                  <>
+                    {" "}
+                    <a
+                      href={`/api/export/batches/${success.batchId}/file`}
+                      download
+                      className="font-medium underline underline-offset-2 hover:text-green-800"
+                    >
+                      Volver a descargar
+                    </a>
+                  </>
+                )}
+              </span>
             </div>
           )}
-          {error && (
-            <div className="flex items-center gap-2 rounded-xl bg-red-50 px-4 py-3 text-[13px] text-red-600">
-              <AlertCircle className="h-4 w-4 flex-shrink-0" />
-              {error}
-            </div>
-          )}
+          {error && <ErrorBox error={error} variant="banner" />}
 
           {/* Download button */}
           <button
             type="button"
             onClick={handleDownload}
-            disabled={!count || counting || count === 0}
+            disabled={!count || counting || count === 0 || downloading}
             className="flex w-full items-center justify-center gap-2.5 rounded-lg bg-blue-600 px-5 py-3.5 text-[14px] font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            <Download className="h-4 w-4" />
-            Descargar Excel
-            {count != null && count > 0 && (
-              <span className="rounded-full bg-blue-500 px-2 py-0.5 text-[11px]">
-                {count}
-              </span>
+            {downloading ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Generando Excel…
+              </>
+            ) : (
+              <>
+                <Download className="h-4 w-4" />
+                Descargar Excel
+                {count != null && count > 0 && (
+                  <span className="rounded-full bg-blue-500 px-2 py-0.5 text-[11px]">
+                    {count}
+                  </span>
+                )}
+              </>
             )}
           </button>
 
@@ -385,6 +496,23 @@ export function ExportForm({ clients }: Props) {
   );
 }
 
+/** El error que manda la API ({ error: AppError | string }) o `fallback` si
+ *  la respuesta no es suya (p. ej. una pagina de error del proxy). */
+async function readApiError(res: Response, fallback: string): Promise<AppError | string> {
+  try {
+    const data = await res.json();
+    // La API devuelve {code, message, details}: con String() salia "[object Object]".
+    if (typeof data?.error === "string") return data.error;
+    if (data?.error?.message) return data.error as AppError;
+  } catch { /* la respuesta no era JSON */ }
+  return fallback;
+}
+
+// " (2 que hay que corregir y 1 que no va a A3)", o nada sin desglose.
+function detailSuffix(detail: string | null) {
+  return detail ? ` (${detail})` : "";
+}
+
 function Row({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between">
@@ -392,4 +520,92 @@ function Row({ label, value }: { label: string; value: string }) {
       <span className="font-medium text-slate-700 truncate max-w-[160px]">{value}</span>
     </div>
   );
+}
+
+const WARNING_TONES = {
+  red: {
+    box: "border-red-200 bg-red-50",
+    title: "text-red-800",
+    item: "text-red-700",
+    link: "decoration-red-300 hover:text-red-900",
+    note: "text-red-600",
+  },
+  amber: {
+    box: "border-amber-200 bg-amber-50",
+    title: "text-amber-800",
+    item: "text-amber-700",
+    link: "decoration-amber-300 hover:text-amber-900",
+    note: "text-amber-600",
+  },
+  slate: {
+    box: "border-slate-200 bg-slate-50",
+    title: "text-slate-700",
+    item: "text-slate-600",
+    link: "decoration-slate-300 hover:text-slate-800",
+    note: "text-slate-500",
+  },
+} as const;
+
+/** Una caja por gravedad (F-025), con scroll dentro. `total` es cuantas hay
+ *  de verdad: de las que no son bloqueantes el servidor manda solo las
+ *  primeras. */
+function WarningList({ tone, title, note, items, total }: {
+  tone: keyof typeof WARNING_TONES;
+  title: (count: number) => string;
+  note: string;
+  items: A3Warning[];
+  total?: number;
+}) {
+  if (items.length === 0) return null;
+  const c = WARNING_TONES[tone];
+  const count = Math.max(total ?? 0, items.length);
+  return (
+    <div className={`rounded-xl border px-4 py-3 ${c.box}`}>
+      <p className={`flex items-center gap-2 text-[13px] font-semibold ${c.title}`}>
+        <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+        {title(count)}
+      </p>
+      <p className={`mt-1 text-[11px] ${c.note}`}>{note}</p>
+      <ul className="mt-2 max-h-72 space-y-1.5 overflow-y-auto pr-1">
+        {items.map((w) => (
+          <li key={w.invoiceId} className={`text-[12px] ${c.item}`}>
+            {/* Enlace a la revision: una validada se puede corregir mientras
+                el periodo no este cerrado, y sin enlace habia que buscarla a mano. */}
+            <Link
+              href={`/dashboard/worker/review/${w.invoiceId}`}
+              prefetch={false}
+              className={`font-medium underline underline-offset-2 ${c.link}`}
+            >
+              {w.invoiceNumber || "Sin número"}
+            </Link>
+            {" — "}
+            {[...w.blockers, ...w.warnings].join("; ")}
+          </li>
+        ))}
+      </ul>
+      {count > items.length && (
+        <p className={`mt-2 text-[11px] ${c.note}`}>
+          Y {count - items.length} más que no se muestran aquí.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Lo que se quedo fuera, por caja: solo las que hay que corregir «siguen
+ *  pendientes»; las que no van a A3 no tienen nada pendiente. Sin la
+ *  cabecera por caja (version anterior del servidor), el total a secas. */
+function successExclusionText(success: { excluded: number; boxes: Partial<ExportExclusionBoxCounts> }): string {
+  if (success.excluded <= 0) return "";
+  const fix = success.boxes.corregir ?? 0;
+  const out = success.boxes.fuera ?? 0;
+  if (fix + out === 0) {
+    return success.excluded === 1
+      ? " 1 factura se ha quedado fuera del Excel."
+      : ` ${success.excluded} facturas se han quedado fuera del Excel.`;
+  }
+  const parts: string[] = [];
+  if (fix > 0) parts.push(fix === 1 ? " 1 factura sigue pendiente hasta que la corrijas." : ` ${fix} facturas siguen pendientes hasta que las corrijas.`);
+  if (out > 0) parts.push(out === 1 ? " 1 no va a A3 y no hay nada que hacer con ella." : ` ${out} no van a A3 y no hay nada que hacer con ellas.`);
+  return parts.join("");
 }

@@ -5,7 +5,7 @@ import { createHash } from "crypto";
 import { revalidatePath } from "next/cache";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { putObject, sanitizeFilenameForStorage, isStorageConfigured } from "@/lib/storage";
+import { deleteObject, putObject, sanitizeFilenameForStorage, isStorageConfigured } from "@/lib/storage";
 import { processInvoice } from "@/lib/processInvoice";
 
 export type ReuploadState = {
@@ -40,10 +40,10 @@ export async function reuploadInvoiceAction(
     return { error: "Factura no encontrada." };
   }
   if (rejected.status !== "REJECTED") {
-    return { error: "Solo se pueden re-subir facturas rechazadas." };
+    return { error: "Solo se pueden volver a subir facturas rechazadas." };
   }
   if (rejected.replacedBy) {
-    return { error: "Esta factura ya fue re-subida." };
+    return { error: "Ya has subido una versión corregida de esta factura." };
   }
 
   const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
@@ -78,37 +78,63 @@ export async function reuploadInvoiceAction(
     return { error: `Error al subir: ${e instanceof Error ? e.message : "fallo"}` };
   }
 
-  const document = await prisma.document.create({
-    data: {
-      filename: file.name,
-      storageKey,
-      fileType: realMime,
-      fileHash,
-      sizeBytes: file.size,
-      uploadedBy: session.user.id,
-      clientId: client.id,
-    },
-  });
+  // Mientras se subia el fichero, el gestor ha podido reabrir y validar la
+  // rechazada: si ademas se creara esta, irian las dos a A3. La transaccion
+  // empieza volviendo a exigir REJECTED y sin sustituta, y toca updatedAt:
+  // si la reapertura del gestor (condicionada a updatedAt) llega despues, ya
+  // no escribe nada.
+  let newId: string | null;
+  try {
+    newId = await prisma.$transaction(async (tx) => {
+      const claimed = await tx.invoice.updateMany({
+        where: { id: rejected.id, clientId: client.id, status: "REJECTED", replacedBy: { is: null } },
+        data: { updatedAt: new Date() },
+      });
+      if (claimed.count === 0) return null;
 
-  const newInvoice = await prisma.invoice.create({
-    data: {
-      filename: file.name,
-      storageKey,
-      fileType: realMime,
-      fileHash,
-      type: rejected.type,
-      periodMonth: rejected.periodMonth,
-      periodYear: rejected.periodYear,
-      clientId: client.id,
-      documentId: document.id,
-      replacesId: rejected.id,
-    },
-  });
+      const document = await tx.document.create({
+        data: {
+          filename: file.name,
+          storageKey,
+          fileType: realMime,
+          fileHash,
+          sizeBytes: file.size,
+          uploadedBy: session.user.id,
+          clientId: client.id,
+        },
+      });
+      const newInvoice = await tx.invoice.create({
+        data: {
+          filename: file.name,
+          storageKey,
+          fileType: realMime,
+          fileHash,
+          type: rejected.type,
+          periodMonth: rejected.periodMonth,
+          periodYear: rejected.periodYear,
+          clientId: client.id,
+          documentId: document.id,
+          replacesId: rejected.id,
+        },
+      });
+      return newInvoice.id;
+    });
+  } catch (e) {
+    // Otra resubida de la misma factura a la vez (replacesId es unico) u
+    // otro fallo: no queda nada creado.
+    console.error(`[reupload] ${rejected.id}: no se pudo registrar la resubida:`, e);
+    await deleteObject(storageKey);
+    return { error: "No se ha podido registrar la factura corregida. Recarga la página y vuelve a intentarlo." };
+  }
+  if (!newId) {
+    await deleteObject(storageKey);
+    return { error: "Esta factura ya no está rechazada. Recarga la página." };
+  }
 
-  const newId = newInvoice.id;
   const userId = session.user.id;
+  const createdId = newId;
   after(async () => {
-    await processInvoice(newId, userId).catch(console.error);
+    await processInvoice(createdId, userId).catch(console.error);
   });
 
   revalidatePath("/dashboard/client/invoices");

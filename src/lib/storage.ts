@@ -63,14 +63,36 @@ export async function putObject(
   );
 }
 
-/** Descarga un objeto completo como Buffer. */
-export async function getObjectBytes(key: string): Promise<Buffer> {
+/**
+ * Descarga un objeto completo como Buffer. `timeoutMs` corta esta llamada (la
+ * respuesta y la lectura del cuerpo) sin tocar el cliente, igual que en
+ * objectExists: con Garage colgado cada peticion dejaba un socket ocupado.
+ */
+export async function getObjectBytes(key: string, options: { timeoutMs?: number } = {}): Promise<Buffer> {
   const client = getClient();
   if (!client) throw new Error("Almacenamiento (S3) no configurado");
-  const res = await client.send(new GetObjectCommand({ Bucket: STORAGE_BUCKET, Key: key }));
+  const res = await client.send(
+    new GetObjectCommand({ Bucket: STORAGE_BUCKET, Key: key }),
+    options.timeoutMs ? { abortSignal: AbortSignal.timeout(options.timeoutMs) } : {},
+  );
   if (!res.Body) throw new Error(`Objeto sin contenido: ${key}`);
   const bytes = await res.Body.transformToByteArray();
   return Buffer.from(bytes);
+}
+
+/**
+ * ¿El error del SDK dice que el objeto no existe? Garage y el SDK lo dan de
+ * varias formas: NoSuchKey en un GET, NotFound (sin cuerpo) en un HEAD, o
+ * solo el 404 en los metadatos. Cualquier otra cosa es un fallo de verdad.
+ * NoSuchBucket tambien es un 404, pero es configuracion (bucket borrado o
+ * S3_BUCKET mal puesto), no "este objeto no esta".
+ */
+export function isStorageNotFound(err: unknown): boolean {
+  const e = err as { name?: unknown; Code?: unknown; $metadata?: { httpStatusCode?: unknown } } | null;
+  if (!e || typeof e !== "object") return false;
+  if (e.name === "NoSuchBucket" || e.Code === "NoSuchBucket") return false;
+  return e.name === "NoSuchKey" || e.name === "NotFound" || e.Code === "NoSuchKey"
+    || e.$metadata?.httpStatusCode === 404;
 }
 
 /** Borra un objeto (no falla si no existe). */
@@ -80,14 +102,33 @@ export async function deleteObject(key: string): Promise<void> {
   await client.send(new DeleteObjectCommand({ Bucket: STORAGE_BUCKET, Key: key })).catch(() => null);
 }
 
-/** ¿Existe el objeto? (HeadObject) */
-export async function objectExists(key: string): Promise<boolean> {
+/**
+ * ¿Existe el objeto? (HeadObject)
+ *
+ * `timeoutMs` corta la espera de esta llamada sin tocar el cliente: el
+ * S3Client no tiene timeout (uno global corto romperia las subidas de 25 MB)
+ * y una pagina que espera a Garage colgado no llega a pintarse.
+ * Un 404 es false sin mas; cualquier otro fallo, incluido el timeout, tambien
+ * da false pero deja aviso en el log, para que "no existe" no tape una caida.
+ */
+export async function objectExists(key: string, options: { timeoutMs?: number } = {}): Promise<boolean> {
   const client = getClient();
   if (!client) return false;
   try {
-    await client.send(new HeadObjectCommand({ Bucket: STORAGE_BUCKET, Key: key }));
+    await client.send(
+      new HeadObjectCommand({ Bucket: STORAGE_BUCKET, Key: key }),
+      options.timeoutMs ? { abortSignal: AbortSignal.timeout(options.timeoutMs) } : {},
+    );
     return true;
-  } catch {
+  } catch (err) {
+    if (!isStorageNotFound(err)) {
+      // Un HEAD no trae cuerpo: sin el codigo HTTP, un 403 de credenciales y
+      // un 503 salen los dos como "Unknown: UnknownError".
+      const status = (err as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
+      const name = err instanceof Error ? err.name : "Error";
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[storage] HeadObject ${key} fallo: ${name}${status ? ` (HTTP ${status})` : ""}: ${message}`);
+    }
     return false;
   }
 }

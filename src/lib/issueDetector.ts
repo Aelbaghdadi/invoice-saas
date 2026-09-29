@@ -1,7 +1,11 @@
 import { prisma } from "@/lib/prisma";
 import type { ExtractedInvoice } from "@/lib/ocr";
 import type { Invoice, IssueType } from "@prisma/client";
-import type { OperationTypeName } from "@/lib/validators";
+import { parseTaxId, type OperationTypeName } from "@/lib/validators";
+import { formatEur } from "@/lib/format";
+import { mathIssues } from "@/lib/mathIssues";
+import { formatDateEs } from "@/lib/dates";
+import { periodLabel } from "@/lib/period";
 
 type IssueData = {
   type: IssueType;
@@ -11,19 +15,48 @@ type IssueData = {
 
 const CONFIDENCE_THRESHOLD = 0.7;
 
+export const DUPLICATE_SELECT = {
+  invoiceNumber: true,
+  filename: true,
+  createdAt: true,
+  periodType: true,
+  periodMonth: true,
+  periodYear: true,
+} as const;
+
+/** La factura ya registrada en el aviso de duplicado: numero, fecha de subida
+ *  y periodo. Con el nombre del fichero a secas, si se subia el mismo PDF dos
+ *  veces el aviso repetia el nombre del propio fichero y no decia cual era. */
+export function describeExisting(existing: {
+  invoiceNumber: string | null;
+  filename: string;
+  createdAt: Date;
+  periodType: "MONTHLY" | "QUARTERLY";
+  periodMonth: number;
+  periodYear: number;
+}): string {
+  const ref = existing.invoiceNumber ?? `«${existing.filename}»`;
+  const period = periodLabel(existing.periodType, existing.periodMonth, existing.periodYear);
+  return `la factura ${ref} subida el ${formatDateEs(existing.createdAt)} (${period})`;
+}
+
 /**
  * Detects issues after OCR extraction and creates InvoiceIssue records.
  * Returns the list of issues created.
  *
- * `operationTypeHint` es una pista (derivada del prefijo del NIF de la otra
- * parte, ver processInvoice) de si la factura es intracomunitaria — se usa
- * SOLO para decidir si avisar de IVA no-cero, no se persiste aqui.
+ * `operationTypeHint` es el tipo de operacion que processInvoice va a guardar
+ * (el aprendido del tercero o, si no hay, el del prefijo del NIF). Decide si
+ * se avisa de IVA no-cero en intracomunitarias y si se comprueba la cuota por
+ * linea (no en inversion del sujeto pasivo). No se persiste aqui.
  */
 export async function detectIssues(
   invoiceId: string,
   extraction: ExtractedInvoice,
   invoice: Invoice,
   operationTypeHint?: OperationTypeName,
+  // Con false solo las devuelve: el OCR las guarda el mismo en su escritura
+  // final, que no se hace si la factura ha cambiado mientras analizaba.
+  options: { persist?: boolean } = {},
 ): Promise<IssueData[]> {
   const issues: IssueData[] = [];
 
@@ -67,31 +100,22 @@ export async function detectIssues(
     }
   }
 
-  // 3. MATH_MISMATCH — tax calculation doesn't match
-  if (
-    extraction.taxBase != null &&
-    extraction.vatAmount != null &&
-    extraction.totalAmount != null
-  ) {
-    const sumBases = extraction.vatLines.length > 0
-      ? extraction.vatLines.reduce((s, l) => s + l.taxBase, 0)
-      : extraction.taxBase;
-    const sumAmounts = extraction.vatLines.length > 0
-      ? extraction.vatLines.reduce((s, l) => s + l.vatAmount, 0)
-      : extraction.vatAmount;
-    // El recargo de equivalencia suma al total igual que el IVA: sin el,
-    // cualquier factura de un cliente en recargo salia como descuadrada.
-    const sumSurcharge = extraction.vatLines.reduce(
-      (s, l) => s + (l.equivalenceSurchargeAmount ?? 0), 0);
-    const expected = sumBases + sumAmounts + sumSurcharge - (extraction.irpfAmount ?? 0);
-    const diff = Math.abs(Math.round(expected * 100) - Math.round(extraction.totalAmount * 100));
-    if (diff > 2) {
-      const formula = `Base + IVA${sumSurcharge ? " + Rec. Equiv." : ""}${extraction.irpfAmount ? " - IRPF" : ""}`;
-      issues.push({
-        type: "MATH_MISMATCH",
-        description: `El total (${extraction.totalAmount}) no coincide con ${formula} (${expected.toFixed(2)}). Diferencia: ${(diff / 100).toFixed(2)}\u20AC.`,
-      });
-    }
+  // 3. Cuadre del total y 3b. cuota por linea (mathIssues, tambien en la
+  // clasificacion manual). El total solo si el OCR leyo base, cuota y total.
+  if (extraction.taxBase != null && extraction.vatAmount != null && extraction.totalAmount != null) {
+    issues.push(...mathIssues({
+      lines: extraction.vatLines,
+      taxBase: extraction.taxBase,
+      vatAmount: extraction.vatAmount,
+      totalAmount: extraction.totalAmount,
+      irpfAmount: extraction.irpfAmount ?? null,
+      operationType: operationTypeHint,
+    }));
+  } else {
+    issues.push(...mathIssues({
+      lines: extraction.vatLines, taxBase: null, vatAmount: null, totalAmount: null, irpfAmount: null,
+      operationType: operationTypeHint,
+    }));
   }
 
   // 4. INTRACOM_VAT — operacion intracomunitaria (adquisicion/entrega) con
@@ -129,12 +153,12 @@ export async function detectIssues(
     if (extraction.invoiceNumber) {
       const dupByNumber = await prisma.invoice.findFirst({
         where: { ...baseWhere, invoiceNumber: extraction.invoiceNumber },
-        select: { id: true, filename: true },
+        select: DUPLICATE_SELECT,
       });
       if (dupByNumber) {
         issues.push({
           type: "POSSIBLE_DUPLICATE",
-          description: `Posible duplicado de "${dupByNumber.filename}" (misma factura ${extraction.invoiceNumber} de ${extraction.issuerCif}).`,
+          description: `Posible duplicado de ${describeExisting(dupByNumber)}: mismo número y mismo CIF emisor (${extraction.issuerCif}).`,
         });
       }
     }
@@ -151,25 +175,35 @@ export async function detectIssues(
       extraction.totalAmount != null &&
       validDate
     ) {
-      const dupByFields = await prisma.invoice.findFirst({
-        where: {
-          ...baseWhere,
-          totalAmount: extraction.totalAmount,
-          invoiceDate: validDate,
-        },
-        select: { id: true, filename: true },
-      });
+      // En ventas el emisor es el propio cliente: comparar su CIF sacaba como
+      // duplicadas dos ventas del mismo importe y dia a clientes distintos.
+      // Ahi se compara el destinatario, limpio como se guarda (revision 2 del
+      // PR #7).
+      const isSale = invoice.type === "SALE";
+      const saleReceiver = isSale ? parseTaxId(extraction.receiverCif).clean || null : null;
+      const dupByFields = isSale && !saleReceiver
+        ? null
+        : await prisma.invoice.findFirst({
+            where: {
+              ...(isSale ? { ...baseWhere, issuerCif: undefined, receiverCif: saleReceiver } : baseWhere),
+              totalAmount: extraction.totalAmount,
+              invoiceDate: validDate,
+            },
+            select: DUPLICATE_SELECT,
+          });
       if (dupByFields) {
         issues.push({
           type: "POSSIBLE_DUPLICATE",
-          description: `Posible duplicado de "${dupByFields.filename}" (mismo CIF ${extraction.issuerCif}, total ${extraction.totalAmount} y fecha).`,
+          description: isSale
+            ? `Posible duplicado de ${describeExisting(dupByFields)}: mismo destinatario (${saleReceiver}), total (${formatEur(extraction.totalAmount)}) y fecha.`
+            : `Posible duplicado de ${describeExisting(dupByFields)}: mismo CIF emisor (${extraction.issuerCif}), total (${formatEur(extraction.totalAmount)}) y fecha.`,
         });
       }
     }
   }
 
   // Create all issues in database
-  if (issues.length > 0) {
+  if (issues.length > 0 && options.persist !== false) {
     await prisma.invoiceIssue.createMany({
       data: issues.map((issue) => ({
         invoiceId,

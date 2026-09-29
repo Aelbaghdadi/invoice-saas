@@ -2,7 +2,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 
 export default function Loading() {
   return (
-    <div className="flex h-[calc(100vh-64px)] animate-fade-in-up">
+    <div className="flex h-[calc(100dvh-94px)] animate-fade-in-up">
       {/* Left - PDF viewer skeleton */}
       <div className="flex w-[55%] flex-col bg-[#1e1e2e]">
         <div className="flex items-center gap-3 border-b border-white/10 bg-[#16161f] px-4 py-2.5">

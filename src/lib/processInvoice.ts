@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { getObjectBytes, isStorageConfigured } from "@/lib/storage";
-import type { InvoiceStatus } from "@prisma/client";
+import type { InvoiceStatus, Prisma } from "@prisma/client";
 import {
   extractInvoiceFromPdf,
   extractInvoiceFromImage,
@@ -12,12 +12,18 @@ import {
 } from "@/lib/ocrLlm";
 import { detectIssues } from "@/lib/issueDetector";
 import { appendAuditLogs } from "@/lib/auditLog";
+import { ocrFenceWhere } from "@/lib/invoiceStatuses";
+import { isInvoiceBalanced } from "@/lib/invoiceBalance";
+import { percentOf, roundCents } from "@/lib/money";
+
+// La escritura final son unas pocas consultas; 15 s por si espera un bloqueo
+// de fila (los 5 s por defecto dejaban el resultado en OCR_ERROR).
+const OCR_WRITE_TRANSACTION_OPTIONS = { timeout: 15_000, maxWait: 5_000 } as const;
 import {
   parseTaxId,
   isPersonaFisica,
   textMentionsRetention,
   RETENTION_DEFAULT_RATE,
-  OPERATION_TYPE_OPTIONS,
   type RetentionTypeName,
 } from "@/lib/validators";
 import {
@@ -28,8 +34,9 @@ import {
 import { textMentionsRectificative, applyRectificativeSign } from "@/lib/rectificative";
 import { routeByCif, clientSideCif, routeByText, detectInvoiceType } from "@/lib/invoiceRouting";
 import { lookupProviderClient } from "@/lib/providerRouting";
-import { accountEntryKey, entryNameMatches } from "@/lib/supplierMatching";
-import { proposeIntracomGoodsType } from "@/lib/intracomGoods";
+import { accountEntryKey } from "@/lib/supplierMatching";
+import { proposeOperationType } from "@/lib/operationTypeProposal";
+import { classifyOcrError, userMessageForOcrError } from "@/lib/ocrErrors";
 
 /**
  * Convierte el string de fecha del OCR a Date. Si el OCR devuelve algo
@@ -59,12 +66,16 @@ async function transitionStatus(
 }
 
 export async function processInvoice(invoiceId: string, triggeredByUserId: string) {
-  // Atomic status transition: only proceed if status is still UPLOADED
-  const result = await prisma.invoice.updateMany({
+  // Claim atomico: solo arranca si sigue en UPLOADED. El fencing token de
+  // esta ejecucion es el ocrAttempts que deja el propio UPDATE; leido despues
+  // con otra consulta podria ser ya el de un claim posterior.
+  const [claimed] = await prisma.invoice.updateManyAndReturn({
     where: { id: invoiceId, status: "UPLOADED" },
     data: { status: "ANALYZING", ocrAttempts: { increment: 1 } },
+    select: { ocrAttempts: true },
   });
-  if (result.count === 0) return;
+  if (!claimed) return;
+  const ocrToken = claimed.ocrAttempts;
 
   await transitionStatus(invoiceId, "UPLOADED", "ANALYZING", triggeredByUserId);
 
@@ -131,6 +142,22 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     }
 
     const extracted = ocrResult.extracted;
+    // A centimos antes de nada: la BD guarda numeric(12,2), y el cuadre
+    // (isValid, incidencias) se calculaba con los importes sin redondear que
+    // luego no son los guardados (revision 2 del PR #7). Los % tambien van a
+    // 2 decimales (numeric(5,2)).
+    extracted.taxBase = roundCents(extracted.taxBase);
+    extracted.vatAmount = roundCents(extracted.vatAmount);
+    extracted.totalAmount = roundCents(extracted.totalAmount);
+    extracted.irpfAmount = roundCents(extracted.irpfAmount);
+    extracted.vatLines = extracted.vatLines.map((l) => ({
+      ...l,
+      taxBase: roundCents(l.taxBase),
+      vatRate: roundCents(l.vatRate),
+      vatAmount: roundCents(l.vatAmount),
+      equivalenceSurchargeRate: roundCents(l.equivalenceSurchargeRate),
+      equivalenceSurchargeAmount: roundCents(l.equivalenceSurchargeAmount),
+    }));
     // El recargo de equivalencia llega a veces como una linea de IVA mas, con
     // el tipo del recargo (5,2 / 1,4 / 0,5) y el importe en la cuota o en la
     // base, porque en la factura aparece como otra fila del cuadro de
@@ -148,43 +175,40 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     const { taxBase, vatAmount, totalAmount, irpfAmount, vatLines } = extracted;
     let isValid: boolean | null = null;
     if (taxBase !== null && vatAmount !== null && totalAmount !== null) {
-      const expected = taxBase + vatAmount - (irpfAmount ?? 0);
-      const diff = Math.abs(
-        Math.round(expected * 100) - Math.round(totalAmount * 100)
-      );
-      isValid = diff <= 2;
+      isValid = isInvoiceBalanced({ sumBase: taxBase, sumAmount: vatAmount, irpf: irpfAmount ?? 0, total: totalAmount });
     }
 
     // Save extraction as separate record (datos brutos OCR + job tracking)
     const ocrFinishedAt = new Date();
     const ocrDurationMs = ocrFinishedAt.getTime() - ocrStartedAt.getTime();
-    const isReprocess = invoice.ocrAttempts > 1;
+    const isReprocess = ocrToken > 1;
 
-    await prisma.invoiceExtraction.create({
-      data: {
-        invoiceId,
-        source,
-        rawResponse,
-        confidence: extracted.confidence ?? undefined,
-        ocrStartedAt,
-        ocrFinishedAt,
-        ocrDurationMs,
-        isReprocess,
-        issuerName:    extracted.issuerName,
-        issuerCif:     extracted.issuerCif,
-        receiverName:  extracted.receiverName,
-        receiverCif:   extracted.receiverCif,
-        invoiceNumber: extracted.invoiceNumber,
-        invoiceDate:   safeParseDate(extracted.invoiceDate),
-        taxBase:       extracted.taxBase,
-        vatRate:       extracted.vatRate,
-        vatAmount:     extracted.vatAmount,
-        irpfRate:      extracted.irpfRate,
-        irpfAmount:    extracted.irpfAmount,
-        totalAmount:   extracted.totalAmount,
-        isValid,
-      },
-    });
+    // Se guarda dentro de la transaccion vallada, mas abajo: si esta
+    // ejecucion ya no es la duena, sus cajas y su confianza no pueden salir
+    // en la revision junto a los datos de la ejecucion buena.
+    const extractionData = {
+      invoiceId,
+      source,
+      rawResponse,
+      confidence: extracted.confidence ?? undefined,
+      ocrStartedAt,
+      ocrFinishedAt,
+      ocrDurationMs,
+      isReprocess,
+      issuerName:    extracted.issuerName,
+      issuerCif:     extracted.issuerCif,
+      receiverName:  extracted.receiverName,
+      receiverCif:   extracted.receiverCif,
+      invoiceNumber: extracted.invoiceNumber,
+      invoiceDate:   safeParseDate(extracted.invoiceDate),
+      taxBase:       extracted.taxBase,
+      vatRate:       extracted.vatRate,
+      vatAmount:     extracted.vatAmount,
+      irpfRate:      extracted.irpfRate,
+      irpfAmount:    extracted.irpfAmount,
+      totalAmount:   extracted.totalAmount,
+      isValid,
+    } satisfies Prisma.InvoiceExtractionUncheckedCreateInput;
 
     // ── Auto-ruteo multicliente ──────────────────────────────────────────────
     // Si la factura se subió en modo "clasificar" (trae candidatos), decidimos
@@ -261,13 +285,9 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     const isUnclassified = isRoutingUpload && routingReason !== null;
 
     // Normalizacion de NIFs y deteccion de tipo de operacion a partir del
-    // prefijo del NIF (parser en validators.ts para no tocar OCR). Se
-    // calcula ya aqui (en vez de mas abajo, donde se usaba antes) porque
-    // detectIssues necesita una pista de operationType para avisar de IVA
-    // no-cero en intracomunitarias antes de decidir el estado de la factura.
+    // prefijo del NIF (parser en validators.ts para no tocar OCR).
     const issuerParsed   = parseTaxId(extracted.issuerCif);
     const receiverParsed = parseTaxId(extracted.receiverCif);
-    const operationTypeHint = (invoice.type === "PURCHASE" ? issuerParsed : receiverParsed).operationType;
 
     // El cliente hace falta ya aqui: su marca de Recargo de Equivalencia
     // decide si se propone el recargo, y eso tiene que estar hecho ANTES de
@@ -291,14 +311,6 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
         extracted.vatLines[p.index].equivalenceSurchargeAmount = p.amount;
       }
     }
-
-    // Detect issues (duplicates, low confidence, math mismatch, IVA no-cero
-    // en intracomunitarias, etc.). En las "Por clasificar" no tiene sentido
-    // (aún no hay cliente real).
-    const issues = isUnclassified ? [] : await detectIssues(invoiceId, extracted, invoice, operationTypeHint);
-    const targetStatus: InvoiceStatus = isUnclassified
-      ? "PENDING_ROUTING"
-      : issues.length > 0 ? "NEEDS_ATTENTION" : "PENDING_REVIEW";
 
     // vatRate denormalizado: solo significativo cuando hay una unica linea.
     // Multi-IVA -> null (el desglose vive en InvoiceVatLine).
@@ -392,35 +404,30 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
         }).catch(() => null)
       : null;
     // Lo aprendido (tipo de operacion, retencion) se aplica por NIF aunque el
-    // nombre no coincida: en el plan de A3 los nombres vienen cortados o
-    // escritos de otra forma, y exigirlo dejaba sin aplicar lo aprendido a
-    // muchos terceros reales. La revision avisa del nombre distinto. Lo
-    // asignado "siempre" como bienes/servicios si exige el mismo nombre: con
-    // dos terceros que comparten numero (418306763) seria la eleccion del otro.
+    // nombre no coincida; la revision avisa del nombre distinto. El tipo de
+    // operacion y bienes/servicios, con la misma funcion que al clasificar.
     const knownEntry = foundEntry;
-    const entryIsSameThirdParty = foundEntry != null && entryNameMatches(foundEntry, otherPartyName);
-    // Lo aprendido se guardo en el sentido de aquella factura; una fila
-    // compartida entre compras y ventas puede traer un tipo que aqui no
-    // existe (INTRACOM_SERVICIOS en una emitida exportaria un 8 que en
-    // expedidas significa otra cosa).
-    const learnedOperationType = knownEntry?.defaultOperationType ?? null;
-    const baseOperationType =
-      learnedOperationType && OPERATION_TYPE_OPTIONS[invoice.type].includes(learnedOperationType)
-        ? learnedOperationType
-        : otherParty.operationType;
-
-    // Bienes o servicios en intracomunitarias: lo asignado "siempre" a este
-    // tercero manda y, si no hay, lo que diga la IA. En compras decide el
-    // codigo (3 bienes / 8 servicios); en ventas va aparte (cuenta 700/705).
-    const intracomProposal = proposeIntracomGoodsType({
+    const intracomProposal = proposeOperationType({
       direction: invoice.type,
-      operationType: baseOperationType,
-      thirdParty: entryIsSameThirdParty
-        ? (invoice.type === "SALE" ? knownEntry?.intracomGoodsTypeSale : knownEntry?.intracomGoodsTypePurchase) ?? null
-        : null,
+      prefixOperationType: otherParty.operationType,
+      otherPartyName,
+      entry: knownEntry,
       ai: extracted.supplyType,
     });
     const operationType = intracomProposal.operationType;
+
+    // Detect issues (duplicates, low confidence, math mismatch, IVA no-cero
+    // en intracomunitarias, etc.). En las "Por clasificar" no tiene sentido
+    // (aún no hay cliente real). Va despues de decidir el tipo de operacion
+    // final (el aprendido del tercero incluido): con la pista del prefijo del
+    // NIF, una inversion del sujeto pasivo con cuota 0 salia como desglose
+    // descuadrado (revision 1 del PR #7).
+    const issues = isUnclassified
+      ? []
+      : await detectIssues(invoiceId, extracted, invoice, operationType, { persist: false });
+    const targetStatus: InvoiceStatus = isUnclassified
+      ? "PENDING_ROUTING"
+      : issues.length > 0 ? "NEEDS_ATTENTION" : "PENDING_REVIEW";
 
     // ── Deteccion de retencion IRPF ────────────────────────────────────
     //
@@ -480,7 +487,10 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     const sumBasesAll = vatLines.reduce((s, l) => s + l.taxBase, 0);
     const retentionBase = retentionType ? sumBasesAll : null;
     const computedIrpfAmount = retentionType && retentionRate != null
-      ? parseFloat(((sumBasesAll * retentionRate) / 100).toFixed(2))
+      // El mismo redondeo que la pantalla (percentOf): con toFixed, 100,30
+      // al 15 % daba 15,04 frente a los 15,05 impresos y la factura quedaba
+      // isValid=false sin ninguna incidencia.
+      ? percentOf(sumBasesAll, retentionRate)
       : (extracted.irpfAmount ?? null);
     const finalIrpfRate = retentionRate ?? extracted.irpfRate ?? null;
     const finalIrpfAmount = computedIrpfAmount;
@@ -558,34 +568,24 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     if (signed.lines.length > 0 && signed.totalAmount !== null) {
       const sBase = signed.lines.reduce((s, l) => s + l.taxBase, 0);
       const sAmount = signed.lines.reduce((s, l) => s + l.vatAmount, 0);
-      const expected = sBase + sAmount + totalSurchargeAmount - (signed.irpfAmount ?? 0);
-      const diff = Math.abs(
-        Math.round(expected * 100) - Math.round(signed.totalAmount * 100)
-      );
-      finalIsValid = diff <= 2;
+      finalIsValid = isInvoiceBalanced({
+        sumBase: sBase, sumAmount: sAmount, sumSurcharge: totalSurchargeAmount,
+        irpf: signed.irpfAmount ?? 0, total: signed.totalAmount,
+      });
     } else {
       finalIsValid = isValid;
     }
 
     // Copy OCR data to Invoice (datos finales — gestor los editará)
-    await prisma.$transaction([
-      // Reemplazar lineas previas (idempotente: si reproceso, borra y mete).
-      prisma.invoiceVatLine.deleteMany({ where: { invoiceId } }),
-      ...(signed.lines.length > 0
-        ? [prisma.invoiceVatLine.createMany({
-            data: signed.lines.map((l, i) => ({
-              invoiceId,
-              position:  i,
-              taxBase:   l.taxBase,
-              vatRate:   l.vatRate,
-              vatAmount: l.vatAmount,
-              equivalenceSurchargeRate:   lineSurcharges[i].rate,
-              equivalenceSurchargeAmount: lineSurcharges[i].amount,
-            })),
-          })]
-        : []),
-      prisma.invoice.update({
-        where: { id: invoiceId },
+    //
+    // Todo en una transaccion que empieza por la escritura condicionada a que
+    // la factura siga en ANALYZING con el ocrAttempts de este claim (F-008).
+    // Si mientras analizaba la rechazaron, dividieron o validaron, o el cron
+    // la relanzo, no se toca nada: ni lineas, ni incidencias, ni historial,
+    // ni auditoria.
+    const written = await prisma.$transaction(async (tx) => {
+      const fenced = await tx.invoice.updateMany({
+        where: ocrFenceWhere(invoiceId, ocrToken),
         data: {
           status: targetStatus,
           // Tipo detectado (si se subió como "No lo sé" y el OCR lo resolvió);
@@ -627,45 +627,77 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
           isValid: finalIsValid,
           lastOcrError:  null,
         },
-      }),
-    ]);
+      });
+      if (fenced.count === 0) return false;
 
-    await transitionStatus(invoiceId, "ANALYZING", targetStatus, triggeredByUserId);
+      await tx.invoiceExtraction.create({ data: extractionData });
 
-    await appendAuditLogs([{
-      invoiceId,
-      userId: triggeredByUserId,
-      field: "status",
-      oldValue: "UPLOADED",
-      newValue: targetStatus,
-    }]);
+      // Reemplazar lineas previas (idempotente: si reproceso, borra y mete).
+      await tx.invoiceVatLine.deleteMany({ where: { invoiceId } });
+      if (signed.lines.length > 0) {
+        await tx.invoiceVatLine.createMany({
+          data: signed.lines.map((l, i) => ({
+            invoiceId,
+            position:  i,
+            taxBase:   l.taxBase,
+            vatRate:   l.vatRate,
+            vatAmount: l.vatAmount,
+            equivalenceSurchargeRate:   lineSurcharges[i].rate,
+            equivalenceSurchargeAmount: lineSurcharges[i].amount,
+          })),
+        });
+      }
+      if (issues.length > 0) {
+        await tx.invoiceIssue.createMany({
+          data: issues.map((issue) => ({
+            invoiceId,
+            type: issue.type,
+            description: issue.description,
+            field: issue.field ?? null,
+          })),
+        });
+      }
+      await tx.invoiceStatusHistory.create({
+        data: { invoiceId, fromStatus: "ANALYZING", toStatus: targetStatus, changedBy: triggeredByUserId },
+      });
+      await appendAuditLogs([{
+        invoiceId,
+        userId: triggeredByUserId,
+        field: "status",
+        oldValue: "UPLOADED",
+        newValue: targetStatus,
+      }], tx);
+      return true;
+    }, OCR_WRITE_TRANSACTION_OPTIONS);
+    if (!written) {
+      console.warn(`[processInvoice] ${invoiceId}: la factura cambio mientras se analizaba (ocrAttempts=${ocrToken}); no se escribe el resultado`);
+    }
   } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : String(err);
     // Clasificar el error en un codigo del catalogo. Lo persistimos como
     // prefijo "[ERR-OCR-XXX] mensaje tecnico" para que la UI pueda
     // separarlos y mostrar el chip de codigo.
-    const code = classifyOcrError(errorMsg);
+    const code = classifyOcrError(err);
     // Mensaje LIMPIO para el gestor (nada de stacks de Prisma en la UI). El
     // detalle técnico completo se queda en el log para depuración.
     const userMsg = `[${code}] ${userMessageForOcrError(code)}`;
-    await prisma.invoice.update({
-      where: { id: invoiceId },
-      data: { status: "OCR_ERROR", lastOcrError: userMsg },
-    });
-    await transitionStatus(invoiceId, "ANALYZING", "OCR_ERROR", triggeredByUserId, userMsg);
     console.error(`[processInvoice] ${code}:`, err);
+    // Mismo fencing que el final: un error de una ejecucion que ya no es la
+    // duena no puede pasar a OCR_ERROR una factura rechazada o validada.
+    try {
+      await prisma.$transaction(async (tx) => {
+        const fenced = await tx.invoice.updateMany({
+          where: ocrFenceWhere(invoiceId, ocrToken),
+          data: { status: "OCR_ERROR", lastOcrError: userMsg },
+        });
+        if (fenced.count === 0) return;
+        await tx.invoiceStatusHistory.create({
+          data: { invoiceId, fromStatus: "ANALYZING", toStatus: "OCR_ERROR", changedBy: triggeredByUserId, reason: userMsg },
+        });
+      });
+    } catch (writeErr) {
+      console.error(`[processInvoice] ${invoiceId}: no se pudo guardar el OCR_ERROR:`, writeErr);
+    }
   }
-}
-
-/** Clasifica un error de OCR en un codigo del catalogo. Heuristica simple:
- *  no necesita ser perfecta, solo ayudar al soporte a triagear sin tener
- *  que abrir logs. */
-function classifyOcrError(msg: string): "ERR-OCR-001" | "ERR-OCR-002" | "ERR-OCR-003" | "ERR-OCR-004" {
-  const lower = msg.toLowerCase();
-  if (lower.includes("timeout") || lower.includes("timed out")) return "ERR-OCR-003";
-  if (lower.includes("download") || lower.includes("storage") || lower.includes("404")) return "ERR-OCR-004";
-  if (lower.includes("invalid") || lower.includes("corrupt") || lower.includes("malformed")) return "ERR-OCR-002";
-  return "ERR-OCR-001";
 }
 
 /** ¿El fallo de OCR es transitorio (merece reintento) o determinista? Los
@@ -678,13 +710,3 @@ function isTransientOcrError(msg: string): boolean {
   return /timeout|timed out|rate limit|too many requests|429|econnreset|etimedout|enotfound|fetch failed|network|socket hang up|503|502|500|unavailable|overloaded/.test(m);
 }
 
-/** Mensaje en español, apto para el gestor, según el código de error. El stack
- *  técnico nunca se muestra en la UI (va al log). */
-function userMessageForOcrError(code: "ERR-OCR-001" | "ERR-OCR-002" | "ERR-OCR-003" | "ERR-OCR-004"): string {
-  switch (code) {
-    case "ERR-OCR-003": return "El análisis tardó demasiado. Vuelve a procesarla.";
-    case "ERR-OCR-004": return "No se pudo descargar el archivo. Vuelve a procesarla.";
-    case "ERR-OCR-002": return "No se pudieron leer los datos del documento (ilegible o con formato no válido). Revísala manualmente.";
-    default:            return "No se pudo procesar la factura. Vuelve a intentarlo o revísala manualmente.";
-  }
-}

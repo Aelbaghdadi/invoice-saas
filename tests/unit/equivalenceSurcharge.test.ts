@@ -83,6 +83,14 @@ describe("foldSurchargeLines — el recargo colado como línea de IVA", () => {
   });
 });
 
+describe("redondeo del recargo igual que en el resto (revisión 2 del PR #7)", () => {
+  it("118,75 al 5,2 % son 6,18 (con toFixed salía 6,17)", () => {
+    expect(completeReadSurcharges([line(118.75, 21, 24.94, 5.2, null)])[0].equivalenceSurchargeAmount).toBe(6.18);
+    expect(proposeSurchargesFromTotal([line(118.75, 21, 24.94)], 149.87, null))
+      .toEqual([expect.objectContaining({ rate: 5.2, amount: 6.18 })]);
+  });
+});
+
 describe("completeReadSurcharges — la IA leyó solo la mitad", () => {
   it("con el % calcula la cuota", () => {
     expect(completeReadSurcharges([line(100, 21, 21, 5.2, null)])[0].equivalenceSurchargeAmount).toBe(5.2);

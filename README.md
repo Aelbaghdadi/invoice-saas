@@ -81,8 +81,9 @@ npm run build        # prisma generate + next build
 npm start            # producción local
 
 npm run lint         # ESLint
-npm test             # Vitest (unit, en src/lib y similares)
+npm test             # Vitest (unit, tests/unit; sin BD, corren en el build de Docker)
 npm run test:watch   # Vitest watch
+npm run test:integration  # Vitest contra un Postgres de pruebas (ver abajo)
 npm run test:e2e     # Playwright (tests/e2e)
 
 # Prisma
@@ -134,9 +135,28 @@ scripts/                       # Scripts operacionales (bootstrap admin,
                                 # seed demo, capturar screenshots...)
 
 tests/
-├── unit/                      # Vitest
+├── unit/                      # Vitest, sin BD (barrera del build)
+├── integration/               # Vitest contra Postgres de pruebas
 └── e2e/                       # Playwright
 ```
+
+## Tests de integración
+
+Van contra un Postgres de pruebas, nunca contra el de `DATABASE_URL` (en
+local, Supabase): la URL sale solo de `TEST_DATABASE_URL`. Cada test la
+vacía, así que tiene que ser una base de datos **vacía la primera vez** y con
+nombre de pruebas (`facturocr_test`); si no, el harness no arranca.
+
+```bash
+# Postgres local con Docker (o createdb facturocr_test en uno instalado)
+docker run -d --name facturocr-test -p 55432:5432 \
+  -e POSTGRES_PASSWORD=test -e POSTGRES_DB=facturocr_test postgres:16
+
+export TEST_DATABASE_URL=postgresql://postgres:test@127.0.0.1:55432/facturocr_test
+npm run test:integration   # aplica las migraciones y ejecuta tests/integration
+```
+
+Detalles (qué se simula, factorías, carreras): ARCHITECTURE.md → Testing.
 
 ## Flujo de una factura
 

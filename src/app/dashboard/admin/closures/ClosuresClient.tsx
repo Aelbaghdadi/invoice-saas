@@ -5,22 +5,8 @@ import { useRouter } from "next/navigation";
 import { useToast } from "@/components/ui/Toast";
 import { Select } from "@/components/ui/Select";
 import { Lock, Loader2 } from "lucide-react";
+import { MONTH_OPTIONS } from "@/lib/period";
 import { closePeriod } from "./actions";
-
-const MONTHS = [
-  { value: "1", label: "Enero" },
-  { value: "2", label: "Febrero" },
-  { value: "3", label: "Marzo" },
-  { value: "4", label: "Abril" },
-  { value: "5", label: "Mayo" },
-  { value: "6", label: "Junio" },
-  { value: "7", label: "Julio" },
-  { value: "8", label: "Agosto" },
-  { value: "9", label: "Septiembre" },
-  { value: "10", label: "Octubre" },
-  { value: "11", label: "Noviembre" },
-  { value: "12", label: "Diciembre" },
-];
 
 const YEARS = Array.from({ length: 5 }, (_, i) => {
   const y = new Date().getFullYear() - i;
@@ -64,32 +50,36 @@ export function ClosuresClient({ clients }: Props) {
       </h2>
       <div className="grid grid-cols-4 gap-4">
         <div>
-          <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+          <label htmlFor="cierre-cliente" className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
             Cliente
           </label>
           <Select
+            id="cierre-cliente"
             value={clientId}
             onChange={setClientId}
             options={clients.map((c) => ({ value: c.id, label: `${c.name} (${c.cif})` }))}
           />
         </div>
         <div>
-          <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+          <label htmlFor="cierre-mes" className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
             Mes
           </label>
-          <Select value={month} onChange={setMonth} options={MONTHS} />
+          <Select id="cierre-mes" value={month} onChange={setMonth} options={MONTH_OPTIONS} />
         </div>
         <div>
-          <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+          <label htmlFor="cierre-anio" className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
             Año
           </label>
-          <Select value={year} onChange={setYear} options={YEARS} />
+          <Select id="cierre-anio" value={year} onChange={setYear} options={YEARS} />
         </div>
         <div className="flex items-end">
+          {/* Mismo verde y candado que "Cerrar periodo" en Lotes: el rojo se
+              reserva para lo destructivo (rechazar, eliminar). */}
           <button
+            type="button"
             onClick={handleClose}
             disabled={isPending || !clientId}
-            className="flex w-full items-center justify-center gap-2 rounded-lg bg-red-600 px-4 py-2.5 text-[13px] font-semibold text-white transition hover:bg-red-700 disabled:opacity-50"
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-[13px] font-semibold text-white transition hover:bg-emerald-700 disabled:opacity-50"
           >
             {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />}
             Cerrar periodo

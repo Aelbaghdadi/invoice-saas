@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { Search, Check, Loader2 } from "lucide-react";
 import { assignClientToWorker, unassignClientFromWorker } from "../actions";
+import { matchesSearch } from "@/lib/listing";
 
 type ClientRow = { id: string; name: string; cif: string };
 
@@ -21,11 +22,7 @@ export function AssignmentsPanel({
   const [, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
-  const filtered = allClients.filter((c) => {
-    const q = query.trim().toLowerCase();
-    if (!q) return true;
-    return c.name.toLowerCase().includes(q) || c.cif.toLowerCase().includes(q);
-  });
+  const filtered = allClients.filter((c) => matchesSearch([c.name, c.cif], query));
 
   const toggle = (clientId: string) => {
     const isAssigned = assigned.has(clientId);

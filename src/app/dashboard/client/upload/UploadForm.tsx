@@ -20,22 +20,7 @@ import {
   type UploadStatus,
   type UploadResult,
 } from "@/lib/uploadDirectClient";
-import { quarterStartMonth, QUARTER_OPTIONS } from "@/lib/period";
-
-const MONTHS = [
-  { value: 1, label: "Enero" },
-  { value: 2, label: "Febrero" },
-  { value: 3, label: "Marzo" },
-  { value: 4, label: "Abril" },
-  { value: 5, label: "Mayo" },
-  { value: 6, label: "Junio" },
-  { value: 7, label: "Julio" },
-  { value: 8, label: "Agosto" },
-  { value: 9, label: "Septiembre" },
-  { value: 10, label: "Octubre" },
-  { value: 11, label: "Noviembre" },
-  { value: 12, label: "Diciembre" },
-];
+import { quarterStartMonth, QUARTER_OPTIONS, MONTH_OPTIONS } from "@/lib/period";
 
 const YEARS = Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - i);
 
@@ -197,19 +182,21 @@ export function UploadForm({ clientId }: Props) {
           </div>
         </div>
 
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <div>
-            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+            <label htmlFor="upload-period" className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
               {periodType === "MONTHLY" ? "Mes" : "Trimestre"}
             </label>
             {periodType === "MONTHLY" ? (
               <Select
+                id="upload-period"
                 value={String(month)}
                 onChange={(v) => setMonth(Number(v))}
-                options={MONTHS.map((m) => ({ value: String(m.value), label: m.label }))}
+                options={MONTH_OPTIONS}
               />
             ) : (
               <Select
+                id="upload-period"
                 value={String(quarter)}
                 onChange={(v) => setQuarter(Number(v))}
                 options={QUARTER_OPTIONS.map((q) => ({ value: String(q.value), label: q.label }))}
@@ -217,20 +204,22 @@ export function UploadForm({ clientId }: Props) {
             )}
           </div>
           <div>
-            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+            <label htmlFor="upload-year" className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
               Año
             </label>
             <Select
+              id="upload-year"
               value={String(year)}
               onChange={(v) => setYear(Number(v))}
               options={YEARS.map((y) => ({ value: String(y), label: String(y) }))}
             />
           </div>
           <div>
-            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+            <label htmlFor="upload-type" className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
               Tipo
             </label>
             <Select
+              id="upload-type"
               value={type}
               onChange={(v) => setType(v as "PURCHASE" | "SALE")}
               options={[
@@ -271,7 +260,7 @@ export function UploadForm({ clientId }: Props) {
           <span className="text-blue-600">selecciona archivos</span>
         </p>
         <p className="mt-1 text-[12px] text-slate-400">
-          PDF, XML, JPG, PNG, WEBP · Máximo 20 MB por archivo
+          PDF, XML, JPG, PNG, WEBP o HEIC (fotos del móvil) · Máximo 20 MB por archivo
         </p>
       </div>
 

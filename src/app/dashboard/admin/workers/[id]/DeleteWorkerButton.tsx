@@ -3,14 +3,22 @@
 import { useState, useTransition } from "react";
 import { Trash2, Loader2 } from "lucide-react";
 import { deleteWorker } from "../actions";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 
 export function DeleteWorkerButton({ workerId, disabled }: { workerId: string; disabled: boolean }) {
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const { confirm, dialog } = useConfirm();
 
-  const handleClick = () => {
+  const handleClick = async () => {
     if (disabled) return;
-    if (!confirm("¿Eliminar este gestor? Esta acción no se puede deshacer.")) return;
+    const ok = await confirm({
+      title: "¿Eliminar este gestor?",
+      message: "Perderá el acceso a la aplicación. Esta acción no se puede deshacer.",
+      confirmLabel: "Eliminar gestor",
+      tone: "danger",
+    });
+    if (!ok) return;
     setError(null);
     startTransition(async () => {
       const res = await deleteWorker(workerId);
@@ -30,6 +38,7 @@ export function DeleteWorkerButton({ workerId, disabled }: { workerId: string; d
         Eliminar gestor
       </button>
       {error && <p className="mt-2 text-[12px] text-red-600">{error}</p>}
+      {dialog}
     </div>
   );
 }

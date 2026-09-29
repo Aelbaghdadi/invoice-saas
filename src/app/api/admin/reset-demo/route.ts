@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   if (body?.confirm !== "RESET") {
     return NextResponse.json(
-      { error: "Falta confirmacion. Envia { confirm: 'RESET' } en el body." },
+      { error: "Falta confirmación. Envía { confirm: 'RESET' } en el body." },
       { status: 400 },
     );
   }

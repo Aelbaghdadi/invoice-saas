@@ -4,9 +4,9 @@ import { useState, useTransition, useEffect, useCallback, useMemo, useRef } from
 import { useToast } from "@/components/ui/Toast";
 import {
   CheckCircle2, AlertTriangle, Save, ChevronLeft, ChevronRight, ChevronDown,
-  Loader2, AlertCircle, ExternalLink, FileText, Image as ImageIcon,
+  Loader2, AlertCircle, Download, FileText, Image as ImageIcon,
   XCircle, RefreshCw, CheckCheck, Plus, Trash2,
-  Globe, Scissors, Sparkles,
+  Globe, Scissors, Sparkles, Lock,
 } from "lucide-react";
 import { saveInvoiceFields, validateInvoice, rejectInvoice, deferInvoice, confirmThirdPartyName, type ReviewState } from "./actions";
 import dynamic from "next/dynamic";
@@ -27,8 +27,24 @@ import {
   type RetentionTypeName,
   type IntracomGoodsTypeName,
 } from "@/lib/validators";
-import { dateMatchesPeriod, periodLabel, type PeriodTypeName } from "@/lib/period";
-import { invoiceBalanceDiffCents } from "@/lib/invoiceBalance";
+import { dateMatchesPeriod, periodLabel, MONTH_NAMES, MONTH_OPTIONS, type PeriodTypeName } from "@/lib/period";
+import { formatAmountEs, formatEur } from "@/lib/format";
+import type { AppError } from "@/lib/errorCodes";
+import { Select, type SelectOption } from "@/components/ui/Select";
+import { InvoiceStatusBadge } from "@/components/ui/InvoiceStatusBadge";
+import {
+  NEEDS_REVIEW,
+  REJECT_CATEGORY_LABEL,
+  isReviewReadOnly,
+  reviewActionBlockReason,
+  reviewLockReason,
+} from "@/lib/invoiceStatuses";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
+import { invoiceBalanceDiffCents, isInvoiceBalanced } from "@/lib/invoiceBalance";
+import { amountFieldsProblem, parseVatLineInputs, vatLinesProblem } from "@/lib/vatLineInput";
+import { validationProblems } from "@/lib/invoiceRules";
+import { percentOf } from "@/lib/money";
+import { describeVatLineMismatch, vatLineMismatches, type VatLineMismatch } from "@/lib/vatLineChecks";
 import { sanitizeAccountingAccountInput, padAccountingAccount } from "@/lib/accountingAccount";
 import {
   isIntracomOperation,
@@ -45,6 +61,29 @@ import {
 import { isForeignCurrency } from "@/lib/currency";
 
 const RETENTION_TYPE_OPTIONS: RetentionTypeName[] = ["PROFESSIONAL", "RENT"];
+
+const RETENTION_SELECT_OPTIONS: SelectOption[] = [
+  { value: "", label: "Sin retención" },
+  ...RETENTION_TYPE_OPTIONS.map((rt) => ({ value: rt, label: RETENTION_TYPE_LABEL[rt] })),
+];
+
+const TYPE_OPTIONS: SelectOption[] = [
+  { value: "PURCHASE", label: "Recibida (compra)" },
+  { value: "SALE", label: "Emitida (venta)" },
+];
+
+const RECTIFICATIVE_TYPE_OPTIONS: SelectOption[] = [
+  { value: "BY_DIFFERENCE", label: "1 · Por diferencias (solo el delta)" },
+  { value: "BY_SUBSTITUTION", label: "2 · Por sustitución (anula y reemplaza)" },
+];
+
+const REJECT_CATEGORY_OPTIONS: SelectOption[] = [
+  { value: "", label: "Categoría (opcional)" },
+  ...Object.entries(REJECT_CATEGORY_LABEL).map(([value, label]) => ({ value, label })),
+];
+
+/** Texto de un error de las actions, venga con codigo o sin el. */
+const errorText = (e: AppError | string) => (typeof e === "string" ? e : e.message);
 import Link from "next/link";
 import PdfViewer from "@/components/ui/PdfViewerDynamic";
 import ImageViewer from "@/components/ui/ImageViewer";
@@ -117,7 +156,7 @@ const FIELD_LABELS: Record<string, string> = {
   issuerCif:    "CIF emisor",
   receiverName: "Nombre receptor",
   receiverCif:  "CIF receptor",
-  invoiceNumber:"N° Factura",
+  invoiceNumber:"Nº factura",
   invoiceDate:  "Fecha",
   taxBase:      "Base imponible",
   vatRate:      "% IVA",
@@ -163,11 +202,30 @@ type Props = {
     equivalenceSurchargeRate: number | null;
     equivalenceSurchargeAmount: number | null;
   }[];
+  /** Anterior y siguiente del lote en cualquier estado (flechas). */
   prevId: string | null;
   nextId: string | null;
+  /** Siguiente pendiente despues de esta: a donde van Validar, Rechazar y
+   *  Posponer. */
+  nextPendingId?: string | null;
   position: number;
   batchTotal: number;
+  /** Facturas del lote ya terminadas (validadas, rechazadas, exportadas). */
+  doneCount?: number;
+  /** Por que no se puede validar aunque el estado lo permita (p. ej. una
+   *  rechazada que el cliente ya sustituyo), o null. Lo calcula la pagina con
+   *  la misma regla que el servidor. */
+  validateBlockReason?: string | null;
+  /** Por que no se ofrece Dividir aunque el estado lo permita (ya tiene
+   *  hijas), o null. */
+  splitBlockReason?: string | null;
+  /** Pendientes que quedan en la cola actual (esta incluida si lo esta). */
+  pendingInBucket?: number;
+  /** El periodo contable de la factura esta cerrado: no se puede guardar. */
+  periodClosed?: boolean;
   backHref: string;
+  /** Listado de origen, para conservarlo al saltar a la siguiente. */
+  back?: string | null;
   extraction: ExtractionData | null;
   issues: IssueData[];
   suggestedAccount?: SuggestedAccount;
@@ -270,11 +328,38 @@ function fmtDate(d: Date | null | undefined) {
   return new Date(d).toISOString().slice(0, 10);
 }
 
-export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false, initialVatLines, prevId, nextId, position, batchTotal, backHref, extraction, issues, suggestedAccount, accountMatchedByName, accountNameMismatch = false, thirdPartyGoodsType = null, canRememberGoodsType = false, boundingBoxes, queueSuffix = "", bucket = "all", sessionContext, avgOcrDurationMs, genericAccounts }: Props) {
+export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false, initialVatLines, prevId, nextId, nextPendingId = null, position, batchTotal, doneCount = 0, pendingInBucket = 0, periodClosed = false, validateBlockReason = null, splitBlockReason = null, backHref, back = null, extraction, issues, suggestedAccount, accountMatchedByName, accountNameMismatch = false, thirdPartyGoodsType = null, canRememberGoodsType = false, boundingBoxes, queueSuffix = "", bucket = "all", sessionContext, avgOcrDurationMs, genericAccounts }: Props) {
   const { success, error } = useToast();
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const isImage = invoice.fileType.startsWith("image/");
   const isPdf   = invoice.fileType === "application/pdf";
   const isXml   = invoice.fileType.includes("xml");
+
+  // En que punto esta la factura. Con las flechas se llega tambien a las ya
+  // terminadas, y la pantalla tiene que decir en cual se esta y ofrecer solo
+  // lo que tiene sentido: una validada se corrige, no se vuelve a validar.
+  const isValidated = invoice.status === "VALIDATED" || invoice.status === "EXPORTED";
+  const isRejected  = invoice.status === "REJECTED";
+  const isExported  = exportedAt != null;
+  const isPending   = !isValidated && !isRejected;
+  // Una exportada ya esta en A3, y con el periodo cerrado no se cambia nada:
+  // ni se rechaza ni se divide (el servidor tambien lo impide).
+  const canReject = !isExported && !isRejected && !periodClosed;
+  const canSplit  = !isExported && !isRejected && !periodClosed && !splitBlockReason;
+  // Analizandose, dividida o por clasificar: el servidor rechaza guardar,
+  // validar, rechazar y dividir (F-015). Los botones salen deshabilitados con
+  // el motivo, y la dividida y la por clasificar quedan en solo lectura.
+  const lockReason = reviewLockReason(invoice.status);
+  const readOnly   = isReviewReadOnly(invoice.status);
+  // Cada boton y cada atajo con el motivo de SU accion, el mismo que da el
+  // servidor: una EXPORTED sin lote (datos antiguos) se guarda, pero no se
+  // rechaza ni se divide.
+  const saveBlock     = reviewActionBlockReason(invoice.status, "save");
+  const rejectBlock   = reviewActionBlockReason(invoice.status, "reject");
+  const splitBlock    = reviewActionBlockReason(invoice.status, "split");
+  const validateBlock = reviewActionBlockReason(invoice.status, "validate", { reopen: isRejected });
+  // Solo las que estan por revisar; con el OCR en curso el servidor lo rechaza.
+  const canDefer  = NEEDS_REVIEW.includes(invoice.status);
 
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(true);
@@ -455,6 +540,20 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     (invoice.accountingPeriodMonth !== null && invoice.accountingPeriodMonth !== invoice.periodMonth) ||
     (invoice.accountingPeriodYear !== null && invoice.accountingPeriodYear !== invoice.periodYear);
   const [showAccountingPanel, setShowAccountingPanel] = useState<boolean>(accountingDiffers);
+  // En estado y no leido del DOM: con el desplegable propio, el id queda en
+  // el boton y su .value no es el mes.
+  const [accountingMonth, setAccountingMonth] = useState(String(invoice.accountingPeriodMonth ?? invoice.periodMonth));
+  const [accountingYear, setAccountingYear] = useState(String(invoice.accountingPeriodYear ?? invoice.periodYear));
+  const accountingDiffersNow =
+    accountingMonth !== String(invoice.periodMonth) || accountingYear !== String(invoice.periodYear);
+  // Los años de alrededor, mas los de la propia factura: una ya exportada de
+  // hace años tiene que poder abrirse sin que el desplegable pierda su año.
+  const accountingYearOptions: SelectOption[] = useMemo(() => {
+    const actual = new Date().getFullYear();
+    const years = new Set<number>([invoice.accountingPeriodYear ?? invoice.periodYear, invoice.periodYear]);
+    for (let y = actual + 1; y >= actual - 4; y--) years.add(y);
+    return [...years].sort((a, b) => b - a).map((y) => ({ value: String(y), label: String(y) }));
+  }, [invoice.accountingPeriodYear, invoice.periodYear]);
 
   // Cuota retencion: derivada de base * % / 100. La calculamos en cada
   // render para evitar quedar desincronizada si el gestor cambia base o %.
@@ -462,7 +561,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     const b = parseFloat(retentionBase);
     const r = parseFloat(retentionRate);
     if (!retentionType || isNaN(b) || isNaN(r)) return 0;
-    return Math.round((b * r)) / 100;
+    return percentOf(b, r);
   }, [retentionBase, retentionRate, retentionType]);
 
   // Al cambiar el tipo, siempre actualizamos el % al default del nuevo
@@ -515,7 +614,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
         const b = parseFloat(field === "taxBase" ? value : copy[idx].taxBase);
         const r = parseFloat(field === "vatRate" ? value : copy[idx].vatRate);
         if (!isNaN(b) && !isNaN(r)) {
-          copy[idx].vatAmount = (Math.round(b * r) / 100).toFixed(2);
+          copy[idx].vatAmount = percentOf(b, r).toFixed(2);
         }
       }
       // La cuota de recargo depende de la base: si se corrige la base y no se
@@ -525,7 +624,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
         const b = parseFloat(value);
         const r = parseFloat(copy[idx].equivalenceSurchargeRate);
         if (!isNaN(b) && !isNaN(r)) {
-          copy[idx].equivalenceSurchargeAmount = ((b * r) / 100).toFixed(2);
+          copy[idx].equivalenceSurchargeAmount = percentOf(b, r).toFixed(2);
         }
       }
       // Idem para la cuota de recargo cuando se edita el % de recargo. Si se
@@ -537,7 +636,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
         if (value.trim() === "") {
           copy[idx].equivalenceSurchargeAmount = "";
         } else if (!isNaN(b) && !isNaN(r)) {
-          copy[idx].equivalenceSurchargeAmount = ((b * r) / 100).toFixed(2);
+          copy[idx].equivalenceSurchargeAmount = percentOf(b, r).toFixed(2);
         }
       }
       return copy;
@@ -584,7 +683,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       const suggested = !isNaN(rateNum) ? equivalenceSurchargeRateForVat(rateNum) : null;
       const baseNum = parseFloat(copy[idx].taxBase);
       const suggestedAmount = suggested != null && !isNaN(baseNum)
-        ? ((baseNum * suggested) / 100).toFixed(2)
+        ? percentOf(baseNum, suggested).toFixed(2)
         : "";
       copy[idx] = {
         ...copy[idx],
@@ -638,14 +737,43 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   // Math semaphore: Total = Σ Bases + Σ Cuotas + Σ Recargo - Retencion IRPF
   const totalNum   = parseFloat(totalAmount) || 0;
   const hasValues  = vatTotals.anyFilled && totalAmount;
-  const balanceDiffCents = invoiceBalanceDiffCents({
+  const balanceInput = {
     sumBase: vatTotals.sumBase,
     sumAmount: vatTotals.sumAmount,
     sumSurcharge: vatTotals.sumSurcharge,
     irpf: retentionAmount,
     total: totalNum,
-  });
-  const mathOk = hasValues ? balanceDiffCents === 0 : null;
+  };
+  const balanceDiffCents = invoiceBalanceDiffCents(balanceInput);
+  // Una linea a medio rellenar no cuadra nunca: el servidor no la guarda
+  // (F-014), asi que el semaforo tampoco puede salir en verde con ella.
+  // Mismo criterio que el servidor: lineas completas, y total y retencion
+  // con 2 decimales como mucho.
+  const vatLineIssue = vatLinesProblem(vatLines)
+    ?? amountFieldsProblem({
+      totalAmount,
+      ...(retentionType ? { retentionBase, retentionRate } : {}),
+    });
+  // Cuota que no es base × % en alguna linea (F-022): marca la linea, no
+  // bloquea. Las lineas a medio rellenar ya las dice vatLineIssue.
+  const lineMismatches = useMemo(() => {
+    const num = (v: string) => (v.trim() === "" ? NaN : Number(v.replace(",", ".")));
+    const found: VatLineMismatch[] = [];
+    vatLines.forEach((l, index) => {
+      const [taxBase, vatRate, vatAmount] = [num(l.taxBase), num(l.vatRate), num(l.vatAmount)];
+      if ([taxBase, vatRate, vatAmount].some(Number.isNaN)) return;
+      const surchargeRate = num(l.equivalenceSurchargeRate);
+      const surchargeAmount = num(l.equivalenceSurchargeAmount);
+      const line = {
+        taxBase, vatRate, vatAmount,
+        equivalenceSurchargeRate: Number.isNaN(surchargeRate) ? null : surchargeRate,
+        equivalenceSurchargeAmount: Number.isNaN(surchargeAmount) ? null : surchargeAmount,
+      };
+      for (const m of vatLineMismatches([line], operationType)) found.push({ ...m, index });
+    });
+    return found;
+  }, [vatLines, operationType]);
+  const mathOk = vatLineIssue ? false : hasValues ? isInvoiceBalanced(balanceInput) : null;
   // Lo que suman las lineas, para ensenarlo junto al total cuando no cuadra.
   const calculado = vatTotals.sumBase + vatTotals.sumAmount + vatTotals.sumSurcharge - retentionAmount;
 
@@ -668,19 +796,31 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
 
   // Auto-foco en el primer campo dudoso al cargar la factura. Si todo es
   // de alta confianza, no robamos el foco (asi Enter valida directamente).
+  // Una sola vez por factura: Guardar refresca la pagina, `confidence` llega
+  // como objeto nuevo y el foco saltaba al primer dudoso con su texto
+  // seleccionado mientras el gestor seguia tecleando en otro campo.
+  const autoFocusedFor = useRef<string | null>(null);
   useEffect(() => {
-    if (!confidence) return;
+    if (!confidence || autoFocusedFor.current === invoice.id) return;
     const order = [
       "issuerName", "issuerCif", "receiverName", "receiverCif",
       "invoiceNumber", "invoiceDate", "taxBase", "vatRate", "vatAmount", "totalAmount",
     ];
     const firstDubious = order.find((f) => {
       const s = confidence[f];
-      return s == null || s < 0.92;
+      if (s != null && s >= 0.92) return false;
+      // El lado del cliente es un input oculto: enfocarlo no hace nada.
+      const el = document.getElementById(f);
+      return !(el instanceof HTMLInputElement && el.type === "hidden");
     });
-    if (!firstDubious) return;
-    // Pequeno delay para ganar al focus inicial del body.
+    if (!firstDubious) {
+      autoFocusedFor.current = invoice.id;
+      return;
+    }
+    // Pequeno delay para ganar al focus inicial del body. Se marca dentro del
+    // timer: en StrictMode el primero se cancela y el segundo tiene que enfocar.
     const timer = setTimeout(() => {
+      autoFocusedFor.current = invoice.id;
       const el = document.getElementById(firstDubious) as HTMLInputElement | null;
       el?.focus();
       el?.select?.();
@@ -691,13 +831,16 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   // Prefetch de la siguiente factura: cuando ya estamos viendo la actual,
   // pedimos la URL firmada de la siguiente y precargamos el archivo en
   // background. Asi al validar y saltar, el visor aparece al instante.
+  // Pendiente: la siguiente es a la que lleva Validar. Ya terminada: la de
+  // la flecha ">".
+  const prefetchId = isPending ? nextPendingId : nextId;
   useEffect(() => {
-    if (!nextId) return;
+    if (!prefetchId) return;
     // Esperar a que la actual termine de cargar; no robar banda a la cosa
     // que el usuario necesita ver ya.
     const timer = setTimeout(async () => {
       try {
-        const res = await fetch(`/api/invoices/${nextId}/preview`);
+        const res = await fetch(`/api/invoices/${prefetchId}/preview`);
         if (!res.ok) return;
         const d = await res.json();
         if (!d?.url) return;
@@ -718,7 +861,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       }
     }, 800);
     return () => clearTimeout(timer);
-  }, [nextId]);
+  }, [prefetchId]);
 
   // Pega el texto seleccionado en el PDF en el último campo enfocado del form.
   const injectTextToField = useCallback((text: string) => {
@@ -763,8 +906,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     fd.set("vatLines", JSON.stringify(vatLines));
     fd.set("totalAmount",totalAmount);
     if (markedEuro) fd.set("currency", "EUR");
-    fd.set("accountingPeriodMonth", (document.getElementById("accountingPeriodMonth") as HTMLSelectElement)?.value ?? "");
-    fd.set("accountingPeriodYear",  (document.getElementById("accountingPeriodYear")  as HTMLSelectElement)?.value ?? "");
+    fd.set("accountingPeriodMonth", accountingMonth);
+    fd.set("accountingPeriodYear",  accountingYear);
     fd.set("supplierAccount", supplierAccountVal);
     fd.set("expenseAccount",  expenseAccountVal);
     fd.set("operationType", operationType);
@@ -782,35 +925,55 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     fd.set("rectificativeType", isRectificative ? rectificativeType : "");
     fd.set("art80Tres", isRectificative && art80Tres ? "1" : "0");
     fd.set("bucket", bucket);
+    if (back) fd.set("back", back);
     if (extra) Object.entries(extra).forEach(([k,v]) => fd.set(k,v));
     return fd;
-  }, [type, vatLines, totalAmount, markedEuro, invoiceDateVal, supplierAccountVal, expenseAccountVal, operationType, goodsTypeShown, shownSource, retentionType, retentionBase, retentionRate, retentionAmount, isRectificative, rectifiedInvoiceSeries, rectifiedInvoiceNumber, rectificativeType, art80Tres, invoice.id, invoice.updatedAt, bucket]);
+  }, [type, vatLines, totalAmount, markedEuro, invoiceDateVal, accountingMonth, accountingYear, supplierAccountVal, expenseAccountVal, operationType, goodsTypeShown, shownSource, retentionType, retentionBase, retentionRate, retentionAmount, isRectificative, rectifiedInvoiceSeries, rectifiedInvoiceNumber, rectificativeType, art80Tres, invoice.id, invoice.updatedAt, bucket, back]);
 
   const handleSave = () => {
+    if (saveBlock) {
+      error(saveBlock);
+      return;
+    }
+    if (vatLineIssue) {
+      triggerShake("math");
+      error(`No se han guardado los cambios: ${vatLineIssue}`);
+      return;
+    }
     startSave(async () => {
       const res = await saveInvoiceFields(null, buildFormData());
       setSaveState(res);
       if (res?.error) {
-        error("Error al guardar");
+        error(`No se han guardado los cambios: ${errorText(res.error)}`);
       } else {
         success("Cambios guardados");
       }
     });
   };
 
+  // "Reabrir y validar" en curso: viaja con la validacion (tambien si antes
+  // sale la pregunta de bienes/servicios). Enter nunca lo pone.
+  const reopenRef = useRef(false);
+
   const runValidate = (goodsTypeScope: GoodsTypeScope) => {
     setGoodsQuestion(null);
+    const reopen = reopenRef.current;
+    reopenRef.current = false;
     startValidate(async () => {
       const res = await validateInvoice(null, buildFormData({
-        nextId: nextId ?? "",
+        nextId: nextPendingId ?? "",
         goodsTypeScope,
         goodsTypeAssignedSeen: assignedGoodsType ?? "",
+        ...(reopen ? { reopen: "1" } : {}),
       }));
       setValidateState(res);
       if (res?.error) {
-        error("Error al guardar");
+        error(isValidated
+          ? `No se ha guardado la corrección: ${errorText(res.error)}`
+          : `No se ha podido validar: ${errorText(res.error)}`);
       } else {
-        success("Factura validada correctamente");
+        // Una ya validada no salta a otra: se queda en ella con la correccion.
+        success(isValidated ? "Corrección guardada" : "Factura validada");
       }
     });
   };
@@ -837,24 +1000,102 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   // puede capturar el click) pero tampoco valida: en vez de un texto en el
   // boton, resalta con un shake los campos de cuenta para que el aviso
   // salga de donde esta el problema.
+  // Lo mismo cuando el importe no cuadra o el CIF es el del cliente: antes
+  // Enter no hacia nada y el gestor no sabia por que.
   const shakeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [shakeAccounts, setShakeAccounts] = useState(false);
-  const triggerAccountsShake = () => {
+  const [shake, setShake] = useState<"accounts" | "math" | "cif" | null>(null);
+  const triggerShake = (target: "accounts" | "math" | "cif") => {
     if (shakeTimeoutRef.current) clearTimeout(shakeTimeoutRef.current);
-    setShakeAccounts(false);
+    setShake(null);
     requestAnimationFrame(() => {
-      setShakeAccounts(true);
-      shakeTimeoutRef.current = setTimeout(() => setShakeAccounts(false), 400);
+      setShake(target);
+      shakeTimeoutRef.current = setTimeout(() => setShake(null), 400);
     });
   };
 
-  const attemptValidate = () => {
-    if (isPendingValidate || cifConflict || mathOk === false) return;
-    if (accountsIncomplete) {
-      triggerAccountsShake();
-      return;
+  // Comprobaciones locales antes de validar (o de preguntar si se reabre):
+  // avisan de lo que falla y resaltan el campo. true si se puede seguir.
+  const validateChecksPass = (reopen: boolean): boolean => {
+    // En una rechazada, primero lo que impide reabrirla (ya sustituida, del
+    // buzon): si no, Enter decia «usa Reabrir y validar» en una pantalla que
+    // ya no ofrece ese boton. Despues, el estado: una rechazada solo se valida
+    // con «Reabrir y validar» (F-015), ni Enter ni el atajo la reabren.
+    const blocked = (isRejected ? validateBlockReason : null)
+      ?? reviewActionBlockReason(invoice.status, "validate", { reopen })
+      ?? validateBlockReason;
+    if (blocked) {
+      error(blocked);
+      return false;
     }
+    if (periodClosed) {
+      error("El periodo contable de esta factura está cerrado: hay que reabrirlo en Cierres para poder cambiarla.");
+      return false;
+    }
+    if (cifConflict) {
+      triggerShake("cif");
+      error("El CIF coincide con el del cliente: corrígelo antes de validar.");
+      return false;
+    }
+    if (vatLineIssue) {
+      triggerShake("math");
+      error(vatLineIssue);
+      return false;
+    }
+    // Lo mismo que exige el servidor al validar (invoiceRules), para decirlo
+    // aqui y resaltar el campo en vez de esperar al { error }.
+    const parsedLines = parseVatLineInputs(JSON.stringify(vatLines));
+    const [problem] = validationProblems({
+      type,
+      invoiceNumber: (document.getElementById("invoiceNumber") as HTMLInputElement | null)?.value ?? null,
+      invoiceDate: invoiceDateVal,
+      totalAmount: totalAmount.trim() === "" ? null : parseFloat(totalAmount.replace(",", ".")),
+      irpfAmount: retentionAmount,
+      lines: "lines" in parsedLines ? parsedLines.lines : [],
+      isRectificative,
+      // Limpio, como lo guarda el servidor: con «-» la pantalla dejaba validar
+      // y el servidor no.
+      thirdPartyTaxId: parseTaxId(counterpartyNif).clean || null,
+      thirdPartyCountry: parseTaxId(counterpartyNif).countryCode,
+      operationType,
+      supplierAccount: supplierAccountVal,
+      expenseAccount: expenseAccountVal,
+      simplifiedSupplierAccount: genericAccounts?.supplier ?? null,
+      currency: markedEuro ? "EUR" : invoice.currency,
+    });
+    if (problem) {
+      if (problem.rule === "descuadre") triggerShake("math");
+      if (problem.rule === "sin_cuentas") triggerShake("accounts");
+      error(problem.message);
+      return false;
+    }
+    // La misma regla que el servidor: sin esto «Reabrir y validar» pedia la
+    // confirmacion para acabar en este mismo error.
+    if (isIntracom && !goodsTypeShown) {
+      error("Marca si la entrega intracomunitaria es de bienes o de servicios antes de validar.");
+      return false;
+    }
+    return true;
+  };
+
+  const attemptValidate = (reopen = false) => {
+    if (isPendingValidate) return;
+    if (!validateChecksPass(reopen)) return;
+    reopenRef.current = reopen;
     handleValidate();
+  };
+
+  // Primero lo que falla en pantalla (CIF, cuadre, cuentas) y solo si pasa se
+  // pide la confirmacion: si no, se confirmaba para acabar en un aviso.
+  const attemptReopen = async () => {
+    if (isPendingValidate) return;
+    if (!validateChecksPass(true)) return;
+    const ok = await confirm({
+      title: "¿Reabrir y validar esta factura?",
+      message: "Dejará de estar rechazada, se borrará el motivo del rechazo y se validará con los datos que ves.",
+      confirmLabel: "Reabrir y validar",
+      tone: "primary",
+    });
+    if (ok) attemptValidate(true);
   };
 
   const handleReject = () => {
@@ -864,7 +1105,11 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       fd.set("invoiceId", invoice.id);
       fd.set("rejectionReason", rejectReason);
       if (rejectCategory) fd.set("rejectionCategory", rejectCategory);
-      fd.set("nextId", nextId ?? "");
+      fd.set("nextId", nextPendingId ?? "");
+      // Sin el bucket, rechazar en la cola de incidencias saltaba a la
+      // siguiente de todo el lote.
+      fd.set("bucket", bucket);
+      if (back) fd.set("back", back);
       const res = await rejectInvoice(null, fd);
       setRejectState(res);
       if (res?.error) {
@@ -880,7 +1125,9 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     startDefer(async () => {
       const fd = new FormData();
       fd.set("invoiceId", invoice.id);
-      fd.set("nextId", nextId ?? "");
+      fd.set("nextId", nextPendingId ?? "");
+      fd.set("bucket", bucket);
+      if (back) fd.set("back", back);
       const res = await deferInvoice(null, fd);
       // El action redirecciona en caso de exito; solo veremos retorno si hay error.
       if (res?.error) {
@@ -928,7 +1175,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     });
   };
 
-  const inputClass = "w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[13px] text-slate-800 outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-100";
+  const inputClass = "w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[13px] text-slate-800 outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500";
 
   // Props de estilo + tabIndex en funcion de la confianza OCR de cada campo.
   // Campos "seguros" (score alto) reciben tabIndex={-1} y color apagado:
@@ -939,9 +1186,24 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   // duplicado, Ctrl/Cmd+S guarda borrador, Alt+Arrow navega, "?" abre ayuda.
   useReviewShortcuts({
     onValidate: () => { attemptValidate(); },
-    onSave: () => { if (!isPendingSave) handleSave(); },
-    onReject: () => setShowRejectModal(true),
+    // En una validada, Ctrl+S guarda la correccion (sin pasar por borrador).
+    onSave: () => {
+      if (saveBlock) error(saveBlock);
+      else if (isValidated) attemptValidate();
+      else if (periodClosed) attemptValidate();
+      else if (!isPendingSave) handleSave();
+    },
+    onReject: () => {
+      if (!canReject) return;
+      if (rejectBlock) error(rejectBlock);
+      else setShowRejectModal(true);
+    },
     onMarkDuplicate: () => {
+      if (!canReject) return;
+      if (rejectBlock) {
+        error(rejectBlock);
+        return;
+      }
       setRejectCategory("DUPLICATE");
       setRejectReason((prev) => prev || "Factura duplicada");
       setShowRejectModal(true);
@@ -949,24 +1211,36 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     onNext: () => { if (nextId) router.push(`/dashboard/worker/review/${nextId}${queueSuffix}`); },
     onPrev: () => { if (prevId) router.push(`/dashboard/worker/review/${prevId}${queueSuffix}`); },
     onToggleHelp: () => setShowHelp((s) => !s),
-    isBlocked: () => showRejectModal || showHelp || showSplitModal || showSplitPdfModal || goodsQuestion !== null,
+    // Con «¿Reabrir y validar?» abierto, Ctrl+S guardaba por detras y
+    // Alt+flechas cambiaba de factura.
+    isBlocked: () => showRejectModal || showHelp || showSplitModal || showSplitPdfModal || goodsQuestion !== null || confirmDialog != null,
   });
 
   // Etiqueta del bucket activo en la sesion. Ayuda al gestor a saber
   // "estoy en la cola de incidencias" vs "la de validacion rapida".
   const bucketLabel =
-    bucket === "attention" ? "Incidencias" :
+    bucket === "attention" ? "Con incidencias" :
     bucket === "clean" ? "Listas para validar" :
     null;
 
-  // Progreso de la sesion: en "attention" y "clean", la factura actual
-  // sigue en la cola hasta que se valida/rechaza, asi que "posicion/total"
-  // ya es el indicador natural. % = (position-1)/total procesado.
-  const progressPct = batchTotal > 0 ? Math.round(((position - 1) / batchTotal) * 100) : 0;
+  // Progreso del lote: lo hecho, no la posicion. Con la posicion, volver
+  // con "<" a la 5 bajaba la barra al 4 % aunque hubiera 30 validadas.
+  const progressPct = batchTotal > 0 ? Math.round((doneCount / batchTotal) * 100) : 0;
 
-  const monthLabel = sessionContext
-    ? new Date(2000, sessionContext.periodMonth - 1).toLocaleString("es-ES", { month: "long" })
+  // Trimestral: "T3 2026", como en Lotes y en el resto de listados.
+  const batchPeriodLabel = sessionContext
+    ? periodLabel(invoice.periodType ?? "MONTHLY", sessionContext.periodMonth, sessionContext.periodYear)
     : null;
+
+  // Titulo: lo que el gestor reconoce (numero y tercero), no el nombre del
+  // fichero ("scan0042.pdf"), que queda en el tooltip.
+  const savedThirdParty = invoice.type === "SALE" ? invoice.receiverName : invoice.issuerName;
+  const headerTitle = [invoice.invoiceNumber, savedThirdParty].filter(Boolean).join(" · ") || invoice.filename;
+
+  // El rechazo se cierra con Escape y pinchando fuera, pero solo si el clic
+  // empezo fuera: al seleccionar texto del motivo y soltar fuera se cerraba.
+  const rejectBackdropDown = useRef(false);
+  const closeRejectModal = () => { setShowRejectModal(false); setRejectReason(""); };
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -978,7 +1252,12 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
             Volver
           </Link>
           <span className="text-slate-200">|</span>
-          <span className="text-[13px] font-semibold text-slate-800 max-w-[200px] truncate">{invoice.filename}</span>
+          <span className="max-w-[360px] truncate text-[13px] font-semibold text-slate-800" title={invoice.filename}>
+            {headerTitle}
+          </span>
+          {!isPending && (
+            <InvoiceStatusBadge status={invoice.status} exported={isExported} pendingReexport={pendingReexport} />
+          )}
         </div>
 
         {/* Navigation */}
@@ -992,24 +1271,40 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
             <kbd className="rounded bg-slate-100 px-1 text-[10px] font-semibold">?</kbd>
             atajos
           </button>
-          <span className="text-[12px] text-slate-400">{position} de {batchTotal}</span>
+          {/* En una que no se puede posponer (ya terminada, o con el OCR en
+              curso; se llega con las flechas), el camino de vuelta a lo que
+              queda por hacer. */}
+          {!canDefer && nextPendingId && (
+            <Link
+              href={`/dashboard/worker/review/${nextPendingId}${queueSuffix}`}
+              className="flex h-7 items-center gap-1 rounded-lg bg-blue-50 px-2.5 text-[12px] font-medium text-blue-700 hover:bg-blue-100"
+            >
+              Siguiente pendiente
+              <ChevronRight className="h-3.5 w-3.5" />
+            </Link>
+          )}
+          <span className="text-[12px] text-slate-400 tabular-nums">{position} de {batchTotal}</span>
           {prevId ? (
             <Link href={`/dashboard/worker/review/${prevId}${queueSuffix}`} prefetch
+              title="Factura anterior del lote (Alt+←)" aria-label="Factura anterior del lote"
               className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50">
               <ChevronLeft className="h-4 w-4" />
             </Link>
           ) : (
-            <button disabled className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-100 text-slate-200">
+            <button disabled title="Es la primera factura del lote" aria-label="Es la primera factura del lote"
+              className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-100 text-slate-200">
               <ChevronLeft className="h-4 w-4" />
             </button>
           )}
           {nextId ? (
             <Link href={`/dashboard/worker/review/${nextId}${queueSuffix}`} prefetch
+              title="Factura siguiente del lote (Alt+→)" aria-label="Factura siguiente del lote"
               className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50">
               <ChevronRight className="h-4 w-4" />
             </Link>
           ) : (
-            <button disabled className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-100 text-slate-200">
+            <button disabled title="Es la última factura del lote" aria-label="Es la última factura del lote"
+              className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-100 text-slate-200">
               <ChevronRight className="h-4 w-4" />
             </button>
           )}
@@ -1028,7 +1323,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                 falta en el form. */}
             <span className="font-mono text-[10px] text-slate-400">{sessionContext.clientCif}</span>
             <span className="text-slate-300">·</span>
-            <span className="capitalize">{monthLabel} {sessionContext.periodYear}</span>
+            <span>{batchPeriodLabel}</span>
             <span className="text-slate-300">·</span>
             <span>{type === "PURCHASE" ? "Recibidas" : "Emitidas"}</span>
             {bucketLabel && (
@@ -1055,8 +1350,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                 style={{ width: `${progressPct}%` }}
               />
             </div>
-            <span className="text-[11px] font-medium text-slate-500 tabular-nums">
-              {position}/{batchTotal}
+            <span className="whitespace-nowrap text-[11px] font-medium text-slate-500 tabular-nums">
+              {doneCount} de {batchTotal} hechas · {pendingInBucket === 0 ? "ninguna por revisar" : `${pendingInBucket} por revisar`}
             </span>
           </div>
         </div>
@@ -1105,10 +1400,10 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
               {isXml ? <FileText className="h-12 w-12" /> : <ImageIcon className="h-12 w-12" />}
               <p className="text-[13px]">{isXml ? "Archivo XML — datos extraídos automáticamente" : "Vista previa no disponible"}</p>
               {previewUrl && (
-                <a href={previewUrl} target="_blank" rel="noreferrer"
+                <a href={previewUrl} download
                   className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-blue-700">
-                  <ExternalLink className="h-3.5 w-3.5" />
-                  Abrir archivo
+                  <Download className="h-3.5 w-3.5" />
+                  Descargar archivo
                 </a>
               )}
             </div>
@@ -1120,16 +1415,87 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
           className="flex w-[45%] flex-col overflow-y-auto bg-white"
           onFocus={(e) => {
             const id = (e.target as HTMLElement).id;
-            if (id) lastFocusedFieldRef.current = id;
-            if (id) setActiveField(id);
+            if (!id) return;
+            // Destino de copiar desde el PDF: solo los campos que se pueden
+            // rellenar asi. Los desplegables tambien llevan id, y al tocar uno
+            // el texto seleccionado en el PDF ya no llegaba a ningun campo.
+            if (Object.hasOwn(FIELD_LABELS, id)) lastFocusedFieldRef.current = id;
+            setActiveField(id);
           }}
           onBlur={(e) => {
             if (!e.currentTarget.contains(e.relatedTarget as Node)) {
               setActiveField(null);
             }
           }}
+          // La rueda sobre un importe enfocado lo cambiaba (21 -> 20,99) al
+          // desplazar el panel. Se suelta el foco para que la rueda solo
+          // desplace y se devuelve en el siguiente frame, cuando la accion por
+          // defecto ya ha pasado: con el foco en el body, un Enter por reflejo
+          // validaba la factura. En un microtask seria antes de esa accion.
+          onWheel={(e) => {
+            const el = e.target;
+            if (!(el instanceof HTMLInputElement) || el.type !== "number" || document.activeElement !== el) return;
+            el.blur();
+            requestAnimationFrame(() => {
+              if (el.isConnected && document.activeElement === document.body) el.focus({ preventScroll: true });
+            });
+          }}
         >
           <div className="flex-1 px-4 py-3 space-y-2.5">
+
+            {periodClosed && (
+              <div className="flex items-start gap-2.5 rounded-xl bg-slate-100 px-4 py-3 text-slate-700">
+                <Lock className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                <div className="flex-1 text-[12px]">
+                  <p className="font-medium">Periodo cerrado</p>
+                  <p className="mt-0.5">
+                    No se puede cambiar esta factura. Si hay que corregirla, un administrador tiene que reabrir el periodo en Cierres.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {readOnly && lockReason && (
+              <div className="flex items-start gap-2.5 rounded-xl bg-slate-100 px-4 py-3 text-slate-700">
+                <Lock className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                <div className="flex-1 text-[12px]">
+                  <p className="font-medium">Solo de consulta</p>
+                  <p className="mt-0.5">{lockReason}</p>
+                </div>
+              </div>
+            )}
+
+            {isValidated && !isExported && (
+              <div className="flex items-start gap-2.5 rounded-xl bg-green-50 px-4 py-3 text-green-800">
+                <CheckCircle2 className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                <div className="flex-1 text-[12px]">
+                  <p className="font-medium">Factura ya validada</p>
+                  <p className="mt-0.5">
+                    Si corriges algo, pulsa «Guardar corrección»: sigue validada con los cambios.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {isRejected && (
+              <div className="flex items-start gap-2.5 rounded-xl bg-red-50 px-4 py-3 text-red-800">
+                <XCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                <div className="flex-1 text-[12px]">
+                  <p className="font-medium">
+                    Factura rechazada
+                    {invoice.rejectionCategory && REJECT_CATEGORY_LABEL[invoice.rejectionCategory]
+                      ? ` · ${REJECT_CATEGORY_LABEL[invoice.rejectionCategory]}`
+                      : ""}
+                  </p>
+                  {invoice.rejectionReason && (
+                    <p className="mt-0.5">Motivo: {invoice.rejectionReason}</p>
+                  )}
+                  <p className="mt-0.5 text-red-700/80">
+                    {validateBlockReason ?? "Para validarla, pulsa «Reabrir y validar»: dejará de estar rechazada y se borrará el motivo."}
+                  </p>
+                </div>
+              </div>
+            )}
 
             {/* Ya exportada: el gestor tiene que saber que lo que corrija
                 aqui NO esta en A3 hasta que se vuelva a exportar. */}
@@ -1161,10 +1527,14 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                   <p className="mt-0.5">
                     A3 solo admite euros. Convierte la base, las cuotas y el total a euros y después marca la factura en euros.
                   </p>
+                  {/* Fuera del fieldset: se deshabilita a mano. En solo lectura
+                      no guardaria nada. */}
                   <button
                     type="button"
                     onClick={() => setMarkedEuro(true)}
-                    className="mt-2 rounded-lg border border-amber-300 bg-white px-2.5 py-1 text-[12px] font-medium text-amber-800 hover:bg-amber-100"
+                    disabled={lockReason != null}
+                    title={lockReason ?? undefined}
+                    className="mt-2 rounded-lg border border-amber-300 bg-white px-2.5 py-1 text-[12px] font-medium text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-white"
                   >
                     Ya están en euros
                   </button>
@@ -1179,6 +1549,9 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
               <OcrProcessingBanner
                 startedAt={invoice.createdAt}
                 avgDurationMs={avgOcrDurationMs ?? undefined}
+                invoiceId={invoice.id}
+                status={invoice.status}
+                updatedAt={invoice.updatedAt}
               />
             )}
 
@@ -1225,6 +1598,22 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
               />
             )}
 
+            {/* Bloqueada (analizandose, dividida o por clasificar): un
+                fieldset deshabilitado desactiva todos los campos y botones de
+                dentro sin tocarlos uno a uno. Analizandose tambien: lo que se
+                tecleara se perderia en silencio al remontarse el formulario
+                cuando termina el OCR. */}
+            {/* Con el fieldset deshabilitado, los botones de dentro (tipos de
+                IVA, añadir linea, cuenta generica...) sin hover ni clic: si
+                no, parecia que se podian pulsar. Solo entonces: con la regla
+                sobre cualquier boton deshabilitado, la papelera de la unica
+                linea de IVA pasaba de 0,3 a 0,6 y parecia activa. Los
+                desplegables (Select) quedan fuera: traen su propio estilo y
+                asi conservan el tooltip con la etiqueta completa. */}
+            <fieldset
+              disabled={lockReason != null}
+              className="m-0 min-w-0 space-y-2.5 border-0 p-0 [&:disabled_button:not([role=combobox])]:pointer-events-none [&:disabled_button:not([role=combobox])]:opacity-60"
+            >
             {/* ── Cabecera 2 columnas: parte editable + datos factura ──────
                 El lado bloqueado (datos del cliente: nombre + CIF) ya
                 vive arriba en el strip de sesion — quitamos su bloque
@@ -1256,7 +1645,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                 </legend>
                 <div>
                   <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
-                    Nombre / Razón social
+                    Nombre / razón social
                     <ConfidenceHint score={confidence?.[lockedSide === "receiver" ? "issuerName" : "receiverName"] ?? null} />
                   </label>
                   {lockedSide === "receiver" ? (
@@ -1265,7 +1654,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                     <input id="receiverName" {...fp("receiverName")} defaultValue={invoice.receiverName ?? ""} />
                   )}
                 </div>
-                <div>
+                <div className={shake === "cif" ? "animate-shake" : undefined}>
                   <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
                     CIF / NIF
                     <ConfidenceHint score={confidence?.[lockedSide === "receiver" ? "issuerCif" : "receiverCif"] ?? null} />
@@ -1286,6 +1675,13 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                       onChange={(e) => setEditableReceiverCif(e.target.value)}
                       placeholder="B12345678"
                     />
+                  )}
+                  {/* Limpio, como en validateChecksPass: «-» no es un NIF. */}
+                  {type === "SALE" && !isIntracom && !parseTaxId(editableReceiverCif).clean && (
+                    <p className="mt-1 flex items-center gap-1 text-[11px] text-amber-600">
+                      <AlertTriangle className="h-3 w-3" />
+                      Venta sin NIF del destinatario: se puede validar, pero irá a A3 sin NIF
+                    </p>
                   )}
                   {(() => {
                     const v = lockedSide === "receiver" ? editableIssuerCif : editableReceiverCif;
@@ -1312,19 +1708,21 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                   Factura
                 </legend>
                 <div>
-                  <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
+                  <label htmlFor="invoiceType" className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
                     Tipo
                     {invoice.typeUnconfirmed && (
                       <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-700">
-                        <AlertTriangle className="h-2.5 w-2.5" /> Confirma
+                        <AlertTriangle className="h-2.5 w-2.5" /> Por confirmar
                       </span>
                     )}
                   </label>
-                  <select
-                    className={inputClass}
+                  <Select
+                    id="invoiceType"
+                    size="xs"
+                    options={TYPE_OPTIONS}
                     value={type}
-                    onChange={(e) => {
-                      const next = e.target.value as "PURCHASE" | "SALE";
+                    onChange={(value) => {
+                      const next = value as "PURCHASE" | "SALE";
                       setType(next);
                       // Una intracomunitaria sigue siendolo al cambiar de
                       // sentido: en compras bienes/servicios es el 3 o el 8 y
@@ -1336,11 +1734,15 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                       } else if (!OPERATION_TYPE_OPTIONS[next].includes(operationType)) {
                         setOperationType(OPERATION_TYPE_OPTIONS[next][0]);
                       }
+                      // Las genericas son de proveedor y gasto: en una emitida
+                      // no valen (y el servidor las rechaza), asi que se vacian.
+                      if (next === "SALE" && genericAccounts?.supplier
+                        && padAccountingAccount(supplierAccountVal.trim()) === padAccountingAccount(genericAccounts.supplier.trim())) {
+                        setSupplierAccount("");
+                        if (genericAccounts.expense && expenseAccountVal.trim() === genericAccounts.expense.trim()) setExpenseAccount("");
+                      }
                     }}
-                  >
-                    <option value="PURCHASE">Recibida (compra)</option>
-                    <option value="SALE">Emitida (venta)</option>
-                  </select>
+                  />
                   {invoice.typeUnconfirmed && (
                     <p className="mt-1 text-[11px] text-amber-600">
                       Tipo sin determinar automáticamente — indica si es emitida o recibida.
@@ -1348,8 +1750,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                   )}
                 </div>
                 <div>
-                  <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
-                    N factura
+                  <label htmlFor="invoiceNumber" className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
+                    Nº factura
                     <ConfidenceHint score={confidence?.invoiceNumber ?? null} />
                   </label>
                   <input id="invoiceNumber" {...fp("invoiceNumber")} defaultValue={invoice.invoiceNumber ?? ""} />
@@ -1378,7 +1780,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                   )}
                 </div>
                 <div>
-                  <label className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
+                  <label htmlFor="operationType" className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-slate-500">
                     Tipo de operación
                     {operationType !== "INTERIOR" && (
                       <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-amber-700">
@@ -1386,11 +1788,16 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                       </span>
                     )}
                   </label>
-                  <select
-                    className={inputClass}
+                  <Select
+                    id="operationType"
+                    size="xs"
                     value={operationType}
-                    onChange={(e) => {
-                      const next = e.target.value as OperationTypeName;
+                    options={(OPERATION_TYPE_OPTIONS[type].includes(operationType)
+                      ? OPERATION_TYPE_OPTIONS[type]
+                      : [...OPERATION_TYPE_OPTIONS[type], operationType]
+                    ).map((op) => ({ value: op, label: `${OPERATION_TYPE_CODE[op]} · ${operationTypeLabel(op, type)}` }))}
+                    onChange={(value) => {
+                      const next = value as OperationTypeName;
                       setOperationType(next);
                       // Elegir 3 u 8 en una compra es marcar bienes o servicios a mano.
                       if (type === "PURCHASE" && isIntracomOperation("PURCHASE", next)) {
@@ -1407,16 +1814,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                         }
                       }
                     }}
-                  >
-                    {(OPERATION_TYPE_OPTIONS[type].includes(operationType)
-                      ? OPERATION_TYPE_OPTIONS[type]
-                      : [...OPERATION_TYPE_OPTIONS[type], operationType]
-                    ).map((op) => (
-                      <option key={op} value={op}>
-                        {OPERATION_TYPE_CODE[op]} · {operationTypeLabel(op, type)}
-                      </option>
-                    ))}
-                  </select>
+                  />
                 </div>
               </fieldset>
             </div>
@@ -1495,7 +1893,9 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                     Operación intracomunitaria con IVA declarado: estas operaciones suelen ir con IVA 0%. Revisa el desglose antes de exportar.
                     <button
                       type="button"
-                      onClick={() => setVatLines((prev) => prev.map((l) => ({ ...l, vatRate: "0", vatAmount: "0" })))}
+                      // Solo las filas con base: a la fila vacia le dejaba % y cuota
+                      // y la convertia en una linea incompleta (F-014).
+                      onClick={() => setVatLines((prev) => prev.map((l) => (l.taxBase.trim() ? { ...l, vatRate: "0", vatAmount: "0" } : l)))}
                       className="ml-1 rounded-md border border-amber-300 bg-amber-50 px-2 py-0.5 font-semibold text-amber-700 hover:bg-amber-100"
                     >
                       Poner IVA a 0%
@@ -1592,17 +1992,16 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                         </div>
                       </div>
                       <div>
-                        <label className="mb-1 block text-[11px] font-medium text-slate-500">
+                        <label htmlFor="rectificativeType" className="mb-1 block text-[11px] font-medium text-slate-500">
                           Tipo de rectificación
                         </label>
-                        <select
-                          className={inputClass}
+                        <Select
+                          id="rectificativeType"
+                          size="xs"
                           value={rectificativeType}
-                          onChange={(e) => setRectificativeType(e.target.value as "BY_DIFFERENCE" | "BY_SUBSTITUTION")}
-                        >
-                          <option value="BY_DIFFERENCE">1 · Por diferencias (solo el delta)</option>
-                          <option value="BY_SUBSTITUTION">2 · Por sustitución (anula y reemplaza)</option>
-                        </select>
+                          options={RECTIFICATIVE_TYPE_OPTIONS}
+                          onChange={(value) => setRectificativeType(value as "BY_DIFFERENCE" | "BY_SUBSTITUTION")}
+                        />
                       </div>
                       <label className="flex items-center gap-2 text-[11px] text-slate-600">
                         <input
@@ -1637,11 +2036,9 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                   </span>
                   <span className={
                     "inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider " +
-                    (accountingDiffers ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-500")
+                    (accountingDiffersNow ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-500")
                   }>
-                    {new Date(0, (invoice.accountingPeriodMonth ?? invoice.periodMonth) - 1).toLocaleString("es", { month: "long" })}
-                    {" "}
-                    {invoice.accountingPeriodYear ?? invoice.periodYear}
+                    {MONTH_NAMES[Number(accountingMonth) - 1]} {accountingYear}
                   </span>
                 </span>
                 <ChevronDown
@@ -1654,55 +2051,27 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                 <div className="border-t border-slate-100 p-3 pt-2">
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="mb-1 block text-[11px] font-medium text-slate-500">Mes</label>
-                      <select
+                      <label htmlFor="accountingPeriodMonth" className="mb-1 block text-[11px] font-medium text-slate-500">Mes</label>
+                      <Select
                         id="accountingPeriodMonth"
-                        className={inputClass}
-                        defaultValue={String(invoice.accountingPeriodMonth ?? invoice.periodMonth)}
-                      >
-                        {Array.from({ length: 12 }, (_, i) => (
-                          <option key={i + 1} value={i + 1}>
-                            {new Date(0, i).toLocaleString("es", { month: "long" })}
-                          </option>
-                        ))}
-                      </select>
+                        size="xs"
+                        value={accountingMonth}
+                        options={MONTH_OPTIONS}
+                        onChange={setAccountingMonth}
+                      />
                     </div>
                     <div>
-                      <label className="mb-1 block text-[11px] font-medium text-slate-500">Año</label>
-                      <select
+                      <label htmlFor="accountingPeriodYear" className="mb-1 block text-[11px] font-medium text-slate-500">Año</label>
+                      <Select
                         id="accountingPeriodYear"
-                        className={inputClass}
-                        defaultValue={String(invoice.accountingPeriodYear ?? invoice.periodYear)}
-                      >
-                        {Array.from({ length: 5 }, (_, i) => {
-                          const y = new Date().getFullYear() - 2 + i;
-                          return <option key={y} value={y}>{y}</option>;
-                        })}
-                      </select>
+                        size="xs"
+                        value={accountingYear}
+                        options={accountingYearOptions}
+                        onChange={setAccountingYear}
+                      />
                     </div>
                   </div>
                 </div>
-              )}
-              {/* Hidden inputs cuando el panel esta cerrado: los selects
-                  no estan en el DOM y `buildFormData` lee del DOM via id.
-                  Garantizamos que siempre se envia un valor (el por
-                  defecto = periodo de subida) aunque el gestor nunca
-                  abra el panel. */}
-              {!showAccountingPanel && (
-                <>
-                  <input
-                    type="hidden"
-                    id="accountingPeriodMonth"
-                    value={String(invoice.accountingPeriodMonth ?? invoice.periodMonth)}
-                    readOnly
-                  />
-                  <input
-                    type="hidden"
-                    id="accountingPeriodYear"
-                    value={String(invoice.accountingPeriodYear ?? invoice.periodYear)}
-                    readOnly
-                  />
-                </>
               )}
             </div>
 
@@ -1737,8 +2106,11 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                     else if (e.key === "2") { e.preventDefault(); updateVatLine(idx, "vatRate", "10"); }
                     else if (e.key === "3") { e.preventDefault(); updateVatLine(idx, "vatRate", "4"); }
                   };
+                  const mismatches = lineMismatches.filter((m) => m.index === idx);
+                  const vatMismatch = mismatches.some((m) => m.kind === "iva");
                   return (
-                    <div key={idx} className="grid grid-cols-[1fr_90px_1fr_28px] gap-2 items-start">
+                    <div key={idx} className="flex flex-col gap-1">
+                    <div className="grid grid-cols-[1fr_90px_1fr_28px] gap-2 items-start">
                       <input
                         type="number"
                         step="0.01"
@@ -1788,7 +2160,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                         step="0.01"
                         min={minVal}
                         id={idx === 0 ? "vatAmount" : undefined}
-                        className={inputClass}
+                        className={vatMismatch ? inputClass.replace("border-slate-200 bg-white", "border-amber-400 bg-amber-50") : inputClass}
                         value={line.vatAmount}
                         onChange={(e) => updateVatLine(idx, "vatAmount", e.target.value)}
                         placeholder="210.00"
@@ -1797,20 +2169,27 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                         type="button"
                         onClick={() => removeVatLine(idx)}
                         disabled={vatLines.length === 1}
-                        title="Eliminar linea"
+                        title="Eliminar línea"
                         className="flex h-[34px] w-7 items-center justify-center rounded-md text-slate-400 hover:bg-red-50 hover:text-red-500 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-400"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
+                    </div>
+                    {mismatches.map((m) => (
+                      <p key={m.kind} className="flex items-center gap-1.5 px-1 text-[11px] text-amber-700">
+                        <AlertTriangle className="h-3 w-3 flex-shrink-0" />
+                        {describeVatLineMismatch(m)}. Revisa el tipo o la cuota.
+                      </p>
+                    ))}
                     </div>
                   );
                 })}
 
                 {/* Totales calculados */}
                 <div className="grid grid-cols-[1fr_90px_1fr_28px] gap-2 border-t border-slate-200 pt-2 text-[12px] font-medium text-slate-600">
-                  <div className="px-3 py-1 tabular-nums">{vatTotals.sumBase.toFixed(2)}</div>
+                  <div className="px-3 py-1 tabular-nums">{formatAmountEs(vatTotals.sumBase)}</div>
                   <div className="px-1 py-1 text-[10px] uppercase text-slate-400">Suma</div>
-                  <div className="px-3 py-1 tabular-nums">{vatTotals.sumAmount.toFixed(2)}</div>
+                  <div className="px-3 py-1 tabular-nums">{formatAmountEs(vatTotals.sumAmount)}</div>
                   <div></div>
                 </div>
 
@@ -1820,7 +2199,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                   className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-slate-200 py-1.5 text-[11px] font-medium text-slate-500 hover:bg-slate-50"
                 >
                   <Plus className="h-3 w-3" />
-                  Anadir linea de IVA
+                  Añadir línea de IVA
                 </button>
               </div>
 
@@ -1865,18 +2244,14 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                         </button>
                       )}
                     </div>
-                    <select
-                      className={inputClass}
+                    <Select
+                      id="retentionType"
+                      aria-label="Tipo de retención"
+                      size="xs"
                       value={retentionType}
-                      onChange={(e) => handleRetentionTypeChange(e.target.value)}
-                    >
-                      <option value="">Sin retención</option>
-                      {RETENTION_TYPE_OPTIONS.map((rt) => (
-                        <option key={rt} value={rt}>
-                          {RETENTION_TYPE_LABEL[rt]}
-                        </option>
-                      ))}
-                    </select>
+                      options={RETENTION_SELECT_OPTIONS}
+                      onChange={handleRetentionTypeChange}
+                    />
                     {retentionType && (
                       <div className="grid grid-cols-3 gap-2">
                         <div>
@@ -1909,7 +2284,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                           <input
                             type="text"
                             className={`${inputClass} bg-slate-50 cursor-not-allowed`}
-                            value={retentionAmount.toFixed(2)}
+                            value={formatAmountEs(retentionAmount)}
                             readOnly
                             tabIndex={-1}
                           />
@@ -1938,11 +2313,11 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                 >
                   <span className="flex items-center gap-2">
                     <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                      Recargo de Equivalencia
+                      Recargo de equivalencia
                     </span>
                     {vatTotals.sumSurcharge > 0 && (
                       <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-blue-700">
-                        {vatTotals.sumSurcharge.toFixed(2)} €
+                        {formatEur(vatTotals.sumSurcharge)}
                       </span>
                     )}
                   </span>
@@ -1962,7 +2337,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                     className="mt-1 flex w-full items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-left text-[12px] text-amber-700"
                   >
                     <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
-                    Cliente en Recargo de Equivalencia — revisa si esta factura lo lleva
+                    Cliente en recargo de equivalencia: revisa si esta factura lo lleva
                   </button>
                 )}
                 {showSurchargePanel && (
@@ -2048,10 +2423,10 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
             {/* Semaforo de cuadre matematico. Se muestra aqui, justo encima de
                 las cuentas contables, para que se vea sin desplazarse hasta
                 arriba en pantallas pequenas (a peticion de una gestora). */}
-            {hasValues && (
+            {(hasValues || vatLineIssue) && (
               <div className={`flex items-center gap-2.5 rounded-xl px-4 py-3 ${
                 mathOk ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"
-              }`}>
+              } ${shake === "math" ? "animate-shake" : ""}`}>
                 {mathOk
                   ? <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
                   : <AlertTriangle className="h-4 w-4 flex-shrink-0" />
@@ -2060,9 +2435,11 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                   {/* El recargo cuenta en el calculo desde que va por linea:
                       sin el, el mensaje de error ensenaba una diferencia que
                       no cuadraba con la que hacia ponerse rojo al semaforo. */}
-                  {mathOk
+                  {vatLineIssue
+                    ? vatLineIssue
+                    : mathOk
                     ? `Validación matemática correcta — Σ Bases + Σ Cuotas${vatTotals.sumSurcharge !== 0 ? " + Σ Recargo" : ""}${retentionAmount > 0 ? " − Retención" : ""} = Total`
-                    : `Error: ${calculado.toFixed(2)} ≠ ${totalNum.toFixed(2)} (diferencia: ${(Math.abs(balanceDiffCents) / 100).toFixed(2)} €)`
+                    : `No cuadra: las líneas suman ${formatEur(calculado)} y el total es ${formatEur(totalNum)} (diferencia: ${formatEur(Math.abs(balanceDiffCents) / 100)})`
                   }
                 </span>
               </div>
@@ -2071,7 +2448,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
             {/* Cuentas contables */}
             <fieldset className="rounded-xl border border-slate-200 bg-white p-3">
               <legend className="px-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-                Cuentas Contables
+                Cuentas contables
               </legend>
               {suggestedAccount?.supplierAccount && !invoice.supplierAccount && !accountNameMismatch && (
                 <div className="mb-3 flex items-center gap-2 rounded-lg bg-green-50 px-3 py-2 text-[12px] text-green-700">
@@ -2122,10 +2499,10 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="mb-1 block text-[11px] font-medium text-slate-500">
-                    {type === "SALE" ? "Cuenta Cliente (43x)" : "Cuenta Proveedor (4xx)"}
+                    {type === "SALE" ? "Cuenta cliente (43x)" : "Cuenta proveedor (4xx)"}
                   </label>
                   <input
-                    className={`${inputClass} ${shakeAccounts && !supplierAccountVal.trim() ? "animate-shake" : ""}`}
+                    className={`${inputClass} ${shake === "accounts" && !supplierAccountVal.trim() ? "animate-shake" : ""}`}
                     value={supplierAccountVal}
                     onChange={(e) => setSupplierAccount(sanitizeAccountingAccountInput(e.target.value))}
                     onBlur={(e) => setSupplierAccount(padAccountingAccount(e.target.value))}
@@ -2134,10 +2511,10 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                 </div>
                 <div>
                   <label className="mb-1 block text-[11px] font-medium text-slate-500">
-                    {type === "SALE" ? "Cuenta Ingreso (7xx)" : "Cuenta Gasto (6xx)"}
+                    {type === "SALE" ? "Cuenta ingreso (7xx)" : "Cuenta gasto (6xx)"}
                   </label>
                   <input
-                    className={`${inputClass} ${shakeAccounts && !expenseAccountVal.trim() ? "animate-shake" : ""}`}
+                    className={`${inputClass} ${shake === "accounts" && !expenseAccountVal.trim() ? "animate-shake" : ""}`}
                     value={expenseAccountVal}
                     onChange={(e) => {
                       const value = sanitizeAccountingAccountInput(e.target.value);
@@ -2170,7 +2547,9 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
               </div>
               {/* Cuenta genérica para tickets/simplificadas sin datos: vuelca
                   la cuenta configurada por cliente con un clic. */}
-              {genericAccounts?.supplier && (
+              {/* Solo en recibidas: la generica es de proveedor y gasto, y en
+                  una emitida A3 recibiria la venta contra esas cuentas. */}
+              {genericAccounts?.supplier && type === "PURCHASE" && (
                 <button
                   type="button"
                   onClick={() => {
@@ -2185,97 +2564,137 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                 </button>
               )}
             </fieldset>
+            </fieldset>
 
 
           </div>
 
           {/* Sticky action bar */}
-          <div className="sticky bottom-0 flex items-center gap-2.5 border-t border-slate-100 bg-white px-5 py-3">
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={isPendingSave}
-              title="Guardar borrador (Ctrl+S)"
-              className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3.5 py-2 text-[13px] font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
-            >
-              {isPendingSave ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-              Guardar
-              <kbd className="ml-1 rounded bg-slate-100 px-1 text-[10px] font-semibold text-slate-500">⌘S</kbd>
-            </button>
-            {isImage && previewUrl && (
+          {/* Por debajo de 2xl los botones secundarios se quedan en icono (el
+              title lo explica): con texto no cabian en el 45 % derecho y el
+              boton verde se salia del panel. */}
+          <div className="sticky bottom-0 flex items-center gap-2 border-t border-slate-100 bg-white px-4 py-3 2xl:gap-2.5 2xl:px-5">
+            {/* En una validada no hay borrador: se guarda como correccion. */}
+            {!isValidated && (
+              <button
+                type="button"
+                onClick={handleSave}
+                disabled={isPendingSave || periodClosed || saveBlock != null}
+                title={saveBlock ?? (periodClosed ? "Periodo cerrado" : "Guardar sin validar (Ctrl+S)")}
+                aria-label="Guardar sin validar"
+                className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-200 px-3 py-2 text-[13px] font-medium text-slate-600 transition hover:bg-slate-50 disabled:opacity-50 2xl:px-3.5"
+              >
+                {isPendingSave ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+                <span className="hidden 2xl:inline">Guardar</span>
+                <kbd className="ml-1 hidden rounded bg-slate-100 px-1 text-[10px] font-semibold text-slate-500 2xl:inline">Ctrl+S</kbd>
+              </button>
+            )}
+            {canSplit && isImage && previewUrl && (
               <button
                 type="button"
                 onClick={() => setShowSplitModal(true)}
-                title="Dividir esta foto en varios tickets"
-                className="flex items-center gap-1.5 rounded-lg border border-blue-200 px-3.5 py-2 text-[13px] font-medium text-blue-700 transition hover:bg-blue-50"
+                disabled={splitBlock != null}
+                title={splitBlock ?? "Dividir esta foto en varios tickets"}
+                aria-label="Dividir esta foto en varios tickets"
+                className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-blue-200 px-3 py-2 text-[13px] font-medium text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent 2xl:px-3.5"
               >
                 <Scissors className="h-3.5 w-3.5" />
-                Dividir
+                <span className="hidden 2xl:inline">Dividir</span>
               </button>
             )}
-            {isPdf && previewUrl && (
+            {canSplit && isPdf && previewUrl && (
               <button
                 type="button"
                 onClick={() => setShowSplitPdfModal(true)}
-                title="Dividir este PDF en varias facturas por páginas"
-                className="flex items-center gap-1.5 rounded-lg border border-blue-200 px-3.5 py-2 text-[13px] font-medium text-blue-700 transition hover:bg-blue-50"
+                disabled={splitBlock != null}
+                title={splitBlock ?? "Dividir este PDF en varias facturas por páginas"}
+                aria-label="Dividir este PDF en varias facturas por páginas"
+                className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-blue-200 px-3 py-2 text-[13px] font-medium text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent 2xl:px-3.5"
               >
                 <Scissors className="h-3.5 w-3.5" />
-                Dividir
+                <span className="hidden 2xl:inline">Dividir</span>
               </button>
             )}
-            <button
-              type="button"
-              onClick={() => setShowRejectModal(true)}
-              title="Rechazar (R)"
-              className="flex items-center gap-1.5 rounded-lg border border-red-200 px-3.5 py-2 text-[13px] font-medium text-red-600 transition hover:bg-red-50 disabled:opacity-50"
-            >
-              <XCircle className="h-3.5 w-3.5" />
-              Rechazar
-              <kbd className="ml-1 rounded bg-red-50 px-1 text-[10px] font-semibold text-red-500">R</kbd>
-            </button>
-            <button
-              type="button"
-              onClick={handleDefer}
-              disabled={isPendingDefer || !nextId}
-              title={!nextId ? "No hay más facturas en la cola" : "Posponer: saltar a la siguiente sin tocar el estado"}
-              className="flex items-center gap-1.5 rounded-lg border border-amber-200 px-3.5 py-2 text-[13px] font-medium text-amber-700 transition hover:bg-amber-50 disabled:opacity-40"
-            >
-              {isPendingDefer
-                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                : <ChevronRight className="h-3.5 w-3.5" />
-              }
-              Posponer
-            </button>
-            <button
-              type="button"
-              onClick={attemptValidate}
-              disabled={isPendingValidate || cifConflict || mathOk === false}
-              title={
-                cifConflict
-                  ? "Corrige el CIF antes de validar (coincide con el cliente)"
-                  : mathOk === false
-                    ? "El importe no cuadra — corrígelo antes de validar"
-                    : accountsIncomplete
-                      ? "Faltan cuentas contables — rellénalas antes de validar"
-                      : "Validar y pasar a la siguiente (Enter)"
-              }
-              className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3.5 py-2 text-[13px] font-semibold text-white transition disabled:opacity-50 ${
-                cifConflict
-                  ? "bg-red-500 hover:bg-red-600"
-                  : accountsIncomplete
-                    ? "bg-green-600 opacity-50 cursor-not-allowed"
-                    : "bg-green-600 hover:bg-green-700"
-              }`}
-            >
-              {isPendingValidate
-                ? <Loader2 className="h-4 w-4 animate-spin" />
-                : <CheckCircle2 className="h-4 w-4" />
-              }
-              {cifConflict ? "CIF duplicado" : "Validar factura"}
-              <kbd className="ml-1 rounded bg-white/20 px-1 text-[10px] font-semibold text-white">Enter</kbd>
-              {nextId && <ChevronRight className="h-4 w-4" />}
-            </button>
+            {canReject && (
+              <button
+                type="button"
+                onClick={() => setShowRejectModal(true)}
+                disabled={rejectBlock != null}
+                title={rejectBlock ?? "Rechazar (R)"}
+                className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-red-200 px-3 py-2 text-[13px] font-medium text-red-600 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent 2xl:px-3.5"
+              >
+                <XCircle className="h-3.5 w-3.5" />
+                Rechazar
+                <kbd className="ml-1 hidden rounded bg-red-50 px-1 text-[10px] font-semibold text-red-500 2xl:inline">R</kbd>
+              </button>
+            )}
+            {canDefer && (
+              <button
+                type="button"
+                onClick={handleDefer}
+                disabled={isPendingDefer || !nextPendingId}
+                title={!nextPendingId ? "No quedan más facturas por revisar en el lote" : "Posponer: saltar a la siguiente sin tocar esta"}
+                aria-label="Posponer"
+                className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-amber-200 px-3 py-2 text-[13px] font-medium text-amber-700 transition hover:bg-amber-50 disabled:opacity-40 2xl:px-3.5"
+              >
+                {isPendingDefer
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  : <ChevronRight className="h-3.5 w-3.5" />
+                }
+                <span className="hidden 2xl:inline">Posponer</span>
+              </button>
+            )}
+            {(() => {
+              // Rechazada que el cliente ya sustituyo: no se ofrece reabrirla
+              // (el motivo sale en el aviso de rechazo).
+              if (isRejected && validateBlockReason) return null;
+              // No se deshabilita por el importe o el CIF: asi el clic (y
+              // Enter) explica que falla en vez de no hacer nada.
+              const blocked = cifConflict || mathOk === false || accountsIncomplete;
+              return (
+                <button
+                  type="button"
+                  onClick={() => (isRejected ? attemptReopen() : attemptValidate())}
+                  disabled={isPendingValidate || periodClosed || validateBlock != null || validateBlockReason != null}
+                  title={
+                    validateBlock || validateBlockReason
+                      ? (validateBlock ?? validateBlockReason)!
+                      : periodClosed
+                      ? "Periodo cerrado"
+                      : isRejected
+                        ? "Quitar el rechazo y validar la factura (pide confirmación)"
+                      : cifConflict
+                        ? "Corrige el CIF antes de validar (coincide con el del cliente)"
+                        : vatLineIssue
+                          ? vatLineIssue
+                        : mathOk === false
+                          ? "El importe no cuadra: corrígelo antes de validar"
+                          : accountsIncomplete
+                            ? "Faltan cuentas contables: rellénalas antes de validar"
+                            : isValidated
+                              ? "Guardar los cambios de esta factura ya validada (Enter)"
+                              : "Validar y pasar a la siguiente (Enter)"
+                  }
+                  className={`flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-3.5 py-2 text-[13px] font-semibold text-white transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                    cifConflict
+                      ? "bg-red-500 hover:bg-red-600"
+                      : blocked
+                        ? "bg-green-600 opacity-50"
+                        : "bg-green-600 hover:bg-green-700"
+                  }`}
+                >
+                  {isPendingValidate
+                    ? <Loader2 className="h-4 w-4 animate-spin" />
+                    : isValidated ? <Save className="h-4 w-4" /> : <CheckCircle2 className="h-4 w-4" />
+                  }
+                  {cifConflict ? "CIF igual al del cliente" : isValidated ? "Guardar corrección" : isRejected ? "Reabrir y validar" : "Validar factura"}
+                  {!isRejected && (
+                    <kbd className="ml-1 hidden rounded bg-white/20 px-1 text-[10px] font-semibold text-white 2xl:inline">Enter</kbd>
+                  )}
+                  {!isValidated && nextPendingId && <ChevronRight className="h-4 w-4" />}
+                </button>
+              );
+            })()}
           </div>
 
           {/* Shortcuts help overlay */}
@@ -2285,23 +2704,39 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
               onClick={() => setShowHelp(false)}
             >
               <div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="shortcuts-title"
                 className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl"
                 onClick={(e) => e.stopPropagation()}
+                // Los atajos globales estan parados con la ayuda abierta: la
+                // propia ayuda se cierra con Escape y con "?", como dice.
+                onKeyDown={(e) => {
+                  if (e.key === "Escape" || e.key === "?") {
+                    e.preventDefault();
+                    // Sin esto el evento llega a window despues del re-render:
+                    // el listener de useReviewShortcuts ya no esta bloqueado y
+                    // vuelve a abrir la ayuda.
+                    e.stopPropagation();
+                    setShowHelp(false);
+                  }
+                }}
               >
-                <h3 className="text-[15px] font-semibold text-slate-800">Atajos de teclado</h3>
+                <h3 id="shortcuts-title" className="text-[15px] font-semibold text-slate-800">Atajos de teclado</h3>
                 <p className="mt-1 text-[12px] text-slate-500">
-                  Pensados para revisar rapido sin tocar el raton.
+                  Pensados para revisar rápido sin tocar el ratón.
                 </p>
                 <ul className="mt-4 space-y-2 text-[13px] text-slate-700">
                   {[
-                    ["Enter", "Validar — solo con Ctrl/Cmd o foco fuera de inputs"],
-                    ["Ctrl / Cmd + S", "Guardar como borrador sin validar"],
-                    ["R", "Abrir dialogo de rechazo"],
-                    ["D", "Marcar como duplicada (abre rechazo prerellenado)"],
-                    ["Alt + Flecha derecha", "Siguiente factura sin validar"],
-                    ["Alt + Flecha izquierda", "Factura anterior sin validar"],
+                    ["Enter", "Validar (en una ya validada, guardar la corrección). Si estás en un campo, Ctrl + Enter"],
+                    ["Ctrl + S", "Guardar sin validar"],
+                    ["R", "Rechazar"],
+                    ["D", "Rechazar como duplicada (con el motivo ya escrito)"],
+                    ["Alt + →", "Factura siguiente del lote"],
+                    ["Alt + ←", "Factura anterior del lote, también las ya validadas"],
                     ["Alt + 1 / 2 / 3", "% IVA rápido (21 / 10 / 4) en la línea enfocada"],
                     ["Tab", "Saltar entre campos dudosos (omite los seguros)"],
+                    ["Esc", "Cerrar esta ayuda o la ventana de rechazo"],
                     ["?", "Abrir / cerrar esta ayuda"],
                   ].map(([k, desc]) => (
                     <li key={k} className="flex items-start gap-3">
@@ -2313,10 +2748,11 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                   ))}
                 </ul>
                 <p className="mt-4 text-[11px] text-slate-400">
-                  Los atajos se ignoran mientras escribes en un campo. Los campos marcados en verde son "seguros" (alta confianza OCR) y Tab los salta.
+                  Los atajos se ignoran mientras escribes en un campo. Los campos en gris con ✓ verde son seguros (el OCR los ha leído con mucha confianza) y Tab se los salta.
                 </p>
                 <div className="mt-4 flex justify-end">
                   <button
+                    autoFocus
                     onClick={() => setShowHelp(false)}
                     className="rounded-lg bg-slate-800 px-4 py-2 text-[13px] font-medium text-white hover:bg-slate-700"
                   >
@@ -2400,38 +2836,53 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
 
           {/* Reject modal */}
           {showRejectModal && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-              <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
-                <h3 className="text-[15px] font-semibold text-slate-800 flex items-center gap-2">
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+              onMouseDown={(e) => { rejectBackdropDown.current = e.target === e.currentTarget; }}
+              onClick={(e) => {
+                if (rejectBackdropDown.current && e.target === e.currentTarget && !isPendingReject) closeRejectModal();
+              }}
+            >
+              <div
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="reject-title"
+                className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl"
+                onKeyDown={(e) => {
+                  if (e.key === "Escape" && !isPendingReject) {
+                    e.preventDefault();
+                    closeRejectModal();
+                  }
+                }}
+              >
+                <h3 id="reject-title" className="text-[15px] font-semibold text-slate-800 flex items-center gap-2">
                   <XCircle className="h-5 w-5 text-red-500" />
                   Rechazar factura
                 </h3>
                 <p className="mt-1.5 text-[12px] text-slate-500">
-                  Indica el motivo del rechazo. El cliente recibira una notificacion con este mensaje.
+                  Indica el motivo del rechazo. El cliente recibirá una notificación con este mensaje.
                 </p>
-                <select
+                <Select
+                  id="rejectCategory"
+                  aria-label="Categoría del rechazo"
+                  size="sm"
+                  className="mt-3"
                   value={rejectCategory}
-                  onChange={e => setRejectCategory(e.target.value)}
-                  className="mt-3 w-full rounded-lg border border-slate-200 px-3 py-2 text-[13px] text-slate-700 outline-none focus:border-red-300 focus:ring-2 focus:ring-red-100"
-                >
-                  <option value="">Categoría (opcional)</option>
-                  <option value="ILLEGIBLE">Ilegible</option>
-                  <option value="INCOMPLETE">Incompleta</option>
-                  <option value="WRONG_PERIOD">Periodo incorrecto</option>
-                  <option value="DUPLICATE">Duplicada</option>
-                  <option value="OTHER">Otro</option>
-                </select>
+                  options={REJECT_CATEGORY_OPTIONS}
+                  onChange={setRejectCategory}
+                />
                 <textarea
                   value={rejectReason}
                   onChange={e => setRejectReason(e.target.value)}
-                  placeholder="Ej: La factura esta ilegible, falta la segunda pagina, el CIF no coincide..."
+                  aria-label="Motivo del rechazo"
+                  placeholder="P. ej.: la factura está ilegible, falta la segunda página, el CIF no coincide…"
                   className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-2 text-[13px] text-slate-700 outline-none focus:border-red-300 focus:ring-2 focus:ring-red-100 resize-none"
                   rows={3}
                   autoFocus
                 />
                 <div className="mt-4 flex justify-end gap-2">
                   <button
-                    onClick={() => { setShowRejectModal(false); setRejectReason(""); }}
+                    onClick={closeRejectModal}
                     className="rounded-lg border border-slate-200 px-4 py-2 text-[13px] font-medium text-slate-600 hover:bg-slate-50"
                   >
                     Cancelar
@@ -2451,11 +2902,14 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
         </div>
       </div>
 
+      {confirmDialog}
+
       {showSplitModal && previewUrl && (
         <SplitInvoiceModal
           invoiceId={invoice.id}
           imageUrl={previewUrl}
           bucket={bucket ?? "all"}
+          back={back}
           onClose={() => setShowSplitModal(false)}
         />
       )}
@@ -2464,6 +2918,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
           invoiceId={invoice.id}
           pdfUrl={previewUrl}
           bucket={bucket ?? "all"}
+          back={back}
           onClose={() => setShowSplitPdfModal(false)}
         />
       )}

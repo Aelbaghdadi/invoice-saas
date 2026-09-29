@@ -38,7 +38,12 @@ export type AppErrorCode =
   | "ERR-VALIDATE-004"  // Linea de IVA invalida (rango, negativos no permitidos...)
   // ── Export ───────────────────────────────────────────────
   | "ERR-EXPORT-001"  // Sin facturas validadas en el rango
-  | "ERR-EXPORT-002"  // Generacion Excel fallo
+  | "ERR-EXPORT-002"  // Fallo antes de registrar el lote: no se marco nada
+  | "ERR-EXPORT-003"  // Otra exportacion o una correccion se cruzo con esta
+  | "ERR-EXPORT-004"  // Todas las del rango se quedan fuera del Excel (total 0, divididas o bloqueantes)
+  | "ERR-EXPORT-005"  // El lote no tiene fichero guardado para volver a descargar
+  | "ERR-EXPORT-006"  // Error al registrar el lote y no se sabe si llego a confirmarse
+  | "ERR-EXPORT-007"  // Lote inexistente o de otra asesoria
   // ── Auth / Permisos ──────────────────────────────────────
   | "ERR-AUTH-001"    // No autenticado
   | "ERR-AUTH-002"    // Rol insuficiente
@@ -48,9 +53,10 @@ export type AppErrorCode =
 
 export const ERROR_MESSAGES: Record<AppErrorCode, string> = {
   "ERR-UPLOAD-001": "El archivo supera el tamaño máximo permitido (20 MB).",
-  "ERR-UPLOAD-002": "Tipo de archivo no permitido. Acepta PDF, JPG, PNG, WEBP o XML.",
+  "ERR-UPLOAD-002": "Tipo de archivo no permitido. Acepta PDF, XML, JPG, PNG, WEBP o HEIC.",
   "ERR-UPLOAD-003": "No se pudo guardar el archivo. Inténtalo de nuevo en unos segundos.",
-  "ERR-UPLOAD-004": "El periodo está cerrado. Reábrelo desde Cierres si necesitas modificarlo.",
+  // Solo un administrador puede reabrir periodos; esto lo ven gestores y clientes.
+  "ERR-UPLOAD-004": "El periodo está cerrado. Pide a un administrador de tu asesoría que lo reabra.",
   "ERR-UPLOAD-005": "No tienes acceso a este cliente.",
   "ERR-UPLOAD-006": "Esta factura ya estaba subida (duplicada por contenido).",
   "ERR-UPLOAD-007": "El nombre del archivo contiene caracteres no válidos.",
@@ -61,14 +67,19 @@ export const ERROR_MESSAGES: Record<AppErrorCode, string> = {
   "ERR-OCR-004": "El archivo original no se encuentra en almacenamiento. Vuelve a subirlo.",
 
   "ERR-VALIDATE-001": "El CIF del emisor y del receptor no pueden coincidir.",
-  "ERR-VALIDATE-002": "El periodo contable está cerrado. No se puede validar.",
-  "ERR-VALIDATE-003": "Otro gestor modificó esta factura. Recarga la página para ver los cambios.",
+  "ERR-VALIDATE-002": "El periodo contable está cerrado. Pide a un administrador que lo reabra en Cierres para poder validar.",
+  "ERR-VALIDATE-003": "La factura ha cambiado mientras la tenías abierta (otra persona la ha modificado o exportado). Recarga la página para ver los cambios.",
   "ERR-VALIDATE-004": "Hay líneas de IVA con valores no válidos (revisa porcentajes y signos).",
 
   "ERR-EXPORT-001": "No hay facturas validadas para exportar en el rango seleccionado.",
-  "ERR-EXPORT-002": "No se pudo generar el Excel. Reintenta o contacta con soporte.",
+  "ERR-EXPORT-002": "No se pudo generar el Excel. No se ha marcado ninguna factura como exportada, así que puedes volver a intentarlo. Si vuelve a fallar, contacta con soporte.",
+  "ERR-EXPORT-003": "Otra persona acaba de exportar o corregir parte de estas facturas. Vuelve a cargar la página para ver las que quedan pendientes.",
+  "ERR-EXPORT-004": "Ninguna de estas facturas puede ir al Excel: tienen total 0 (A3 no acepta importes cero), se dividieron en otras facturas o tienen errores que lo impiden. Revisa los avisos.",
+  "ERR-EXPORT-005": "El fichero de esta exportación no está guardado. Solo se guardan las exportaciones hechas desde esta versión.",
+  "ERR-EXPORT-006": "No se ha podido confirmar si la exportación se ha registrado. Antes de repetirla, recarga la página y mira el historial: si aparece, descárgala desde allí con «Volver a descargar».",
+  "ERR-EXPORT-007": "No se encuentra esta exportación.",
 
-  "ERR-AUTH-001": "No has iniciado sesión.",
+  "ERR-AUTH-001": "Tu sesión ha caducado. Vuelve a iniciar sesión.",
   "ERR-AUTH-002": "No tienes permisos para esta acción.",
   "ERR-AUTH-003": "No tienes asignado este cliente.",
 

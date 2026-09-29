@@ -80,11 +80,39 @@ Hay dos endpoints que en Vercel disparaba Vercel Cron y aquí hay que disparar
 con una **Scheduled Task** de Coolify (o cron externo) con la cabecera
 `Authorization: Bearer <CRON_SECRET>`:
 
-- `POST /api/cron/retry-stuck` — reintenta facturas atascadas (p. ej. cada 15 min).
-- `POST /api/cron/closure-reminders` — recordatorios de cierre (p. ej. diario).
+- `GET` o `POST /api/cron/retry-stuck` — reintenta facturas atascadas y pasa a «Error OCR» las que ya agotaron los reintentos (p. ej. cada 15 min).
+- `GET` o `POST /api/cron/closure-reminders` — recordatorios de cierre: **una vez al mes** (p. ej. el día 5 a las 9:00, como estaba en `vercel.json`). No lleva la cuenta de lo enviado: cada ejecución vuelve a mandar el recordatorio a todos los clientes con el mes anterior sin cerrar, así que programado a diario les llegaría un correo al día.
+
+Los dos aceptan GET y POST con la misma comprobación del secreto: usa el que
+permita la Scheduled Task.
 
 Si no configuras los crons, la app funciona; solo no se ejecutan esas tareas
-periódicas.
+periódicas. Una factura con el análisis parado (un redeploy a mitad del OCR)
+no se relanza sola: en la revisión sale «El análisis se ha parado» con un
+botón «Reprocesar».
+
+## 5 bis. Parada y Redeploy: periodo de gracia de al menos 120 s
+
+El OCR de las facturas recién subidas corre en segundo plano (`after()`)
+dentro del propio proceso de Next. Al parar el contenedor (Redeploy,
+reinicio), Coolify manda SIGTERM y, pasado el periodo de gracia, SIGKILL.
+Con SIGTERM, Next deja de aceptar peticiones y espera a que terminen los
+`after()` en curso; con SIGKILL se cortan a medias y esas facturas se quedan
+«analizándose» hasta que alguien pulse «Reprocesar» o pase el cron.
+
+- **Dónde:** en Coolify 4.1.0 o posterior, la aplicación → *Advanced* →
+  *Operations* → **«Stop Grace Period»** (por defecto, 30 s). Ponlo en
+  **120 s como mínimo**: un OCR con reintentos puede tardar más de un
+  minuto. En versiones anteriores de Coolify la parada son 30 s fijos.
+- **Qué cubre:** 120 s bastan para terminar un OCR en curso, no un lote
+  entero: el Reprocesar masivo y `retry-stuck` procesan las facturas en
+  serie. Lo que quede sin terminar lo recoge `retry-stuck` en su siguiente
+  ejecución, así que conviene tenerlo programado (§5).
+- `docker-entrypoint.sh` arranca con `exec node node_modules/next/dist/bin/next start`:
+  Node es el PID 1 y recibe el SIGTERM sin depender de que npm lo reenvíe
+  (con `npx next start` npm también lo reenviaba y esperaba; no era lo que
+  cortaba las facturas). Lo que corta los `after()` es el SIGKILL al acabar el
+  periodo de gracia.
 
 ## 6. Almacenamiento (Garage)
 

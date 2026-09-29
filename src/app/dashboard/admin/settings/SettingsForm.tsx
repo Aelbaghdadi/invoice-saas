@@ -3,13 +3,12 @@
 import { useState, useTransition, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
-  Building2, Lock, User, CheckCircle2, AlertCircle, Loader2,
+  Building2, Lock, User, Loader2,
   Mail, Shield, Users,
   Image as ImageIcon, Trash2,
 } from "lucide-react";
 import {
   updateFirm, changePassword, updateProfile, updateFirmLogo, removeFirmLogo,
-  type ActionState,
 } from "./actions";
 import { useToast } from "@/components/ui/Toast";
 
@@ -76,20 +75,6 @@ const footerClass = "mt-1 flex justify-end border-t border-slate-100 pt-4";
 const headerChipClass =
   "flex h-9 w-9 items-center justify-center rounded-lg bg-blue-50/80 ring-1 ring-inset ring-blue-100/70";
 
-function StatusBanner({ state }: { state: ActionState }) {
-  if (!state) return null;
-  return (
-    <div className={`mb-4 flex items-center gap-2 rounded-lg px-4 py-3 text-[13px] font-medium ${
-      state.success
-        ? "bg-emerald-50 text-emerald-700"
-        : "bg-red-50 text-red-600"
-    }`}>
-      {state.success ? <CheckCircle2 className="h-4 w-4" /> : <AlertCircle className="h-4 w-4" />}
-      {state.success ? "Cambios guardados correctamente" : state.error}
-    </div>
-  );
-}
-
 /* Badges de rol con el mismo lenguaje que el Badge de estados (tinte suave +
    borde + punto). Admin en navy (autoridad), resto en neutro. */
 const ROLE_BADGE: Record<string, { label: string; color: string; dot: string }> = {
@@ -147,9 +132,10 @@ export function SettingsForm({ firm, profile, team }: Props) {
 
 // ─── Firm tab ───────────────────────────────────────────────────────────────
 
+// Un solo aviso por guardado, el toast, y si falla con el motivo real: antes
+// salia a la vez un banner en la tarjeta y el motivo solo se leia ahi.
 function FirmTab({ firm }: { firm: FirmData }) {
   const { success, error: toastError } = useToast();
-  const [state, setState] = useState<ActionState>(null);
   const [pending, start]  = useTransition();
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
@@ -157,11 +143,10 @@ function FirmTab({ firm }: { firm: FirmData }) {
     start(async () => {
       const fd = new FormData(e.currentTarget);
       const res = await updateFirm(null, fd);
-      setState(res);
       if (res?.success) {
-        success("Ajustes guardados");
+        success("Datos de la asesoría guardados");
       } else if (res?.error) {
-        toastError("Error al guardar ajustes");
+        toastError(res.error);
       }
     });
   };
@@ -177,8 +162,6 @@ function FirmTab({ firm }: { firm: FirmData }) {
           <p className="text-[12px] text-slate-500">Información fiscal de tu empresa</p>
         </div>
       </div>
-
-      <StatusBanner state={state} />
 
       <LogoSection initialLogo={firm.logoDataUrl} />
 
@@ -312,7 +295,6 @@ function LogoSection({ initialLogo }: { initialLogo: string | null }) {
 
 function ProfileTab({ profile }: { profile: ProfileData }) {
   const { success, error: toastError } = useToast();
-  const [state, setState] = useState<ActionState>(null);
   const [pending, start]  = useTransition();
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
@@ -320,11 +302,10 @@ function ProfileTab({ profile }: { profile: ProfileData }) {
     start(async () => {
       const fd = new FormData(e.currentTarget);
       const res = await updateProfile(null, fd);
-      setState(res);
       if (res?.success) {
-        success("Ajustes guardados");
+        success("Perfil guardado");
       } else if (res?.error) {
-        toastError("Error al guardar ajustes");
+        toastError(res.error);
       }
     });
   };
@@ -340,8 +321,6 @@ function ProfileTab({ profile }: { profile: ProfileData }) {
           <p className="text-[12px] text-slate-500">Tu información personal de administrador</p>
         </div>
       </div>
-
-      <StatusBanner state={state} />
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="max-w-[520px] space-y-4">
@@ -369,7 +348,6 @@ function ProfileTab({ profile }: { profile: ProfileData }) {
 
 function PasswordTab() {
   const { success, error: toastError } = useToast();
-  const [state, setState] = useState<ActionState>(null);
   const [pending, start]  = useTransition();
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
@@ -377,12 +355,11 @@ function PasswordTab() {
     start(async () => {
       const fd = new FormData(e.currentTarget);
       const res = await changePassword(null, fd);
-      setState(res);
       if (res?.success) {
         (e.target as HTMLFormElement).reset();
-        success("Ajustes guardados");
+        success("Contraseña cambiada");
       } else if (res?.error) {
-        toastError("Error al guardar ajustes");
+        toastError(res.error);
       }
     });
   };
@@ -398,8 +375,6 @@ function PasswordTab() {
           <p className="text-[12px] text-slate-500">Actualiza tu contraseña de acceso</p>
         </div>
       </div>
-
-      <StatusBanner state={state} />
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="max-w-[520px] space-y-4">

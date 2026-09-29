@@ -1,0 +1,237 @@
+import { Prisma, type InvoiceVatLine } from "@prisma/client";
+import { prisma } from "@/lib/prisma";
+import { appendAuditLogs } from "@/lib/auditLog";
+import { exportFingerprint, type FingerprintInvoice } from "@/lib/exportFingerprint";
+import { exportExtension, type ExportFormat, type InvoiceWithClient } from "@/lib/exportFormats";
+
+/**
+ * Registro de una exportacion a A3: lote, items con snapshot, puntero
+ * `exportBatchId` en cada factura y auditoria, todo en una transaccion y
+ * DESPUES de tener el fichero generado (F-001). Si algo falla, no queda
+ * ninguna factura marcada sin que el usuario tenga su Excel.
+ */
+
+/** Pensado para ~3.000 facturas en un lote: seis o siete consultas en bloque,
+ *  muy lejos de 30 s. Los 5 s por defecto de Prisma se quedaban cortos. */
+export const EXPORT_TRANSACTION_OPTIONS = { timeout: 30_000, maxWait: 5_000 } as const;
+
+// Postgres admite 65.535 parametros por consulta.
+const ITEM_INSERT_CHUNK = 1000;
+
+export type ExportInvoice = InvoiceWithClient & { vatLines: InvoiceVatLine[] };
+
+/** Otra exportacion o una correccion se ha cruzado con esta: no se escribe nada. */
+export class ExportConflictError extends Error {
+  constructor(readonly invoiceIds: string[], reason: string) {
+    super(reason);
+    this.name = "ExportConflictError";
+  }
+}
+
+/**
+ * Snapshot de ExportBatchItem: lo que se mando a A3. El formato (claves y
+ * orden) no se toca: la revision lo compara con exportFingerprint para saber
+ * si una correccion tiene que volver a exportarse.
+ */
+export function buildExportSnapshot(inv: ExportInvoice): string {
+  return JSON.stringify({
+    issuerName: inv.issuerName,
+    issuerCif: inv.issuerCif,
+    receiverName: inv.receiverName,
+    receiverCif: inv.receiverCif,
+    invoiceNumber: inv.invoiceNumber,
+    invoiceDate: inv.invoiceDate,
+    taxBase: inv.taxBase,
+    vatRate: inv.vatRate,
+    vatAmount: inv.vatAmount,
+    irpfRate: inv.irpfRate,
+    irpfAmount: inv.irpfAmount,
+    totalAmount: inv.totalAmount,
+    vatLines: inv.vatLines.map((l) => ({
+      position:  l.position,
+      taxBase:   l.taxBase,
+      vatRate:   l.vatRate,
+      vatAmount: l.vatAmount,
+      equivalenceSurchargeRate: l.equivalenceSurchargeRate,
+      equivalenceSurchargeAmount: l.equivalenceSurchargeAmount,
+    })),
+    supplierAccount: inv.supplierAccount,
+    expenseAccount: inv.expenseAccount,
+    operationType: inv.operationType,
+    intracomGoodsType: inv.intracomGoodsType,
+    retentionType: inv.retentionType,
+    retentionBase: inv.retentionBase,
+    issuerCountry: inv.issuerCountry,
+    receiverCountry: inv.receiverCountry,
+    isRectificative: inv.isRectificative,
+    rectifiedInvoiceSeries: inv.rectifiedInvoiceSeries,
+    rectifiedInvoiceNumber: inv.rectifiedInvoiceNumber,
+    rectificativeType: inv.rectificativeType,
+    art80Tres: inv.art80Tres,
+    type: inv.type,
+    clientName: inv.client.name,
+    clientCif: inv.client.cif,
+  });
+}
+
+/**
+ * Facturas cuyo contenido para A3 ya no es el que se metio en el fichero:
+ * alguien la corrigio entre la lectura y la reserva. La reserva por
+ * `exportBatchId: null` no lo ve, porque corregir no cambia ni el estado ni
+ * el puntero de una factura que nunca se exporto.
+ */
+export function invoicesChangedSince(
+  generated: (FingerprintInvoice & { id: string })[],
+  current: (FingerprintInvoice & { id: string })[],
+): string[] {
+  const currentById = new Map(current.map((inv) => [inv.id, inv]));
+  return generated
+    .filter((inv) => {
+      const now = currentById.get(inv.id);
+      return !now || exportFingerprint(now) !== exportFingerprint(inv);
+    })
+    .map((inv) => inv.id);
+}
+
+/** Carpeta de las copias de una asesoria: la baja o el reset la borran entera. */
+export function exportStoragePrefix(firmId: string): string {
+  return `exports/${firmId}/`;
+}
+
+/**
+ * Donde se guarda el fichero de un lote. Sale del lote, sin columna nueva:
+ * los lotes antiguos no tienen objeto y salen como "No disponible". Una
+ * carpeta por cliente, para poder borrar lo de un cliente por prefijo.
+ */
+export function exportStorageKey(
+  firmId: string,
+  clientId: string,
+  batchId: string,
+  format: ExportFormat,
+): string {
+  return `${exportStoragePrefix(firmId)}${clientId}/${batchId}.${exportExtension(format)}`;
+}
+
+/**
+ * Un lote de esta asesoria. ExportBatch no tiene asesoria: sale de sus
+ * facturas (items -> factura -> cliente -> advisoryFirmId), igual que en el
+ * historial de Exportar.
+ */
+export function firmExportBatchWhere(batchId: string, firmId: string): Prisma.ExportBatchWhereInput {
+  return { id: batchId, items: { some: { invoice: { client: { advisoryFirmId: firmId } } } } };
+}
+
+/**
+ * Tras un error de commitExportBatch que no es un conflicto, ¿quedo el lote
+ * confirmado? Un corte de conexion justo despues del COMMIT (un Redeploy en
+ * ese momento) da error aqui aunque Postgres lo haya confirmado.
+ *  - "committed": el lote existe; las facturas constan exportadas.
+ *  - "absent": no existe; no se marco nada.
+ *  - "unknown": no se ha podido comprobar.
+ */
+export async function committedBatchState(
+  findBatch: () => Promise<unknown>,
+): Promise<"committed" | "absent" | "unknown"> {
+  try {
+    return (await findBatch()) ? "committed" : "absent";
+  } catch {
+    return "unknown";
+  }
+}
+
+export type ExportBatchData = {
+  id: string;
+  format: string;
+  clientId: string | null;
+  periodType: Prisma.ExportBatchCreateInput["periodType"];
+  periodMonth: number | null;
+  periodYear: number | null;
+  invoiceType: string;
+  userId: string;
+};
+
+/**
+ * Deja constancia de un fichero ya generado con `invoices`. Reserva las
+ * facturas con `exportBatchId: null` y `status: VALIDATED`: si otra
+ * exportacion simultanea se ha llevado alguna, el recuento no cuadra y se
+ * aborta la transaccion entera (F-049).
+ */
+export async function commitExportBatch(
+  batch: ExportBatchData,
+  invoices: ExportInvoice[],
+): Promise<void> {
+  const invoiceIds = invoices.map((i) => i.id);
+  try {
+    await prisma.$transaction(async (tx) => {
+      // El lote va primero: exportBatchId es una FK a ExportBatch.
+      await tx.exportBatch.create({ data: { ...batch, invoiceCount: invoices.length } });
+
+      const reserved = await tx.invoice.updateMany({
+        where: { id: { in: invoiceIds }, exportBatchId: null, status: "VALIDATED" },
+        data: { exportBatchId: batch.id },
+      });
+      if (reserved.count !== invoiceIds.length) {
+        throw new ExportConflictError(
+          invoiceIds,
+          `reservadas ${reserved.count} de ${invoiceIds.length}`,
+        );
+      }
+
+      // Ya con las filas bloqueadas por el UPDATE: lo que hay ahora es lo que
+      // queda. Si no coincide con lo que lleva el fichero, fuera.
+      const current = await tx.invoice.findMany({
+        where: { id: { in: invoiceIds } },
+        include: { vatLines: { orderBy: { position: "asc" } } },
+      });
+      const changed = invoicesChangedSince(invoices, current);
+      if (changed.length > 0) {
+        throw new ExportConflictError(changed, `corregidas durante la exportacion: ${changed.join(",")}`);
+      }
+
+      const items = invoices.map((inv) => ({
+        exportBatchId: batch.id,
+        invoiceId: inv.id,
+        snapshot: buildExportSnapshot(inv),
+      }));
+      for (let i = 0; i < items.length; i += ITEM_INSERT_CHUNK) {
+        await tx.exportBatchItem.createMany({ data: items.slice(i, i + ITEM_INSERT_CHUNK) });
+      }
+
+      await appendAuditLogs(
+        invoiceIds.map((invoiceId) => ({
+          invoiceId,
+          userId: batch.userId,
+          field: "export",
+          oldValue: null,
+          newValue: `Exportada (batch: ${batch.id}, formato: ${batch.format})`,
+        })),
+        tx,
+      );
+    }, EXPORT_TRANSACTION_OPTIONS);
+  } catch (err) {
+    // Postgres ha abortado esta transaccion por cruzarse con otra: es la
+    // misma carrera de F-049, no un fallo del export.
+    if (isTransactionConflictError(err)) {
+      throw new ExportConflictError(invoiceIds, `conflicto de transaccion: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    throw err;
+  }
+}
+
+// 40P01 deadlock; 40001 fallo de serializacion.
+const CONFLICT_SQLSTATES = new Set(["40P01", "40001"]);
+
+/**
+ * ¿Postgres ha abortado la transaccion por cruzarse con otra?
+ *
+ * La transaccion va en READ COMMITTED, asi que lo habitual entre dos exports
+ * es un deadlock 40P01 (bloquean las mismas facturas en distinto orden), no
+ * un 40001. Con adapter-pg el 40P01 no se traduce: llega como
+ * DriverAdapterError con `code` undefined y el SQLSTATE en
+ * `cause.originalCode`. El 40001 si se traduce a P2034.
+ */
+export function isTransactionConflictError(err: unknown): boolean {
+  if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2034") return true;
+  const cause = (err as { cause?: { originalCode?: unknown } } | null)?.cause;
+  return typeof cause?.originalCode === "string" && CONFLICT_SQLSTATES.has(cause.originalCode);
+}

@@ -138,19 +138,25 @@ async function main() {
   if (!s3) {
     console.warn("⚠️  Vars S3/Garage faltan — los PDFs no se subiran (storageKey sera placeholder).");
   } else {
-    // Borrar PDFs previos del bucket para los clientIds que vamos a borrar
+    // Borrar PDFs previos del bucket para los clientIds que vamos a borrar, y
+    // las copias de los Excel exportados de la asesoria (exports/<firmId>/,
+    // ver exportStoragePrefix en src/lib/exportBatch.ts): sus lotes ya no existen.
     try {
-      for (const cid of clientIds) {
-        const list = await s3.send(new ListObjectsV2Command({ Bucket: S3_BUCKET, Prefix: `${cid}/` }));
-        const objs = (list.Contents ?? [])
-          .map((o) => o.Key)
-          .filter((k): k is string => Boolean(k))
-          .map((Key) => ({ Key }));
-        if (objs.length) {
-          await s3.send(new DeleteObjectsCommand({ Bucket: S3_BUCKET, Delete: { Objects: objs } }));
-        }
+      for (const prefix of [...clientIds.map((cid) => `${cid}/`), `exports/${firmId}/`]) {
+        let token: string | undefined;
+        do {
+          const list = await s3.send(new ListObjectsV2Command({ Bucket: S3_BUCKET, Prefix: prefix, ContinuationToken: token }));
+          const objs = (list.Contents ?? [])
+            .map((o) => o.Key)
+            .filter((k): k is string => Boolean(k))
+            .map((Key) => ({ Key }));
+          if (objs.length) {
+            await s3.send(new DeleteObjectsCommand({ Bucket: S3_BUCKET, Delete: { Objects: objs } }));
+          }
+          token = list.IsTruncated ? list.NextContinuationToken : undefined;
+        } while (token);
       }
-      console.log("✓ PDFs previos eliminados de Storage");
+      console.log("✓ PDFs y copias de exportaciones previos eliminados de Storage");
     } catch (e) {
       console.warn(`⚠️  No se pudieron limpiar PDFs de Storage: ${(e as Error).message}`);
     }
@@ -200,7 +206,7 @@ async function main() {
     data: [
       { clientId: panaderia.id, nif: "A95758389", name: "Iberdrola Clientes S.A.U.", supplierAccount: "4000001", expenseAccount: "6280001", defaultVatRate: 21 as any },
       { clientId: panaderia.id, nif: "A28015865", name: "Telefónica España S.A.", supplierAccount: "4000002", expenseAccount: "6290001", defaultVatRate: 21 as any },
-      { clientId: taller.id, nif: "A78374114", name: "Repsol Comercializadora S.A.", supplierAccount: "4100001", expenseAccount: "6000001", defaultVatRate: 21 as any },
+      { clientId: taller.id, nif: "A78374113", name: "Repsol Comercializadora S.A.", supplierAccount: "4100001", expenseAccount: "6000001", defaultVatRate: 21 as any },
       { clientId: taller.id, nif: "A95758389", name: "Iberdrola Clientes S.A.U.", supplierAccount: "4100002", expenseAccount: "6280001", defaultVatRate: 21 as any },
     ],
   });
@@ -290,7 +296,7 @@ async function main() {
       client: taller, type: "PURCHASE", status: "VALIDATED", month: 4, year: 2026,
       filename: "repsol-gasoil.pdf",
       pdf: {
-        emisor: { nombre: "Repsol Comercializadora S.A.", cif: "A78374114", direccion: "Méndez Álvaro 44", cp_ciudad: "28045 Madrid" },
+        emisor: { nombre: "Repsol Comercializadora S.A.", cif: "A78374113", direccion: "Méndez Álvaro 44", cp_ciudad: "28045 Madrid" },
         receptor: { nombre: taller.name, cif: taller.cif, ...tallerAddr },
         numero: "FR-00283-26", fecha_emision: "04/04/2026", fecha_vencimiento: "04/05/2026",
         conceptos: [

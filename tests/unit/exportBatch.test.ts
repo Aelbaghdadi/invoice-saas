@@ -1,0 +1,172 @@
+import { describe, it, expect } from "vitest";
+import { Prisma } from "@prisma/client";
+import {
+  buildExportSnapshot,
+  committedBatchState,
+  exportStorageKey,
+  exportStoragePrefix,
+  firmExportBatchWhere,
+  invoicesChangedSince,
+  isTransactionConflictError,
+  type ExportInvoice,
+} from "@/lib/exportBatch";
+
+function mkInvoice(overrides: Partial<ExportInvoice> = {}): ExportInvoice {
+  return {
+    id: "inv1",
+    type: "PURCHASE",
+    invoiceDate: new Date("2026-04-15"),
+    invoiceNumber: "F-001",
+    issuerName: "Suministros S.L.",
+    issuerCif: "B12345674",
+    receiverName: "Asesoría Cliente",
+    receiverCif: "B87654321",
+    taxBase: 100,
+    vatRate: 21,
+    vatAmount: 21,
+    irpfRate: 0,
+    irpfAmount: 0,
+    totalAmount: 121,
+    supplierAccount: "4000001",
+    expenseAccount: "6000001",
+    operationType: null,
+    intracomGoodsType: null,
+    retentionType: null,
+    retentionBase: null,
+    issuerCountry: null,
+    receiverCountry: null,
+    isRectificative: false,
+    rectifiedInvoiceSeries: null,
+    rectifiedInvoiceNumber: null,
+    rectificativeType: null,
+    art80Tres: false,
+    client: { id: "c1", name: "ACME SL", cif: "B11111111" },
+    vatLines: [],
+    ...overrides,
+  } as unknown as ExportInvoice;
+}
+
+describe("buildExportSnapshot", () => {
+  it("conserva las claves y su orden (la revisión compara contra este JSON)", () => {
+    const snapshot = JSON.parse(buildExportSnapshot(mkInvoice()));
+    expect(Object.keys(snapshot)).toEqual([
+      "issuerName", "issuerCif", "receiverName", "receiverCif", "invoiceNumber", "invoiceDate",
+      "taxBase", "vatRate", "vatAmount", "irpfRate", "irpfAmount", "totalAmount", "vatLines",
+      "supplierAccount", "expenseAccount", "operationType", "intracomGoodsType", "retentionType",
+      "retentionBase", "issuerCountry", "receiverCountry", "isRectificative", "rectifiedInvoiceSeries",
+      "rectifiedInvoiceNumber", "rectificativeType", "art80Tres", "type", "clientName", "clientCif",
+    ]);
+    expect(snapshot.clientName).toBe("ACME SL");
+    expect(snapshot.invoiceDate).toBe("2026-04-15T00:00:00.000Z");
+  });
+
+  it("guarda las líneas de IVA con sus seis campos", () => {
+    const snapshot = JSON.parse(
+      buildExportSnapshot(
+        mkInvoice({
+          vatLines: [{
+            id: "l1", invoiceId: "inv1", position: 0, taxBase: 100, vatRate: 21, vatAmount: 21,
+            equivalenceSurchargeRate: 5.2, equivalenceSurchargeAmount: 5.2,
+          }] as unknown as ExportInvoice["vatLines"],
+        }),
+      ),
+    );
+    expect(snapshot.vatLines).toEqual([{
+      position: 0, taxBase: 100, vatRate: 21, vatAmount: 21,
+      equivalenceSurchargeRate: 5.2, equivalenceSurchargeAmount: 5.2,
+    }]);
+  });
+});
+
+describe("invoicesChangedSince", () => {
+  it("sin cambios no devuelve nada", () => {
+    expect(invoicesChangedSince([mkInvoice()], [mkInvoice()])).toEqual([]);
+  });
+
+  it("detecta una corrección que cambia el fichero", () => {
+    const generated = [mkInvoice(), mkInvoice({ id: "inv2" })];
+    const current = [mkInvoice(), mkInvoice({ id: "inv2", invoiceNumber: "F-002" })];
+    expect(invoicesChangedSince(generated, current)).toEqual(["inv2"]);
+  });
+
+  it("ignora lo que no viaja al fichero", () => {
+    expect(
+      invoicesChangedSince([mkInvoice()], [mkInvoice({ currency: "USD" } as Partial<ExportInvoice>)]),
+    ).toEqual([]);
+  });
+
+  it("una factura que ya no aparece cuenta como cambiada", () => {
+    expect(invoicesChangedSince([mkInvoice()], [])).toEqual(["inv1"]);
+  });
+});
+
+describe("exportStorageKey", () => {
+  it("guarda el xlsx bajo exports/<asesoría>/<cliente>/<lote>", () => {
+    expect(exportStorageKey("firm1", "client1", "batch1", "a3excel")).toBe("exports/firm1/client1/batch1.xlsx");
+  });
+
+  it("dos asesorías no comparten carpeta", () => {
+    expect(exportStorageKey("firm1", "c", "b", "a3excel")).not.toBe(exportStorageKey("firm2", "c", "b", "a3excel"));
+  });
+
+  it("todo lo de una asesoría y lo de un cliente cuelga de un prefijo que se puede borrar", () => {
+    const key = exportStorageKey("firm1", "client1", "batch1", "a3excel");
+    expect(key.startsWith(exportStoragePrefix("firm1"))).toBe(true);
+    expect(key.startsWith(`${exportStoragePrefix("firm1")}client1/`)).toBe(true);
+    expect(exportStoragePrefix("firm1")).toBe("exports/firm1/");
+  });
+});
+
+describe("firmExportBatchWhere", () => {
+  it("exige que el lote tenga facturas de clientes de la asesoría", () => {
+    expect(firmExportBatchWhere("batch1", "firm1")).toEqual({
+      id: "batch1",
+      items: { some: { invoice: { client: { advisoryFirmId: "firm1" } } } },
+    });
+  });
+});
+
+describe("committedBatchState", () => {
+  it("el lote existe: se confirmó aunque la respuesta diera error", async () => {
+    expect(await committedBatchState(async () => ({ id: "b" }))).toBe("committed");
+  });
+
+  it("el lote no existe: no se marcó nada", async () => {
+    expect(await committedBatchState(async () => null)).toBe("absent");
+  });
+
+  it("si la comprobación falla no se sabe (y no se borra la copia)", async () => {
+    expect(await committedBatchState(async () => { throw new Error("conexión cortada"); })).toBe("unknown");
+  });
+});
+
+describe("isTransactionConflictError", () => {
+  // Forma real de un deadlock con adapter-pg 7.5, copiada de uno provocado
+  // contra Postgres 16: DriverAdapterError sin code y el SQLSTATE en cause.
+  function driverAdapterError(originalCode: string) {
+    const err = new Error("deadlock detected") as Error & { cause: unknown };
+    err.name = "DriverAdapterError";
+    err.cause = { originalCode, originalMessage: "deadlock detected", kind: "postgres", code: originalCode };
+    return err;
+  }
+
+  it("un deadlock (40P01) es un conflicto", () => {
+    expect(isTransactionConflictError(driverAdapterError("40P01"))).toBe(true);
+  });
+
+  it("un fallo de serialización (40001) es un conflicto", () => {
+    expect(isTransactionConflictError(driverAdapterError("40001"))).toBe(true);
+  });
+
+  it("P2034 de Prisma es un conflicto", () => {
+    const err = new Prisma.PrismaClientKnownRequestError("write conflict", { code: "P2034", clientVersion: "7.5.0" });
+    expect(isTransactionConflictError(err)).toBe(true);
+  });
+
+  it("otros errores no lo son", () => {
+    expect(isTransactionConflictError(driverAdapterError("23503"))).toBe(false);
+    expect(isTransactionConflictError(new Error("conexión cortada"))).toBe(false);
+    expect(isTransactionConflictError(null)).toBe(false);
+    expect(isTransactionConflictError("40P01")).toBe(false);
+  });
+});

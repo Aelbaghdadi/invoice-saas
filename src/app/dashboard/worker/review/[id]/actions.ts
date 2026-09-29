@@ -2,16 +2,20 @@
 
 import { after } from "next/server";
 import { createHash } from "crypto";
+import { splitStorageKey } from "@/lib/splitStorageKey";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
-import { revalidatePath } from "next/cache";
+import { revalidatePath, refresh } from "next/cache";
 import { notifyClientInvoiceValidated, notifyClientInvoiceRejected } from "@/lib/email";
 import {
   filterFromInvoice,
   getNextInQueue,
+  parseBackHref,
   parseBucket,
   queueToSearchParams,
+  type QueueBucket,
+  type QueueFilter,
 } from "@/lib/reviewQueue";
 import { appendAuditLogs } from "@/lib/auditLog";
 import { canAccessClient } from "@/lib/accessibleClients";
@@ -27,11 +31,25 @@ import {
   goodsTypeLearning,
 } from "@/lib/intracomGoods";
 import { normalizeCurrency } from "@/lib/currency";
+import { isInvoiceBalanced } from "@/lib/invoiceBalance";
+import { amountFieldsProblem, parseVatLineInputs } from "@/lib/vatLineInput";
+import { validationProblems } from "@/lib/invoiceRules";
+import { percentOf } from "@/lib/money";
 import { applyRectificativeSign } from "@/lib/rectificative";
 import { foldSurchargeLines, completeReadSurcharges, surchargeAuditValue } from "@/lib/equivalenceSurcharge";
 import { exportFingerprint, type FingerprintInvoice } from "@/lib/exportFingerprint";
 import { appError, type AppError } from "@/lib/errorCodes";
-import { putObject, getObjectBytes, sanitizeFilenameForStorage, isStorageConfigured } from "@/lib/storage";
+import { putObject, getObjectBytes, deleteObject, sanitizeFilenameForStorage, isStorageConfigured } from "@/lib/storage";
+import {
+  NEEDS_REVIEW,
+  reviewActionBlockReason,
+  reviewAllowedFrom,
+  reviewTargetBlockReason,
+  reviewTargetWhere,
+  type ReviewAction,
+} from "@/lib/invoiceStatuses";
+import { Prisma, type Invoice } from "@prisma/client";
+import { EXPORT_TRANSACTION_OPTIONS } from "@/lib/exportBatch";
 
 /** Resultado de las server actions de revision. El `error` puede ser:
  *  - AppError: cuando es un fallo "conocido" del dominio (tiene codigo)
@@ -48,6 +66,41 @@ async function assertInvoiceAccess(
 ): Promise<ReviewState> {
   if (await canAccessClient(session, clientId)) return null;
   return { error: "No tienes acceso a esta factura." };
+}
+
+/** Periodo en el que cuenta la factura: el contable si lo tiene, si no el del
+ *  lote. Mismo criterio que la pagina de revision y que parseAndSave. */
+function invoicePeriod(
+  invoice: Pick<Invoice, "periodMonth" | "periodYear" | "accountingPeriodMonth" | "accountingPeriodYear">,
+): { month: number; year: number } {
+  return {
+    month: invoice.accountingPeriodMonth ?? invoice.periodMonth,
+    year: invoice.accountingPeriodYear ?? invoice.periodYear,
+  };
+}
+
+/** Rechazar y dividir cambian la factura igual que guardar: con el periodo
+ *  cerrado no se tocan (mismo criterio que rejectBatch). La pagina ya oculta
+ *  los botones, pero puede estar abierta desde antes del cierre. */
+async function closedPeriodError(
+  clientId: string,
+  periods: { month: number; year: number }[],
+  action: string,
+): Promise<{ error: string } | null> {
+  const seen = new Set<string>();
+  for (const { month, year } of periods) {
+    const key = `${month}/${year}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const closure = await prisma.periodClosure.findUnique({
+      where: { clientId_month_year: { clientId, month, year } },
+      select: { reopenedAt: true },
+    });
+    if (closure && !closure.reopenedAt) {
+      return { error: `El periodo ${key} está cerrado: pide a un administrador que lo reabra en Cierres antes de ${action} la factura.` };
+    }
+  }
+  return null;
 }
 
 type FieldData = {
@@ -109,44 +162,55 @@ type ParsedVatLine = {
   equivalenceSurchargeAmount: number | null;
 };
 
-/** Parsea el JSON de lineas, descarta las vacias y normaliza a numeros.
- *  Devuelve [] si el JSON es invalido o no hay nada util. */
-function parseVatLines(raw: string): ParsedVatLine[] {
-  if (!raw) return [];
-  let arr: unknown;
-  try { arr = JSON.parse(raw); } catch { return []; }
-  if (!Array.isArray(arr)) return [];
-  const lines: ParsedVatLine[] = [];
-  for (const item of arr) {
-    if (!item || typeof item !== "object") continue;
-    const o = item as Record<string, unknown>;
-    const tb = typeof o.taxBase === "string" ? o.taxBase.trim() : "";
-    const vr = typeof o.vatRate === "string" ? o.vatRate.trim() : "";
-    const va = typeof o.vatAmount === "string" ? o.vatAmount.trim() : "";
-    // Linea vacia: la ignoramos silenciosamente para que el form pueda
-    // tener una fila placeholder sin guardarla.
-    if (!tb && !vr && !va) continue;
-    const taxBase = parseFloat(tb.replace(",", "."));
-    const vatRate = parseFloat(vr.replace(",", "."));
-    const vatAmount = parseFloat(va.replace(",", "."));
-    if (isNaN(taxBase) || isNaN(vatRate) || isNaN(vatAmount)) continue;
-    const sr = typeof o.equivalenceSurchargeRate === "string" ? o.equivalenceSurchargeRate.trim() : "";
-    const sa = typeof o.equivalenceSurchargeAmount === "string" ? o.equivalenceSurchargeAmount.trim() : "";
-    const srNum = sr ? parseFloat(sr.replace(",", ".")) : NaN;
-    const saNum = sa ? parseFloat(sa.replace(",", ".")) : NaN;
-    lines.push({
-      taxBase, vatRate, vatAmount,
-      equivalenceSurchargeRate:   isNaN(srNum) ? null : srNum,
-      equivalenceSurchargeAmount: isNaN(saNum) ? null : saNum,
-    });
-  }
+/** Lineas del formulario a numeros. Una linea a medio rellenar es un error
+ *  (F-014): antes se descartaba en silencio y la factura se guardaba con una
+ *  linea de menos. */
+function parseVatLines(raw: string): { lines: ParsedVatLine[] } | { error: string } {
+  const parsed = parseVatLineInputs(raw);
+  if ("error" in parsed) return parsed;
   // La IA devuelve a veces el recargo como si fuera otra linea de IVA (tipo
   // 5,2 / 1,4 / 0,5) y el formulario la reenvia tal cual. Se pliega sobre su
   // linea antes de guardar: en A3 seria un IVA que no existe.
-  return completeReadSurcharges(foldSurchargeLines(lines).lines);
+  return { lines: completeReadSurcharges(foldSurchargeLines(parsed.lines).lines) };
 }
 
-async function parseAndSave(invoiceId: string, userId: string, data: FieldData, validate: boolean, expectedUpdatedAt?: string) {
+/**
+ * La escritura condicionada no ha tocado nada (count 0). Si la factura esta
+ * ahora en un estado en el que la accion no vale, se dice por que; si no, es
+ * que la cambio otra persona (ERR-VALIDATE-003).
+ */
+async function conditionalWriteError(
+  invoiceId: string,
+  action: ReviewAction,
+  options: { reopen?: boolean },
+  detail: string,
+): Promise<{ error: string | AppError }> {
+  const now = await prisma.invoice
+    .findUnique({
+      where: { id: invoiceId },
+      select: { status: true, replacedBy: { select: { id: true } }, client: { select: { isUnclassifiedBucket: true } } },
+    })
+    .catch(() => null);
+  const reason = now
+    ? reviewActionBlockReason(now.status, action, options)
+      ?? reviewTargetBlockReason(action, {
+        replacedById: now.replacedBy?.id ?? null,
+        isUnclassifiedBucket: now.client.isUnclassifiedBucket,
+      }, options)
+    : null;
+  return { error: reason ?? appError("ERR-VALIDATE-003", detail) };
+}
+
+async function parseAndSave(
+  invoiceId: string,
+  userId: string,
+  data: FieldData,
+  validate: boolean,
+  expectedUpdatedAt?: string,
+  // "Reabrir y validar": la unica forma de validar una REJECTED (F-015).
+  options: { reopen?: boolean } = {},
+) {
+  const action: ReviewAction = validate ? "validate" : "save";
   const session = await auth();
   if (!session?.user) return { error: "No autorizado" };
 
@@ -163,6 +227,7 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
         take: 1,
         select: { exportBatchId: true, snapshot: true },
       },
+      replacedBy: { select: { id: true } },
     },
   });
   if (!invoice) return { error: "Factura no encontrada" };
@@ -170,6 +235,15 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
   // Workers can only modify invoices of assigned clients
   const accessErr = await assertInvoiceAccess(session, invoice.clientId);
   if (accessErr) return accessErr;
+
+  // En analisis, dividida, por clasificar o rechazada (sin reabrir) no se
+  // guarda ni se valida. Se repite en el propio updateMany de abajo.
+  const blocked = reviewActionBlockReason(invoice.status, action, options)
+    ?? reviewTargetBlockReason(action, {
+      replacedById: invoice.replacedBy?.id ?? null,
+      isUnclassifiedBucket: invoice.client.isUnclassifiedBucket,
+    }, options);
+  if (blocked) return { error: blocked };
 
   // Check if the period is closed (use accounting period when set, fallback to upload period)
   const parseInt2 = (v: string) => { const n = parseInt(v, 10); return isNaN(n) ? null : n; };
@@ -206,7 +280,16 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     return isNaN(d.getTime()) ? null : d;
   };
 
-  const vatLines = parseVatLines(data.vatLines);
+  const parsedLines = parseVatLines(data.vatLines);
+  if ("error" in parsedLines) return { error: parsedLines.error };
+  const vatLines = parsedLines.lines;
+  // Solo con retencion: sin tipo, el % y la base que queden en el
+  // formulario no se guardan.
+  const amountsError = amountFieldsProblem({
+    totalAmount: data.totalAmount,
+    ...(data.retentionType ? { retentionBase: data.retentionBase, retentionRate: data.retentionRate, retentionAmount: data.retentionAmount } : {}),
+  });
+  if (amountsError) return { error: amountsError };
   const isRectificativeFlag = data.isRectificative === "1";
 
   // Validacion de cada linea de IVA antes de calcular nada. Permitimos
@@ -233,7 +316,11 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
   // Tipo confirmado en la revisión (desplegable). Si la factura se subió como
   // "No lo sé", aquí queda fijado; al validar exigimos un tipo concreto.
   const submittedType = data.type === "PURCHASE" || data.type === "SALE" ? data.type : null;
-  if (validate && !submittedType && invoice.typeUnconfirmed) {
+  // Las comprobaciones de validar se aplican tambien al guardar una VALIDATED
+  // o una EXPORTED legacy (reviewAllowedFrom("save") las admite): la pantalla
+  // no ofrece Guardar ahi, pero una llamada directa las saltaba.
+  const enforceRules = validate || invoice.status === "VALIDATED" || invoice.status === "EXPORTED";
+  if (enforceRules && !submittedType && invoice.typeUnconfirmed) {
     return { error: "Indica si la factura es emitida o recibida." };
   }
   const effectiveType: "PURCHASE" | "SALE" =
@@ -256,7 +343,7 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
   // OCR confunde los dos cuadros de la factura. Solo bloqueamos al
   // validar — guardar borrador con el conflicto se permite para que el
   // gestor pueda corregirlo en pasos.
-  if (validate && finalIssuerCif && finalReceiverCif && finalIssuerCif === finalReceiverCif) {
+  if (enforceRules && finalIssuerCif && finalReceiverCif && finalIssuerCif === finalReceiverCif) {
     return { error: appError("ERR-VALIDATE-001", `cif=${finalIssuerCif}`) };
   }
 
@@ -272,7 +359,7 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
   const retentionAmountNum = retentionType
     ? (parse(data.retentionAmount)
         ?? (retentionBaseNum != null && retentionRateNum != null
-            ? parseFloat(((retentionBaseNum * retentionRateNum) / 100).toFixed(2))
+            ? percentOf(retentionBaseNum, retentionRateNum)
             : null))
     : null;
 
@@ -303,7 +390,7 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     : effectiveType === "PURCHASE"
       ? goodsTypeFromOperationType(submittedOperationType)
       : normalizeGoodsType(data.intracomGoodsType);
-  if (validate && isIntracom && !intracomGoodsType) {
+  if (enforceRules && isIntracom && !intracomGoodsType) {
     return { error: "Marca si la entrega intracomunitaria es de bienes o de servicios antes de validar." };
   }
   const intracomGoodsSource = intracomGoodsType ? normalizeGoodsSource(data.intracomGoodsSource) : null;
@@ -385,15 +472,20 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
   if (signedLines.lines.length > 0 && newData.totalAmount !== null) {
     const sBase = signedLines.lines.reduce((s, l) => s + l.taxBase, 0);
     const sAmount = signedLines.lines.reduce((s, l) => s + l.vatAmount, 0);
-    const expected = sBase + sAmount + sumSurcharge - (newData.irpfAmount ?? 0);
-    const diff = Math.abs(
-      Math.round(expected * 100) - Math.round(newData.totalAmount * 100)
-    );
-    isValid = diff <= 2;
+    isValid = isInvoiceBalanced({
+      sumBase: sBase, sumAmount: sAmount, sumSurcharge, irpf: newData.irpfAmount ?? 0, total: newData.totalAmount,
+    });
   }
 
   // Build audit log entries for changed fields
   const auditEntries: { field: string; oldValue: string | null; newValue: string | null }[] = [];
+  // Reabrir borra el motivo del rechazo: la factura deja de estar rechazada.
+  if (options.reopen && invoice.rejectionReason) {
+    auditEntries.push({ field: "rejectionReason", oldValue: invoice.rejectionReason, newValue: null });
+  }
+  if (options.reopen && invoice.rejectionCategory) {
+    auditEntries.push({ field: "rejectionCategory", oldValue: invoice.rejectionCategory, newValue: null });
+  }
   const trackedFields = [
     "type",
     "issuerName","issuerCif","receiverName","receiverCif",
@@ -427,9 +519,40 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     auditEntries.push({ field: "equivalenceSurcharge", oldValue: oldSurcharge, newValue: newSurcharge });
   }
 
-  if (validate && !isValid && isValid !== null) {
-    // Allow validating with warning but don't block
+  // Lo minimo para validar, tambien al guardar la correccion de una ya
+  // validada (F-009, F-014). La pantalla lo avisa antes, con la misma funcion.
+  // Tambien al guardar una VALIDATED o una EXPORTED (enforceRules): una
+  // llamada directa dejaria una validada sin total o descuadrada.
+  if (enforceRules) {
+    const [problem] = validationProblems({
+      type: effectiveType,
+      invoiceNumber: newData.invoiceNumber,
+      invoiceDate: newData.invoiceDate,
+      totalAmount: newData.totalAmount,
+      irpfAmount: newData.irpfAmount,
+      lines: linesToSave,
+      isRectificative: isRectificativeFlag,
+      thirdPartyTaxId: isPurchase ? finalIssuerCif : finalReceiverCif,
+      thirdPartyCountry: isPurchase ? finalIssuerCountry : finalReceiverCountry,
+      operationType: submittedOperationType,
+      supplierAccount: newData.supplierAccount,
+      expenseAccount: newData.expenseAccount,
+      simplifiedSupplierAccount: invoice.client.simplifiedSupplierAccount,
+      currency: newData.currency,
+    });
+    if (problem) return { error: problem.message };
   }
+
+  // Volver a validar una factura ya validada (se vuelve a ella con "<" o desde
+  // el listado para corregirla) es guardar la correccion: el estado no cambia,
+  // asi que ni historial VALIDATED -> VALIDATED ni entrada de estado en la
+  // auditoria.
+  const alreadyValidated = invoice.status === "VALIDATED";
+  // EXPORTED (legacy, "validada y exportada") se normaliza a VALIDATED al
+  // corregirla, tambien sin validar: /api/export solo recoge VALIDATED con
+  // exportBatchId null, y si se quedara EXPORTED una correccion que la saca
+  // del lote no volveria nunca al Excel.
+  const toValidated = (validate && !alreadyValidated) || invoice.status === "EXPORTED";
 
   // When saving without validating, transition to PENDING_REVIEW if coming from initial states
   // ANALYZED es legacy (pre-refactor); si aun existe en BD se acepta como draft.
@@ -476,10 +599,54 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
 
   // Persistir factura + lineas en una transaccion. Borramos las lineas
   // previas y reinsertamos: la UI envia el array completo.
-  await prisma.$transaction([
-    prisma.invoiceVatLine.deleteMany({ where: { invoiceId } }),
-    ...(linesToSave.length > 0
-      ? [prisma.invoiceVatLine.createMany({
+  //
+  // La escritura de la factura va la primera y condicionada al updatedAt que
+  // se leyo: el bloqueo optimista de arriba solo mira la lectura, y una
+  // exportacion que confirma entre la lectura y esta escritura dejaba la
+  // correccion aplicada sobre una factura ya exportada con los datos viejos
+  // (F-049). El export pone updatedAt al reservar, asi que aqui no cuadra.
+  //
+  // Si el export tiene la fila reservada, esta escritura espera a su COMMIT, que
+  // puede tardar hasta el timeout del export: con los 5 s por defecto de Prisma
+  // la transaccion caducaba (P2028), la accion lanzaba y el gestor perdia lo
+  // tecleado. Esta accion no lanza nunca: todo sale como { error }.
+  if (toValidated) {
+    auditEntries.push({ field: "status", oldValue: invoice.status, newValue: "VALIDATED" });
+  }
+
+  let saved: boolean;
+  try {
+    saved = await prisma.$transaction(async (tx) => {
+      const updated = await tx.invoice.updateMany({
+        where: {
+          id: invoiceId,
+          updatedAt: invoice.updatedAt,
+          status: { in: reviewAllowedFrom(action, options) },
+          ...reviewTargetWhere(action, options),
+        },
+        data: {
+          ...newData,
+          ...(options.reopen ? { rejectionReason: null, rejectionCategory: null } : {}),
+          isValid,
+          // Si la factura estaba pospuesta y el gestor la edita/valida,
+          // la sacamos de la "cola de pospuestas" para que vuelva al
+          // orden normal.
+          deferredAt: null,
+          // Va en la misma escritura que los datos corregidos: si se hiciera
+          // aparte y fallara, quedaria la factura corregida pero marcada como
+          // exportada, y ya no habria forma de que volviera al Excel.
+          ...(nuevoExportBatchId !== undefined ? { exportBatchId: nuevoExportBatchId } : {}),
+          ...(toValidated
+            ? { status: "VALIDATED" as const }
+            : saveStatus ? { status: saveStatus as "PENDING_REVIEW" } : {}),
+        },
+      });
+      // Ha cambiado desde la lectura: no se escribe nada mas.
+      if (updated.count === 0) return false;
+
+      await tx.invoiceVatLine.deleteMany({ where: { invoiceId } });
+      if (linesToSave.length > 0) {
+        await tx.invoiceVatLine.createMany({
           data: linesToSave.map((l, i) => ({
             invoiceId,
             position:  i,
@@ -489,38 +656,48 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
             equivalenceSurchargeRate:   l.equivalenceSurchargeRate,
             equivalenceSurchargeAmount: l.equivalenceSurchargeAmount,
           })),
-        })]
-      : []),
-    prisma.invoice.update({
-      where: { id: invoiceId },
-      data: {
-        ...newData,
-        isValid,
-        // Si la factura estaba pospuesta y el gestor la edita/valida,
-        // la sacamos de la "cola de pospuestas" para que vuelva al
-        // orden normal.
-        deferredAt: null,
-        // Va en la misma escritura que los datos corregidos: si se hiciera
-        // aparte y fallara, quedaria la factura corregida pero marcada como
-        // exportada, y ya no habria forma de que volviera al Excel.
-        ...(nuevoExportBatchId !== undefined ? { exportBatchId: nuevoExportBatchId } : {}),
-        ...(validate ? { status: "VALIDATED" as const } : saveStatus ? { status: saveStatus as "PENDING_REVIEW" } : {}),
-      },
-    }),
-  ]);
+        });
+      }
+
+      // Historial y auditoria en la misma transaccion que los datos: si se
+      // escribieran despues y fallaran, quedaria la factura reabierta (motivo
+      // borrado) o validada sin rastro en la auditoria, que es inmutable.
+      if (toValidated) {
+        await tx.invoiceStatusHistory.create({
+          data: {
+            invoiceId,
+            fromStatus: invoice.status,
+            toStatus: "VALIDATED",
+            changedBy: userId,
+          },
+        });
+      }
+      if (auditEntries.length > 0) {
+        await appendAuditLogs(
+          auditEntries.map((e) => ({
+            invoiceId,
+            userId,
+            field: e.field,
+            oldValue: e.oldValue,
+            newValue: e.newValue,
+          })),
+          tx,
+        );
+      }
+      return true;
+    }, { timeout: EXPORT_TRANSACTION_OPTIONS.timeout + 5_000, maxWait: 5_000 });
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2028") {
+      return { error: appError("ERR-VALIDATE-003", `P2028 al escribir: ${err.message}`) };
+    }
+    console.error(`[review] no se pudo guardar la factura ${invoiceId}:`, err);
+    return { error: appError("ERR-SYS-001", `guardar ${invoiceId}: ${err instanceof Error ? err.message : String(err)}`) };
+  }
+  if (!saved) {
+    return conditionalWriteError(invoiceId, action, options, `updatedAt=${invoice.updatedAt.getTime()} al escribir`);
+  }
 
   if (validate) {
-    auditEntries.push({ field: "status", oldValue: invoice.status, newValue: "VALIDATED" });
-    // Record status transition
-    await prisma.invoiceStatusHistory.create({
-      data: {
-        invoiceId,
-        fromStatus: invoice.status,
-        toStatus: "VALIDATED",
-        changedBy: userId,
-      },
-    });
-
     // Aprender plan de cuentas + operationType para la "otra parte"
     // (la que NO es el cliente). En PURCHASE es el emisor (proveedor),
     // en SALE es el receptor (cliente final). Asi indexamos por el NIF
@@ -628,18 +805,6 @@ async function parseAndSave(invoiceId: string, userId: string, data: FieldData, 
     }
   }
 
-  if (auditEntries.length > 0) {
-    await appendAuditLogs(
-      auditEntries.map((e) => ({
-        invoiceId,
-        userId,
-        field: e.field,
-        oldValue: e.oldValue,
-        newValue: e.newValue,
-      })),
-    );
-  }
-
   return null; // no error
 }
 
@@ -654,7 +819,11 @@ export async function saveInvoiceFields(
   const id = formData.get("invoiceId") as string;
   const expectedUpdatedAt = formData.get("updatedAt") as string | null;
   const err = await parseAndSave(id, session.user.id, extractFields(formData), false, expectedUpdatedAt ?? undefined);
-  return err ?? null;
+  if (err) return err;
+  // Sin esto la pagina seguia con el updatedAt de antes de guardar, y el
+  // siguiente Guardar o Validar fallaba con "modificada por otro usuario".
+  refresh();
+  return null;
 }
 
 export async function validateInvoice(
@@ -668,9 +837,39 @@ export async function validateInvoice(
   const id = formData.get("invoiceId") as string;
   const fallbackNext = formData.get("nextId") as string | null;
   const bucket = parseBucket(formData.get("bucket"));
+  const back = parseBackHref(formData.get("back"));
   const expectedUpdatedAt = formData.get("updatedAt") as string | null;
-  const err = await parseAndSave(id, session.user.id, extractFields(formData), true, expectedUpdatedAt ?? undefined);
+  // Solo el boton "Reabrir y validar" lo manda; Enter nunca.
+  const reopen = formData.get("reopen") === "1";
+  // Lote y estado de ANTES de guardar. Si al validar se cambia el tipo
+  // (recibida -> emitida), la factura pasa al otro lote, y la siguiente tiene
+  // que salir del lote en el que estaba trabajando el gestor.
+  const before = await prisma.invoice.findUnique({
+    where: { id },
+    select: { status: true, clientId: true, periodMonth: true, periodYear: true, type: true },
+  }).catch(() => null);
+  const wasValidated = before != null && (before.status === "VALIDATED" || before.status === "EXPORTED");
+  // La siguiente se recalcula (otro gestor puede haber validado alguna desde
+  // que cargo la pagina), pero con el orden de ANTES de guardar: guardar quita
+  // deferredAt y una pospuesta vuelve a su sitio del lote, con lo que la
+  // siguiente ya no seria la que anunciaba la pagina. Guardar no cambia las
+  // demas, asi que el calculo previo sigue valiendo. Una ya validada no navega.
+  const nextId = wasValidated
+    ? null
+    : await resolveNextId(id, before ? filterFromInvoice(before, bucket) : null, fallbackNext);
+  const err = await parseAndSave(id, session.user.id, extractFields(formData), true, expectedUpdatedAt ?? undefined, { reopen });
   if (err) return err;
+
+  // Correccion de una factura ya validada: se guarda y el gestor se queda en
+  // ella (vino a corregirla, no a seguir el lote). Al cliente ya se le aviso
+  // la primera vez.
+  if (wasValidated) {
+    revalidatePath("/dashboard/worker/invoices");
+    revalidatePath("/dashboard/admin/invoices");
+    revalidatePath("/dashboard/admin/export");
+    refresh();
+    return null;
+  }
 
   // Notify client via email (after response)
   after(async () => {
@@ -692,9 +891,6 @@ export async function validateInvoice(
     }
   });
 
-  // Recomputar el siguiente respetando el bucket actual (puede haber
-  // cambiado desde que cargo la pagina: otro gestor valido, etc).
-  const nextId = await resolveNextId(id, bucket, fallbackNext);
   // Invalidar el cache de la siguiente factura: Next.js la habia
   // prefetcheado mientras la actual aun estaba PENDING, asi que el
   // contador X/N quedaria desfasado (p.ej. "2/8" en vez de "2/7").
@@ -702,36 +898,35 @@ export async function validateInvoice(
   revalidatePath("/dashboard/worker/invoices");
   revalidatePath("/dashboard/worker/batch", "layout");
   revalidatePath("/dashboard/admin/batch", "layout");
-  if (nextId) {
-    const suffix = queueToSearchParams({ bucket }).toString();
-    redirect(`/dashboard/worker/review/${nextId}${suffix ? `?${suffix}` : ""}`);
-  }
-  redirect("/dashboard/worker/invoices");
+  goToNext(nextId, bucket, back);
 }
 
 /**
- * Dado un invoiceId recien procesado, devuelve el siguiente id pendiente
- * de la misma cola (mismo cliente + periodo + tipo + bucket). Si algo
- * falla (factura no encontrada, etc) cae en el fallback que venia del
- * formulario.
+ * Siguiente pendiente de la cola (mismo cliente + periodo + tipo + bucket)
+ * despues de la actual, o null si no queda ninguna. El id que manda el
+ * formulario (calculado al abrir la pagina) solo se usa si la consulta
+ * falla: si la consulta dice que no queda ninguna, ese id puede ser una
+ * factura que otro gestor ya ha validado mientras tanto.
  */
 async function resolveNextId(
   currentId: string,
-  bucket: "clean" | "attention" | "all",
+  filter: QueueFilter | null,
   fallback: string | null,
 ): Promise<string | null> {
+  if (!filter) return fallback || null;
   try {
-    const inv = await prisma.invoice.findUnique({
-      where: { id: currentId },
-      select: { clientId: true, periodMonth: true, periodYear: true, type: true },
-    });
-    if (!inv) return fallback || null;
-    const filter = filterFromInvoice(inv, bucket);
-    const next = await getNextInQueue(currentId, filter);
-    return next ?? fallback ?? null;
+    return await getNextInQueue(currentId, filter);
   } catch {
     return fallback || null;
   }
+}
+
+/** A la siguiente pendiente, conservando la cola y el listado de origen; si
+ *  no queda ninguna, de vuelta a ese listado. */
+function goToNext(nextId: string | null, bucket: QueueBucket, back: string | null): never {
+  const suffix = queueToSearchParams({ bucket, back }).toString();
+  if (nextId) redirect(`/dashboard/worker/review/${nextId}${suffix ? `?${suffix}` : ""}`);
+  redirect(back ?? "/dashboard/worker/invoices");
 }
 
 /**
@@ -752,6 +947,7 @@ export async function deferInvoice(
   const id = formData.get("invoiceId") as string;
   const fallbackNext = formData.get("nextId") as string | null;
   const bucket = parseBucket(formData.get("bucket"));
+  const back = parseBackHref(formData.get("back"));
 
   const invoice = await prisma.invoice.findUnique({ where: { id } });
   if (!invoice) return { error: "Factura no encontrada" };
@@ -759,12 +955,22 @@ export async function deferInvoice(
   const accessErr = await assertInvoiceAccess(session, invoice.clientId);
   if (accessErr) return accessErr;
 
+  // Posponer una ya validada la mandaria al final del lote y descolocaria las
+  // flechas, sin ningun sentido: ya no esta en la cola. Lo mismo el
+  // formulario, que solo ofrece Posponer en estos estados.
+  if (!NEEDS_REVIEW.includes(invoice.status)) {
+    return { error: "Solo se pueden posponer las facturas que están por revisar." };
+  }
+
+  // Antes de marcarla: una vez pospuesta es la ultima del lote, y desde ahi
+  // la siguiente pendiente daba la vuelta y volvia a la primera del lote en
+  // vez de ir a la que sigue a esta.
+  const nextId = await resolveNextId(id, filterFromInvoice(invoice, bucket), fallbackNext);
   await prisma.invoice.update({
     where: { id },
     data: { deferredAt: new Date() },
   });
 
-  const nextId = await resolveNextId(id, bucket, fallbackNext);
   // Posponer no marca la factura como "hecha" — el contador X/N no
   // cambia. Solo invalidamos las listas para que los lotes muestren el
   // nuevo orden.
@@ -772,11 +978,7 @@ export async function deferInvoice(
   revalidatePath("/dashboard/worker/invoices");
   revalidatePath("/dashboard/worker/batch", "layout");
   revalidatePath("/dashboard/admin/batch", "layout");
-  if (nextId) {
-    const suffix = queueToSearchParams({ bucket }).toString();
-    redirect(`/dashboard/worker/review/${nextId}${suffix ? `?${suffix}` : ""}`);
-  }
-  redirect("/dashboard/worker/invoices");
+  goToNext(nextId, bucket, back);
 }
 
 /**
@@ -857,6 +1059,7 @@ export async function rejectInvoice(
   const category = formData.get("rejectionCategory") as string | null;
   const fallbackNext = formData.get("nextId") as string | null;
   const bucket = parseBucket(formData.get("bucket"));
+  const back = parseBackHref(formData.get("back"));
 
   if (!reason) {
     return { error: "Debes indicar el motivo del rechazo." };
@@ -867,21 +1070,42 @@ export async function rejectInvoice(
     return { error: "Categoría de rechazo no válida." };
   }
 
-  const invoice = await prisma.invoice.findUnique({ where: { id } });
+  const invoice = await prisma.invoice.findUnique({
+    where: { id },
+    include: { exportBatchItems: { take: 1, select: { id: true } } },
+  });
   if (!invoice) return { error: "Factura no encontrada" };
 
   // Workers can only reject invoices of assigned clients
   const accessErr = await assertInvoiceAccess(session, invoice.clientId);
   if (accessErr) return accessErr;
 
-  await prisma.invoice.update({
-    where: { id },
+  // Con las flechas se llega a facturas ya terminadas. Una que ya salio en un
+  // Excel esta en la contabilidad de A3: rechazarla aqui no la quita de alli
+  // y al cliente le llegaria un rechazo de algo ya contabilizado.
+  if (invoice.exportBatchItems.length > 0) {
+    return { error: "Esta factura ya se exportó a A3 y no se puede rechazar. Si hay que corregirla, corrígela y vuelve a exportarla." };
+  }
+  // Ya rechazada, en analisis, dividida o por clasificar: no se rechaza. Se
+  // repite en el propio updateMany de abajo.
+  const blocked = reviewActionBlockReason(invoice.status, "reject");
+  if (blocked) return { error: blocked };
+  const periodErr = await closedPeriodError(invoice.clientId, [invoicePeriod(invoice)], "rechazar");
+  if (periodErr) return periodErr;
+
+  // Condicionado al updatedAt leido: si una exportacion la reservo mientras
+  // tanto, no se rechaza una factura que ya esta camino de A3 (F-049).
+  const rejected = await prisma.invoice.updateMany({
+    where: { id, updatedAt: invoice.updatedAt, status: { in: reviewAllowedFrom("reject") } },
     data: {
       status: "REJECTED",
       rejectionReason: reason,
       ...(category ? { rejectionCategory: category as "ILLEGIBLE" | "INCOMPLETE" | "WRONG_PERIOD" | "DUPLICATE" | "OTHER" } : {}),
     },
   });
+  if (rejected.count === 0) {
+    return conditionalWriteError(id, "reject", {}, `updatedAt=${invoice.updatedAt.getTime()} al rechazar`);
+  }
 
   await prisma.invoiceStatusHistory.create({
     data: {
@@ -922,21 +1146,170 @@ export async function rejectInvoice(
     }
   });
 
-  const nextId = await resolveNextId(id, bucket, fallbackNext);
+  const nextId = await resolveNextId(id, filterFromInvoice(invoice, bucket), fallbackNext);
   // Mismo motivo que en validateInvoice: prefetch del siguiente puede
   // tener un contador X/N desfasado tras rechazar la actual.
   if (nextId) revalidatePath(`/dashboard/worker/review/${nextId}`);
   revalidatePath("/dashboard/worker/invoices");
   revalidatePath("/dashboard/worker/batch", "layout");
   revalidatePath("/dashboard/admin/batch", "layout");
-  if (nextId) {
-    const suffix = queueToSearchParams({ bucket }).toString();
-    redirect(`/dashboard/worker/review/${nextId}${suffix ? `?${suffix}` : ""}`);
-  }
-  redirect("/dashboard/worker/invoices");
+  goToNext(nextId, bucket, back);
 }
 
 // ── División multi-ticket ──────────────────────────────────────────────────
+
+/** Periodos que toca una division: el de la original y el del lote, que es
+ *  donde se crean las hijas (sin periodo contable). Con este cerrado quedarian
+ *  hijas pendientes que no se pueden validar hasta que lo reabran. */
+function splitPeriods(
+  invoice: Pick<Invoice, "periodMonth" | "periodYear" | "accountingPeriodMonth" | "accountingPeriodYear">,
+): { month: number; year: number }[] {
+  return [invoicePeriod(invoice), { month: invoice.periodMonth, year: invoice.periodYear }];
+}
+
+/** Un trozo de una division, ya en memoria y listo para subir. */
+type SplitPiece = {
+  label: string;
+  filename: string;
+  storageKey: string;
+  fileType: string;
+  body: Buffer;
+};
+
+/** Sube los trozos de una division. Si uno falla, borra los ya subidos. */
+async function uploadSplitPieces(pieces: SplitPiece[]): Promise<string | null> {
+  const uploaded: string[] = [];
+  for (const piece of pieces) {
+    try {
+      await putObject(piece.storageKey, piece.body, piece.fileType);
+      uploaded.push(piece.storageKey);
+    } catch (e) {
+      await Promise.all(uploaded.map((key) => deleteObject(key)));
+      return `Error subiendo "${piece.label}": ${e instanceof Error ? e.message : "fallo"}`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Reserva la original y crea sus hijas, en una sola transaccion (F-056).
+ *
+ * La reserva va la primera: updateMany condicionado a un estado desde el que
+ * se puede dividir y a que no este en ningun Excel. Si otra persona la ha
+ * dividido, rechazado o exportado mientras tanto, count es 0 y no se crea
+ * ninguna hija (antes se creaban y se marcaba la original despues, sin
+ * condicion: dos divisiones a la vez duplicaban las hijas). Si algo falla,
+ * se deshace todo y se borran los ficheros ya subidos.
+ */
+async function reserveAndCreateSplit(
+  invoice: Pick<
+    Invoice,
+    "id" | "status" | "updatedAt" | "clientId" | "type" | "typeUnconfirmed" | "periodType" | "periodMonth" | "periodYear" | "currency"
+  >,
+  userId: string,
+  pieces: SplitPiece[],
+): Promise<{ childIds: string[] } | { error: string }> {
+  const discardFiles = () => Promise.all(pieces.map((p) => deleteObject(p.storageKey)));
+  let childIds: string[] | null;
+  try {
+    childIds = await prisma.$transaction(async (tx) => {
+      const reserved = await tx.invoice.updateMany({
+        where: {
+          id: invoice.id,
+          // Lo leido: si se valido o se cambio mientras se subian las partes,
+          // el historial y la auditoria (inmutable) apuntarian un estado de
+          // origen falso y las hijas heredarian type y currency viejos.
+          updatedAt: invoice.updatedAt,
+          status: { in: reviewAllowedFrom("split") },
+          exportBatchId: null,
+          exportBatchItems: { none: {} },
+          ...reviewTargetWhere("split"),
+        },
+        data: { status: "SPLIT_SOURCE" },
+      });
+      if (reserved.count === 0) return null;
+
+      const ids: string[] = [];
+      for (const piece of pieces) {
+        const fileHash = createHash("sha256").update(piece.body).digest("hex");
+        const document = await tx.document.create({
+          data: {
+            filename: piece.filename,
+            storageKey: piece.storageKey,
+            fileType: piece.fileType,
+            fileHash,
+            sizeBytes: piece.body.length,
+            uploadedBy: userId,
+            clientId: invoice.clientId,
+          },
+        });
+        const child = await tx.invoice.create({
+          data: {
+            filename: piece.filename,
+            storageKey: piece.storageKey,
+            fileType: piece.fileType,
+            fileHash,
+            type: invoice.type,
+            // Si el tipo de la original estaba sin confirmar ("No lo sé"), el
+            // de las hijas tambien; y una trimestral sigue siendo trimestral:
+            // en MONTHLY salian en otro lote.
+            typeUnconfirmed: invoice.typeUnconfirmed,
+            periodType: invoice.periodType,
+            periodMonth: invoice.periodMonth,
+            periodYear: invoice.periodYear,
+            clientId: invoice.clientId,
+            documentId: document.id,
+            splitFromId: invoice.id,
+            // La hija hereda la moneda: si su recorte no la muestra, el OCR no
+            // la veria y el aviso de "no es euro" desapareceria en silencio.
+            currency: invoice.currency,
+          },
+        });
+        ids.push(child.id);
+      }
+
+      await tx.invoiceStatusHistory.create({
+        data: { invoiceId: invoice.id, fromStatus: invoice.status, toStatus: "SPLIT_SOURCE", changedBy: userId },
+      });
+      await appendAuditLogs([{
+        invoiceId: invoice.id,
+        userId,
+        field: "status",
+        oldValue: invoice.status,
+        newValue: "SPLIT_SOURCE",
+      }], tx);
+      return ids;
+    }, { timeout: 30_000, maxWait: 5_000 });
+  } catch (e) {
+    await discardFiles();
+    console.error(`[split] ${invoice.id}: no se pudo dividir:`, e);
+    return { error: "No se ha podido dividir la factura. No se ha cambiado nada: vuelve a intentarlo." };
+  }
+
+  if (!childIds) {
+    await discardFiles();
+    const now = await prisma.invoice
+      .findUnique({
+        where: { id: invoice.id },
+        select: {
+          status: true,
+          exportBatchId: true,
+          exportBatchItems: { take: 1, select: { id: true } },
+          _count: { select: { splitInvoices: true } },
+        },
+      })
+      .catch(() => null);
+    if (now && (now.exportBatchId || now.exportBatchItems.length > 0)) {
+      return { error: "Esta factura ya se exportó a A3 y no se puede dividir." };
+    }
+    return {
+      error: (now && (reviewActionBlockReason(now.status, "split")
+        ?? reviewTargetBlockReason("split", { replacedById: null, isUnclassifiedBucket: false, splitChildren: now._count.splitInvoices })))
+        ?? "La factura ha cambiado mientras la dividías. Recarga la página.",
+    };
+  }
+  return { childIds };
+}
 
 export type SplitTicket = {
   /** Nombre descriptivo del ticket (ej: "ticket1"). */
@@ -954,6 +1327,7 @@ export async function splitInvoice(
   invoiceId: string,
   tickets: SplitTicket[],
   bucket: string,
+  back?: string | null,
 ): Promise<{ error?: string }> {
   const session = await auth();
   if (!session?.user || !["ADMIN", "WORKER"].includes(session.user.role)) {
@@ -965,16 +1339,39 @@ export async function splitInvoice(
 
   const invoice = await prisma.invoice.findUnique({
     where: { id: invoiceId },
-    include: { client: true },
+    include: {
+      client: true,
+      exportBatchItems: { take: 1, select: { id: true } },
+      _count: { select: { splitInvoices: true } },
+    },
   });
   if (!invoice) return { error: "Factura no encontrada" };
 
   const accessErr = await assertInvoiceAccess(session, invoice.clientId);
   if (accessErr) return accessErr as { error: string };
 
-  if (!isStorageConfigured()) return { error: "Almacenamiento no configurado" };
-  const createdIds: string[] = [];
+  // Ya esta en A3 como una sola factura: dividirla aqui dejaria el asiento
+  // de alli sin su original.
+  if (invoice.exportBatchItems.length > 0) {
+    return { error: "Esta factura ya se exportó a A3 y no se puede dividir." };
+  }
+  // En analisis, ya dividida (por estado o porque ya tiene hijas), por
+  // clasificar o rechazada: no se divide.
+  const blocked = reviewActionBlockReason(invoice.status, "split")
+    ?? reviewTargetBlockReason("split", {
+      replacedById: null,
+      isUnclassifiedBucket: invoice.client.isUnclassifiedBucket,
+      splitChildren: invoice._count.splitInvoices,
+    });
+  if (blocked) return { error: blocked };
+  // Antes de subir nada: si no, quedarian recortes huerfanos en el almacenamiento.
+  const periodErr = await closedPeriodError(invoice.clientId, splitPeriods(invoice), "dividir");
+  if (periodErr) return periodErr;
 
+  if (!isStorageConfigured()) return { error: "Almacenamiento no configurado" };
+
+  // Todos los recortes, validados y en memoria antes de subir nada.
+  const pieces: SplitPiece[] = [];
   for (const ticket of tickets) {
     // Extraer el buffer del data URL (data:[mime];base64,[data])
     const match = ticket.dataUrl.match(/^data:([^;]+);base64,(.+)$/);
@@ -984,70 +1381,20 @@ export async function splitInvoice(
 
     const ext = mime === "image/png" ? "png" : "jpg";
     const safeName = sanitizeFilenameForStorage(`${ticket.name}.${ext}`);
-    const storageKey = `${invoice.clientId}/${invoice.periodYear}-${String(invoice.periodMonth).padStart(2, "0")}/${Date.now()}-split-${safeName}`;
-    const fileHash = createHash("sha256").update(buffer).digest("hex");
-
-    try {
-      await putObject(storageKey, buffer, mime);
-    } catch (e) {
-      return { error: `Error subiendo "${ticket.name}": ${e instanceof Error ? e.message : "fallo"}` };
-    }
-
-    const filename = `${ticket.name}.${ext}`;
-    const document = await prisma.document.create({
-      data: {
-        filename,
-        storageKey,
-        fileType: mime,
-        fileHash,
-        sizeBytes: buffer.length,
-        uploadedBy: session.user.id,
-        clientId: invoice.clientId,
-      },
+    pieces.push({
+      label: ticket.name,
+      filename: `${ticket.name}.${ext}`,
+      storageKey: splitStorageKey(invoice, safeName),
+      fileType: mime,
+      body: buffer,
     });
-
-    const child = await prisma.invoice.create({
-      data: {
-        filename,
-        storageKey,
-        fileType: mime,
-        fileHash,
-        type: invoice.type,
-        periodMonth: invoice.periodMonth,
-        periodYear: invoice.periodYear,
-        clientId: invoice.clientId,
-        documentId: document.id,
-        splitFromId: invoiceId,
-        // La hija hereda la moneda: si su recorte no la muestra, el OCR no
-        // la veria y el aviso de "no es euro" desapareceria en silencio.
-        currency: invoice.currency,
-      },
-    });
-    createdIds.push(child.id);
   }
 
-  // Marcar la original como dividida
-  await prisma.invoice.update({
-    where: { id: invoiceId },
-    data: { status: "SPLIT_SOURCE" },
-  });
-
-  await prisma.invoiceStatusHistory.create({
-    data: {
-      invoiceId,
-      fromStatus: invoice.status,
-      toStatus: "SPLIT_SOURCE",
-      changedBy: session.user.id,
-    },
-  });
-
-  await appendAuditLogs([{
-    invoiceId,
-    userId: session.user.id,
-    field: "status",
-    oldValue: invoice.status,
-    newValue: "SPLIT_SOURCE",
-  }]);
+  const uploadErr = await uploadSplitPieces(pieces);
+  if (uploadErr) return { error: uploadErr };
+  const split = await reserveAndCreateSplit(invoice, session.user.id, pieces);
+  if ("error" in split) return split;
+  const createdIds = split.childIds;
 
   // OCR en segundo plano para las sub-facturas
   const userId = session.user.id;
@@ -1062,18 +1409,13 @@ export async function splitInvoice(
 
   // Calcular el siguiente pendiente en la cola y redirigir
   const parsedBucket = parseBucket(bucket);
-  const filter = filterFromInvoice(invoice, parsedBucket);
-  const nextId = await getNextInQueue(invoiceId, filter);
+  const nextId = await resolveNextId(invoiceId, filterFromInvoice(invoice, parsedBucket), null);
 
   revalidatePath("/dashboard/worker/invoices");
   revalidatePath("/dashboard/worker/batch", "layout");
   revalidatePath("/dashboard/admin/batch", "layout");
 
-  const suffix = queueToSearchParams({ bucket: parsedBucket }).toString();
-  if (nextId) {
-    redirect(`/dashboard/worker/review/${nextId}${suffix ? `?${suffix}` : ""}`);
-  }
-  redirect("/dashboard/worker/invoices");
+  goToNext(nextId, parsedBucket, parseBackHref(back));
 }
 
 // ── División PDF multi-factura ────────────────────────────────────────────────
@@ -1096,6 +1438,7 @@ export async function splitPdfInvoice(
   invoiceId: string,
   parts: PdfSplitPart[],
   bucket: string,
+  back?: string | null,
 ): Promise<{ error?: string }> {
   const session = await auth();
   if (!session?.user || !["ADMIN", "WORKER"].includes(session.user.role)) {
@@ -1107,12 +1450,34 @@ export async function splitPdfInvoice(
 
   const invoice = await prisma.invoice.findUnique({
     where: { id: invoiceId },
-    include: { client: true },
+    include: {
+      client: true,
+      exportBatchItems: { take: 1, select: { id: true } },
+      _count: { select: { splitInvoices: true } },
+    },
   });
   if (!invoice) return { error: "Factura no encontrada" };
 
   const accessErr = await assertInvoiceAccess(session, invoice.clientId);
   if (accessErr) return accessErr as { error: string };
+
+  // Ya esta en A3 como una sola factura: dividirla aqui dejaria el asiento
+  // de alli sin su original.
+  if (invoice.exportBatchItems.length > 0) {
+    return { error: "Esta factura ya se exportó a A3 y no se puede dividir." };
+  }
+  // En analisis, ya dividida (por estado o porque ya tiene hijas), por
+  // clasificar o rechazada: no se divide.
+  const blocked = reviewActionBlockReason(invoice.status, "split")
+    ?? reviewTargetBlockReason("split", {
+      replacedById: null,
+      isUnclassifiedBucket: invoice.client.isUnclassifiedBucket,
+      splitChildren: invoice._count.splitInvoices,
+    });
+  if (blocked) return { error: blocked };
+  // Antes de subir nada: si no, quedarian partes huerfanas en el almacenamiento.
+  const periodErr = await closedPeriodError(invoice.clientId, splitPeriods(invoice), "dividir");
+  if (periodErr) return periodErr;
 
   if (!isStorageConfigured()) return { error: "Almacenamiento no configurado" };
 
@@ -1124,10 +1489,23 @@ export async function splitPdfInvoice(
     return { error: `No se pudo descargar el PDF: ${e instanceof Error ? e.message : "sin datos"}` };
   }
 
-  // Cargar con pdf-lib y validar rangos
+  // Cargar con pdf-lib y validar rangos. Un PDF cifrado o dañado hace
+  // lanzar a load, copyPages o save: se devuelve { error } antes de subir
+  // nada, en vez de lanzar a la UI.
   const { PDFDocument } = await import("pdf-lib");
-  const srcDoc = await PDFDocument.load(originalBytes);
-  const totalPages = srcDoc.getPageCount();
+  const unreadablePdf = { error: "No se ha podido leer el PDF para dividirlo (¿está protegido o dañado?)." };
+  let srcDoc: Awaited<ReturnType<typeof PDFDocument.load>>;
+  let totalPages: number;
+  try {
+    srcDoc = await PDFDocument.load(originalBytes);
+    // pdf-lib carga sin error un PDF sin /Pages (o con /Pages roto) y es el
+    // recuento lo que lanza.
+    totalPages = srcDoc.getPageCount();
+  } catch (e) {
+    console.warn(`[split] ${invoice.id}: no se pudo leer el PDF:`, e);
+    return unreadablePdf;
+  }
+  if (totalPages === 0) return unreadablePdf;
 
   for (const part of parts) {
     if (!part.name.trim()) return { error: "Todas las partes deben tener un nombre." };
@@ -1136,85 +1514,38 @@ export async function splitPdfInvoice(
     }
   }
 
-  const createdIds: string[] = [];
+  // Todas las partes, generadas en memoria antes de subir nada.
+  const pieces: SplitPiece[] = [];
+  try {
+    for (const part of parts) {
+      const newDoc = await PDFDocument.create();
+      // copyPages devuelve las páginas en el mismo orden que el array de índices
+      const pageIndices = Array.from(
+        { length: part.endPage - part.startPage + 1 },
+        (_, i) => part.startPage - 1 + i,
+      );
+      const copiedPages = await newDoc.copyPages(srcDoc, pageIndices);
+      for (const p of copiedPages) newDoc.addPage(p);
 
-  for (const part of parts) {
-    const newDoc = await PDFDocument.create();
-    // copyPages devuelve las páginas en el mismo orden que el array de índices
-    const pageIndices = Array.from(
-      { length: part.endPage - part.startPage + 1 },
-      (_, i) => part.startPage - 1 + i,
-    );
-    const copiedPages = await newDoc.copyPages(srcDoc, pageIndices);
-    for (const p of copiedPages) newDoc.addPage(p);
-
-    const pdfBytes = Buffer.from(await newDoc.save());
-    const fileHash = createHash("sha256").update(pdfBytes).digest("hex");
-
-    const safeName = sanitizeFilenameForStorage(`${part.name}.pdf`);
-    const storageKey = `${invoice.clientId}/${invoice.periodYear}-${String(invoice.periodMonth).padStart(2, "0")}/${Date.now()}-split-${safeName}`;
-
-    try {
-      await putObject(storageKey, pdfBytes, "application/pdf");
-    } catch (e) {
-      return { error: `Error subiendo "${part.name}": ${e instanceof Error ? e.message : "fallo"}` };
+      const safeName = sanitizeFilenameForStorage(`${part.name}.pdf`);
+      pieces.push({
+        label: part.name,
+        filename: `${part.name}.pdf`,
+        storageKey: splitStorageKey(invoice, safeName),
+        fileType: "application/pdf",
+        body: Buffer.from(await newDoc.save()),
+      });
     }
-
-    const filename = `${part.name}.pdf`;
-    const document = await prisma.document.create({
-      data: {
-        filename,
-        storageKey,
-        fileType: "application/pdf",
-        fileHash,
-        sizeBytes: pdfBytes.length,
-        uploadedBy: session.user.id,
-        clientId: invoice.clientId,
-      },
-    });
-
-    const child = await prisma.invoice.create({
-      data: {
-        filename,
-        storageKey,
-        fileType: "application/pdf",
-        fileHash,
-        type: invoice.type,
-        periodMonth: invoice.periodMonth,
-        periodYear: invoice.periodYear,
-        clientId: invoice.clientId,
-        documentId: document.id,
-        splitFromId: invoiceId,
-        // La hija hereda la moneda: si su recorte no la muestra, el OCR no
-        // la veria y el aviso de "no es euro" desapareceria en silencio.
-        currency: invoice.currency,
-      },
-    });
-    createdIds.push(child.id);
+  } catch (e) {
+    console.warn(`[split] ${invoice.id}: no se pudieron generar las partes del PDF:`, e);
+    return unreadablePdf;
   }
 
-  // Marcar la original como dividida
-  await prisma.invoice.update({
-    where: { id: invoiceId },
-    data: { status: "SPLIT_SOURCE" },
-  });
-
-  await prisma.invoiceStatusHistory.create({
-    data: {
-      invoiceId,
-      fromStatus: invoice.status,
-      toStatus: "SPLIT_SOURCE",
-      changedBy: session.user.id,
-    },
-  });
-
-  await appendAuditLogs([{
-    invoiceId,
-    userId: session.user.id,
-    field: "status",
-    oldValue: invoice.status,
-    newValue: "SPLIT_SOURCE",
-  }]);
+  const uploadErr = await uploadSplitPieces(pieces);
+  if (uploadErr) return { error: uploadErr };
+  const split = await reserveAndCreateSplit(invoice, session.user.id, pieces);
+  if ("error" in split) return split;
+  const createdIds = split.childIds;
 
   // OCR en segundo plano para las sub-facturas
   const userId = session.user.id;
@@ -1228,18 +1559,13 @@ export async function splitPdfInvoice(
   });
 
   const parsedBucket = parseBucket(bucket);
-  const filter = filterFromInvoice(invoice, parsedBucket);
-  const nextId = await getNextInQueue(invoiceId, filter);
+  const nextId = await resolveNextId(invoiceId, filterFromInvoice(invoice, parsedBucket), null);
 
   revalidatePath("/dashboard/worker/invoices");
   revalidatePath("/dashboard/worker/batch", "layout");
   revalidatePath("/dashboard/admin/batch", "layout");
 
-  const suffix = queueToSearchParams({ bucket: parsedBucket }).toString();
-  if (nextId) {
-    redirect(`/dashboard/worker/review/${nextId}${suffix ? `?${suffix}` : ""}`);
-  }
-  redirect("/dashboard/worker/invoices");
+  goToNext(nextId, parsedBucket, parseBackHref(back));
 }
 
 function extractFields(fd: FormData): FieldData {

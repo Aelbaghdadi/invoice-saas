@@ -39,7 +39,7 @@ export function ReuploadButton({ invoiceId }: { invoiceId: string }) {
         className="inline-flex items-center gap-1 rounded-md border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700 transition hover:bg-blue-100 disabled:opacity-50"
       >
         <Upload className="h-3 w-3" />
-        {pending ? "Subiendo..." : "Re-subir corregida"}
+        {pending ? "Subiendo..." : "Subir versión corregida"}
       </button>
       {error && <p className="mt-0.5 text-[11px] text-red-500">{error}</p>}
     </div>

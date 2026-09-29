@@ -1,13 +1,15 @@
 import { prisma } from "@/lib/prisma";
 import type { Invoice, InvoiceStatus, InvoiceType, Prisma } from "@prisma/client";
+import { neighbours, nextPendingAfter } from "@/lib/reviewNavigation";
+export { parseBackHref } from "@/lib/reviewNavigation";
 
 /**
  * Helper centralizado de la "cola de revision".
  *
- * La cola representa el conjunto de facturas que comparten contexto con
- * la actual (mismo cliente, mismo periodo, mismo tipo) y que siguen
- * pendientes de revisar. Se ordena por createdAt asc para mantener el
- * orden cronologico de subida.
+ * El lote es el conjunto de facturas que comparten contexto con la actual
+ * (mismo cliente, mismo periodo, mismo tipo). Las flechas lo recorren entero;
+ * los buckets solo deciden cual es la siguiente PENDIENTE a la que saltar al
+ * validar, rechazar o posponer. Orden: QUEUE_ORDER.
  *
  * Tenemos dos "buckets" conceptuales (fase 3):
  *  - "clean": PENDING_REVIEW sin incidencias abiertas → cola rapida.
@@ -83,111 +85,131 @@ function buildWhere(filter: QueueFilter): Prisma.InvoiceWhereInput {
 }
 
 /**
- * Devuelve los IDs de la cola en orden cronologico.
- * Incluye la factura actual aunque ya este VALIDATED/REJECTED para que
- * el indice "X de N" siga teniendo sentido.
+ * Orden de la cola: las pospuestas al final y, dentro de cada grupo, por
+ * orden de subida. El id desempata: sin el, dos facturas subidas en el mismo
+ * instante podian salir en distinto orden entre dos consultas y las flechas
+ * saltarse una o repetirla. Una sola constante para todo lo que ordena la cola.
  */
-async function getQueueIds(
-  filter: QueueFilter,
-  currentInvoiceId?: string,
-): Promise<string[]> {
-  const where: Prisma.InvoiceWhereInput = currentInvoiceId
-    ? { OR: [{ id: currentInvoiceId }, buildWhere(filter)] }
-    : buildWhere(filter);
+export const QUEUE_ORDER: Prisma.InvoiceOrderByWithRelationInput[] = [
+  { deferredAt: { sort: "asc", nulls: "first" } },
+  { createdAt: "asc" },
+  { id: "asc" },
+];
 
-  const rows = await prisma.invoice.findMany({
-    where,
-    // Las pospuestas (`deferredAt != null`) van al final. Dentro de
-    // cada grupo, orden cronologico de subida.
-    orderBy: [{ deferredAt: { sort: "asc", nulls: "first" } }, { createdAt: "asc" }],
-    select: { id: true },
+/** Estados que no son una factura que revisar: el original de una division
+ *  (sus hijas si lo son) y las que esperan clasificar en otro cliente. */
+const FUERA_DEL_LOTE: InvoiceStatus[] = ["SPLIT_SOURCE", "PENDING_ROUTING"];
+
+/** Estados de una factura ya terminada (para el progreso del lote). */
+const HECHAS: InvoiceStatus[] = ["VALIDATED", "REJECTED", "EXPORTED"];
+
+/** Facturas del lote en el orden de la cola (la actual siempre incluida,
+ *  aunque sea una SPLIT_SOURCE abierta a mano). */
+async function batchInOrder(filter: QueueFilter, currentInvoiceId: string) {
+  return prisma.invoice.findMany({
+    where: {
+      OR: [
+        { id: currentInvoiceId },
+        {
+          clientId: filter.clientId,
+          periodMonth: filter.periodMonth,
+          periodYear: filter.periodYear,
+          type: filter.type,
+          status: { notIn: FUERA_DEL_LOTE },
+        },
+      ],
+    },
+    orderBy: QUEUE_ORDER,
+    select: { id: true, status: true },
   });
-  return rows.map((r) => r.id);
+}
+
+/** Ids pendientes del bucket (lo que Validar/Rechazar/Posponer van recorriendo). */
+async function pendingIdsInBucket(filter: QueueFilter): Promise<Set<string>> {
+  const rows = await prisma.invoice.findMany({ where: buildWhere(filter), select: { id: true } });
+  return new Set(rows.map((r) => r.id));
 }
 
 export type QueuePosition = {
   ids: string[];
   index: number; // 0-based position of currentInvoiceId, -1 if not in queue
+  /** Anterior y siguiente del LOTE, en cualquier estado (flechas "<" ">"). */
   prevId: string | null;
   nextId: string | null;
+  /** Siguiente PENDIENTE despues de la actual: a donde van Validar,
+   *  Rechazar y Posponer. */
+  nextPendingId: string | null;
   total: number;
+  /** Ya terminadas (validadas, rechazadas, exportadas): el progreso real. */
+  doneCount: number;
+  /** Pendientes que quedan en el bucket actual (la actual incluida). */
+  pendingInBucket: number;
 };
 
 /**
- * Devuelve la cola y la posicion del actual.
+ * Posicion de la factura en su lote (mismo cliente, periodo y tipo).
  *
- * El contador "X de N" usa el TAMANO ORIGINAL del lote (todas las
- * facturas del cliente+periodo+tipo, en cualquier estado), no solo las
- * pendientes. De esta forma al validar "1/8" se ve "2/8", "3/8"... sin
- * que el total decrezca conforme se completan — la percepcion natural
- * del usuario.
+ * "X de N" y las flechas salen de la MISMA lista: todas las facturas del lote
+ * en cualquier estado, en el orden de la cola. Antes el contador contaba el
+ * lote entero y las flechas solo las pendientes, asi que con las anteriores
+ * validadas "<" salia deshabilitado y no se podia volver a una factura recien
+ * validada para corregirla (lo pidio un gestor, Miquel).
  *
- * La navegacion prev/next sigue saltando solo entre facturas del bucket
- * activo (pendientes), saltandose las ya completadas en el sentido
- * "avanza" — uses getNextInQueue para eso.
+ * El bucket (incidencias / listas para validar) ya no limita las flechas:
+ * solo decide cual es la siguiente pendiente.
  */
 export async function getQueuePosition(
   currentInvoiceId: string,
   filter: QueueFilter,
 ): Promise<QueuePosition> {
-  // Total e indice se calculan sobre el lote entero (mismo cliente +
-  // periodo + tipo, todos los estados). Asi el "X/N" no fluctua.
-  // Ordenacion: pospuestas al final para que el "X de N" coincida con
-  // el orden visual de la cola.
-  const allInBatch = await prisma.invoice.findMany({
-    where: {
-      clientId: filter.clientId,
-      periodMonth: filter.periodMonth,
-      periodYear: filter.periodYear,
-      type: filter.type,
-    },
-    orderBy: [{ deferredAt: { sort: "asc", nulls: "first" } }, { createdAt: "asc" }],
-    select: { id: true },
-  });
-  const ids = allInBatch.map((r) => r.id);
-  const index = ids.indexOf(currentInvoiceId);
-
-  // Para prev/next nos quedamos solo con los del bucket (pendientes),
-  // mas la actual para que prev funcione si estamos en una "done".
-  const bucketIds = await getQueueIds(filter, currentInvoiceId);
-  const bucketIndex = bucketIds.indexOf(currentInvoiceId);
-  const prevId = bucketIndex > 0 ? bucketIds[bucketIndex - 1] : null;
-  const nextId = bucketIndex >= 0 && bucketIndex < bucketIds.length - 1
-    ? bucketIds[bucketIndex + 1]
-    : null;
-
-  return { ids, index, prevId, nextId, total: ids.length };
+  const [lote, pendientes] = await Promise.all([
+    batchInOrder(filter, currentInvoiceId),
+    pendingIdsInBucket(filter),
+  ]);
+  const ids = lote.map((r) => r.id);
+  const { index, prevId, nextId } = neighbours(ids, currentInvoiceId);
+  return {
+    ids,
+    index,
+    prevId,
+    nextId,
+    nextPendingId: nextPendingAfter(ids, pendientes, currentInvoiceId),
+    total: ids.length,
+    doneCount: lote.filter((r) => HECHAS.includes(r.status)).length,
+    pendingInBucket: pendientes.size,
+  };
 }
 
 /**
- * Devuelve el siguiente ID pendiente (saltando el actual y los ya
- * procesados), o null si no queda ninguno en la cola. Lo usamos tras
- * validar/rechazar para saltar directamente al siguiente.
+ * Siguiente pendiente del bucket DESPUES de la actual (dando la vuelta si no
+ * queda ninguna por detras), o null si no queda ninguna. Lo usan Validar,
+ * Rechazar, Posponer y Dividir para saltar a la siguiente.
+ *
+ * Antes devolvia la primera pendiente del lote: si el gestor saltaba con ">"
+ * a la 32 y la validaba, volvia a la 31.
  */
 export async function getNextInQueue(
   currentInvoiceId: string,
   filter: QueueFilter,
 ): Promise<string | null> {
-  const where = buildWhere(filter);
-  // Excluir la factura actual y buscar el siguiente cronologico,
-  // respetando el orden de la cola (pospuestas al final).
-  const row = await prisma.invoice.findFirst({
-    where: { ...where, id: { not: currentInvoiceId } },
-    orderBy: [{ deferredAt: { sort: "asc", nulls: "first" } }, { createdAt: "asc" }],
-    select: { id: true },
-  });
-  return row?.id ?? null;
+  const [lote, pendientes] = await Promise.all([
+    batchInOrder(filter, currentInvoiceId),
+    pendingIdsInBucket(filter),
+  ]);
+  return nextPendingAfter(lote.map((r) => r.id), pendientes, currentInvoiceId);
 }
 
 /**
  * Serializa el filtro como querystring para meterlo en la URL de review.
- * Mantiene el contexto al navegar entre facturas.
+ * Mantiene el contexto al navegar entre facturas: la cola y el listado del
+ * que se vino (a donde lleva "Volver").
  */
 export function queueToSearchParams(
-  filter: Pick<QueueFilter, "bucket">,
+  filter: Pick<QueueFilter, "bucket"> & { back?: string | null },
 ): URLSearchParams {
   const p = new URLSearchParams();
   if (filter.bucket && filter.bucket !== "all") p.set("bucket", filter.bucket);
+  if (filter.back) p.set("back", filter.back);
   return p;
 }
 

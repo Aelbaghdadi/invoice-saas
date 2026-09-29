@@ -99,7 +99,7 @@ export function DashboardShell({ role, userName, userEmail, firmName, firmLogo, 
         <button
           onClick={() => setSidebarOpen(false)}
           className="absolute right-2 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 lg:hidden"
-          aria-label="Cerrar menu"
+          aria-label="Cerrar menú"
         >
           <X className="h-5 w-5" />
         </button>

@@ -1,22 +1,25 @@
 import Link from "next/link";
-import { Receipt } from "lucide-react";
+import Image from "next/image";
+import { BRAND } from "@/lib/brand";
 
 export default function NotFound() {
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-white px-4">
-      <div className="flex items-center gap-2.5 mb-8">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-600">
-          <Receipt className="h-4 w-4 text-white" />
-        </div>
-        <span className="text-[17px] font-bold text-slate-800">Faktury</span>
-      </div>
+      <Image
+        src="/brand/faktury-logo.svg"
+        alt={BRAND}
+        width={192}
+        height={64}
+        priority
+        className="mb-8 h-16 w-auto"
+      />
 
       <p className="text-7xl font-extrabold text-blue-600">404</p>
       <h1 className="mt-4 text-xl font-bold text-slate-800">
-        Pagina no encontrada
+        Página no encontrada
       </h1>
       <p className="mt-2 text-[14px] text-slate-500 text-center max-w-sm">
-        La pagina que buscas no existe o ha sido movida.
+        La página que buscas no existe o ha sido movida.
       </p>
 
       <Link

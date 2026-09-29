@@ -3,6 +3,7 @@
 import { prisma } from "@/lib/prisma";
 import { sendPasswordResetEmail } from "@/lib/email";
 import { headers } from "next/headers";
+import { after } from "next/server";
 import { resetPasswordRateLimit, getClientIp } from "@/lib/rateLimit";
 
 type ForgotPasswordState = {
@@ -34,23 +35,43 @@ export async function forgotPasswordAction(
   }
 
   try {
-    // Delete any existing tokens for this email
-    await prisma.passwordResetToken.deleteMany({ where: { email } });
+    // Delete any existing tokens for this email (sin distinguir mayusculas)
+    await prisma.passwordResetToken.deleteMany({ where: { email: { equals: email, mode: "insensitive" } } });
 
-    // Only proceed if user exists (but always show success to avoid user enumeration)
-    const user = await prisma.user.findUnique({ where: { email } });
+    // Only proceed if user exists (but always show success to avoid user enumeration).
+    // Sin distinguir mayusculas: hay emails guardados tal cual se teclearon
+    // («Ana.Garcia@Taller.es») y aqui llega en minusculas; con findUnique no
+    // se encontraba al usuario y no se mandaba nada.
+    const user = await prisma.user.findFirst({
+      where: { email: { equals: email, mode: "insensitive" } },
+      orderBy: { createdAt: "asc" },
+    });
 
-    if (user) {
+    if (user?.email) {
       const token = crypto.randomUUID();
       const expiresAt = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
 
+      // Con el email guardado: reset-password busca al usuario por el email
+      // del token con findUnique.
       await prisma.passwordResetToken.create({
-        data: { email, token, expiresAt },
+        data: { email: user.email, token, expiresAt },
       });
 
       const resetUrl = `${getAppUrl()}/login/reset-password?token=${token}`;
 
-      await sendPasswordResetEmail({ to: email, resetUrl });
+      // El envio va en after(): la respuesta tarda lo mismo exista o no el
+      // email, aunque Resend vaya lento o este colgado (si no, el tiempo
+      // delataba que la cuenta existe). Al usuario se le responde lo mismo;
+      // el fallo solo queda en el log (send ya dice la plantilla y el
+      // destinatario enmascarado).
+      const to = user.email;
+      const userId = user.id;
+      after(async () => {
+        const sent = await sendPasswordResetEmail({ to, resetUrl });
+        if (!sent.ok) {
+          console.error(`[FORGOT_PASSWORD] El enlace de restablecimiento no se ha enviado (usuario ${userId})`);
+        }
+      });
     }
 
     return { success: true };

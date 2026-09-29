@@ -2,8 +2,10 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, Plus, Trash2, Save, X, Users } from "lucide-react";
+import { Loader2, Plus, Trash2, Save, X, Users, Search } from "lucide-react";
 import { useToast } from "@/components/ui/Toast";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
+import { matchesSearch } from "@/lib/listing";
 import { createGroup, updateGroup, deleteGroup } from "./actions";
 
 type Client = { id: string; name: string; cif: string };
@@ -82,9 +84,16 @@ function GroupRow({
   const { success, error: toastError } = useToast();
   const router = useRouter();
   const [pending, start] = useTransition();
+  const { confirm, dialog } = useConfirm();
 
-  const onDelete = () => {
-    if (!confirm(`¿Eliminar el grupo "${group.name}"?`)) return;
+  const onDelete = async () => {
+    const ok = await confirm({
+      title: `¿Eliminar el grupo «${group.name}»?`,
+      message: "Las empresas y sus facturas no se tocan; solo se deshace la agrupación.",
+      confirmLabel: "Eliminar grupo",
+      tone: "danger",
+    });
+    if (!ok) return;
     start(async () => {
       const res = await deleteGroup(group.id);
       if (res?.error) toastError(res.error);
@@ -116,6 +125,7 @@ function GroupRow({
           {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
         </button>
       </div>
+      {dialog}
     </div>
   );
 }
@@ -137,7 +147,17 @@ function GroupForm({
   const router = useRouter();
   const [name, setName] = useState(initialName);
   const [selected, setSelected] = useState<Set<string>>(new Set(initialIds));
+  const [query, setQuery] = useState("");
   const [pending, start] = useTransition();
+
+  // Primero las que ya estaban en el grupo al abrir el formulario. Se ordena
+  // con la seleccion inicial y no con la viva: si no, cada casilla marcada
+  // saltaria arriba bajo el cursor.
+  const initial = new Set(initialIds);
+  const visible = [
+    ...clients.filter((c) => initial.has(c.id)),
+    ...clients.filter((c) => !initial.has(c.id)),
+  ].filter((c) => matchesSearch([c.name, c.cif], query));
 
   const toggle = (id: string) =>
     setSelected((prev) => {
@@ -159,11 +179,30 @@ function GroupForm({
       <input
         value={name}
         onChange={(e) => setName(e.target.value)}
-        placeholder="Nombre del grupo (ej. Restaurantes Pepe)"
+        placeholder="Nombre del grupo (p. ej. Restaurantes Pepe)"
         className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-100"
       />
-      <div className="mt-3 grid grid-cols-2 gap-1.5 sm:grid-cols-3">
-        {clients.map((c) => (
+      <div className="mt-3 flex items-center gap-3">
+        <div className="relative flex-1">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Buscar cliente o CIF"
+            aria-label="Buscar cliente o CIF"
+            className="w-full rounded-lg border border-slate-200 bg-white py-1.5 pl-8 pr-2 text-[13px] outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-100"
+          />
+        </div>
+        <span className="flex-shrink-0 text-[12px] text-slate-500 tabular-nums">
+          {selected.size} seleccionada{selected.size !== 1 ? "s" : ""}
+        </span>
+      </div>
+      <div className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-3">
+        {visible.length === 0 && (
+          <p className="col-span-full py-2 text-[12px] text-slate-400">Ningún cliente coincide con «{query.trim()}».</p>
+        )}
+        {visible.map((c) => (
           <label key={c.id} className="flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[12px] text-slate-700">
             <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggle(c.id)} className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600" />
             <span className="truncate" title={`${c.name} (${c.cif})`}>{c.name}</span>

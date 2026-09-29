@@ -7,6 +7,8 @@ import {
   LEGACY_STATUSES,
   BATCH_REJECT_EXCLUDED_STATUSES,
   isBatchRejectable,
+  CLIENT_STATUS_BADGE,
+  STATUS_LABELS,
 } from "@/lib/invoiceStatuses";
 
 describe("completionPercent", () => {
@@ -97,5 +99,25 @@ describe("isBatchRejectable", () => {
   it("never touches invoices whose OCR is still running", () => {
     expect(BATCH_REJECT_EXCLUDED_STATUSES).toContain("UPLOADED");
     expect(BATCH_REJECT_EXCLUDED_STATUSES).toContain("ANALYZING");
+  });
+});
+
+describe("CLIENT_STATUS_BADGE", () => {
+  it("tiene etiqueta para todos los estados", () => {
+    for (const status of Object.keys(STATUS_LABELS) as (keyof typeof STATUS_LABELS)[]) {
+      expect(CLIENT_STATUS_BADGE[status]?.label).toBeTruthy();
+    }
+  });
+
+  it("los estados internos del gestor son \"En proceso\" para el cliente", () => {
+    for (const status of ["UPLOADED", "ANALYZING", "PENDING_REVIEW", "NEEDS_ATTENTION", "OCR_ERROR", "PENDING_ROUTING"] as const) {
+      expect(CLIENT_STATUS_BADGE[status].label).toBe("En proceso");
+    }
+  });
+
+  it("validada y exportada son lo mismo para el cliente", () => {
+    expect(CLIENT_STATUS_BADGE.VALIDATED.label).toBe("Validada");
+    expect(CLIENT_STATUS_BADGE.EXPORTED.label).toBe("Validada");
+    expect(CLIENT_STATUS_BADGE.REJECTED.label).toBe("Rechazada");
   });
 });

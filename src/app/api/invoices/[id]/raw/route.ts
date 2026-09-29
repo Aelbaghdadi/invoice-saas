@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { canReadInvoice } from "@/lib/invoiceAccess";
 import { getObjectBytes } from "@/lib/storage";
+import { invoiceFileHeaders } from "@/lib/invoiceFileHeaders";
 
 export const dynamic = "force-dynamic";
 
@@ -23,7 +24,7 @@ export async function GET(
   const { id } = await params;
   const invoice = await prisma.invoice.findUnique({
     where: { id },
-    select: { storageKey: true, fileType: true, clientId: true, routingCandidateIds: true },
+    select: { storageKey: true, fileType: true, filename: true, clientId: true, routingCandidateIds: true },
   });
   if (!invoice) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
@@ -33,11 +34,12 @@ export async function GET(
 
   try {
     const bytes = await getObjectBytes(invoice.storageKey);
+    // Solo PDF e imágenes van inline; el resto (XML incluido) se descarga.
+    // La CSP sandbox y nosniff de esta ruta están en next.config.ts.
     return new Response(new Uint8Array(bytes), {
       headers: {
-        "Content-Type": invoice.fileType || "application/octet-stream",
+        ...invoiceFileHeaders(invoice.fileType, id, invoice.filename),
         "Content-Length": String(bytes.length),
-        "Content-Disposition": "inline",
         // Datos sensibles (RGPD): no cachear en proxies/CDN intermedios.
         "Cache-Control": "private, no-store",
       },

@@ -23,8 +23,7 @@ export function periodLabel(periodType: PeriodTypeName, periodMonth: number, per
     const q = quarterFromMonth(periodMonth);
     return `T${q} ${periodYear}`;
   }
-  const name = new Date(2000, periodMonth - 1).toLocaleString("es-ES", { month: "long" });
-  return `${name.charAt(0).toUpperCase()}${name.slice(1)} ${periodYear}`;
+  return `${MONTH_NAMES[periodMonth - 1] ?? periodMonth} ${periodYear}`;
 }
 
 /**
@@ -54,3 +53,13 @@ export const QUARTER_OPTIONS = [
   { value: 3, label: "T3 (Julio – Septiembre)" },
   { value: 4, label: "T4 (Octubre – Diciembre)" },
 ] as const;
+
+/** Nombres de los meses con mayuscula, como se ven en toda la app. */
+export const MONTH_NAMES = [
+  "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+  "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
+] as const;
+
+/** Opciones de mes para los desplegables (valor "1".."12"). Estaba copiada a
+ *  mano en siete pantallas, cada una con su forma. */
+export const MONTH_OPTIONS = MONTH_NAMES.map((label, i) => ({ value: String(i + 1), label }));

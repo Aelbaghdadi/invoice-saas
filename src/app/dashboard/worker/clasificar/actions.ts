@@ -6,6 +6,12 @@ import { canAccessClient } from "@/lib/accessibleClients";
 import { appendAuditLogs } from "@/lib/auditLog";
 import { learnProviderRule } from "@/lib/providerRouting";
 import { detectInvoiceType } from "@/lib/invoiceRouting";
+import { DUPLICATE_SELECT, describeExisting } from "@/lib/issueDetector";
+import { mathIssues } from "@/lib/mathIssues";
+import { proposeSurchargesFromTotal } from "@/lib/equivalenceSurcharge";
+import { proposeOperationType } from "@/lib/operationTypeProposal";
+import { parseTaxId, taxIdWithCountry } from "@/lib/validators";
+import { accountEntryKey } from "@/lib/supplierMatching";
 import { revalidatePath } from "next/cache";
 
 export type ClassifyState = { ok?: boolean; error?: string } | null;
@@ -21,7 +27,10 @@ export async function classifyInvoice(invoiceId: string, clientId: string): Prom
     return { error: "No autorizado" };
   }
 
-  const invoice = await prisma.invoice.findUnique({ where: { id: invoiceId } });
+  const invoice = await prisma.invoice.findUnique({
+    where: { id: invoiceId },
+    include: { vatLines: { orderBy: { position: "asc" } } },
+  });
   if (!invoice || invoice.status !== "PENDING_ROUTING") {
     return { error: "La factura no está pendiente de clasificar" };
   }
@@ -45,7 +54,7 @@ export async function classifyInvoice(invoiceId: string, clientId: string): Prom
 
   const client = await prisma.client.findUnique({
     where: { id: clientId },
-    select: { name: true, cif: true, advisoryFirmId: true },
+    select: { name: true, cif: true, advisoryFirmId: true, equivalenceSurchargeCustomer: true },
   });
   if (!client) return { error: "Cliente no encontrado" };
 
@@ -74,6 +83,7 @@ export async function classifyInvoice(invoiceId: string, clientId: string): Prom
   // Dedupe básico contra el cliente real (estrategia CIF + nº factura).
   const otherCif = isPurchase ? invoice.issuerCif : invoice.receiverCif;
   let isDuplicate = false;
+  let duplicateDescription: string | null = null;
   if (otherCif && invoice.invoiceNumber) {
     const dup = await prisma.invoice.findFirst({
       where: {
@@ -85,52 +95,125 @@ export async function classifyInvoice(invoiceId: string, clientId: string): Prom
         receiverCif: isPurchase ? undefined : otherCif,
         invoiceNumber: invoice.invoiceNumber,
       },
-      select: { id: true, filename: true },
+      select: { id: true, ...DUPLICATE_SELECT },
     });
     if (dup) {
       isDuplicate = true;
-      await prisma.invoiceIssue.create({
-        data: {
-          invoiceId,
-          type: "POSSIBLE_DUPLICATE",
-          description: `Posible duplicado de "${dup.filename}" (misma factura ${invoice.invoiceNumber}).`,
-        },
-      });
+      // Mismo texto que el detector del OCR: el aviso se lee igual venga de
+      // donde venga. Se crea dentro de la transaccion de abajo.
+      duplicateDescription = `Posible duplicado de ${describeExisting(dup)}.`;
     }
   }
 
-  const targetStatus = isDuplicate || invoice.isValid === false ? "NEEDS_ATTENTION" : "PENDING_REVIEW";
-
-  await prisma.invoice.update({
-    where: { id: invoiceId },
-    data: {
-      clientId,
-      ...clientSide,
-      type: effectiveType,
-      typeUnconfirmed: typeStillUnconfirmed,
-      status: targetStatus,
-      routingCandidateIds: [],
-      routingReason: null,
-    },
+  // Tipo de operacion con lo aprendido del tercero en el cliente elegido,
+  // como en el OCR: el que habia se calculo con el cliente buzon (INTERIOR)
+  // y con el una inversion del sujeto pasivo salia como desglose descuadrado.
+  const otherCountry = isPurchase ? invoice.issuerCountry : invoice.receiverCountry;
+  const otherName = isPurchase ? invoice.issuerName : invoice.receiverName;
+  const otherParsed = parseTaxId(taxIdWithCountry(otherCif, otherCountry));
+  const entryKey = accountEntryKey(otherParsed.clean, otherName, otherParsed.countryCode);
+  const entry = entryKey
+    ? await prisma.accountEntry.findUnique({
+        where: { clientId_nif: { clientId, nif: entryKey } },
+        select: { nif: true, name: true, defaultOperationType: true, intracomGoodsTypePurchase: true, intracomGoodsTypeSale: true },
+      })
+    : null;
+  const proposal = proposeOperationType({
+    direction: effectiveType,
+    prefixOperationType: otherParsed.operationType,
+    otherPartyName: otherName,
+    entry,
+    ai: invoice.intracomGoodsSource === "IA" ? invoice.intracomGoodsType : null,
   });
 
-  await prisma.invoiceStatusHistory.create({
-    data: {
+  // Cuadre del total y cuota por linea, como en el OCR (que no las mira en
+  // «Por clasificar»). Antes se usaba isValid a secas: con un centimo de
+  // descuadre quedaba en «Requiere atención» sin incidencia que resolver.
+  const lines = invoice.vatLines.map((l) => ({
+    id: l.id,
+    taxBase: Number(l.taxBase),
+    vatRate: Number(l.vatRate),
+    vatAmount: Number(l.vatAmount),
+    equivalenceSurchargeRate: l.equivalenceSurchargeRate == null ? null : Number(l.equivalenceSurchargeRate),
+    equivalenceSurchargeAmount: l.equivalenceSurchargeAmount == null ? null : Number(l.equivalenceSurchargeAmount),
+  }));
+  // Cliente en recargo de equivalencia: se propone el recargo desde el total,
+  // como hace el OCR con los clientes que ya conoce. Sin esto salia «Error
+  // matemático: diferencia 5,20 €» donde el OCR habria puesto el recargo.
+  const surchargeProposals = client.equivalenceSurchargeCustomer
+    ? proposeSurchargesFromTotal(
+        lines,
+        invoice.totalAmount == null ? null : Number(invoice.totalAmount),
+        invoice.irpfAmount == null ? null : Number(invoice.irpfAmount),
+      )
+    : [];
+  for (const p of surchargeProposals) {
+    lines[p.index].equivalenceSurchargeRate = p.rate;
+    lines[p.index].equivalenceSurchargeAmount = p.amount;
+  }
+  const mathProblems = mathIssues({
+    lines,
+    taxBase: invoice.taxBase == null ? null : Number(invoice.taxBase),
+    vatAmount: invoice.vatAmount == null ? null : Number(invoice.vatAmount),
+    totalAmount: invoice.totalAmount == null ? null : Number(invoice.totalAmount),
+    irpfAmount: invoice.irpfAmount == null ? null : Number(invoice.irpfAmount),
+    operationType: proposal.operationType,
+  });
+  const targetStatus = isDuplicate || mathProblems.length > 0 ? "NEEDS_ATTENTION" : "PENDING_REVIEW";
+
+  // Todo en una transaccion que empieza por reclamar la factura: si dos
+  // gestores la clasifican a la vez, solo la primera escribe incidencias,
+  // historial y auditoria (antes salian duplicados).
+  const claimed = await prisma.$transaction(async (tx) => {
+    const claim = await tx.invoice.updateMany({
+      where: { id: invoiceId, status: "PENDING_ROUTING" },
+      data: {
+        clientId,
+        ...clientSide,
+        type: effectiveType,
+        typeUnconfirmed: typeStillUnconfirmed,
+        operationType: proposal.operationType,
+        intracomGoodsType: proposal.goodsType,
+        intracomGoodsSource: proposal.source,
+        status: targetStatus,
+        routingCandidateIds: [],
+        routingReason: null,
+      },
+    });
+    if (claim.count !== 1) return false;
+
+    const issues = [
+      ...(duplicateDescription ? [{ type: "POSSIBLE_DUPLICATE" as const, description: duplicateDescription }] : []),
+      ...mathProblems,
+    ];
+    if (issues.length > 0) {
+      await tx.invoiceIssue.createMany({ data: issues.map((issue) => ({ invoiceId, ...issue })) });
+    }
+    for (const p of surchargeProposals) {
+      await tx.invoiceVatLine.update({
+        where: { id: lines[p.index].id },
+        data: { equivalenceSurchargeRate: p.rate, equivalenceSurchargeAmount: p.amount },
+      });
+    }
+    await tx.invoiceStatusHistory.create({
+      data: {
+        invoiceId,
+        fromStatus: "PENDING_ROUTING",
+        toStatus: targetStatus,
+        changedBy: session.user.id,
+        reason: `Clasificada manualmente a ${client.name}`,
+      },
+    });
+    await appendAuditLogs([{
       invoiceId,
-      fromStatus: "PENDING_ROUTING",
-      toStatus: targetStatus,
-      changedBy: session.user.id,
-      reason: `Clasificada manualmente a ${client.name}`,
-    },
+      userId: session.user.id,
+      field: "status",
+      oldValue: "PENDING_ROUTING",
+      newValue: targetStatus,
+    }], tx);
+    return true;
   });
-
-  await appendAuditLogs([{
-    invoiceId,
-    userId: session.user.id,
-    field: "status",
-    oldValue: "PENDING_ROUTING",
-    newValue: targetStatus,
-  }]);
+  if (!claimed) return { error: "La factura no está pendiente de clasificar" };
 
   // Aprender: este proveedor (otra parte) va a esta empresa, para auto-rutear
   // las siguientes facturas suyas. No-op si no se leyó el CIF del proveedor.

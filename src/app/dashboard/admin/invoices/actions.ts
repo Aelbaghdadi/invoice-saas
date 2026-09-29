@@ -6,65 +6,13 @@ import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { appendAuditLogs } from "@/lib/auditLog";
 import { processInvoice } from "@/lib/processInvoice";
+import { ocrErrorsToReprocessWhere } from "@/lib/invoiceListing";
 import type { InvoiceStatus } from "@prisma/client";
 
-export async function bulkValidateInvoices(ids: string[]) {
-  const session = await auth();
-  if (!session?.user || session.user.role !== "ADMIN") {
-    return { error: "No autorizado" };
-  }
-  if (ids.length === 0) return { error: "No hay facturas seleccionadas" };
-
-  // Sin asesoria en la sesion no hay filtro posible: en Prisma un
-  // `advisoryFirmId: undefined` desactiva la condicion en silencio.
-  const firmId = session.user.advisoryFirmId;
-  if (!firmId) return { error: "No autorizado" };
-
-  // Only allow bulk validation of invoices that have been reviewed. Filtrado
-  // por asesoria: los ids llegan del navegador y no se pueden dar por buenos.
-  const invoices = await prisma.invoice.findMany({
-    where: {
-      id: { in: ids },
-      status: { in: ["PENDING_REVIEW", "NEEDS_ATTENTION"] },
-      client: { advisoryFirmId: firmId },
-    },
-  });
-
-  if (invoices.length === 0) {
-    return { error: "Ninguna factura seleccionada puede ser validada (deben estar revisadas)" };
-  }
-
-  const userId = session.user.id;
-
-  // Update each invoice individually to create proper history
-  for (const inv of invoices) {
-    await prisma.invoice.update({
-      where: { id: inv.id },
-      data: { status: "VALIDATED" },
-    });
-
-    await prisma.invoiceStatusHistory.create({
-      data: {
-        invoiceId: inv.id,
-        fromStatus: inv.status,
-        toStatus: "VALIDATED",
-        changedBy: userId,
-        reason: "Validación masiva por admin",
-      },
-    });
-
-    await appendAuditLogs([{
-      invoiceId: inv.id,
-      userId,
-      field: "status",
-      oldValue: inv.status,
-      newValue: "VALIDATED",
-    }]);
-  }
-
-  revalidatePath("/dashboard/admin/invoices");
-  return { count: invoices.length };
-}
+// NOTE: bulkValidateInvoices se quito a proposito (2026-09-25). Validar de
+// golpe facturas que nadie ha abierto se saltaba justo lo que la revision
+// comprueba (cuadre, cuentas contables, recargo, bienes/servicios), y la
+// lista ya no tiene seleccion multiple.
 
 // NOTE: bulkExportInvoices was removed intentionally.
 // EXPORTED state should only be set via a real ExportBatch (export route),
@@ -90,11 +38,9 @@ export async function reprocessAllOcrErrors() {
   const firmId = session.user.advisoryFirmId ?? undefined;
   const userId = session.user.id;
 
+  // Mismo where con el que cuenta el boton del listado.
   const invoices = await prisma.invoice.findMany({
-    where: {
-      status: "OCR_ERROR",
-      client: { advisoryFirmId: firmId, isUnclassifiedBucket: false },
-    },
+    where: ocrErrorsToReprocessWhere(firmId),
     select: { id: true, status: true },
   });
 
@@ -107,7 +53,9 @@ export async function reprocessAllOcrErrors() {
     userId,
     field: "status",
     oldValue: inv.status,
-    newValue: "UPLOADED (reprocess masivo)",
+    // Mismo valor que el reproceso de una sola factura: es el que la
+    // auditoria sabe traducir ("Subida (reprocesar)").
+    newValue: "UPLOADED (reprocess)",
   }));
 
   for (const inv of invoices) {

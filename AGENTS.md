@@ -43,6 +43,9 @@ commits). Mantenedlo así; no traduzcáis a inglés cosas existentes.
 - **No instales paquetes nuevos sin razón clara**. Si el stack ya
   resuelve algo, úsalo. Si añadís uno, justificadlo en el commit.
 - **No mockéis Prisma en tests**. Usad la DB de test real.
+- **`tests/unit` corre en el build de Docker sin `.env` ni BD**: si falla, no
+  hay imagen. Los tests contra Postgres van en otra carpeta (p. ej.
+  `tests/integration`), fuera de esa barrera. Ver ARCHITECTURE.md → Testing.
 
 ## Multitenancy (importante)
 

@@ -236,8 +236,9 @@ export async function updateSimplifiedAccounts(
   const client = await prisma.client.findUnique({ where: { id: clientId } });
   if (!client || client.advisoryFirmId !== firmId) return { error: "Cliente no encontrado" };
 
-  const supplier = ((formData.get("simplifiedSupplierAccount") as string) ?? "").trim();
-  const expense = ((formData.get("simplifiedExpenseAccount") as string) ?? "").trim();
+  // Igual que el alta manual del plan: "400.1" se guarda como "40000001".
+  const supplier = normalizePlanAccount((formData.get("simplifiedSupplierAccount") as string) ?? "");
+  const expense = normalizePlanAccount((formData.get("simplifiedExpenseAccount") as string) ?? "");
 
   await prisma.client.update({
     where: { id: clientId },
