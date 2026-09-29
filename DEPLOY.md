@@ -270,14 +270,20 @@ Desde F-048, cada escritura en la auditoría bloquea la cadena de su factura
 escrituras a la vez ya no dejan dos eslabones con el mismo anterior. Las que
 se escribieron antes pueden estar bifurcadas.
 
-**Antes de pensar en un índice único sobre `prevId`**, el equipo tiene que
-ejecutar esta consulta (solo lectura) en producción. Si da más de 0, el
-índice no se puede crear sin decidir qué hacer con esos eslabones:
+**Antes de pensar en un índice único**, el equipo tiene que ejecutar esta
+consulta (solo lectura) en producción. Si da más de 0 en cualquiera de las
+dos columnas, el índice no se puede crear sin decidir antes qué hacer con
+esos eslabones:
 
 ```sql
--- Eslabones que comparten anterior con otro de la misma factura
--- (prevId NULL cuenta como el génesis: dos génesis también es bifurcación).
-SELECT count(*) AS grupos, coalesce(sum(n - 1), 0) AS eslabones_de_mas
+-- Eslabones que cuelgan del mismo anterior que otro de la misma factura.
+--   con_anterior: dos o más con el mismo prevId;
+--   genesis:      dos o más primeros eslabones (prevId NULL) en una factura.
+SELECT
+  count(*) FILTER (WHERE "prevId" IS NOT NULL)                       AS grupos_con_anterior,
+  coalesce(sum(n - 1) FILTER (WHERE "prevId" IS NOT NULL), 0)        AS eslabones_de_mas_con_anterior,
+  count(*) FILTER (WHERE "prevId" IS NULL)                           AS facturas_con_genesis_repetido,
+  coalesce(sum(n - 1) FILTER (WHERE "prevId" IS NULL), 0)            AS genesis_de_mas
 FROM (
   SELECT "invoiceId", "prevId", count(*) AS n
   FROM "AuditLog"
@@ -285,6 +291,11 @@ FROM (
   HAVING count(*) > 1
 ) AS bifurcaciones;
 ```
+
+Un `UNIQUE ("prevId")` a secas no cubre los génesis repetidos: en Postgres
+los NULL son distintos entre sí. El índice que cubre los dos casos sería
+`UNIQUE ("invoiceId", "prevId") NULLS NOT DISTINCT` (Postgres 15 o más), en
+una migración nueva.
 
 El botón «Verificar la cadena» de Auditoría (admin) recorre la de su asesoría
 y dice qué eslabón falla, bifurcaciones incluidas.
