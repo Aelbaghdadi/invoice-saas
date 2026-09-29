@@ -152,7 +152,9 @@ export function readmeText(r: ReadmeInput): string {
   }
   lines.push(
     "Los CSV van separados por «;», con coma decimal y en UTF-8, para abrirlos",
-    "directamente en Excel en español.",
+    "directamente en Excel en español. Fechas y horas de los CSV en hora de",
+    "Madrid (dd/mm/aaaa hh:mm); en los JSON, en ISO 8601 y UTC. En auditoria.csv,",
+    "la columna «Fecha exacta (UTC)» es la que entra en el hash de cada registro.",
     "",
     "Esta descarga no borra nada: los datos siguen en FacturOCR.",
     "",

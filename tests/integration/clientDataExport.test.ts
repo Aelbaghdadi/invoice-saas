@@ -62,6 +62,11 @@ describe("descargar los datos de un cliente (F-044)", () => {
     // La auditoría incluye el rastro de esta misma descarga.
     const audit = zip.text("auditoria.csv");
     expect(audit).toContain("PENDING_REVIEW;VALIDATED");
+    // Fechas en hora de Madrid; la exacta en UTC al final.
+    const firstRow = audit.split("\r\n")[1].split(";");
+    expect(firstRow[0]).toMatch(/^\d{2}\/\d{2}\/\d{4} \d{2}:\d{2}$/);
+    expect(firstRow[12]).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    expect(zip.text("facturas.csv").split("\r\n")[1].split(";").at(-1)).toMatch(/^\d{2}\/\d{2}\/\d{4} \d{2}:\d{2}$/);
     expect(audit.match(/;dataExport;/g)).toHaveLength(3);
     const trail = await prisma.auditLog.findMany({ where: { field: "dataExport" }, select: { userId: true, invoiceId: true } });
     expect(trail).toHaveLength(3);
