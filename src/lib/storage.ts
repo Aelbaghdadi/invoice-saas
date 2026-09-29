@@ -90,18 +90,61 @@ export async function getObjectBytes(key: string, options: { timeoutMs?: number 
   }
 }
 
+/** El almacenamiento no ha mandado nada durante el tope de inactividad. */
+export class StorageIdleError extends Error {
+  constructor(key: string, idleMs: number) {
+    super(`Almacenamiento: ${idleMs / 1000} s sin responder descargando ${key}`);
+    this.name = "StorageIdleError";
+  }
+}
+
 /**
  * El objeto por trozos, sin cargarlo entero en memoria (la exportacion de los
- * datos de un cliente, F-044). El tope cuenta desde la peticion hasta el
- * ultimo byte: un GET parado a mitad se corta.
+ * datos de un cliente, F-044). El tope es de inactividad: salta si Garage
+ * pasa `idleMs` sin mandar nada mientras se le esta pidiendo. No corre
+ * mientras el que lee no pide el trozo siguiente (con la contrapresion, un
+ * navegador lento no corta el original; revision 1 del PR #15, punto 11).
  */
-export async function getObjectChunks(key: string, options: { timeoutMs?: number } = {}): Promise<AsyncIterable<Uint8Array>> {
+export async function getObjectChunks(key: string, options: { idleMs: number }): Promise<AsyncIterable<Uint8Array>> {
   const client = getClient();
   if (!client) throw new Error("Almacenamiento (S3) no configurado");
-  const signal = options.timeoutMs ? AbortSignal.timeout(options.timeoutMs) : undefined;
-  const res = await client.send(new GetObjectCommand({ Bucket: STORAGE_BUCKET, Key: key }), signal ? { abortSignal: signal } : {});
-  if (!res.Body) throw new Error(`Objeto sin contenido: ${key}`);
-  return res.Body as AsyncIterable<Uint8Array>;
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const arm = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => controller.abort(), options.idleMs);
+  };
+  const idle = (err: unknown) => (controller.signal.aborted ? new StorageIdleError(key, options.idleMs) : err);
+
+  arm();
+  let body: AsyncIterable<Uint8Array>;
+  try {
+    const res = await client.send(new GetObjectCommand({ Bucket: STORAGE_BUCKET, Key: key }), { abortSignal: controller.signal });
+    if (!res.Body) throw new Error(`Objeto sin contenido: ${key}`);
+    body = res.Body as AsyncIterable<Uint8Array>;
+  } catch (err) {
+    throw idle(err);
+  } finally {
+    clearTimeout(timer);
+  }
+  return (async function* () {
+    const it = body[Symbol.asyncIterator]();
+    try {
+      for (;;) {
+        arm();
+        const next = await it.next().catch((err) => {
+          throw idle(err);
+        });
+        clearTimeout(timer);
+        if (next.done) return;
+        yield next.value;
+      }
+    } finally {
+      clearTimeout(timer);
+      // Cortado a mitad (o por el que lee): la conexion se cierra.
+      if (!controller.signal.aborted) controller.abort();
+    }
+  })();
 }
 
 /**

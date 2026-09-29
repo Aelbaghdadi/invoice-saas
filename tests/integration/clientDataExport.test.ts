@@ -76,23 +76,44 @@ describe("descargar los datos de un cliente (F-044)", () => {
     await makeInvoice(w.client, { storageKey: "k-no-esta", filename: "perdida.pdf" });
     signInAs(w.admin);
     const zip = await unzip(await call(w.client.id));
-    expect(zip.text("ERRORES.txt")).toContain("perdida.pdf");
+    expect(zip.text("ERRORES.txt")).toMatch(/perdida\.pdf\tno está en el almacenamiento/);
     expect(zip.names.filter((n) => n.startsWith("originales/"))).toHaveLength(2);
     expect(zip.text("LEEME.txt")).toContain("1 original no se pudo descargar");
   });
 
   it("un original que se para a mitad cierra su entrada, va a ERRORES.txt y el ZIP sigue siendo válido", async () => {
-    CLIENT_EXPORT_LIMITS.fileTimeoutMs = 200;
+    CLIENT_EXPORT_LIMITS.storageIdleMs = 200;
     fakeS3().setMode("stall");
     signInAs(w.admin);
     try {
       const zip = await unzip(await call(w.client.id));
-      expect(zip.text("ERRORES.txt").split("\r\n").filter((l) => l.startsWith("originales/"))).toHaveLength(2);
+      const errors = zip.text("ERRORES.txt").split("\r\n").filter((l) => l.startsWith("originales/"));
+      expect(errors).toHaveLength(2);
+      for (const line of errors) expect(line).toMatch(/\tel almacenamiento dejó de responder; el fichero del ZIP está incompleto \(\d+ bytes\)$/);
       expect(zip.names).toContain("LEEME.txt");
     } finally {
       fakeS3().clear();
     }
   }, 20_000);
+
+  it("un navegador lento no corta el original: el tope es de inactividad del almacenamiento", async () => {
+    CLIENT_EXPORT_LIMITS.storageIdleMs = 200;
+    const big = new Uint8Array(2 * 1024 * 1024).map((_, i) => i % 251);
+    const inv = await makeInvoice(w.client, { storageKey: "k-lento", filename: "lento.pdf" });
+    fakeS3().put("k-lento", Buffer.from(big));
+    const chunks: Uint8Array[] = [];
+    const client = { id: w.client.id, name: w.client.name, cif: w.client.cif };
+    const started = Date.now();
+    await writeClientDataZip(client, "test", async (chunk) => {
+      chunks.push(chunk);
+      // Un navegador que lee despacio: en total, mucho más que el tope.
+      await new Promise((r) => setTimeout(r, 25));
+    });
+    expect(Date.now() - started).toBeGreaterThan(400);
+    const files = unzipSync(Buffer.concat(chunks));
+    expect(Object.keys(files)).not.toContain("ERRORES.txt");
+    expect(Buffer.from(files[`originales/2026-09/${inv.id}_lento.pdf`]).equals(Buffer.from(big))).toBe(true);
+  }, 30_000);
 
   it("en streaming: cada trozo de un original sale antes de leer el siguiente", async () => {
     const events: string[] = [];

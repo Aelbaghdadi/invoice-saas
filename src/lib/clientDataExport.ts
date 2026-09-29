@@ -1,7 +1,7 @@
 import { Zip, ZipDeflate, ZipPassThrough, strToU8 } from "fflate";
 import { prisma } from "@/lib/prisma";
 import { appendAuditLogs, AUDIT_TRANSACTION_OPTIONS } from "@/lib/auditLog";
-import { getObjectChunks } from "@/lib/storage";
+import { getObjectChunks, isStorageNotFound, StorageIdleError } from "@/lib/storage";
 import { formatDateTimeEs } from "@/lib/dates";
 import { CSV_BOM, csvAmount, csvDate, csvRow, formatBytes, originalPath, readmeText } from "@/lib/clientDataExportFormat";
 
@@ -26,8 +26,8 @@ export const CLIENT_EXPORT_LIMITS = {
    * si la suma de arriba se queda corta.
    */
   maxZipBytes: 4 * 1024 ** 3 - 64 * 1024 ** 2,
-  /** Por original, de la peticion al ultimo byte. */
-  fileTimeoutMs: 120_000,
+  /** Por original: tiempo sin recibir nada de Garage mientras se le pide. */
+  storageIdleMs: 30_000,
 };
 
 const PAGE_SIZE = 2_000;
@@ -98,7 +98,7 @@ export async function writeClientDataZip(
   client: { id: string; name: string; cif: string },
   generatedBy: string,
   sink: (chunk: Uint8Array) => Promise<void>,
-  openObject: OpenObject = (key) => getObjectChunks(key, { timeoutMs: CLIENT_EXPORT_LIMITS.fileTimeoutMs }),
+  openObject: OpenObject = (key) => getObjectChunks(key, { idleMs: CLIENT_EXPORT_LIMITS.storageIdleMs }),
 ): Promise<void> {
   const out = zipWriter(sink);
   const invoices = await prisma.invoice.findMany({
@@ -114,15 +114,16 @@ export async function writeClientDataZip(
     if (paths.has(inv.storageKey)) continue;
     const path = originalPath(inv);
     paths.set(inv.storageKey, path);
+    let received = 0;
     try {
       // Se abre antes de añadir la entrada: un original que no está no deja
       // una entrada vacía en el ZIP.
       const chunks = await openObject(inv.storageKey);
-      await out.binary(path, chunks, inv.createdAt);
+      await out.binary(path, counted(chunks, (n) => (received += n)), inv.createdAt);
     } catch (err) {
       if (out.closed) throw err;
       console.error(`[clientDataExport] ${client.id}: no se pudo descargar ${inv.storageKey}:`, err);
-      missing.push(`${path}\t${err instanceof Error ? err.message : String(err)}`);
+      missing.push(`${path}\t${storageFailure(err, received)}`);
       paths.set(inv.storageKey, `${path} (incompleto o ausente, ver ERRORES.txt)`);
     }
   }
@@ -249,6 +250,22 @@ function auditPage(clientId: string, after: { createdAt: Date; id: string } | nu
     take: PAGE_SIZE,
     include: { user: { select: { name: true, email: true } } },
   });
+}
+
+/** Motivo de ERRORES.txt, para quien abra el ZIP. */
+function storageFailure(err: unknown, received: number): string {
+  const partial = received > 0 ? `; el fichero del ZIP está incompleto (${formatBytes(received)})` : "";
+  if (isStorageNotFound(err)) return "no está en el almacenamiento";
+  if (err instanceof StorageIdleError) return `el almacenamiento dejó de responder${partial}`;
+  return `no se pudo descargar del almacenamiento${partial}`;
+}
+
+/** Los mismos trozos, contando los bytes. */
+async function* counted(chunks: AsyncIterable<Uint8Array>, add: (n: number) => void): AsyncIterable<Uint8Array> {
+  for await (const chunk of chunks) {
+    add(chunk.length);
+    yield chunk;
+  }
 }
 
 /** El snapshot como objeto; si no se puede leer, el texto tal cual. */
