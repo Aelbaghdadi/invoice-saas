@@ -20,6 +20,7 @@ import {
   ChevronDown,
   Inbox,
   Boxes,
+  BarChart3,
 } from "lucide-react";
 import { BRAND } from "@/lib/brand";
 
@@ -69,6 +70,7 @@ const NAV_SECTIONS: Record<Role, NavSection[]> = {
         { href: "/dashboard/admin/invoices", label: "Facturas",  icon: FileText },
         { href: "/dashboard/admin/closures", label: "Cierres",   icon: CalendarCheck },
         { href: "/dashboard/admin/audit",    label: "Auditoría", icon: ClipboardList },
+        { href: "/dashboard/admin/usage",    label: "Uso",       icon: BarChart3 },
         { href: "/dashboard/admin/settings", label: "Ajustes",   icon: Settings },
       ],
     },

@@ -20,6 +20,7 @@ const ROUTE_LABELS: Record<string, string> = {
   "/dashboard/admin/invoices":     "Facturas",
   "/dashboard/admin/closures":     "Cierres",
   "/dashboard/admin/audit":        "Auditoría",
+  "/dashboard/admin/usage":        "Uso",
   "/dashboard/admin/settings":     "Ajustes",
   "/dashboard/admin/batch":        "Lotes",
   "/dashboard/admin/export":       "Exportar",
