@@ -1,9 +1,10 @@
-type Waiter = { resume: () => void; key?: string };
+type Waiter = { resume: () => void; key?: string; priority?: boolean };
 
 /**
  * Semaforo en memoria: como mucho `limit` tareas a la vez; las demas esperan
- * en orden de llegada, salvo las que piden prioridad (van delante). Se libera
- * tambien si la tarea falla.
+ * en orden de llegada, salvo las que piden prioridad: van delante de las
+ * demas, pero entre ellas tambien por orden de llegada. Se libera tambien si
+ * la tarea falla.
  */
 export class Semaphore {
   private running = 0;
@@ -34,21 +35,22 @@ export class Semaphore {
     return index < 0 ? null : index;
   }
 
-  /** La que espera con esa clave pasa delante de todas. false si no espera. */
+  /** La que espera con esa clave pasa a prioritaria (detras de las que ya lo
+   *  eran). false si no espera. */
   promote(key: string): boolean {
     const index = this.queue.findIndex((w) => w.key === key);
     if (index < 0) return false;
+    if (this.queue[index].priority) return true;
     const [waiter] = this.queue.splice(index, 1);
-    this.queue.unshift(waiter);
+    waiter.priority = true;
+    this.enqueue(waiter);
     return true;
   }
 
   async run<T>(task: () => Promise<T>, options: { key?: string; priority?: boolean } = {}): Promise<T> {
     if (this.running >= this.limit) {
       await new Promise<void>((resume) => {
-        const waiter = { resume, key: options.key };
-        if (options.priority) this.queue.unshift(waiter);
-        else this.queue.push(waiter);
+        this.enqueue({ resume, key: options.key, priority: options.priority });
       });
     } else {
       this.running++;
@@ -58,6 +60,16 @@ export class Semaphore {
     } finally {
       this.release();
     }
+  }
+
+  // Las prioritarias, detras de la ultima prioritaria; las demas, al final.
+  private enqueue(waiter: Waiter): void {
+    if (!waiter.priority) {
+      this.queue.push(waiter);
+      return;
+    }
+    const at = this.queue.findIndex((w) => !w.priority);
+    this.queue.splice(at < 0 ? this.queue.length : at, 0, waiter);
   }
 
   // drain sube running antes de despertar a la siguiente: otra que llegue

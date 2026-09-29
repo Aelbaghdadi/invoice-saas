@@ -151,11 +151,13 @@ describe("Reprocesar con la cola llena (revisión 1 del PR #14, punto 3)", () =>
       await waitFor(async () => ocrQueuePosition(failed) != null);
       expect(ocrQueuePosition(failed)).toBe(0);
       expect(ocrQueuePosition(queued[0])).toBe(1);
-      // Una que ya esperaba al final: Reprocesar la adelanta.
+      // Una que ya esperaba al final: Reprocesar la adelanta, pero detrás de
+      // la que se relanzó antes (revisión 2, punto 2).
       expect(ocrQueuePosition(queued[2])).toBe(3);
       expect((await reprocess(queued[2])).status).toBe(200);
       running.push(runAfterCallbacks());
-      await waitFor(async () => ocrQueuePosition(queued[2]) === 0);
+      await waitFor(async () => ocrQueuePosition(queued[2]) === 1);
+      expect(ocrQueuePosition(failed)).toBe(0);
       expect(ocrQueueState().waiting).toBe(4);
       running.push(launched);
     } finally {

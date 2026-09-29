@@ -61,7 +61,7 @@ describe("Semaphore (F-029)", () => {
     await expect(late).resolves.toBe("tarde");
   });
 
-  it("con prioridad va delante de las que esperan; promote adelanta a una que ya espera", async () => {
+  it("con prioridad va delante de las que esperan, y entre ellas por orden de llegada; promote hace lo mismo", async () => {
     const s = new Semaphore(1);
     const order: string[] = [];
     let unblock!: () => void;
@@ -74,13 +74,19 @@ describe("Semaphore (F-029)", () => {
     await tick();
     expect([s.position("a"), s.position("c"), s.position("x")]).toEqual([0, 2, null]);
     tasks.push(s.run(async () => { order.push("urgente"); }, { key: "urgente", priority: true }));
+    await tick();
     expect(s.promote("c")).toBe(true);
     expect(s.promote("x")).toBe(false);
+    tasks.push(s.run(async () => { order.push("urgente2"); }, { key: "urgente2", priority: true }));
     await tick();
-    expect(s.position("c")).toBe(0);
+    // Cada «Reprocesar» nuevo queda detrás del anterior: su posición no retrocede.
+    expect([s.position("urgente"), s.position("c"), s.position("urgente2"), s.position("a")]).toEqual([0, 1, 2, 3]);
+    // Promover una que ya es prioritaria no la mueve.
+    expect(s.promote("urgente")).toBe(true);
+    expect(s.position("urgente")).toBe(0);
     unblock();
     await Promise.all([first, ...tasks]);
-    expect(order).toEqual(["c", "urgente", "a", "b"]);
+    expect(order).toEqual(["urgente", "c", "urgente2", "a", "b"]);
   });
 
   it("límite no válido: error", () => {
