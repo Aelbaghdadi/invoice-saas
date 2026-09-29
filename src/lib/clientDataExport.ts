@@ -171,14 +171,14 @@ export async function writeClientDataZip(
   await out.text("auditoria.csv", (async function* () {
     // La fecha en hora de Madrid para leerla; la exacta en UTC es la que
     // entra en el hash, para quien quiera comprobar la cadena.
-    yield CSV_BOM + csvRow(["Fecha", "Usuario", "Email", "Id de la factura", "Nº factura", "Campo", "Antes", "Después", "Id del registro", "Anterior", "Hash del anterior", "Hash", "Fecha exacta (UTC)"]);
+    yield CSV_BOM + csvRow(["Fecha", "Usuario", "Email", "Id del usuario", "Id de la factura", "Nº factura", "Campo", "Antes", "Después", "Id del registro", "Anterior", "Hash del anterior", "Hash", "Fecha exacta (UTC)"]);
     let after: { createdAt: Date; id: string } | null = null;
     for (;;) {
       const page: Awaited<ReturnType<typeof auditPage>> = await auditPage(client.id, after);
       if (page.length === 0) break;
       for (const r of page) {
         yield csvRow([
-          formatDateTimeEs(r.createdAt), r.user.name, r.user.email, r.invoiceId, numbers.get(r.invoiceId), r.field, r.oldValue, r.newValue,
+          formatDateTimeEs(r.createdAt), r.user.name, r.user.email, r.userId, r.invoiceId, numbers.get(r.invoiceId), r.field, r.oldValue, r.newValue,
           r.id, r.prevId, r.prevHash, r.hash, r.createdAt,
         ]);
       }

@@ -2,12 +2,14 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { NextRequest } from "next/server";
 import { unzipSync, strFromU8 } from "fflate";
+import { createHash } from "node:crypto";
 import { prisma } from "./helpers/db";
 import { fakeS3 } from "./helpers/fakeS3";
 import { makeFirm, makeInvoice, type FirmWorld } from "./helpers/factories";
 import { signInAs } from "./helpers/session";
 import { appendAuditLogs } from "@/lib/auditLog";
 import { CLIENT_EXPORT_LIMITS, writeClientDataZip } from "@/lib/clientDataExport";
+import { CSV_BOM } from "@/lib/clientDataExportFormat";
 import { GET as dataExport } from "@/app/api/admin/clients/[id]/data-export/route";
 
 let w: FirmWorld;
@@ -67,7 +69,20 @@ describe("descargar los datos de un cliente (F-044)", () => {
     // Fechas en hora de Madrid; la exacta en UTC al final.
     const firstRow = audit.split("\r\n")[1].split(";");
     expect(firstRow[0]).toMatch(/^\d{2}\/\d{2}\/\d{4} \d{2}:\d{2}$/);
-    expect(firstRow[12]).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    expect(firstRow[13]).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    // El hash se puede recomprobar solo con el CSV, como explica el LEEME.
+    const header = audit.replace(CSV_BOM, "").split("\r\n")[0].split(";");
+    const col = (row: string[], name: string) => row[header.indexOf(name)].replace(/^'/, "");
+    const rows = audit.split("\r\n").slice(1).filter(Boolean).map((l) => l.split(";"));
+    expect(rows.length).toBeGreaterThan(1);
+    for (const row of rows) {
+      const fields = ["Id del registro", "Id de la factura", "Id del usuario", "Campo", "Antes", "Después", "Fecha exacta (UTC)", "Hash del anterior"];
+      const expected = createHash("sha256").update(fields.map((f) => col(row, f)).join("|")).digest("hex");
+      expect(col(row, "Hash")).toBe(expected);
+    }
+    expect(col(rows.find((r) => col(r, "Campo") === "status")!, "Id del usuario")).toBe(w.worker.id);
+    expect(zip.text("LEEME.txt")).toContain("AAAA-MM-DD");
+    expect(zip.text("LEEME.txt")).toContain("Id del usuario");
     expect(zip.text("facturas.csv").split("\r\n")[1].split(";").at(-1)).toMatch(/^\d{2}\/\d{2}\/\d{4} \d{2}:\d{2}$/);
     expect(audit.match(/;dataExport;/g)).toHaveLength(3);
     const trail = await prisma.auditLog.findMany({ where: { field: "dataExport" }, select: { userId: true, invoiceId: true } });
