@@ -123,7 +123,7 @@ export const AUDIT_TRANSACTION_OPTIONS = { timeout: 30_000, maxWait: 5_000 } as 
  * export de miles de facturas no cabia en el timeout de la transaccion.
  */
 async function writeAuditLogs(tx: Prisma.TransactionClient, entries: AuditEntry[]): Promise<void> {
-  const invoiceIds = [...new Set(entries.map((e) => e.invoiceId))].sort();
+  const invoiceIds = [...new Set(entries.map((e) => e.invoiceId))];
   await lockAuditChains(tx, invoiceIds);
   const existing = await tx.auditLog.findMany({
     where: { invoiceId: { in: invoiceIds } },
@@ -138,7 +138,7 @@ async function writeAuditLogs(tx: Prisma.TransactionClient, entries: AuditEntry[
 /**
  * Clave de los bloqueos de la cadena de auditoria (pg_advisory_xact_lock con
  * dos enteros): la primera separa estos bloqueos de cualquier otro que use la
- * app; la segunda es hashtext(invoiceId).
+ * app; la segunda es el cubo de la factura (lockAuditChains).
  */
 const AUDIT_LOCK_NAMESPACE = 48_048;
 
@@ -147,15 +147,21 @@ const AUDIT_LOCK_NAMESPACE = 48_048;
  * Sin esto, dos escrituras simultaneas leian la misma cabeza y dejaban dos
  * eslabones con el mismo prevId: la cadena se bifurcaba.
  *
- * En orden de id, para que dos transacciones con varias facturas en comun no
- * se bloqueen mutuamente. Dos ids con el mismo hashtext solo se esperan de mas.
+ * Por cubos (hashtext(id) & 4095), sin repetir y en orden de cubo: como mucho
+ * AUDIT_LOCK_BUCKETS entradas en la tabla de bloqueos por transaccion. Con uno
+ * por factura, un export o un reproceso de mas de ~12.800 facturas la agotaba
+ * y fallaba siempre (revision 1 del PR #15, punto 6). Dos facturas en el mismo
+ * cubo solo se esperan de mas; y como el orden es el del cubo, dos
+ * transacciones con varios en comun no se bloquean mutuamente.
  */
-async function lockAuditChains(tx: Prisma.TransactionClient, sortedInvoiceIds: string[]): Promise<void> {
-  if (sortedInvoiceIds.length === 0) return;
+export const AUDIT_LOCK_BUCKETS = 4096;
+
+async function lockAuditChains(tx: Prisma.TransactionClient, invoiceIds: string[]): Promise<void> {
+  if (invoiceIds.length === 0) return;
   // executeRaw: pg_advisory_xact_lock devuelve void, que queryRaw no sabe leer.
   await tx.$executeRaw`
-    SELECT pg_advisory_xact_lock(${AUDIT_LOCK_NAMESPACE}::int, hashtext(id))
-    FROM (SELECT unnest(${sortedInvoiceIds}::text[]) AS id ORDER BY 1) AS ids`;
+    SELECT pg_advisory_xact_lock(${AUDIT_LOCK_NAMESPACE}::int, k)
+    FROM (SELECT DISTINCT hashtext(id) & ${AUDIT_LOCK_BUCKETS - 1}::int AS k FROM unnest(${invoiceIds}::text[]) AS id ORDER BY k) AS buckets`;
 }
 
 /**

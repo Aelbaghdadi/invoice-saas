@@ -6,7 +6,7 @@ import { prisma } from "./helpers/db";
 import { makeFirm, makeInvoice } from "./helpers/factories";
 import { holdLock, sessionsWaitingForLock } from "./helpers/locks";
 import { inFlight } from "./helpers/inflight";
-import { appendAuditLogs, verifyFirmAuditChains } from "@/lib/auditLog";
+import { appendAuditLogs, verifyFirmAuditChains, AUDIT_LOCK_BUCKETS } from "@/lib/auditLog";
 import { signInAs } from "./helpers/session";
 import { GET as verifyAudit } from "@/app/api/admin/verify-audit/route";
 
@@ -50,6 +50,25 @@ describe("cadena serializada por factura (F-048)", () => {
     let length = 0;
     while ((at = next.get(at ?? null)) !== undefined) length++;
     expect(length).toBe(20);
+  });
+});
+
+describe("bloqueos por cubos (revisión 1 del PR #15, punto 6)", () => {
+  it("6.000 facturas en una transacción ocupan como mucho 4.096 entradas de la tabla de bloqueos", { timeout: 60_000 }, async () => {
+    const w = await makeFirm("A");
+    const ids = Array.from({ length: 6_000 }, (_, i) => `bulk-${String(i).padStart(5, "0")}`);
+    await prisma.invoice.createMany({ data: ids.map((id) => ({
+      id, clientId: w.client.id, filename: `${id}.pdf`, storageKey: id, fileType: "application/pdf", type: "PURCHASE" as const, periodMonth: 9, periodYear: 2026,
+    })) });
+    const held = await prisma.$transaction(async (tx) => {
+      await appendAuditLogs(ids.map((invoiceId) => ({ invoiceId, userId: w.worker.id, field: "note", oldValue: null, newValue: "x" })), tx);
+      const [row] = await tx.$queryRaw<{ n: number }[]>`
+        SELECT count(*)::int AS n FROM pg_locks WHERE locktype = 'advisory' AND pid = pg_backend_pid()`;
+      return row.n;
+    }, { timeout: 60_000 });
+    expect(held).toBeGreaterThan(0);
+    expect(held).toBeLessThanOrEqual(AUDIT_LOCK_BUCKETS);
+    expect(await prisma.auditLog.count({ where: { invoiceId: { in: ids } } })).toBe(6_000);
   });
 });
 
