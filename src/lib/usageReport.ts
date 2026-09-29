@@ -81,19 +81,26 @@ export async function usageReport(firmId: string, now = new Date(), count = 12):
       GROUP BY 1`,
     // Un fallo es un reproceso si la factura ya habia terminado otro analisis
     // antes (lo mismo que isReprocess de una extraccion: no era el primero).
+    // Numerando las salidas de ANALYZING de cada factura con una ventana, y
+    // no con un EXISTS por fila: sin indice en invoiceId, cada fallo recorria
+    // el historial entero de todas las asesorias y la pagina pasaba del
+    // statement_timeout (revision 2 del PR #15, punto 1). La ventana se
+    // aplica despues de numerar, para contar tambien los de antes.
     prisma.$queryRaw<{ month: string; n: number; reprocess: number }[]>`
-      SELECT to_char(h."createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Madrid', 'YYYY-MM') AS month, count(*)::int AS n,
-        (count(*) FILTER (WHERE EXISTS (
-          SELECT 1 FROM "InvoiceStatusHistory" p
-          WHERE p."invoiceId" = h."invoiceId" AND p."fromStatus" = 'ANALYZING' AND p."createdAt" < h."createdAt"
-        )))::int AS reprocess
-      FROM "InvoiceStatusHistory" h JOIN "Invoice" i ON i.id = h."invoiceId" JOIN "Client" c ON c.id = i."clientId"
-      WHERE c."advisoryFirmId" = ${firmId} AND h."fromStatus" = 'ANALYZING' AND h."toStatus" = 'OCR_ERROR'
+      SELECT to_char(x."createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Madrid', 'YYYY-MM') AS month, count(*)::int AS n,
+        (count(*) FILTER (WHERE x.nth > 1))::int AS reprocess
+      FROM (
+        SELECT h."createdAt", h."toStatus", h.reason, i."fileType",
+          row_number() OVER (PARTITION BY h."invoiceId" ORDER BY h."createdAt", h.id) AS nth
+        FROM "InvoiceStatusHistory" h JOIN "Invoice" i ON i.id = h."invoiceId" JOIN "Client" c ON c.id = i."clientId"
+        WHERE c."advisoryFirmId" = ${firmId} AND h."fromStatus" = 'ANALYZING'
+      ) AS x
+      WHERE x."toStatus" = 'OCR_ERROR'
         -- Sin llegar al proveedor: un XML (se lee sin OCR) o el original que
         -- no se pudo descargar (ERR-OCR-004).
-        AND i."fileType" NOT IN ('application/xml', 'text/xml')
-        AND coalesce(h.reason, '') NOT LIKE '[ERR-OCR-004]%'
-        AND h."createdAt" >= ${fromUtc}
+        AND x."fileType" NOT IN ('application/xml', 'text/xml')
+        AND coalesce(x.reason, '') NOT LIKE '[ERR-OCR-004]%'
+        AND x."createdAt" >= ${fromUtc}
       GROUP BY 1`,
     prisma.$queryRaw<Counted[]>`
       SELECT to_char(h."createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Madrid', 'YYYY-MM') AS month, count(DISTINCT h."invoiceId")::int AS n

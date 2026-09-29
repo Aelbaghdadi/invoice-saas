@@ -120,4 +120,43 @@ describe("informe de uso (F-043)", () => {
     [month] = await usageReport(a.firm.id, new Date(), 1);
     expect(month).toMatchObject({ ocrAnalyses: 3, ocrReprocesses: 1, ocrFailures: 2 });
   });
+
+  it("el historial de otra asesoría no cambia las cifras ni hace lenta la consulta de fallos", { timeout: 120_000 }, async () => {
+    const a = await makeFirm("A");
+    const b = await makeFirm("B");
+    // A: 500 facturas con un fallo cada una; 20 de ellas ya habían terminado
+    // otro análisis antes (reprocesos).
+    const now = Date.now();
+    const aIds = Array.from({ length: 500 }, (_, i) => `a-${i}`);
+    await prisma.invoice.createMany({ data: aIds.map((id) => ({
+      id, clientId: a.client.id, filename: `${id}.pdf`, storageKey: id, fileType: "application/pdf", type: "PURCHASE" as const, periodMonth: 9, periodYear: 2026,
+    })) });
+    await prisma.invoiceStatusHistory.createMany({ data: aIds.flatMap((invoiceId, i) => [
+      ...(i < 20 ? [{ invoiceId, fromStatus: "ANALYZING" as const, toStatus: "PENDING_REVIEW" as const, createdAt: new Date(now - 60_000) }] : []),
+      { invoiceId, fromStatus: "ANALYZING" as const, toStatus: "OCR_ERROR" as const, createdAt: new Date(now - 30_000) },
+    ]) });
+    const expected = { ocrFailures: 500 };
+    const [before] = await usageReport(a.firm.id, new Date(), 1);
+    expect(before).toMatchObject(expected);
+    expect(before.ocrReprocesses).toBe(20);
+
+    // B: 3.000 facturas y 60.000 filas de historial.
+    const bIds = Array.from({ length: 3_000 }, (_, i) => `b-${i}`);
+    await prisma.invoice.createMany({ data: bIds.map((id) => ({
+      id, clientId: b.client.id, filename: `${id}.pdf`, storageKey: id, fileType: "application/pdf", type: "PURCHASE" as const, periodMonth: 9, periodYear: 2026,
+    })) });
+    for (let k = 0; k < 20; k++) {
+      await prisma.invoiceStatusHistory.createMany({ data: bIds.map((invoiceId) => ({
+        invoiceId, fromStatus: "ANALYZING" as const, toStatus: "OCR_ERROR" as const, createdAt: new Date(now - k * 1000),
+      })) });
+    }
+    const started = Date.now();
+    const [after] = await usageReport(a.firm.id, new Date(), 1);
+    const elapsed = Date.now() - started;
+    expect(after).toMatchObject(expected);
+    expect(after.ocrReprocesses).toBe(20);
+    // Con un EXISTS por fallo, cada uno recorría las 60.000 filas: segundos.
+    // Numerando, una pasada.
+    expect(elapsed).toBeLessThan(1_000);
+  });
 });
