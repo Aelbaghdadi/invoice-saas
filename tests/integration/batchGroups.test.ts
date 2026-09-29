@@ -3,7 +3,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { prisma } from "./helpers/db";
 import { makeFirm, makeInvoice, type FirmWorld } from "./helpers/factories";
-import { batchWindowWhere, groupBatches, loadBatchRows } from "@/lib/batchGroups";
+import { batchWindowWhere, groupBatches, loadBatchRows, MAX_RESCUED_PERIODS } from "@/lib/batchGroups";
 import { getQueuePosition, QUEUE_ORDER } from "@/lib/reviewQueue";
 import { BATCH_REJECT_EXCLUDED_STATUSES } from "@/lib/invoiceStatuses";
 
@@ -118,5 +118,60 @@ describe("ventana por defecto (F-030)", () => {
     const rows = await loadBatchRows(await batchWindowWhere({ client: { advisoryFirmId: w.firm.id } }, now));
     // Solo las dos de A que deja makeFirm; la vieja pendiente de B no entra.
     expect(rows.map((r) => r.id).sort()).toEqual([w.invoices.pending.id, w.invoices.validated.id].sort());
+  });
+
+  // Revisión 2, punto 1: una asesoría que no cierra periodos rescata casi
+  // todo. Miles de periodos sueltos en el OR eran más lentos que sin ventana.
+  describe("una asesoría que no cierra periodos", () => {
+    let seq = 0;
+    // Clientes con 20 meses viejos (2023-2024) rechazados y sin cerrar: solo
+    // los rescata «sin cierre activo». Con `closedOne`, además un mes cerrado
+    // (escondido), así que el cliente no se rescata entero.
+    const clientsWithOldPeriods = async (count: number, closedOne: boolean) => {
+      const ids: string[] = [];
+      for (let c = 0; c < count; c++) {
+        const client = await prisma.client.create({
+          data: { name: `Cliente ${++seq}`, cif: `Z${Date.now()}${seq}`, advisoryFirmId: w.firm.id },
+        });
+        ids.push(client.id);
+        const months = Array.from({ length: 20 }, (_, i) => ({ periodYear: 2023 + Math.floor(i / 12), periodMonth: (i % 12) + 1 }));
+        if (closedOne) months.push({ periodYear: 2022, periodMonth: 1 });
+        await prisma.invoice.createMany({
+          data: months.map((m) => ({
+            ...m,
+            clientId: client.id,
+            filename: `v${++seq}.pdf`,
+            storageKey: `${client.id}/v${seq}.pdf`,
+            fileType: "application/pdf",
+            type: "PURCHASE" as const,
+            status: "REJECTED" as const,
+            invoiceNumber: `V-${seq}`,
+          })),
+        });
+        if (closedOne) await close(client.id, 1, 2022);
+      }
+      return ids;
+    };
+    const ids = async (where: object) => (await loadBatchRows(where)).map((r) => r.id).sort();
+
+    it("un cliente con todos sus periodos viejos rescatados va entero; lo cerrado sigue fuera", async () => {
+      const whole = await clientsWithOldPeriods(120, false); // 2.400 periodos: por encima del tope si fueran sueltos
+      const hidden = await clientsWithOldPeriods(1, true);
+      const scope = { clientId: { in: [...whole, ...hidden] } };
+      const windowed = await ids(await batchWindowWhere(scope, now));
+      const all = await ids(scope);
+      // Todo menos el mes cerrado del último cliente.
+      expect(windowed).toHaveLength(all.length - 1);
+      const closedRow = await prisma.invoice.findFirst({ where: { clientId: hidden[0], periodYear: 2022 } });
+      expect(windowed).not.toContain(closedRow!.id);
+    }, 60_000);
+
+    it("por encima del tope de periodos sueltos, sin ventana: lo mismo que «ver todo el histórico»", async () => {
+      const partial = await clientsWithOldPeriods(Math.ceil(MAX_RESCUED_PERIODS / 20) + 5, true);
+      const scope = { clientId: { in: partial } };
+      const where = await batchWindowWhere(scope, now);
+      expect(where).toBe(scope);
+      expect(await ids(where)).toEqual(await ids(scope));
+    }, 60_000);
   });
 });

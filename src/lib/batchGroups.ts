@@ -81,12 +81,24 @@ export function recentPeriodsWhere(now = new Date()): Prisma.InvoiceWhereInput {
 }
 
 /**
+ * Tope de periodos viejos sueltos en la ventana. Cada uno es un OR de tres
+ * columnas sin indice que Postgres evalua fila a fila (y gasta 3 parametros):
+ * por encima, la ventana sale mas cara que no tenerla.
+ */
+export const MAX_RESCUED_PERIODS = 2_000;
+
+/**
  * Por defecto: los ultimos 12 meses y, de antes, los periodos enteros que
  * todavia piden algo (revision 1 del PR #14, punto 2):
  * - algo pendiente de revisar (PENDING_WORK);
  * - una validada sin lote: por exportar, una reexportada o una bloqueante;
  * - sin cierre activo: terminado pero «por cerrar».
  * Un periodo viejo cerrado y exportado es lo unico que se queda fuera.
+ *
+ * En una asesoria que no cierra periodos se rescata casi todo (revision 2,
+ * punto 1): un cliente con todos sus periodos viejos rescatados va por
+ * clientId y, si aun asi quedan mas de MAX_RESCUED_PERIODS sueltos, sin
+ * ventana, que es lo mismo que «ver todo el histórico».
  */
 export async function batchWindowWhere(base: Prisma.InvoiceWhereInput, now = new Date()): Promise<Prisma.InvoiceWhereInput> {
   const recent = recentPeriodsWhere(now);
@@ -106,13 +118,28 @@ export async function batchWindowWhere(base: Prisma.InvoiceWhereInput, now = new
       })
     : [];
   const closed = new Set(closures.map((c) => key({ clientId: c.clientId, periodYear: c.year, periodMonth: c.month })));
-  const rescued = new Map<string, { clientId: string; periodYear: number; periodMonth: number }>();
-  for (const k of actionable) rescued.set(key(k), k);
-  for (const k of oldPeriods) if (!closed.has(key(k))) rescued.set(key(k), k);
+  const rescued = new Set(actionable.map(key));
+  for (const k of oldPeriods) if (!closed.has(key(k))) rescued.add(key(k));
+
+  // Por cliente: si no se esconde ninguno de sus periodos viejos, entero.
+  const byClient = new Map<string, { all: number; rescued: typeof oldPeriods }>();
+  for (const k of oldPeriods) {
+    const c = byClient.get(k.clientId) ?? { all: 0, rescued: [] };
+    c.all++;
+    if (rescued.has(key(k))) c.rescued.push(k);
+    byClient.set(k.clientId, c);
+  }
+  const wholeClients: string[] = [];
+  const periods: Prisma.InvoiceWhereInput[] = [];
+  for (const [clientId, c] of byClient) {
+    if (c.rescued.length === c.all) wholeClients.push(clientId);
+    else for (const k of c.rescued) periods.push({ clientId, periodYear: k.periodYear, periodMonth: k.periodMonth });
+  }
+  if (periods.length > MAX_RESCUED_PERIODS) return base;
   return {
     AND: [
       base,
-      { OR: [recent, ...[...rescued.values()].map((k) => ({ clientId: k.clientId, periodYear: k.periodYear, periodMonth: k.periodMonth }))] },
+      { OR: [recent, ...(wholeClients.length ? [{ clientId: { in: wholeClients } }] : []), ...periods] },
     ],
   };
 }

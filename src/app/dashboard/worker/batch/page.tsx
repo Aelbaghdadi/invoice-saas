@@ -95,15 +95,17 @@ export default async function WorkerBatchPage({
 
   // Solo las columnas que se pintan, y por defecto la ventana reciente
   // (F-030): antes se leia el historico entero en cada carga.
-  const baseWhere: Prisma.InvoiceWhereInput = {
+  // Sin el tipo: el cierre mira el periodo entero (mas abajo).
+  const periodBase: Prisma.InvoiceWhereInput = {
     clientId: requestedClient ? requestedClient : { in: clientIds },
     ...(yearNum ? { periodYear: yearNum } : {}),
     ...(monthNum ? { periodMonth: monthNum } : {}),
-    ...(typeParam ? { type: typeParam } : {}),
   };
-  // Con año elegido o «ver todo el histórico», sin ventana.
+  // Con año elegido o «ver todo el histórico», sin ventana. La ventana se
+  // calcula una vez, sobre el periodo entero, y el tipo va aparte.
   const windowed = !yearNum && !showHistory;
-  const invoices = await loadBatchRows(windowed ? await batchWindowWhere(baseWhere) : baseWhere);
+  const periodWhere = windowed ? await batchWindowWhere(periodBase) : periodBase;
+  const invoices = await loadBatchRows(typeParam ? { AND: [periodWhere, { type: typeParam }] } : periodWhere);
   const clientsById = new Map(clientOptions.map((c) => [c.id, { name: c.name, cif: c.cif }]));
 
   const groups = groupBatches(invoices, clientsById);
@@ -158,14 +160,9 @@ export default async function WorkerBatchPage({
   // Con filtro de tipo, `invoices` solo trae ese tipo: sin esta consulta
   // aparte se ofrecia "Cerrar periodo" mirando solo las ventas aunque hubiera
   // compras pendientes (la accion lo revalida y lo rechaza, pero confunde).
-  const periodBase: Prisma.InvoiceWhereInput = {
-    clientId: requestedClient ? requestedClient : { in: clientIds },
-    ...(yearNum ? { periodYear: yearNum } : {}),
-    ...(monthNum ? { periodMonth: monthNum } : {}),
-  };
   const periodInvoices = typeParam
     ? await prisma.invoice.findMany({
-        where: windowed ? await batchWindowWhere(periodBase) : periodBase,
+        where: periodWhere,
         select: { clientId: true, periodYear: true, periodMonth: true, status: true },
       })
     : invoices;
