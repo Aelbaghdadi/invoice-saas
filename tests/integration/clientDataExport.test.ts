@@ -143,10 +143,43 @@ describe("descargar los datos de un cliente (F-044)", () => {
     expect((await call(w.client.id)).status).toBe(413);
     expect(await prisma.auditLog.count({ where: { field: "dataExport" } })).toBe(0);
 
-    CLIENT_EXPORT_LIMITS.maxInvoices = limits.maxInvoices;
+  });
+
+  it("los originales se suman por las facturas del cliente, también los subidos al buzón", async () => {
     CLIENT_EXPORT_LIMITS.maxBytes = 10;
-    await prisma.document.create({ data: { clientId: w.client.id, filename: "x.pdf", storageKey: "x", fileType: "application/pdf", sizeBytes: 11 } });
+    signInAs(w.admin);
+    // Subidos en modo «clasificar»: el documento sigue con el cliente buzón.
+    const inbox = await prisma.client.create({ data: { name: "Buzón", cif: "B44444444", advisoryFirmId: w.firm.id, isUnclassifiedBucket: true } });
+    const doc = (sizeBytes: number | null) => prisma.document.create({
+      data: { clientId: inbox.id, filename: "x.pdf", storageKey: `x${sizeBytes}`, fileType: "application/pdf", sizeBytes },
+    });
+    const [five, six] = [await doc(5), await doc(6)];
+    await prisma.invoice.update({ where: { id: w.invoices.pending.id }, data: { documentId: five.id } });
+    await prisma.invoice.update({ where: { id: w.invoices.validated.id }, data: { documentId: six.id } });
     expect((await (await call(w.client.id, "?check=1")).json()).error).toMatch(/ocupan 11 bytes y se pueden descargar como mucho 10 bytes/);
+
+    // Sin tamaño guardado, o sin documento, cuenta como una subida del máximo (20 MB).
+    CLIENT_EXPORT_LIMITS.maxBytes = 15 * 1024 ** 2;
+    expect((await call(w.client.id, "?check=1")).status).toBe(200);
+    await makeInvoice(w.client, { storageKey: "sin-documento" });
+    expect((await (await call(w.client.id, "?check=1")).json()).error).toMatch(/ocupan 20 MB/);
+    await prisma.invoice.update({ where: { id: w.invoices.pending.id }, data: { documentId: (await doc(null)).id } });
+    expect((await (await call(w.client.id, "?check=1")).json()).error).toMatch(/ocupan 40 MB/);
+  });
+
+  it("si el ZIP fuera a pasar del tope de bytes (sin ZIP64), se corta y no sigue pidiendo originales", async () => {
+    CLIENT_EXPORT_LIMITS.maxZipBytes = 100 * 1024;
+    for (let i = 0; i < 10; i++) await makeInvoice(w.client, { storageKey: `grande-${i}` });
+    let opened = 0;
+    async function* big() {
+      for (let i = 0; i < 4; i++) yield new Uint8Array(32 * 1024);
+    }
+    const client = { id: w.client.id, name: w.client.name, cif: w.client.cif };
+    await expect(writeClientDataZip(client, "test", async () => {}, async () => {
+      opened++;
+      return big();
+    })).rejects.toThrow(/El ZIP pasaría de 100 KB/);
+    expect(opened).toBe(1);
   });
 
   it("con ?check=1 solo comprueba: ni ZIP ni rastro", async () => {

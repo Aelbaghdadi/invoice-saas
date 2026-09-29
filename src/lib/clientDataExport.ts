@@ -20,11 +20,20 @@ export const CLIENT_EXPORT_LIMITS = {
   maxInvoices: 5_000,
   /** Suma de los originales, segun lo que se guardo al subirlos. */
   maxBytes: 1024 ** 3,
+  /**
+   * Bytes escritos en el ZIP, como mucho: fflate no escribe ZIP64, y por
+   * encima de 4 GiB los offsets de 32 bits dejan el ZIP corrupto. Salta solo
+   * si la suma de arriba se queda corta.
+   */
+  maxZipBytes: 4 * 1024 ** 3 - 64 * 1024 ** 2,
   /** Por original, de la peticion al ultimo byte. */
   fileTimeoutMs: 120_000,
 };
 
 const PAGE_SIZE = 2_000;
+
+/** Un original sin tamaño guardado cuenta como el maximo de subida (20 MB). */
+const UNKNOWN_FILE_BYTES = 20 * 1024 * 1024;
 
 export type ClientExportCheck =
   | { ok: true; client: { id: string; name: string; cif: string } }
@@ -37,9 +46,14 @@ export async function checkClientExport(clientId: string, firmId: string): Promi
     select: { id: true, name: true, cif: true },
   });
   if (!client) return { ok: false, status: 404, error: "Cliente no encontrado." };
-  const [invoiceCount, sizes] = await Promise.all([
+  // Por las facturas del cliente: un documento subido en modo «clasificar»
+  // sigue con el clientId del buzon despues de rutearlo. Lo que no tiene
+  // tamaño guardado cuenta como una subida del maximo.
+  const [invoiceCount, sizes, unsized, withoutDocument] = await Promise.all([
     prisma.invoice.count({ where: { clientId } }),
-    prisma.document.aggregate({ where: { clientId }, _sum: { sizeBytes: true } }),
+    prisma.document.aggregate({ where: { invoices: { some: { clientId } } }, _sum: { sizeBytes: true } }),
+    prisma.document.count({ where: { invoices: { some: { clientId } }, sizeBytes: null } }),
+    prisma.invoice.count({ where: { clientId, documentId: null } }),
   ]);
   const { maxInvoices, maxBytes } = CLIENT_EXPORT_LIMITS;
   if (invoiceCount > maxInvoices) {
@@ -49,7 +63,7 @@ export async function checkClientExport(clientId: string, firmId: string): Promi
       error: `El cliente tiene ${invoiceCount.toLocaleString("es-ES")} facturas y se pueden descargar como mucho ${maxInvoices.toLocaleString("es-ES")} de una vez. Pide la exportación a soporte.`,
     };
   }
-  const bytes = sizes._sum.sizeBytes ?? 0;
+  const bytes = (sizes._sum.sizeBytes ?? 0) + (unsized + withoutDocument) * UNKNOWN_FILE_BYTES;
   if (bytes > maxBytes) {
     return {
       ok: false,
@@ -106,6 +120,7 @@ export async function writeClientDataZip(
       const chunks = await openObject(inv.storageKey);
       await out.binary(path, chunks, inv.createdAt);
     } catch (err) {
+      if (out.closed) throw err;
       console.error(`[clientDataExport] ${client.id}: no se pudo descargar ${inv.storageKey}:`, err);
       missing.push(`${path}\t${err instanceof Error ? err.message : String(err)}`);
       paths.set(inv.storageKey, `${path} (incompleto o ausente, ver ERRORES.txt)`);
@@ -252,15 +267,30 @@ function parseSnapshot(snapshot: string): unknown {
 function zipWriter(sink: (chunk: Uint8Array) => Promise<void>) {
   const pending: Uint8Array[] = [];
   let failure: unknown = null;
+  let written = 0;
   const zip = new Zip((err, chunk) => {
     if (err) failure = err;
     else pending.push(chunk);
   });
   const flush = async () => {
     if (failure) throw failure;
-    while (pending.length > 0) await sink(pending.shift()!);
+    while (pending.length > 0) {
+      const chunk = pending.shift()!;
+      written += chunk.length;
+      if (written > CLIENT_EXPORT_LIMITS.maxZipBytes) {
+        // Cortar antes que mandar un ZIP que pasa de 4 GiB sin ZIP64.
+        failure = new Error(`El ZIP pasaría de ${formatBytes(CLIENT_EXPORT_LIMITS.maxZipBytes)}: descarga cortada`);
+        pending.length = 0;
+        throw failure;
+      }
+      await sink(chunk);
+    }
   };
   return {
+    /** Ya no se puede seguir escribiendo: lo que falle ya no es de un original. */
+    get closed() {
+      return failure !== null;
+    },
     async binary(name: string, chunks: AsyncIterable<Uint8Array>, mtime: Date) {
       // Sin comprimir: PDF e imagenes ya lo estan.
       const entry = new ZipPassThrough(name);
