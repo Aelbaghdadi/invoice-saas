@@ -239,6 +239,31 @@ describe("S3 colgado (revisión 1 del PR #14, punto 1)", () => {
   }, 30_000);
 });
 
+describe("S3 parado a mitad del cuerpo (revisión 2 del PR #14, punto 3)", () => {
+  it("cuenta como tope: 4 intentos, error de descarga y el hueco libre", async () => {
+    const original = OCR_WAITS.storageMs;
+    OCR_WAITS.storageMs = 150;
+    setOcrConcurrency(1);
+    stubOcr(async () => reply(1));
+    try {
+      const id = await upload(1);
+      fakeS3().setMode("stall");
+      await processInvoice(id, w.worker.id);
+      const row = await prisma.invoice.findUniqueOrThrow({ where: { id } });
+      expect(row.status).toBe("OCR_ERROR");
+      expect(row.lastOcrError).toMatch(/^\[ERR-OCR-004\]/);
+      expect(fakeS3().stalledGets()).toBe(4);
+      expect(ocrQueueState()).toEqual({ active: 0, waiting: 0 });
+      fakeS3().clear();
+      const next = await upload(2);
+      await processInvoice(next, w.worker.id);
+      expect((await prisma.invoice.findUniqueOrThrow({ where: { id: next } })).status).not.toBe("OCR_ERROR");
+    } finally {
+      OCR_WAITS.storageMs = original;
+    }
+  }, 30_000);
+});
+
 describe("reintentos del OCR (F-029)", () => {
   it("un 429 con Retry-After espera lo que pide y reintenta", async () => {
     let calls = 0;

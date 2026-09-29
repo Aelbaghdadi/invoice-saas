@@ -11,6 +11,8 @@ import type { AddressInfo } from "node:net";
  *    releaseGets({ fail: true }), que responde 500). Para cruzar carreras sin
  *    depender de tiempos: el test espera a heldGets() > 0, cambia lo que
  *    quiera y suelta. Los GET que llegan despues de volver a "ok" pasan.
+ *  - "stall": los GET mandan las cabeceras y la mitad del cuerpo, y se
+ *    quedan parados (hasta clear() o close()).
  *  - "down": todo responde 500.
  *  - "hang": nada responde (hasta clear() o close()), para los timeouts.
  */
@@ -18,6 +20,7 @@ export type FakeS3 = {
   endpoint: string;
   keys: () => string[];
   heldGets: () => number;
+  stalledGets: () => number;
   releaseGets: (opts?: { fail?: boolean; count?: number }) => void;
   put: (key: string, body: Buffer | string) => void;
   setMode: (mode: string) => void;
@@ -71,6 +74,11 @@ export async function startFakeS3(bucket: string): Promise<FakeS3> {
           return;
         }
         res.writeHead(200, { "Content-Length": obj.length, "Content-Type": "application/octet-stream", ETag: '"x"' });
+        if (mode === "stall" && req.method === "GET") {
+          res.write(obj.subarray(0, Math.floor(obj.length / 2)));
+          hanging.push(res);
+          return;
+        }
         res.end(req.method === "HEAD" ? undefined : obj);
       });
     };
@@ -95,6 +103,7 @@ export async function startFakeS3(bucket: string): Promise<FakeS3> {
     // Claves sin el bucket, como las ve la app.
     keys: () => [...store.keys()].filter((k) => k.startsWith(prefix)).map((k) => k.slice(prefix.length)),
     heldGets: () => held.length,
+    stalledGets: () => hanging.length,
     // En orden de llegada; `count` suelta solo los primeros.
     releaseGets: ({ fail: failThem = false, count } = {}) => {
       for (const get of held.splice(0, count ?? held.length)) (failThem ? get.fail : get.respond)();

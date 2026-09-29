@@ -72,13 +72,22 @@ export async function putObject(
 export async function getObjectBytes(key: string, options: { timeoutMs?: number } = {}): Promise<Buffer> {
   const client = getClient();
   if (!client) throw new Error("Almacenamiento (S3) no configurado");
-  const res = await client.send(
-    new GetObjectCommand({ Bucket: STORAGE_BUCKET, Key: key }),
-    options.timeoutMs ? { abortSignal: AbortSignal.timeout(options.timeoutMs) } : {},
-  );
-  if (!res.Body) throw new Error(`Objeto sin contenido: ${key}`);
-  const bytes = await res.Body.transformToByteArray();
-  return Buffer.from(bytes);
+  const signal = options.timeoutMs ? AbortSignal.timeout(options.timeoutMs) : undefined;
+  try {
+    const res = await client.send(new GetObjectCommand({ Bucket: STORAGE_BUCKET, Key: key }), signal ? { abortSignal: signal } : {});
+    if (!res.Body) throw new Error(`Objeto sin contenido: ${key}`);
+    const bytes = await res.Body.transformToByteArray();
+    return Buffer.from(bytes);
+  } catch (err) {
+    // Cortado a mitad del cuerpo, el SDK no da un AbortError sino un
+    // «aborted» (ECONNRESET): sin esto no se reconocia como tope.
+    if (signal?.aborted) {
+      const timeout = new Error(`Almacenamiento: timeout (${options.timeoutMs! / 1000} s) descargando ${key}`, { cause: err });
+      timeout.name = "TimeoutError";
+      throw timeout;
+    }
+    throw err;
+  }
 }
 
 /**

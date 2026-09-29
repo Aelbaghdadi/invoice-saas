@@ -63,6 +63,9 @@ export function classifyOcrError(err: unknown): OcrErrorCode {
     return typeof code === "string" && OCR_DATA_PRISMA_CODES.has(code) ? "ERR-OCR-002" : "ERR-SYS-001";
   }
   const lower = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  // Antes que «timeout»: una descarga que pasa del tope es un fallo de
+  // descarga, no un analisis lento.
+  if (lower.startsWith("almacenamiento")) return "ERR-OCR-004";
   if (lower.includes("timeout") || lower.includes("timed out")) return "ERR-OCR-003";
   if (lower.includes("download") || lower.includes("storage") || lower.includes("404")) return "ERR-OCR-004";
   if (lower.includes("invalid") || lower.includes("corrupt") || lower.includes("malformed")) return "ERR-OCR-002";

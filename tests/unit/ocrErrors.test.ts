@@ -28,6 +28,8 @@ describe("classifyOcrError", () => {
   it("mantiene la clasificación de los fallos del OCR", () => {
     expect(classifyOcrError(new Error("Request timed out"))).toBe("ERR-OCR-003");
     expect(classifyOcrError(new Error("storage download failed: 404"))).toBe("ERR-OCR-004");
+    // Una descarga que pasa del tope es un fallo de descarga, no un análisis lento.
+    expect(classifyOcrError(new Error("Almacenamiento: timeout (30 s) descargando k.pdf"))).toBe("ERR-OCR-004");
     expect(classifyOcrError(new Error("Invalid PDF structure"))).toBe("ERR-OCR-002");
     expect(classifyOcrError("algo raro")).toBe("ERR-OCR-001");
     // Un code que no es de Prisma no cambia nada.
