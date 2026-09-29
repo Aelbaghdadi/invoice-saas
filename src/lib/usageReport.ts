@@ -74,8 +74,14 @@ export async function usageReport(firmId: string, now = new Date(), count = 12):
       WHERE c."advisoryFirmId" = ${firmId}
         AND e."createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Madrid' >= ${from}::timestamp
       GROUP BY 1`,
-    prisma.$queryRaw<Counted[]>`
-      SELECT to_char(h."createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Madrid', 'YYYY-MM') AS month, count(*)::int AS n
+    // Un fallo es un reproceso si la factura ya habia terminado otro analisis
+    // antes (lo mismo que isReprocess de una extraccion: no era el primero).
+    prisma.$queryRaw<{ month: string; n: number; reprocess: number }[]>`
+      SELECT to_char(h."createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Madrid', 'YYYY-MM') AS month, count(*)::int AS n,
+        (count(*) FILTER (WHERE EXISTS (
+          SELECT 1 FROM "InvoiceStatusHistory" p
+          WHERE p."invoiceId" = h."invoiceId" AND p."fromStatus" = 'ANALYZING' AND p."createdAt" < h."createdAt"
+        )))::int AS reprocess
       FROM "InvoiceStatusHistory" h JOIN "Invoice" i ON i.id = h."invoiceId" JOIN "Client" c ON c.id = i."clientId"
       WHERE c."advisoryFirmId" = ${firmId} AND h."fromStatus" = 'ANALYZING' AND h."toStatus" = 'OCR_ERROR'
         -- Sin llegar al proveedor: un XML (se lee sin OCR) o el original que
@@ -105,6 +111,7 @@ export async function usageReport(firmId: string, now = new Date(), count = 12):
   const up = byMonth(uploads);
   const ocrBy = new Map(ocr.map((r) => [r.month, r]));
   const fail = byMonth(failures);
+  const failedReprocess = new Map(failures.map((r) => [r.month, r.reprocess]));
   const val = byMonth(validated);
   const exp = byMonth(exported);
   // Existentes a fin de mes: creados antes de que empiece el siguiente (en Madrid).
@@ -117,7 +124,7 @@ export async function usageReport(firmId: string, now = new Date(), count = 12):
     month,
     uploaded: up.get(month) ?? 0,
     ocrAnalyses: (ocrBy.get(month)?.ocr ?? 0) + (fail.get(month) ?? 0),
-    ocrReprocesses: ocrBy.get(month)?.reprocess ?? 0,
+    ocrReprocesses: (ocrBy.get(month)?.reprocess ?? 0) + (failedReprocess.get(month) ?? 0),
     ocrFailures: fail.get(month) ?? 0,
     xmlParsed: ocrBy.get(month)?.xml ?? 0,
     validated: val.get(month) ?? 0,

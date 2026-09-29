@@ -104,7 +104,15 @@ describe("informe de uso (F-043)", () => {
     expect(reasons).toHaveLength(2);
     expect(reasons.map((r) => r.reason)).toContainEqual(expect.stringMatching(/^\[ERR-OCR-004\]/));
 
-    const [month] = await usageReport(a.firm.id, new Date(), 1);
-    expect(month).toMatchObject({ ocrAnalyses: 2, ocrFailures: 1, xmlParsed: 0 });
+    let [month] = await usageReport(a.firm.id, new Date(), 1);
+    expect(month).toMatchObject({ ocrAnalyses: 2, ocrReprocesses: 0, ocrFailures: 1, xmlParsed: 0 });
+
+    // Reprocesar la que salió bien y que ahora falle: un análisis más, y
+    // cuenta como reproceso aunque acabe en «Error OCR».
+    await prisma.invoice.update({ where: { id: ok }, data: { status: "UPLOADED" } });
+    await processInvoice(ok, a.worker.id);
+    expect((await prisma.invoice.findUniqueOrThrow({ where: { id: ok } })).status).toBe("OCR_ERROR");
+    [month] = await usageReport(a.firm.id, new Date(), 1);
+    expect(month).toMatchObject({ ocrAnalyses: 3, ocrReprocesses: 1, ocrFailures: 2 });
   });
 });
