@@ -2,9 +2,10 @@
  * Cadena de hash para AuditLog.
  *
  * Cada registro de auditoria contiene el hash del registro anterior y
- * su propio hash. Esto detecta cualquier modificacion o borrado: si
- * alguien retoca una fila o la elimina, el siguiente eslabon ya no
- * cuadra y `verifyInvoiceAuditChain()` lo destapa.
+ * su propio hash, y el id del anterior (prevId). Esto detecta cualquier
+ * modificacion o borrado: si alguien retoca una fila o la elimina, el
+ * siguiente eslabon ya no cuadra y `verifyFirmAuditChains()` lo destapa
+ * (salvo el borrado del ultimo, que nada apunta).
  *
  * Importante: la BD tiene un trigger (PostgreSQL) que prohibe UPDATE
  * y DELETE sobre AuditLog. La cadena de hash es la "segunda capa" —
@@ -109,11 +110,10 @@ export async function appendAuditLogs(
 }
 
 /**
- * Transaccion propia de appendAuditLogs. Con el timeout por defecto de Prisma
- * (5 s), unos miles de entradas con la BD cargada no caben: la llamada lanza
- * despues de que el llamador ya ha escrito su cambio fuera de transaccion
- * (p. ej. el reproceso masivo de «Error OCR», que ya ha pasado las facturas a
- * UPLOADED y se queda sin programar el OCR).
+ * Plazo de las transacciones que escriben auditoria de muchas facturas (la
+ * propia de appendAuditLogs, el reproceso masivo, rechazar un lote, la
+ * descarga de un cliente): con el de Prisma por defecto (5 s), unos miles
+ * de entradas con la BD cargada no caben.
  */
 export const AUDIT_TRANSACTION_OPTIONS = { timeout: 30_000, maxWait: 5_000 } as const;
 
@@ -198,10 +198,10 @@ export function auditChainHeads(rows: AuditChainRow[]): Map<string, AuditChainHe
  * Encadena las entradas nuevas detras de la cabeza de cada factura, en el
  * orden en que llegan. Mismo `computeAuditHash` y mismos campos que siempre.
  *
- * El createdAt de cada eslabon queda al menos 1 ms por detras del anterior:
- * la verificacion recorre la cadena por createdAt, y dos registros de la
- * misma factura en el mismo milisegundo se leian en cualquier orden y
- * salian como cadena rota sin que nadie la hubiera tocado.
+ * El createdAt de cada eslabon queda al menos 1 ms por detras del anterior,
+ * para que el orden por fecha (la pantalla de Auditoria, auditoria.csv de
+ * la descarga de un cliente) sea el de la cadena. La verificacion ya no
+ * depende de el: sigue prevId.
  */
 export function planAuditRecords(
   entries: AuditEntry[],
