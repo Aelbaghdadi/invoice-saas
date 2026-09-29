@@ -41,7 +41,7 @@ import { routeByCif, clientSideCif, routeByText, detectInvoiceType } from "@/lib
 import { lookupProviderClient, normalizeProviderNif } from "@/lib/providerRouting";
 import { accountEntryKey } from "@/lib/supplierMatching";
 import { proposeOperationType, unclassifiedGoodsType } from "@/lib/operationTypeProposal";
-import { classifyOcrError, DocumentError, OcrHttpError, userMessageForError } from "@/lib/ocrErrors";
+import { classifyOcrError, DocumentError, OcrHttpError, OriginalMissingError, userMessageForError } from "@/lib/ocrErrors";
 import { retryDelayMs } from "@/lib/retryBackoff";
 import { runQueuedOcr } from "@/lib/ocrQueue";
 import { closeOpenIssues } from "@/lib/invoiceIssues";
@@ -163,7 +163,7 @@ async function analyzeInvoice(invoiceId: string, triggeredByUserId: string) {
       } catch (ocrErr) {
         // Un error del documento no es transitorio aunque su texto lo parezca:
         // «El XML trae 500 facturas (lote)» casaba con el 500 de la regex.
-        if (ocrErr instanceof DocumentError) throw ocrErr;
+        if (ocrErr instanceof DocumentError || ocrErr instanceof OriginalMissingError) throw ocrErr;
         const m = ocrErr instanceof Error ? ocrErr.message : String(ocrErr);
         if (attempt >= MAX_OCR_ATTEMPTS || !isTransientError(ocrErr, m)) throw ocrErr;
         // Exponencial con jitter, o lo que pida el proveedor en Retry-After
@@ -891,16 +891,19 @@ function isAbortError(err: unknown): boolean {
 }
 
 /**
- * El original desde Garage. Si no esta, un error de almacenamiento (ERR-OCR-004,
- * «No se pudo descargar el archivo»), y no el generico: el SDK lo da como
- * NoSuchKey y se clasificaba como un fallo del OCR, tambien en el informe de
- * uso (revision 1 del PR #15, punto 15). No se reintenta: no va a aparecer.
+ * El original desde Garage. Si no esta, OriginalMissingError (ERR-OCR-004), y
+ * no el generico: el SDK lo da como NoSuchKey y se clasificaba como un fallo
+ * del OCR, tambien en el informe de uso (revision 1 del PR #15, punto 15). No
+ * se reintenta: no va a aparecer.
  */
 async function downloadOriginal(key: string): Promise<Buffer> {
   try {
     return await getObjectBytes(key, { timeoutMs: OCR_WAITS.storageMs });
   } catch (err) {
-    if (isStorageNotFound(err)) throw new Error(`Almacenamiento: el original no está (${key})`, { cause: err });
+    if (isStorageNotFound(err)) {
+      console.error(`[processInvoice] el original no está en el almacenamiento: ${key}`);
+      throw new OriginalMissingError({ cause: err });
+    }
     throw err;
   }
 }

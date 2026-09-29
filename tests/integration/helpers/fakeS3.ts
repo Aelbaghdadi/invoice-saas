@@ -20,6 +20,8 @@ export type FakeS3 = {
   endpoint: string;
   keys: () => string[];
   heldGets: () => number;
+  /** GET recibidos desde que arranco (o desde clear()). */
+  getCount: () => number;
   stalledGets: () => number;
   releaseGets: (opts?: { fail?: boolean; count?: number }) => void;
   put: (key: string, body: Buffer | string) => void;
@@ -34,7 +36,9 @@ export async function startFakeS3(bucket: string): Promise<FakeS3> {
   let delayMs = 0;
   const held: { respond: () => void; fail: () => void }[] = [];
   const hanging: http.ServerResponse[] = [];
+  let gets = 0;
   const server = http.createServer((req, res) => {
+    if (req.method === "GET") gets++;
     const key = decodeURIComponent((req.url ?? "/").split("?")[0]);
     if (mode === "hang") {
       hanging.push(res);
@@ -103,6 +107,7 @@ export async function startFakeS3(bucket: string): Promise<FakeS3> {
     // Claves sin el bucket, como las ve la app.
     keys: () => [...store.keys()].filter((k) => k.startsWith(prefix)).map((k) => k.slice(prefix.length)),
     heldGets: () => held.length,
+    getCount: () => gets,
     stalledGets: () => hanging.length,
     // En orden de llegada; `count` suelta solo los primeros.
     releaseGets: ({ fail: failThem = false, count } = {}) => {
@@ -116,6 +121,7 @@ export async function startFakeS3(bucket: string): Promise<FakeS3> {
     },
     clear: () => {
       store.clear();
+      gets = 0;
       mode = "ok";
       for (const res of hanging.splice(0)) res.destroy();
       for (const get of held.splice(0)) get.fail();

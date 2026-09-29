@@ -56,8 +56,22 @@ export class DocumentError extends Error {
   }
 }
 
+/**
+ * El original de la factura no esta en el almacenamiento (NoSuchKey). No se
+ * reintenta: no va a aparecer. La clave va en `cause` y en el log, no en el
+ * mensaje: el timestamp que lleva casaba a veces con «500» o «503» de la
+ * regex de transitorios (revision 2 del PR #15, punto 2).
+ */
+export class OriginalMissingError extends Error {
+  constructor(options?: { cause?: unknown }) {
+    super("Almacenamiento: el original no está", options);
+    this.name = "OriginalMissingError";
+  }
+}
+
 export function classifyOcrError(err: unknown): OcrErrorCode {
   if (err instanceof DocumentError) return "ERR-OCR-002";
+  if (err instanceof OriginalMissingError) return "ERR-OCR-004";
   if (isDatabaseError(err)) {
     const code = (err as { code?: unknown }).code;
     return typeof code === "string" && OCR_DATA_PRISMA_CODES.has(code) ? "ERR-OCR-002" : "ERR-SYS-001";

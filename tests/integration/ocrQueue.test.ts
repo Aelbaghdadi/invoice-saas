@@ -264,6 +264,22 @@ describe("S3 parado a mitad del cuerpo (revisión 2 del PR #14, punto 3)", () =>
   }, 30_000);
 });
 
+describe("original que no está (revisión 2 del PR #15, punto 2)", () => {
+  it("no se reintenta aunque la clave lleve «500»", async () => {
+    stubOcr(async () => reply(1));
+    const id = (await makeInvoice(w.client, {
+      filename: "q.pdf", storageKey: "cliente/1759150012500-factura.pdf", fileType: "application/pdf", status: "UPLOADED",
+      invoiceNumber: null, totalAmount: null,
+    })).id;
+    const before = fakeS3().getCount();
+    await processInvoice(id, w.worker.id);
+    expect(fakeS3().getCount() - before).toBe(1);
+    const row = await prisma.invoice.findUniqueOrThrow({ where: { id } });
+    expect(row.status).toBe("OCR_ERROR");
+    expect(row.lastOcrError).toMatch(/^\[ERR-OCR-004\]/);
+  });
+});
+
 describe("reintentos del OCR (F-029)", () => {
   it("un 429 con Retry-After espera lo que pide y reintenta", async () => {
     let calls = 0;
