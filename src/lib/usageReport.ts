@@ -10,7 +10,10 @@ import { startOfDayInMadrid, yearMonthInMadrid } from "@/lib/dates";
  * - Analisis de OCR: InvoiceExtraction que no son de un XML (Gemini por
  *   texto o por imagen, Document AI; los XML de Facturae se leen sin OCR y
  *   van aparte), mas los que acabaron en «Error
- *   OCR» (historial ANALYZING → OCR_ERROR). Los reintentos dentro de un mismo
+ *   OCR» (historial ANALYZING → OCR_ERROR), sin los XML ni los que no
+ *   pudieron descargar el original (ERR-OCR-004), que no llegaron al
+ *   proveedor. Un 500 de Garage no se distingue de un fallo del proveedor
+ *   (los dos son ERR-OCR-001). Los reintentos dentro de un mismo
  *   analisis (429, 5xx) no se guardan en ningun sitio: no se pueden contar.
  * - Validadas: facturas distintas que pasaron a VALIDATED ese mes.
  * - Exportadas: facturas distintas que salieron en algun lote ese mes.
@@ -75,6 +78,10 @@ export async function usageReport(firmId: string, now = new Date(), count = 12):
       SELECT to_char(h."createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Madrid', 'YYYY-MM') AS month, count(*)::int AS n
       FROM "InvoiceStatusHistory" h JOIN "Invoice" i ON i.id = h."invoiceId" JOIN "Client" c ON c.id = i."clientId"
       WHERE c."advisoryFirmId" = ${firmId} AND h."fromStatus" = 'ANALYZING' AND h."toStatus" = 'OCR_ERROR'
+        -- Sin llegar al proveedor: un XML (se lee sin OCR) o el original que
+        -- no se pudo descargar (ERR-OCR-004).
+        AND i."fileType" NOT IN ('application/xml', 'text/xml')
+        AND coalesce(h.reason, '') NOT LIKE '[ERR-OCR-004]%'
         AND h."createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Madrid' >= ${from}::timestamp
       GROUP BY 1`,
     prisma.$queryRaw<Counted[]>`

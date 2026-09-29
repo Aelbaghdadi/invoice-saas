@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { getObjectBytes, isStorageConfigured } from "@/lib/storage";
+import { getObjectBytes, isStorageConfigured, isStorageNotFound } from "@/lib/storage";
 import type { InvoiceStatus, Prisma } from "@prisma/client";
 import {
   extractInvoiceFromPdf,
@@ -132,10 +132,10 @@ async function analyzeInvoice(invoiceId: string, triggeredByUserId: string) {
       try {
         if (ft.includes("xml")) {
           source = "xml_parse";
-          const xmlText = (await getObjectBytes(invoice.storageKey, { timeoutMs: OCR_WAITS.storageMs })).toString("utf-8");
+          const xmlText = (await downloadOriginal(invoice.storageKey)).toString("utf-8");
           ocrResult = await extractInvoiceFromXml(xmlText);
         } else {
-          const base64 = (await getObjectBytes(invoice.storageKey, { timeoutMs: OCR_WAITS.storageMs })).toString("base64");
+          const base64 = (await downloadOriginal(invoice.storageKey)).toString("base64");
 
           if (ft === "application/pdf" || invoice.filename.endsWith(".pdf")) {
             if (process.env.GEMINI_API_KEY) {
@@ -888,6 +888,21 @@ function isTransientError(err: unknown, message: string): boolean {
 function isAbortError(err: unknown): boolean {
   const name = (err as { name?: unknown } | null)?.name;
   return name === "AbortError" || name === "TimeoutError";
+}
+
+/**
+ * El original desde Garage. Si no esta, un error de almacenamiento (ERR-OCR-004,
+ * «No se pudo descargar el archivo»), y no el generico: el SDK lo da como
+ * NoSuchKey y se clasificaba como un fallo del OCR, tambien en el informe de
+ * uso (revision 1 del PR #15, punto 15). No se reintenta: no va a aparecer.
+ */
+async function downloadOriginal(key: string): Promise<Buffer> {
+  try {
+    return await getObjectBytes(key, { timeoutMs: OCR_WAITS.storageMs });
+  } catch (err) {
+    if (isStorageNotFound(err)) throw new Error(`Almacenamiento: el original no está (${key})`, { cause: err });
+    throw err;
+  }
 }
 
 function isTransientOcrError(msg: string): boolean {

@@ -72,9 +72,11 @@ export default async function UsagePage() {
 
       <div className="mt-4 space-y-1 text-[12px] text-slate-500">
         <p>
-          <strong>Análisis de OCR:</strong> las lecturas con Gemini o Document AI, también las que acabaron en «Error OCR».
-          Los reintentos automáticos dentro de una misma lectura (por ejemplo, cuando el proveedor pide esperar) no se guardan
-          y no están contados.
+          <strong>Análisis de OCR:</strong> las lecturas con Gemini o Document AI, también las que acabaron en «Error OCR»,
+          salvo las que no llegaron a enviarse (el original no se pudo descargar). Un fallo del almacenamiento a mitad de la
+          descarga no se distingue de uno del proveedor y sí cuenta. Los reintentos automáticos dentro de una misma lectura
+          (por ejemplo, cuando el proveedor pide esperar) no se guardan y no están contados: contarlos necesita guardar un
+          dato nuevo.
         </p>
         <p><strong>XML sin OCR:</strong> las facturas electrónicas (Facturae) se leen directamente, sin gastar OCR.</p>
         <p><strong>Validadas y exportadas:</strong> facturas distintas; una que se valida o exporta dos veces el mismo mes cuenta una.</p>

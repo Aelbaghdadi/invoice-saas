@@ -4,6 +4,7 @@ import { prisma } from "./helpers/db";
 import { makeFirm, makeInvoice } from "./helpers/factories";
 import { usageReport } from "@/lib/usageReport";
 import { fakeS3 } from "./helpers/fakeS3";
+import { facturaeXml } from "./helpers/fixtures";
 import { stubOcr } from "./helpers/ocr";
 import { processInvoice } from "@/lib/processInvoice";
 import type { ExtractedInvoice } from "@/lib/ocr";
@@ -90,6 +91,18 @@ describe("informe de uso (F-043)", () => {
     const bad = await upload("k-uso-2");
     stubOcr(async () => { throw new Error("Invalid PDF structure"); });
     await processInvoice(bad, a.worker.id);
+
+    // Fallos que no llegaron al proveedor: un XML ilegible y un original que
+    // no está en el almacenamiento. No son análisis de OCR.
+    const xml = (await makeInvoice(a.client, { storageKey: "k-uso-xml", fileType: "application/xml", status: "UPLOADED" })).id;
+    // Un lote Facturae con dos facturas: DocumentError, sin OCR.
+    fakeS3().put("k-uso-xml", facturaeXml().replace(/<Invoice>[\s\S]*<\/Invoice>/, (m) => m + m));
+    await processInvoice(xml, a.worker.id);
+    const lost = (await makeInvoice(a.client, { storageKey: "k-uso-no-esta", fileType: "application/pdf", status: "UPLOADED" })).id;
+    await processInvoice(lost, a.worker.id);
+    const reasons = await prisma.invoiceStatusHistory.findMany({ where: { invoiceId: { in: [xml, lost] }, toStatus: "OCR_ERROR" }, select: { reason: true } });
+    expect(reasons).toHaveLength(2);
+    expect(reasons.map((r) => r.reason)).toContainEqual(expect.stringMatching(/^\[ERR-OCR-004\]/));
 
     const [month] = await usageReport(a.firm.id, new Date(), 1);
     expect(month).toMatchObject({ ocrAnalyses: 2, ocrFailures: 1, xmlParsed: 0 });
