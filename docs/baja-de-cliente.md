@@ -31,6 +31,17 @@ qué queda por decidir.
 
 ## Lo que queda por decidir (con el asesor)
 
+- **Qué se le entrega al cliente tal cual y qué se quita.** El ZIP es la
+  copia completa, pensada para la asesoría. Lleva datos del personal de la
+  asesoría y campos internos:
+  - nombres y emails de los gestores y administradores en `auditoria.csv`
+    (quién cambió cada cosa) y en `lotes_exportados.json` (quién exportó);
+  - en `facturas.json`, campos de trabajo interno (motivos de rechazo,
+    errores del OCR, candidatos de ruteo, estados intermedios).
+
+  Si se entrega al cliente por portabilidad, hay que decidir si va así o
+  una versión sin esos datos (que hoy la app no genera).
+
 - **Cuánto tiempo se conservan los datos** tras la baja. Hay obligaciones
   de conservación de facturas y libros (fiscales y mercantiles) que fijan un
   mínimo; el asesor tiene que confirmar el plazo que aplica a cada caso.
