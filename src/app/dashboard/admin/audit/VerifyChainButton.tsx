@@ -30,7 +30,7 @@ export function VerifyChainButton() {
     setError(null);
     try {
       const res = await fetch("/api/admin/verify-audit", { cache: "no-store" });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error ?? "No se pudo verificar la cadena.");
       setResult(data);
       setState("idle");
