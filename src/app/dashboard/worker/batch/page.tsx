@@ -279,7 +279,8 @@ export default async function WorkerBatchPage({
                   {" · "}
                 </>
               )}
-              <Link href={basePath} className="font-medium text-blue-600 hover:underline">
+              {/* El mismo destino que «Limpiar»: sin filtros, pero sin perder el histórico. */}
+              <Link href={showHistory ? `${basePath}?historico=1` : basePath} className="font-medium text-blue-600 hover:underline">
                 Quitar filtros
               </Link>
             </>
