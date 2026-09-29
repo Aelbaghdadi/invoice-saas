@@ -57,6 +57,8 @@ describe("descargar los datos de un cliente (F-044)", () => {
     expect(invoices).toHaveLength(3);
     expect(invoices.find((i: { id: string }) => i.id === inv.id).vatLines.map((l: { taxBase: string }) => l.taxBase)).toEqual(["100", "50"]);
     expect(zip.text("facturas.csv").split("\r\n").filter(Boolean)).toHaveLength(4);
+    // Los CSV empiezan por el BOM (sin él, Excel abre mal las tildes).
+    for (const csv of ["facturas.csv", "lineas_iva.csv", "auditoria.csv"]) expect(zip.bytes(csv).slice(0, 3)).toEqual(new Uint8Array([0xef, 0xbb, 0xbf]));
     expect(zip.text("lineas_iva.csv")).toContain(`${inv.id};${inv.invoiceNumber};2;50;10;5;;`);
 
     // La auditoría incluye el rastro de esta misma descarga.

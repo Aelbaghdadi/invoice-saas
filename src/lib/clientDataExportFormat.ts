@@ -25,7 +25,7 @@ export function csvRow(values: unknown[]): string {
 }
 
 /** BOM de UTF-8: sin él, Excel abre las tildes mal. */
-export const CSV_BOM = "﻿";
+export const CSV_BOM = "\uFEFF";
 
 /** Importe con coma decimal (lo que espera Excel en español); vacío si no hay. */
 export function csvAmount(value: { toString(): string } | null | undefined): string {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { csvAmount, csvCell, csvDate, csvRow, formatBytes, originalFileName, originalPath, readmeText, safeZipName } from "@/lib/clientDataExportFormat";
+import { CSV_BOM, csvAmount, csvCell, csvDate, csvRow, formatBytes, originalFileName, originalPath, readmeText, safeZipName } from "@/lib/clientDataExportFormat";
 
 describe("CSV de la descarga de datos (F-044)", () => {
   it("entre comillas solo lo que lleva separador, comillas o saltos", () => {
@@ -21,6 +21,11 @@ describe("CSV de la descarga de datos (F-044)", () => {
     // Un número plano sigue siendo un número.
     expect(csvCell("-12,50")).toBe("-12,50");
     expect(csvCell("-3")).toBe("-3");
+  });
+
+  it("el BOM de UTF-8 es U+FEFF", () => {
+    expect(CSV_BOM).toHaveLength(1);
+    expect(CSV_BOM.charCodeAt(0)).toBe(0xfeff);
   });
 
   it("importes con coma y fechas AAAA-MM-DD", () => {
