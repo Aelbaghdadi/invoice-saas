@@ -3,7 +3,7 @@
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { BATCH_REJECT_EXCLUDED_STATUSES, PERIOD_BLOCKING_STATUSES } from "@/lib/invoiceStatuses";
-import { appendAuditLogs } from "@/lib/auditLog";
+import { appendAuditLogs, AUDIT_TRANSACTION_OPTIONS } from "@/lib/auditLog";
 import { closeOpenIssues } from "@/lib/invoiceIssues";
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
@@ -12,7 +12,7 @@ import { canAccessClient } from "@/lib/accessibleClients";
 import type { InvoiceType, InvoiceStatus, PeriodType } from "@prisma/client";
 
 export type BatchAction =
-  | { ok?: boolean; error?: string; rejectedCount?: number; warning?: string }
+  | { ok?: boolean; error?: string; rejectedCount?: number }
   | null;
 
 /** ADMIN: solo clientes de su asesoria. WORKER: solo clientes asignados.
@@ -224,8 +224,21 @@ export async function rejectBatch(
           reason: `Lote rechazado: ${reason}`,
         })),
       });
+      // La auditoria en la misma transaccion (F-048): antes iba aparte, en
+      // tandas, y si fallaba el lote quedaba rechazado sin rastro. Ahora las
+      // cabezas se leen en una consulta y se inserta por tandas: cabe.
+      await appendAuditLogs(
+        applied.map((inv) => ({
+          invoiceId: inv.id,
+          userId: session.user.id,
+          field: "status",
+          oldValue: inv.status,
+          newValue: "REJECTED",
+        })),
+        tx,
+      );
       return applied;
-    });
+    }, AUDIT_TRANSACTION_OPTIONS);
   } catch (e) {
     console.error("[rejectBatch]", e);
     return { error: "No se pudo rechazar el lote. Inténtalo de nuevo." };
@@ -235,30 +248,9 @@ export async function rejectBatch(
     return { error: "No hay facturas en este lote que se puedan rechazar (ya exportadas, rechazadas o en análisis)" };
   }
 
-  // La auditoria es una cadena de hash por factura en su propia transaccion
-  // interactiva: en tandas para no pasarnos del timeout con lotes grandes.
-  // Si aun asi falla, el rechazo ya esta hecho: se avisa, no se lanza.
-  let warning: string | undefined;
-  try {
-    for (let i = 0; i < rejected.length; i += 25) {
-      await appendAuditLogs(
-        rejected.slice(i, i + 25).map((inv) => ({
-          invoiceId: inv.id,
-          userId: session.user.id,
-          field: "status",
-          oldValue: inv.status,
-          newValue: "REJECTED",
-        })),
-      );
-    }
-  } catch (e) {
-    console.error("[rejectBatch] auditoría", e);
-    warning = "Lote rechazado, pero no se pudo registrar toda la auditoría. Avisa al administrador.";
-  }
-
   revalidatePath("/dashboard/worker/batch", "layout");
   revalidatePath("/dashboard/admin/batch", "layout");
   revalidatePath("/dashboard/worker/invoices");
   revalidatePath("/dashboard/admin/invoices");
-  return { ok: true, rejectedCount: rejected.length, warning };
+  return { ok: true, rejectedCount: rejected.length };
 }

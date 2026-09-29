@@ -57,32 +57,38 @@ export async function POST(
   // UPLOADED con el mismo corte que el cron y sin limite de intentos. Si el
   // OCR colgado despierta, ya no escribe: el claim nuevo sube ocrAttempts.
   if (invoice.status === "ANALYZING") {
-    const stalled = await prisma.invoice.updateMany({
-      where: manualStuckAnalyzingWhere(id, stuckAnalyzingCutoff()),
-      data: { status: "UPLOADED", lastOcrError: null },
+    // Cambio, auditoria e historial juntos (F-048): la auditoria no puede
+    // quedarse fuera si lo demas se guarda, ni al reves.
+    const stalled = await prisma.$transaction(async (tx) => {
+      const reset = await tx.invoice.updateMany({
+        where: manualStuckAnalyzingWhere(id, stuckAnalyzingCutoff()),
+        data: { status: "UPLOADED", lastOcrError: null },
+      });
+      if (reset.count === 0) return false;
+      await appendAuditLogs([{
+        invoiceId: id,
+        userId,
+        field: "status",
+        oldValue: "ANALYZING",
+        newValue: "UPLOADED (reprocess)",
+      }], tx);
+      await tx.invoiceStatusHistory.create({
+        data: {
+          invoiceId: id,
+          fromStatus: "ANALYZING",
+          toStatus: "UPLOADED",
+          changedBy: userId,
+          reason: "Reprocesado manualmente (el análisis se había parado)",
+        },
+      });
+      return true;
     });
-    if (stalled.count === 0) {
+    if (!stalled) {
       return NextResponse.json(
         { error: "La factura ya se está analizando. Espera unos segundos y recarga la página." },
         { status: 400 },
       );
     }
-    await appendAuditLogs([{
-      invoiceId: id,
-      userId,
-      field: "status",
-      oldValue: "ANALYZING",
-      newValue: "UPLOADED (reprocess)",
-    }]);
-    await prisma.invoiceStatusHistory.create({
-      data: {
-        invoiceId: id,
-        fromStatus: "ANALYZING",
-        toStatus: "UPLOADED",
-        changedBy: userId,
-        reason: "Reprocesado manualmente (el análisis se había parado)",
-      },
-    });
     launch(id, userId);
     const updated = await prisma.invoice.findUnique({ where: { id } });
     return NextResponse.json({ success: true, invoice: updated });
@@ -102,30 +108,29 @@ export async function POST(
 
     // Reset status to UPLOADED so processInvoice can pick it up.
     // Do NOT clear existing invoice fields — processInvoice will overwrite
-    // them after successful OCR.
-    await prisma.invoice.update({
-      where: { id },
-      data: { status: "UPLOADED", lastOcrError: null },
-    });
-
-    // Audit log for the reprocess action (cadena de hash)
-    await appendAuditLogs([{
-      invoiceId: id,
-      userId,
-      field: "status",
-      oldValue: previousStatus,
-      newValue: "UPLOADED (reprocess)",
-    }]);
-
-    // Status history for the reset
-    await prisma.invoiceStatusHistory.create({
-      data: {
+    // them after successful OCR. El cambio, la auditoria y el historial van
+    // en la misma transaccion (F-048).
+    await prisma.$transaction(async (tx) => {
+      await tx.invoice.update({
+        where: { id },
+        data: { status: "UPLOADED", lastOcrError: null },
+      });
+      await appendAuditLogs([{
         invoiceId: id,
-        fromStatus: previousStatus as InvoiceStatus,
-        toStatus: "UPLOADED",
-        changedBy: userId,
-        reason: "Reprocesado manualmente",
-      },
+        userId,
+        field: "status",
+        oldValue: previousStatus,
+        newValue: "UPLOADED (reprocess)",
+      }], tx);
+      await tx.invoiceStatusHistory.create({
+        data: {
+          invoiceId: id,
+          fromStatus: previousStatus as InvoiceStatus,
+          toStatus: "UPLOADED",
+          changedBy: userId,
+          reason: "Reprocesado manualmente",
+        },
+      });
     });
   }
 

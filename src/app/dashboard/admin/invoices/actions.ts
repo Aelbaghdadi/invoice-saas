@@ -4,7 +4,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
-import { appendAuditLogs } from "@/lib/auditLog";
+import { appendAuditLogs, AUDIT_TRANSACTION_OPTIONS } from "@/lib/auditLog";
 import { processInvoice } from "@/lib/processInvoice";
 import { ocrErrorsToReprocessWhere } from "@/lib/invoiceListing";
 import type { InvoiceStatus } from "@prisma/client";
@@ -58,24 +58,25 @@ export async function reprocessAllOcrErrors() {
     newValue: "UPLOADED (reprocess)",
   }));
 
-  for (const inv of invoices) {
-    await prisma.invoice.update({
-      where: { id: inv.id },
+  // Cambios, historial y auditoria en una transaccion (F-048): antes la
+  // auditoria iba aparte y, si fallaba, las facturas ya estaban en UPLOADED
+  // sin rastro de quien las relanzo.
+  await prisma.$transaction(async (tx) => {
+    await tx.invoice.updateMany({
+      where: { id: { in: invoices.map((inv) => inv.id) } },
       data: { status: "UPLOADED", lastOcrError: null },
     });
-
-    await prisma.invoiceStatusHistory.create({
-      data: {
+    await tx.invoiceStatusHistory.createMany({
+      data: invoices.map((inv) => ({
         invoiceId: inv.id,
         fromStatus: inv.status as InvoiceStatus,
-        toStatus: "UPLOADED",
+        toStatus: "UPLOADED" as InvoiceStatus,
         changedBy: userId,
         reason: "Reprocesado masivo de Error OCR",
-      },
+      })),
     });
-  }
-
-  await appendAuditLogs(auditEntries);
+    await appendAuditLogs(auditEntries, tx);
+  }, AUDIT_TRANSACTION_OPTIONS);
 
   const invoiceIds = invoices.map((i) => i.id);
 

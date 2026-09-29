@@ -242,3 +242,29 @@ SELECT count(*) FROM "Invoice"
 WHERE status IN ('UPLOADED', 'ANALYZING') AND "updatedAt" < now() - interval '15 minutes';
 ```
 
+
+## 9. Cadena de auditoría
+
+Desde F-048, cada escritura en la auditoría bloquea la cadena de su factura
+(`pg_advisory_xact_lock`) hasta el final de la transacción del cambio: dos
+escrituras a la vez ya no dejan dos eslabones con el mismo anterior. Las que
+se escribieron antes pueden estar bifurcadas.
+
+**Antes de pensar en un índice único sobre `prevId`**, el equipo tiene que
+ejecutar esta consulta (solo lectura) en producción. Si da más de 0, el
+índice no se puede crear sin decidir qué hacer con esos eslabones:
+
+```sql
+-- Eslabones que comparten anterior con otro de la misma factura
+-- (prevId NULL cuenta como el génesis: dos génesis también es bifurcación).
+SELECT count(*) AS grupos, coalesce(sum(n - 1), 0) AS eslabones_de_mas
+FROM (
+  SELECT "invoiceId", "prevId", count(*) AS n
+  FROM "AuditLog"
+  GROUP BY "invoiceId", "prevId"
+  HAVING count(*) > 1
+) AS bifurcaciones;
+```
+
+El botón «Verificar la cadena» de Auditoría (admin) recorre la de su asesoría
+y dice qué eslabón falla, bifurcaciones incluidas.

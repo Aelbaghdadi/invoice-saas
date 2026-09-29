@@ -83,7 +83,6 @@ export function BatchActions({
         toastError(res.error);
       } else {
         success(`Lote rechazado (${res?.rejectedCount ?? 0} factura${res?.rejectedCount !== 1 ? "s" : ""})`);
-        if (res?.warning) toastError(res.warning);
         setShowRejectConfirm(false);
         setRejectReason("");
       }

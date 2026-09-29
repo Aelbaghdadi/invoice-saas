@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
 import { verifyFirmAuditChains } from "@/lib/auditLog";
 
-// Verificacion completa de la cadena: recorre todos los registros de
-// todas las facturas de la firma. Para firmas grandes puede tardar; le
-// damos margen de tiempo Vercel (60s).
+// Verificacion completa de la cadena: recorre todos los registros de la
+// firma, por tandas (F-048). Para firmas grandes puede tardar.
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
 
@@ -22,5 +22,13 @@ export async function GET() {
   }
 
   const result = await verifyFirmAuditChains(session.user.advisoryFirmId);
-  return NextResponse.json(result);
+  // El primer eslabon que falla, con la factura como la reconoce el admin.
+  const first = result.breaks[0];
+  const firstInvoice = first
+    ? await prisma.invoice.findUnique({ where: { id: first.invoiceId }, select: { invoiceNumber: true, filename: true } })
+    : null;
+  return NextResponse.json({
+    ...result,
+    firstBreak: first ? { ...first, invoiceLabel: firstInvoice?.invoiceNumber ?? firstInvoice?.filename ?? first.invoiceId } : null,
+  });
 }
