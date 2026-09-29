@@ -37,25 +37,51 @@ export function csvDate(value: Date | null | undefined): string {
   return value ? value.toISOString().slice(0, 10) : "";
 }
 
+// Controles bidi (U+202E y compañia): «fdp.cmd» se veia como «dmc.pdf».
+const BIDI = /[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+
 /**
  * Nombre de fichero seguro dentro del ZIP: sin barras (no puede crear
- * carpetas ni salir de la suya), sin caracteres que Windows no admite y sin
- * nombres vacíos.
+ * carpetas ni salir de la suya), sin caracteres que Windows no admite, sin
+ * controles bidi, sin puntos ni espacios al final y nunca vacio.
  */
-export function safeZipName(name: string): string {
+export function safeZipName(name: string, maxLength = 150): string {
   const cleaned = name
     .normalize("NFC")
+    .replace(BIDI, "")
     .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_")
     .replace(/^\.+/, "_")
     .trim()
-    .slice(0, 150);
+    .slice(0, maxLength)
+    .replace(/[. ]+$/, "");
   return cleaned || "fichero";
 }
 
+/** Extension por el tipo real del fichero, no por el nombre con que se subio. */
+const EXTENSIONS: Record<string, string> = {
+  "application/pdf": "pdf",
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "image/heic": "heic",
+  "application/xml": "xml",
+  "text/xml": "xml",
+};
+
+/**
+ * Nombre del original: la raiz del nombre subido (como mucho 80 caracteres)
+ * y la extension de su tipo real. Recortar el nombre entero podia dejar otra
+ * extension: «FFF….cmd.pdf» salia como «FFF….cmd» (revision 1 del PR #15).
+ */
+export function originalFileName(filename: string, fileType: string): string {
+  const root = filename.replace(/\.[^.]*$/, "") || filename;
+  return `${safeZipName(root, 80)}.${EXTENSIONS[fileType] ?? "bin"}`;
+}
+
 /** Ruta del original: por periodo y con el id delante (dos pueden llamarse igual). */
-export function originalPath(invoice: { id: string; filename: string; periodYear: number; periodMonth: number }): string {
+export function originalPath(invoice: { id: string; filename: string; fileType: string; periodYear: number; periodMonth: number }): string {
   const period = `${invoice.periodYear}-${String(invoice.periodMonth).padStart(2, "0")}`;
-  return `originales/${period}/${invoice.id}_${safeZipName(invoice.filename)}`;
+  return `originales/${period}/${invoice.id}_${originalFileName(invoice.filename, invoice.fileType)}`;
 }
 
 /** Tamaño legible («1,5 GB»). */

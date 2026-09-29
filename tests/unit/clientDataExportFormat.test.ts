@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { csvAmount, csvCell, csvDate, csvRow, formatBytes, originalPath, readmeText, safeZipName } from "@/lib/clientDataExportFormat";
+import { csvAmount, csvCell, csvDate, csvRow, formatBytes, originalFileName, originalPath, readmeText, safeZipName } from "@/lib/clientDataExportFormat";
 
 describe("CSV de la descarga de datos (F-044)", () => {
   it("entre comillas solo lo que lleva separador, comillas o saltos", () => {
@@ -40,7 +40,21 @@ describe("nombres dentro del ZIP", () => {
   });
 
   it("los originales por periodo y con el id delante", () => {
-    expect(originalPath({ id: "inv1", filename: "f.pdf", periodYear: 2026, periodMonth: 3 })).toBe("originales/2026-03/inv1_f.pdf");
+    expect(originalPath({ id: "inv1", filename: "f.pdf", fileType: "application/pdf", periodYear: 2026, periodMonth: 3 })).toBe("originales/2026-03/inv1_f.pdf");
+  });
+
+  it("la extensión es la del tipo real, y recortar no la cambia", () => {
+    const long = originalFileName("F".repeat(146) + ".cmd.pdf", "application/pdf");
+    expect(long).toBe("F".repeat(80) + ".pdf");
+    expect(originalFileName("factura.html", "application/pdf")).toBe("factura.pdf");
+    expect(originalFileName("foto.JPEG", "image/jpeg")).toBe("foto.jpg");
+    expect(originalFileName("sin-extension", "application/xml")).toBe("sin-extension.xml");
+    expect(originalFileName("raro.pdf", "application/octet-stream")).toBe("raro.bin");
+  });
+
+  it("sin controles bidi ni puntos o espacios al final", () => {
+    expect(originalFileName("factura\u202Efdp.cmd", "application/pdf")).toBe("facturafdp.pdf");
+    expect(originalFileName("factura. . .pdf", "application/pdf")).toBe("factura.pdf");
   });
 
   it("tamaños legibles", () => {
