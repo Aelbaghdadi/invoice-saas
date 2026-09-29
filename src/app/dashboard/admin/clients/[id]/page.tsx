@@ -8,6 +8,7 @@ import Link from "next/link";
 import { PENDING_WORK } from "@/lib/invoiceStatuses";
 import { periodLabel } from "@/lib/period";
 import { InvoiceStatusBadge } from "@/components/ui/InvoiceStatusBadge";
+import { DownloadClientData } from "./DownloadClientData";
 
 export default async function ClientDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const session = await auth();
@@ -89,6 +90,7 @@ export default async function ClientDetailPage({ params }: { params: Promise<{ i
             <BookOpen className="h-4 w-4 text-slate-400" />
             Plan de Cuentas
           </Link>
+          <DownloadClientData clientId={id} />
 
           <h3 className="mb-3 mt-6 text-[13px] font-semibold text-slate-700">Gestores asignados</h3>
           {client.assignedWorkers.length === 0 ? (

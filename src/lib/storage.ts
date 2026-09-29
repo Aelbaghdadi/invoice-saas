@@ -91,6 +91,20 @@ export async function getObjectBytes(key: string, options: { timeoutMs?: number 
 }
 
 /**
+ * El objeto por trozos, sin cargarlo entero en memoria (la exportacion de los
+ * datos de un cliente, F-044). El tope cuenta desde la peticion hasta el
+ * ultimo byte: un GET parado a mitad se corta.
+ */
+export async function getObjectChunks(key: string, options: { timeoutMs?: number } = {}): Promise<AsyncIterable<Uint8Array>> {
+  const client = getClient();
+  if (!client) throw new Error("Almacenamiento (S3) no configurado");
+  const signal = options.timeoutMs ? AbortSignal.timeout(options.timeoutMs) : undefined;
+  const res = await client.send(new GetObjectCommand({ Bucket: STORAGE_BUCKET, Key: key }), signal ? { abortSignal: signal } : {});
+  if (!res.Body) throw new Error(`Objeto sin contenido: ${key}`);
+  return res.Body as AsyncIterable<Uint8Array>;
+}
+
+/**
  * ¿El error del SDK dice que el objeto no existe? Garage y el SDK lo dan de
  * varias formas: NoSuchKey en un GET, NotFound (sin cuerpo) en un HEAD, o
  * solo el 404 en los metadatos. Cualquier otra cosa es un fallo de verdad.
