@@ -24,8 +24,8 @@ si se toca algo.
                   ┌──────────────────┼────────────────────┐
                   ▼                  ▼                    ▼
             ┌──────────┐     ┌──────────────┐     ┌──────────────┐
-            │ Postgres │     │ Gemini (OCR) │     │   Supabase   │
-            │(Supabase)│     │ o Document AI│     │   Storage    │
+            │ Postgres │     │ Gemini (OCR) │     │    Garage    │
+            │          │     │ o Document AI│     │     (S3)     │
             └──────────┘     └──────────────┘     └──────────────┘
 ```
 
