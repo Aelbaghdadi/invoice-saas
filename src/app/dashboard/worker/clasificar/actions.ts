@@ -330,10 +330,12 @@ async function discard(invoiceId: string): Promise<ClassifyState> {
   const accesses = await Promise.all(invoice.routingCandidateIds.map((c) => canAccessClient(session, c)));
   if (!accesses.some(Boolean)) return { error: "No tienes acceso a esta factura" };
 
-  // Cambio, historial y auditoria juntos (F-048).
-  await prisma.$transaction(async (tx) => {
-    await tx.invoice.update({
-      where: { id: invoiceId },
+  // Cambio, historial y auditoria juntos (F-048), y solo si sigue pendiente
+  // de clasificar al escribir: otro gestor puede haberla clasificado entre
+  // tanto (revision 1 del PR #15, punto 8).
+  const discarded = await prisma.$transaction(async (tx) => {
+    const updated = await tx.invoice.updateMany({
+      where: { id: invoiceId, status: "PENDING_ROUTING" },
       data: {
         status: "REJECTED",
         rejectionCategory: "OTHER",
@@ -341,11 +343,14 @@ async function discard(invoiceId: string): Promise<ClassifyState> {
         routingReason: null,
       },
     });
+    if (updated.count === 0) return false;
     await tx.invoiceStatusHistory.create({
       data: { invoiceId, fromStatus: "PENDING_ROUTING", toStatus: "REJECTED", changedBy: session.user.id, reason: "Descartada al clasificar" },
     });
     await appendAuditLogs([{ invoiceId, userId: session.user.id, field: "status", oldValue: "PENDING_ROUTING", newValue: "REJECTED" }], tx);
+    return true;
   });
+  if (!discarded) return { error: "La factura ya no está pendiente de clasificar." };
 
   revalidatePath("/dashboard/worker/clasificar");
   return { ok: true };
