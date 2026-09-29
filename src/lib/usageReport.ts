@@ -7,8 +7,9 @@ import { startOfDayInMadrid, yearMonthInMadrid } from "@/lib/dates";
  *
  * - Subidas: facturas creadas, sin las hijas de una division (salen de un
  *   fichero ya subido).
- * - Analisis de OCR: InvoiceExtraction de Gemini o Document AI (los XML de
- *   Facturae se leen sin OCR y van aparte), mas los que acabaron en «Error
+ * - Analisis de OCR: InvoiceExtraction que no son de un XML (Gemini por
+ *   texto o por imagen, Document AI; los XML de Facturae se leen sin OCR y
+ *   van aparte), mas los que acabaron en «Error
  *   OCR» (historial ANALYZING → OCR_ERROR). Los reintentos dentro de un mismo
  *   analisis (429, 5xx) no se guardan en ningun sitio: no se pueden contar.
  * - Validadas: facturas distintas que pasaron a VALIDATED ese mes.
@@ -63,8 +64,8 @@ export async function usageReport(firmId: string, now = new Date(), count = 12):
       GROUP BY 1`,
     prisma.$queryRaw<{ month: string; ocr: number; reprocess: number; xml: number }[]>`
       SELECT to_char(e."createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Madrid', 'YYYY-MM') AS month,
-        (count(*) FILTER (WHERE e.source IN ('gemini_multimodal', 'document_ai')))::int AS ocr,
-        (count(*) FILTER (WHERE e.source IN ('gemini_multimodal', 'document_ai') AND e."isReprocess"))::int AS reprocess,
+        (count(*) FILTER (WHERE e.source <> 'xml_parse'))::int AS ocr,
+        (count(*) FILTER (WHERE e.source <> 'xml_parse' AND e."isReprocess"))::int AS reprocess,
         (count(*) FILTER (WHERE e.source = 'xml_parse'))::int AS xml
       FROM "InvoiceExtraction" e JOIN "Invoice" i ON i.id = e."invoiceId" JOIN "Client" c ON c.id = i."clientId"
       WHERE c."advisoryFirmId" = ${firmId}

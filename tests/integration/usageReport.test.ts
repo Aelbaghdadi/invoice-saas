@@ -1,8 +1,12 @@
 // F-043: informe de uso por asesoría, con lo que ya hay en la BD.
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { prisma } from "./helpers/db";
 import { makeFirm, makeInvoice } from "./helpers/factories";
 import { usageReport } from "@/lib/usageReport";
+import { fakeS3 } from "./helpers/fakeS3";
+import { stubOcr } from "./helpers/ocr";
+import { processInvoice } from "@/lib/processInvoice";
+import type { ExtractedInvoice } from "@/lib/ocr";
 
 describe("informe de uso (F-043)", () => {
   it("cuadra con lo sembrado, por mes de Madrid, y no cuenta otra asesoría", async () => {
@@ -58,5 +62,36 @@ describe("informe de uso (F-043)", () => {
       validated: 1, exported: 0, clients: 1, staffUsers: 2, portalUsers: 1,
     });
     expect(report[2]).toMatchObject({ month: "2026-07", uploaded: 0, clients: 0, staffUsers: 0, portalUsers: 0 });
+  });
+
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("con processInvoice de verdad: un PDF leído por Gemini por texto cuenta como análisis de OCR", async () => {
+    // Con clave, un PDF va por extractPdfWithGemini (simulado: «gemini_text»).
+    vi.stubEnv("GEMINI_API_KEY", "clave-de-prueba");
+    const a = await makeFirm("A");
+    const upload = async (key: string) => {
+      fakeS3().put(key, "%PDF-1.4");
+      return (await makeInvoice(a.client, { storageKey: key, fileType: "application/pdf", status: "UPLOADED", invoiceNumber: null, totalAmount: null })).id;
+    };
+    const ok = await upload("k-uso-1");
+    stubOcr(async () => ({
+      rawJson: "{}",
+      extracted: {
+        issuerName: "Proveedor SL", issuerCif: "B12345674", receiverName: a.client.name, receiverCif: a.client.cif,
+        invoiceNumber: "U-1", invoiceDate: "2026-09-10", taxBase: 100, vatRate: 21, vatAmount: 21,
+        irpfRate: null, irpfAmount: null, totalAmount: 121, currency: "EUR", supplyType: null,
+        vatLines: [{ taxBase: 100, vatRate: 21, vatAmount: 21 }], confidence: null,
+      } as ExtractedInvoice,
+    }));
+    await processInvoice(ok, a.worker.id);
+    expect((await prisma.invoiceExtraction.findFirstOrThrow({ where: { invoiceId: ok } })).source).toBe("gemini_text");
+    // Otra que falla sin remedio (PDF ilegible): análisis, y fallido.
+    const bad = await upload("k-uso-2");
+    stubOcr(async () => { throw new Error("Invalid PDF structure"); });
+    await processInvoice(bad, a.worker.id);
+
+    const [month] = await usageReport(a.firm.id, new Date(), 1);
+    expect(month).toMatchObject({ ocrAnalyses: 2, ocrFailures: 1, xmlParsed: 0 });
   });
 });
