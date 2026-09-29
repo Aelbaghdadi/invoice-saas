@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { startOfDayInMadrid, yearMonthInMadrid } from "@/lib/dates";
 
@@ -57,13 +58,17 @@ type Counted = { month: string; n: number };
 export async function usageReport(firmId: string, now = new Date(), count = 12): Promise<UsageMonth[]> {
   const months = usageMonths(now, count);
   const from = `${months[months.length - 1]}-01 00:00:00`;
-  // Hora de Madrid de una columna timestamp guardada en UTC.
+  // El inicio de la ventana en UTC, como las columnas (timestamp sin zona):
+  // el filtro va sobre la constante y no envuelve la columna, que asi puede
+  // usar un indice (revision 1 del PR #15, punto 17). La hora de Madrid solo
+  // se calcula para agrupar por mes.
+  const fromUtc = Prisma.sql`((${from}::timestamp AT TIME ZONE 'Europe/Madrid') AT TIME ZONE 'UTC')`;
   const [uploads, ocr, failures, validated, exported, clients, staff, portal] = await Promise.all([
     prisma.$queryRaw<Counted[]>`
       SELECT to_char(i."createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Madrid', 'YYYY-MM') AS month, count(*)::int AS n
       FROM "Invoice" i JOIN "Client" c ON c.id = i."clientId"
       WHERE c."advisoryFirmId" = ${firmId} AND i."splitFromId" IS NULL
-        AND i."createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Madrid' >= ${from}::timestamp
+        AND i."createdAt" >= ${fromUtc}
       GROUP BY 1`,
     prisma.$queryRaw<{ month: string; ocr: number; reprocess: number; xml: number }[]>`
       SELECT to_char(e."createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Madrid', 'YYYY-MM') AS month,
@@ -72,7 +77,7 @@ export async function usageReport(firmId: string, now = new Date(), count = 12):
         (count(*) FILTER (WHERE e.source = 'xml_parse'))::int AS xml
       FROM "InvoiceExtraction" e JOIN "Invoice" i ON i.id = e."invoiceId" JOIN "Client" c ON c.id = i."clientId"
       WHERE c."advisoryFirmId" = ${firmId}
-        AND e."createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Madrid' >= ${from}::timestamp
+        AND e."createdAt" >= ${fromUtc}
       GROUP BY 1`,
     // Un fallo es un reproceso si la factura ya habia terminado otro analisis
     // antes (lo mismo que isReprocess de una extraccion: no era el primero).
@@ -88,19 +93,19 @@ export async function usageReport(firmId: string, now = new Date(), count = 12):
         -- no se pudo descargar (ERR-OCR-004).
         AND i."fileType" NOT IN ('application/xml', 'text/xml')
         AND coalesce(h.reason, '') NOT LIKE '[ERR-OCR-004]%'
-        AND h."createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Madrid' >= ${from}::timestamp
+        AND h."createdAt" >= ${fromUtc}
       GROUP BY 1`,
     prisma.$queryRaw<Counted[]>`
       SELECT to_char(h."createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Madrid', 'YYYY-MM') AS month, count(DISTINCT h."invoiceId")::int AS n
       FROM "InvoiceStatusHistory" h JOIN "Invoice" i ON i.id = h."invoiceId" JOIN "Client" c ON c.id = i."clientId"
       WHERE c."advisoryFirmId" = ${firmId} AND h."toStatus" = 'VALIDATED'
-        AND h."createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Madrid' >= ${from}::timestamp
+        AND h."createdAt" >= ${fromUtc}
       GROUP BY 1`,
     prisma.$queryRaw<Counted[]>`
       SELECT to_char(x."createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Madrid', 'YYYY-MM') AS month, count(DISTINCT x."invoiceId")::int AS n
       FROM "ExportBatchItem" x JOIN "Invoice" i ON i.id = x."invoiceId" JOIN "Client" c ON c.id = i."clientId"
       WHERE c."advisoryFirmId" = ${firmId}
-        AND x."createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Europe/Madrid' >= ${from}::timestamp
+        AND x."createdAt" >= ${fromUtc}
       GROUP BY 1`,
     prisma.client.findMany({ where: { advisoryFirmId: firmId, isUnclassifiedBucket: false }, select: { createdAt: true } }),
     prisma.user.findMany({ where: { advisoryFirmId: firmId, role: { in: ["ADMIN", "WORKER"] } }, select: { createdAt: true } }),

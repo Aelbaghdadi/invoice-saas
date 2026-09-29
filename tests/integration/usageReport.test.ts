@@ -43,6 +43,11 @@ describe("informe de uso (F-043)", () => {
       const batch = await prisma.exportBatch.create({ data: { format: "a3excel", invoiceCount: 1, userId: a.admin.id } });
       await prisma.exportBatchItem.create({ data: { exportBatchId: batch.id, invoiceId: id, snapshot: "{}", ...at("2026-09-10T10:00:00Z") } });
     }
+    // El borde de la ventana (3 meses: desde el 1 de julio en Madrid, que es
+    // el 30 de junio a las 22:00 en UTC): la de las 00:30 del 1 de julio entra
+    // y la de las 23:30 del 30 de junio no.
+    await makeInvoice(a.client, at("2026-06-30T22:30:00Z"));
+    await makeInvoice(a.client, at("2026-06-30T21:30:00Z"));
     // Un cliente nuevo en septiembre.
     await prisma.client.create({ data: { name: "Nuevo SL", cif: "B77777777", advisoryFirmId: a.firm.id, ...at("2026-09-12T10:00:00Z") } });
 
@@ -62,7 +67,7 @@ describe("informe de uso (F-043)", () => {
       month: "2026-08", uploaded: 1, ocrAnalyses: 0, ocrReprocesses: 0, ocrFailures: 0, xmlParsed: 1,
       validated: 1, exported: 0, clients: 1, staffUsers: 2, portalUsers: 1,
     });
-    expect(report[2]).toMatchObject({ month: "2026-07", uploaded: 0, clients: 0, staffUsers: 0, portalUsers: 0 });
+    expect(report[2]).toMatchObject({ month: "2026-07", uploaded: 1, clients: 0, staffUsers: 0, portalUsers: 0 });
   });
 
   afterEach(() => vi.unstubAllEnvs());
