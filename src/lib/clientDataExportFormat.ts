@@ -3,10 +3,19 @@
  * BD ni almacenamiento: lo que se puede probar en unitarios.
  */
 
-/** Una celda CSV: entre comillas si lleva separador, comillas o saltos. */
+/**
+ * Una celda CSV: entre comillas si lleva separador, comillas o saltos.
+ *
+ * Contra la inyeccion de formulas (OWASP): un texto que empieza por =, +, -,
+ * @, tabulador o retorno lleva delante un apostrofo, para que Excel no lo
+ * evalue (un nombre de proveedor «=HYPERLINK(...)» leido de un Facturae se
+ * ejecutaba al abrir el CSV). Un numero plano no, para que los importes
+ * negativos sigan siendo numeros.
+ */
 export function csvCell(value: unknown): string {
   if (value == null) return "";
-  const text = value instanceof Date ? value.toISOString() : String(value);
+  let text = value instanceof Date ? value.toISOString() : String(value);
+  if (/^[=+\-@\t\r]/.test(text) && !/^-?\d+([.,]\d+)?$/.test(text)) text = `'${text}`;
   return /[;"\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
