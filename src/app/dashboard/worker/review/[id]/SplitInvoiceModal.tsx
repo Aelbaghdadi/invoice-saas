@@ -10,6 +10,9 @@ type Props = {
   bucket: string;
   /** Listado de origen, para volver a el al acabar el lote. */
   back?: string | null;
+  /** Si la salida debe sustituir la entrada del historial (centinela de
+   *  cambios sin guardar puesto). */
+  replaceHistory?: () => boolean;
   onClose: () => void;
 };
 
@@ -24,7 +27,7 @@ type TicketConfig = {
 // Paso 2: recortar cada ticket de la imagen original.
 type Step = "configure" | "crop";
 
-export default function SplitInvoiceModal({ invoiceId, imageUrl, bucket, back = null, onClose }: Props) {
+export default function SplitInvoiceModal({ invoiceId, imageUrl, bucket, back = null, replaceHistory, onClose }: Props) {
   const [step, setStep] = useState<Step>("configure");
   const [count, setCount] = useState(2);
   const [tickets, setTickets] = useState<TicketConfig[]>([
@@ -209,7 +212,7 @@ export default function SplitInvoiceModal({ invoiceId, imageUrl, bucket, back = 
     }));
 
     startTransition(async () => {
-      const result = await splitInvoice(invoiceId, splitTickets, bucket, back);
+      const result = await splitInvoice(invoiceId, splitTickets, bucket, back, replaceHistory?.() ?? false);
       if (result?.error) setError(result.error);
       // Si no hay error, splitInvoice hace redirect() — el componente
       // no llegará a este punto.

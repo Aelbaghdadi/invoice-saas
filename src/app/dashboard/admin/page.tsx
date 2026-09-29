@@ -12,7 +12,7 @@ import {
   Edit3,
 } from "lucide-react";
 import Link from "next/link";
-import { PENDING_WORK, auditFieldLabelInline, completionPercent, formatAuditValue } from "@/lib/invoiceStatuses";
+import { PENDING_WORK, auditFieldLabelInline, completionPercent, formatAuditValue, auditActor } from "@/lib/invoiceStatuses";
 import { formatDateEs } from "@/lib/dates";
 import { periodLabel } from "@/lib/period";
 import { InvoiceStatusBadge } from "@/components/ui/InvoiceStatusBadge";
@@ -306,12 +306,19 @@ export default async function AdminDashboard() {
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-baseline justify-between gap-3">
-                        <p className="min-w-0 truncate text-[13px] text-slate-800">
-                          <span className="font-semibold">{log.user.name}</span>
+                        {/* Sin truncate: cortaba el numero de factura. */}
+                        <p className="min-w-0 break-words text-[13px] text-slate-800">
+                          <span className="font-semibold">{auditActor(log.field, log.user.name, log.oldValue, log.newValue)}</span>
                           {" "}cambió{" "}
                           <span className="font-semibold text-slate-600">{auditFieldLabelInline(log.field)}</span>
                           {" "}en{" "}
-                          <span className="font-medium" title={log.invoice.filename}>
+                          {/* El numero, entero; el nombre del fichero («WhatsApp Image
+                              2026-09-28 at 13.08.02.jpeg») puede partirse, o en un
+                              movil se sale de la tarjeta. */}
+                          <span
+                            className={`font-medium ${log.invoice.invoiceNumber ? "whitespace-nowrap" : "break-all"}`}
+                            title={log.invoice.filename}
+                          >
                             {log.invoice.invoiceNumber ?? log.invoice.filename}
                           </span>
                         </p>
@@ -322,9 +329,9 @@ export default async function AdminDashboard() {
                       <p className="mt-1 text-[12px] text-slate-500">
                         {log.invoice.client.name}
                         <span className="mx-1.5 text-slate-300">·</span>
-                        {formatAuditValue(log.oldValue)}
+                        {formatAuditValue(log.oldValue, log.field)}
                         <span className="mx-1 text-slate-300">→</span>
-                        <span className="font-medium text-slate-600">{formatAuditValue(log.newValue)}</span>
+                        <span className="font-medium text-slate-600">{formatAuditValue(log.newValue, log.field)}</span>
                       </p>
                     </div>
                   </div>

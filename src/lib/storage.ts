@@ -6,6 +6,7 @@ import {
   DeleteObjectsCommand,
   ListObjectsV2Command,
   HeadObjectCommand,
+  HeadBucketCommand,
 } from "@aws-sdk/client-s3";
 
 /**
@@ -129,6 +130,21 @@ export async function objectExists(key: string, options: { timeoutMs?: number } 
       const message = err instanceof Error ? err.message : String(err);
       console.warn(`[storage] HeadObject ${key} fallo: ${name}${status ? ` (HTTP ${status})` : ""}: ${message}`);
     }
+    return false;
+  }
+}
+
+/** ¿Responde el almacenamiento? HeadBucket con timeout, para /api/health.
+ *  Sin credenciales, false. El detalle del fallo va al log, no a la respuesta. */
+export async function storageReachable(timeoutMs: number): Promise<boolean> {
+  const client = getClient();
+  if (!client) return false;
+  try {
+    await client.send(new HeadBucketCommand({ Bucket: STORAGE_BUCKET }), { abortSignal: AbortSignal.timeout(timeoutMs) });
+    return true;
+  } catch (err) {
+    const status = (err as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
+    console.warn(`[health] almacenamiento no disponible: ${err instanceof Error ? err.name : "Error"}${status ? ` (HTTP ${status})` : ""}`);
     return false;
   }
 }

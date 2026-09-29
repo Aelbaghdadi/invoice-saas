@@ -330,6 +330,15 @@ export const RETENTION_DEFAULT_RATE: Record<RetentionTypeName, number> = {
 };
 
 /**
+ * Tipos de retencion de IRPF que existen: modulos (1), agricultura y
+ * ganaderia (2), nuevos profesionales (7), profesionales (15),
+ * arrendamientos y capital (19), no residentes (24) y consejeros (35). Un %
+ * deducido de base e importe solo se acepta si es uno de estos: si no, con
+ * una linea al 0 % salia un 12,5 % que no existe.
+ */
+export const LEGAL_RETENTION_RATES = [1, 2, 7, 15, 19, 24, 35] as const;
+
+/**
  * Detecta si un NIF/CIF corresponde a una persona fisica (DNI o NIE),
  * lo que sugiere fuertemente que la factura es de un profesional
  * autonomo y por tanto suele llevar retencion IRPF (Modelo 111).
@@ -355,10 +364,21 @@ export function textMentionsRetention(text: string | null | undefined): boolean 
     .toLowerCase()
     // "sin retencion", "no sujeta a retencion", "exento de retencion": son
     // justo el caso CONTRARIO, asi que se borran antes de buscar.
-    .replace(/\b(sin|no\s+sujet\w*\s+a|exent\w*\s+de)\s+retenc\w*/g, " ");
+    .replace(/\b(sin|no\s+sujet\w*\s+a|exent\w*\s+de)\s+retenc\w*/g, " ")
+    // El pie de proteccion de datos (LOPD/RGPD) de muchas facturas: «la
+    // retencion de los datos», «plazos de retencion», «retencion de la
+    // informacion». No es IRPF, y proponia retencion en facturas sin ella.
+    .replace(/\bretenc\w*\s+de\s+(?:(?:los|las|la|sus?|tus?|estos|estas?|dichos|dichas)\s+)?(?:datos|informacion)\b/g, " ")
+    .replace(/\b(?:plazos?|periodos?|politicas?|tiempos?)(?:\s+(?:legal(?:es)?|maximos?|minimos?))?\s+de\s+(?:conservacion\s+y\s+)?retenc\w*/g, " ")
+    // «sus datos personales serán retenidos», «la información será
+    // retenida»: con verbo. Sin él, «Datos bancarios\nRetenido 15 %» es
+    // una retención de verdad.
+    .replace(/\b(?:datos|informacion)(?:\s+\w+){0,3}?\s+(?:seran?|quedaran?|estaran?|permaneceran?|(?:se\s+)?mantendran?)\s+(?:\w+\s+y\s+)?retenid\w*/g, " ");
   return /\birpf\b/.test(t)
     || /\bretenc(?:ion|iones)\b/.test(t)
-    || /\bretenid[oa]s?\b/.test(t);
+    || /\bretenid[oa]s?\b/.test(t)
+    // «Ret. 7%», «Ret. (15%)», «Ret. -15 %».
+    || /\bret\.\s*\(?[-\u2212]?\d{1,2}(?:[.,]\d{1,2})?\s*%/.test(t);
 }
 
 export function isPersonaFisica(rawCif: string | null | undefined): boolean {

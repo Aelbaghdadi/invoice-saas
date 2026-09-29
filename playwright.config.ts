@@ -25,5 +25,8 @@ export default defineConfig({
         url: BASE_URL,
         reuseExistingServer: true,
         timeout: 120_000,
+        // Los e2e que siembran datos vacian E2E_DATABASE_URL: el servidor
+        // tiene que usar esa misma base de datos de pruebas, no la del .env.
+        ...(process.env.E2E_DATABASE_URL ? { env: { DATABASE_URL: process.env.E2E_DATABASE_URL } } : {}),
       },
 });

@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { requireTestDatabase, TEST_DATABASE_MARKER, TEST_MARKER_SCHEMA, type TestDatabase } from "./guard";
+import { requireTestDatabase, TEST_DATABASE_MARKER, TEST_MARKER_SCHEMA, type TestDatabase } from "../../shared/testDatabase";
 
 /**
  * Una vez por ejecucion, antes de tocar nada:

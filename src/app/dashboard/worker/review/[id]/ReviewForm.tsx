@@ -43,6 +43,9 @@ import {
   showsDuplicateWarning,
 } from "@/lib/invoiceStatuses";
 import { useConfirm } from "@/components/ui/ConfirmDialog";
+import { useUnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
+import { formSnapshot } from "@/lib/formSnapshot";
+import { clientPartyWarning, clientPartyWarningText } from "@/lib/clientParty";
 import { invoiceBalanceDiffCents, isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { amountFieldsProblem, parseVatLineInputs, vatLinesProblem } from "@/lib/vatLineInput";
 import { accountsAgainstDirection, validationProblems } from "@/lib/invoiceRules";
@@ -115,6 +118,29 @@ type ExtractionData = {
   source: string;
   createdAt: string;
 };
+
+/** Lo que manda el formulario pero no edita el gestor: no son cambios. */
+const SNAPSHOT_IGNORE = ["updatedAt", "bucket", "back", "replaceHistory"] as const;
+
+/**
+ * Posicion de la entrada actual en el historial de la pestaña (cuantas hay
+ * detras). Con la Navigation API, la de verdad; sin ella, solo se sabe que
+ * con una unica entrada no hay nada detras.
+ */
+function historyIndex(): number {
+  const nav = (window as unknown as { navigation?: { currentEntry?: { index: number } | null } }).navigation;
+  const index = nav?.currentEntry?.index;
+  if (typeof index === "number" && index >= 0) return index;
+  return window.history.length <= 1 ? 0 : Number.POSITIVE_INFINITY;
+}
+
+// El lado bloqueado (el cliente) no lo edita el gestor: lo pone el servidor
+// al guardar (una factura sin receptor recibe el del cliente) y, al refrescar,
+// su valor cambiaba y salia un falso «cambios sin guardar».
+function reviewSnapshot(fd: FormData): string {
+  const lockedFields = fd.get("type") === "PURCHASE" ? ["receiverName", "receiverCif"] : ["issuerName", "issuerCif"];
+  return formSnapshot(fd, [...SNAPSHOT_IGNORE, ...lockedFields]);
+}
 
 type IssueData = {
   id: string;
@@ -340,6 +366,7 @@ function fmtDate(d: Date | null | undefined) {
 export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false, initialVatLines, prevId, nextId, nextPendingId = null, position, batchTotal, doneCount = 0, pendingInBucket = 0, periodClosed = false, validateBlockReason = null, splitBlockReason = null, backHref, back = null, extraction, issues, suggestedAccount, accountMatchedByName, accountNameMismatch = false, thirdPartyGoodsType = null, canRememberGoodsType = false, boundingBoxes, queueSuffix = "", bucket = "all", sessionContext, avgOcrDurationMs, genericAccounts }: Props) {
   const { success, error } = useToast();
   const { confirm, dialog: confirmDialog } = useConfirm();
+  const { ask: askUnsaved, dialog: unsavedDialog } = useUnsavedChangesDialog();
   const isImage = invoice.fileType.startsWith("image/");
   const isPdf   = invoice.fileType === "application/pdf";
   const isXml   = invoice.fileType.includes("xml");
@@ -598,6 +625,13 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   // Esa parte queda bloqueada (read-only) porque la fija el sistema, pero
   // sin etiquetas adicionales — el fondo gris ya indica que no se edita.
   const lockedSide: "issuer" | "receiver" = type === "PURCHASE" ? "receiver" : "issuer";
+  // Lo que leyo el OCR en el lado del cliente, si es otra parte (F-019).
+  // Como las incidencias abiertas: no en una factura ya terminada, y nunca
+  // en el buzon, donde el «cliente» es el provisional y cualquier CIF
+  // valido avisaria.
+  const partyWarning = extraction && sessionContext && invoice.status !== "PENDING_ROUTING" && showsDuplicateWarning(invoice.status)
+    ? clientPartyWarning(type, extraction, { cif: sessionContext.clientCif })
+    : null;
   const lockedInputClass = "w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-[13px] text-slate-600 cursor-not-allowed";
 
   // Conflicto de CIF: emisor == receptor (despues de normalizar). Tipicamente
@@ -928,6 +962,19 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     setTimeout(() => document.getElementById(field)?.focus(), 0);
   }, [setEditableIssuerCif, setEditableReceiverCif, setTotalAmount, updateVatLine]);
 
+  // Centinela de Atras (ver mas abajo). Aqui porque buildFormData lo lee.
+  const sentinelRef = useRef(false);
+  // La URL de la factura cuando se puso el centinela.
+  const sentinelUrlRef = useRef<string | null>(null);
+  // Desde que se lanza una salida (validar y pasar, posponer, rechazar,
+  // dividir, un enlace) hasta que llega la otra factura o la accion falla: no
+  // se pone el centinela, que quedaria como una entrada muerta detras.
+  const departingRef = useRef(false);
+  useEffect(() => { sentinelRef.current = false; departingRef.current = false; }, [invoice.id]);
+  // Con el centinela puesto, la accion redirige con replace: sustituye la
+  // entrada repetida en vez de dejarla detras de la siguiente factura.
+  const setReplaceHistory = (fd: FormData) => { if (sentinelRef.current) fd.set("replaceHistory", "1"); };
+
   const buildFormData = useCallback((extra?: Record<string,string>) => {
     const fd = new FormData();
     fd.set("invoiceId",    invoice.id);
@@ -964,124 +1011,420 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     fd.set("art80Tres", isRectificative && art80Tres ? "1" : "0");
     fd.set("bucket", bucket);
     if (back) fd.set("back", back);
+    if (sentinelRef.current) fd.set("replaceHistory", "1");
     if (extra) Object.entries(extra).forEach(([k,v]) => fd.set(k,v));
     return fd;
   }, [type, vatLines, totalAmount, markedEuro, invoiceDateVal, accountingMonth, accountingYear, supplierAccountVal, expenseAccountVal, operationType, goodsTypeShown, shownSource, retentionType, retentionBase, retentionRate, retentionAmount, isRectificative, rectifiedInvoiceSeries, rectifiedInvoiceNumber, rectificativeType, art80Tres, invoice.id, invoice.updatedAt, bucket, back]);
 
-  const handleSave = () => {
+  // El guardado o la validacion en curso. Mientras dura, la instantanea aun
+  // es la de antes: salir en ese momento preguntaba por unos cambios que ya
+  // se estaban guardando. guardLeave espera a que acabe y vuelve a mirar.
+  const savingRef = useRef<Promise<unknown> | null>(null);
+  const trackSaving = <T,>(run: () => Promise<T>): Promise<T> => {
+    const p = run();
+    savingRef.current = p;
+    const clear = () => { if (savingRef.current === p) savingRef.current = null; };
+    p.then(clear, clear);
+    return p;
+  };
+
+  // Guarda y dice si ha ido bien: lo usan el boton y «Guardar» del aviso de
+  // cambios sin guardar, que solo sigue adelante si se guardo.
+  const saveNow = (): Promise<boolean> => trackSaving(async () => {
     if (saveBlock) {
       error(saveBlock);
-      return;
+      return false;
     }
     if (vatLineIssue) {
       triggerShake("math");
       error(`No se han guardado los cambios: ${vatLineIssue}`);
-      return;
+      return false;
     }
-    startSave(async () => {
-      const res = await saveInvoiceFields(null, buildFormData());
-      setSaveState(res);
-      if (res?.error) {
-        error(`No se han guardado los cambios: ${errorText(res.error)}`);
+    const fd = buildFormData();
+    const sent = reviewSnapshot(fd);
+    const res = await saveInvoiceFields(null, fd);
+    setSaveState(res);
+    if (res?.error) {
+      error(`No se han guardado los cambios: ${errorText(res.error)}`);
+      return false;
+    }
+    success("Cambios guardados");
+    markSaved(sent);
+    return true;
+  });
+  const handleSave = () => {
+    startSave(async () => { await saveNow(); });
+  };
+
+  // ── Cambios sin guardar (F-047) ──────────────────────────────────────────
+  // La instantanea es lo que se enviaria al guardar justo antes de que el
+  // gestor toque nada: el primer pointerdown, keydown, focusin o beforeinput
+  // dentro de la pantalla (este ultimo cubre pegar y el autocompletado, que no
+  // pasan por el teclado). Asi no cuentan como cambios los valores que el
+  // propio formulario ajusta al montarse. Se rehace al cambiar de factura y
+  // tras un guardado propio con exito (markClean). Un refresco de la pagina
+  // («Es el mismo», «No es duplicada»…) no la toca: lo tecleado sigue en
+  // pantalla y sigue sin guardar. Antes dependia de invoice.updatedAt, que es
+  // un Date nuevo en cada refresco, y los cambios dejaban de estar protegidos.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const snapshotRef = useRef<string | null>(null);
+  useEffect(() => { snapshotRef.current = null; justSavedRef.current = null; }, [invoice.id]);
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const takeSnapshotOnce = () => {
+      if (snapshotRef.current == null) snapshotRef.current = reviewSnapshot(buildFormData());
+    };
+    const events = ["pointerdown", "keydown", "focusin", "beforeinput"] as const;
+    for (const ev of events) root.addEventListener(ev, takeSnapshotOnce, true);
+    return () => { for (const ev of events) root.removeEventListener(ev, takeSnapshotOnce, true); };
+  }, [buildFormData]);
+  const markClean = () => { snapshotRef.current = reviewSnapshot(buildFormData()); };
+  // Tras un guardado propio, el refresco trae la factura como la dejo el
+  // servidor (valores normalizados, lado del cliente): esa es la nueva
+  // referencia, no la de justo antes del refresco.
+  // Guarda el updatedAt de antes de guardar; cuando llega otro, es el
+  // refresco del guardado.
+  const justSavedRef = useRef<number | null>(null);
+  const updatedAtTime = new Date(invoice.updatedAt).getTime();
+  // Guardado con exito: la referencia es lo que se envio, no lo que hay ahora
+  // en pantalla. Lo tecleado mientras volvia la respuesta (el formulario no
+  // se bloquea) sigue contando como cambio; si no se ha tocado nada, el
+  // refresco rehace la instantanea con lo que devuelva el servidor. Si el
+  // refresco ya ha llegado, se queda lo enviado: como mucho, un aviso de mas.
+  const markSaved = (sent: string) => {
+    snapshotRef.current = sent;
+    const { isDirty: dirtyNow, updatedAtTime: currentUpdatedAt } = latest.current;
+    justSavedRef.current = !dirtyNow() && currentUpdatedAt === updatedAtTime ? updatedAtTime : null;
+  };
+  useEffect(() => {
+    if (justSavedRef.current == null || justSavedRef.current === updatedAtTime) return;
+    justSavedRef.current = null;
+    snapshotRef.current = reviewSnapshot(buildFormData());
+  }, [updatedAtTime, buildFormData]);
+  const isDirty = () => snapshotRef.current != null && reviewSnapshot(buildFormData()) !== snapshotRef.current;
+
+  // Antes de salir de la factura: si hay cambios, Guardar / Descartar /
+  // Cancelar. Tambien al corregir una validada, el caso grave: una
+  // correccion perdida deja en A3 los valores viejos.
+  // Una sola salida a la vez: con un guardado en curso, otro clic (o
+  // Alt+→) no abre otro aviso ni lanza un segundo guardado, que chocaba con
+  // el bloqueo optimista y sacaba un error falso.
+  const leavingRef = useRef(false);
+  // Lo que habia antes de «Descartar», por si la salida falla (Posponer sin
+  // red): entonces se restaura y lo tecleado vuelve a contar como cambios.
+  const discardedSnapshotRef = useRef<string | null>(null);
+  const guardLeave = async (leave: () => void, onStay?: () => void): Promise<void> => {
+    if (leavingRef.current) return;
+    const saving = savingRef.current;
+    if (saving) {
+      leavingRef.current = true;
+      try {
+        await saving.catch(() => {});
+      } finally {
+        leavingRef.current = false;
+      }
+      // Era validar y pasar: ya se esta saliendo.
+      if (departingRef.current) return;
+      // El guardado ya ha rehecho la instantanea: se vuelve a mirar.
+      return guardLeave(leave, onStay);
+    }
+    discardedSnapshotRef.current = null;
+    if (!isDirty()) return leave();
+    leavingRef.current = true;
+    try {
+      const choice = await askUnsaved();
+      // «Descartar» marca limpio antes de salir: si no, al salir a otro
+      // documento (Atras tras un F5) el navegador volvia a preguntar con
+      // beforeunload. Si la accion falla (Posponer sin red), quien la lanzo
+      // restaura la instantanea con restoreDiscarded().
+      if (choice === "discard") {
+        discardedSnapshotRef.current = snapshotRef.current;
+        markClean();
+        leave();
+      } else if (choice === "save" && (await saveBeforeLeaving())) {
+        leave();
       } else {
-        success("Cambios guardados");
+        onStay?.();
+      }
+    } finally {
+      leavingRef.current = false;
+    }
+  };
+  // Dentro de la transicion del boton correspondiente (spinner y botones
+  // deshabilitados). Sin red, la accion lanza: se avisa y no se sale.
+  const restoreDiscarded = () => {
+    if (discardedSnapshotRef.current != null) snapshotRef.current = discardedSnapshotRef.current;
+    discardedSnapshotRef.current = null;
+  };
+  const saveBeforeLeaving = (): Promise<boolean> => new Promise((resolve) => {
+    const run = isValidated ? startValidate : startSave;
+    run(async () => {
+      try {
+        resolve(await (isValidated ? saveCorrectionNow() : saveNow()));
+      } catch {
+        error("No se han guardado los cambios: error de conexión.");
+        resolve(false);
       }
     });
+  });
+  // En una validada, «Guardar» es «Guardar corrección» (validar): pasa por
+  // las mismas comprobaciones, el aviso de duplicado (F-010) y el aprendizaje
+  // de cuentas. Con saveInvoiceFields se lo saltaba. Si hace falta una
+  // pregunta (bienes/servicios o duplicado), el gestor se queda en la
+  // factura con la pregunta normal de la pagina.
+  const saveCorrectionNow = async (): Promise<boolean> => {
+    if (!validateChecksPass(false)) return false;
+    const question = pendingGoodsQuestion();
+    if (question) {
+      setGoodsQuestion(question);
+      return false;
+    }
+    return (await validateNow("", false)) === "ok";
   };
+  // Atras del navegador (o del raton): es navegacion del router, sin
+  // beforeunload. Con cambios se mete una entrada «centinela» en el historial
+  // (la misma URL). Atras la consume sin salir de la factura; se vuelve a
+  // poner enseguida (asi un segundo Atras con el aviso abierto tampoco sale)
+  // y se pregunta. Si se sale, se dan los dos pasos: el centinela y el Atras
+  // que el gestor queria. Toda salida con el centinela puesto (enlace,
+  // flechas, validar y pasar, posponer, rechazar, dividir) sustituye la
+  // entrada (replace) en vez de dejarla repetida detras.
+  // Limite conocido: tras un F5 con el centinela puesto, la entrada repetida
+  // queda en el historial y un Atras de mas vuelve a esta misma factura.
+  const pushSentinel = () => {
+    // En una pestaña nueva no hay nada que proteger. En la primera entrada
+    // con otras por delante si se pone: trunca lo de delante, y asi Adelante
+    // no sale de la factura sin avisar.
+    if (sentinelRef.current || departingRef.current || window.history.length <= 1) return;
+    window.history.pushState(window.history.state, "", window.location.href);
+    sentinelUrlRef.current = window.location.href;
+    sentinelRef.current = true;
+  };
+  const navigate = (href: string) => {
+    departingRef.current = true;
+    if (sentinelRef.current) {
+      sentinelRef.current = false;
+      router.replace(href);
+    } else {
+      router.push(href);
+    }
+  };
+  // Los listeners de abajo se registran una vez y leen lo ultimo por refs.
+  const latest = useRef({ isDirty, guardLeave, navigate, pushSentinel, updatedAtTime, restoreDiscarded });
+  useEffect(() => { latest.current = { isDirty, guardLeave, navigate, pushSentinel, updatedAtTime, restoreDiscarded }; });
+  useEffect(() => {
+    const root = rootRef.current;
+    const timers = new Set<ReturnType<typeof setTimeout>>();
+    // Al teclear: si ya hay cambios, se pone el centinela (despues del
+    // render, cuando el estado ya lleva lo tecleado). Los clics y teclas
+    // dentro de un dialogo (el propio aviso, «¿Validar igualmente?») no son
+    // edicion: «Descartar» volvia a poner el centinela justo al salir.
+    const onEdit = (e: Event) => {
+      if ((e.target as Element | null)?.closest?.('[role="alertdialog"],[role="dialog"],[aria-modal="true"]')) return;
+      // Los campos que se leen del DOM ya llevan lo tecleado: se mira en el
+      // acto, por si el refresco se aplica antes del temporizador.
+      if (justSavedRef.current != null && latest.current.isDirty()) justSavedRef.current = null;
+      const t = setTimeout(() => {
+        timers.delete(t);
+        // Tras un guardado, hasta que llega el refresco la instantanea es lo
+        // enviado: si ya hay algo distinto, es lo tecleado despues de
+        // «Cambios guardados», y el refresco no puede darlo por guardado.
+        if (justSavedRef.current != null && latest.current.isDirty()) justSavedRef.current = null;
+        if (!leavingRef.current && latest.current.isDirty()) latest.current.pushSentinel();
+      }, 0);
+      timers.add(t);
+    };
+    const onPopState = () => {
+      if (!sentinelRef.current) return;
+      sentinelRef.current = false;
+      // Se ha saltado a otra pagina (el menu del boton Atras salta varias
+      // entradas): esa salida ya no se puede parar, y reponer el centinela
+      // duplicaria la entrada de destino y borraria las de delante.
+      if (window.location.href !== sentinelUrlRef.current) return;
+      const { isDirty: dirty, guardLeave: guard, pushSentinel: push } = latest.current;
+      // Primera entrada de la pestaña: no hay adonde volver. Se repone el
+      // centinela y ya esta, sin aviso.
+      if (historyIndex() === 0) {
+        push();
+        return;
+      }
+      // Atras con el aviso ya abierto: se repone y el aviso sigue.
+      if (leavingRef.current) {
+        push();
+        return;
+      }
+      if (!dirty()) {
+        window.history.back();
+        return;
+      }
+      push();
+      void guard(() => {
+        // El centinela y el Atras que queria el gestor. Si no hay tantas
+        // entradas detras, no se sale (con uno de menos se volveria a la
+        // propia factura) y se queda con lo tecleado.
+        const needed = sentinelRef.current ? 2 : 1;
+        const steps = historyIndex() >= needed ? needed : 0;
+        if (steps === 0) {
+          latest.current.restoreDiscarded();
+          return;
+        }
+        departingRef.current = true;
+        sentinelRef.current = false;
+        window.history.go(-steps);
+      });
+    };
+    // Cualquier enlace interno (barra lateral, cabecera, «Volver», «<», «>»…):
+    // con cambios, se para en captura, antes que el Link de Next, y se
+    // pregunta. Sin cambios pero con el centinela puesto, tambien se para,
+    // para salir con replace. Con Ctrl/Cmd/Shift/Alt, boton central o target
+    // (pestaña nueva) no se sale de esta y no se toca.
+    const onClick = (e: MouseEvent) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const a = (e.target as Element | null)?.closest?.("a[href]") as HTMLAnchorElement | null;
+      if (!a || (a.target && a.target !== "_self") || a.hasAttribute("download")) return;
+      const url = new URL(a.href, window.location.href);
+      if (url.origin !== window.location.origin) return;
+      if (url.pathname === window.location.pathname && url.search === window.location.search) return;
+      if (!sentinelRef.current && !latest.current.isDirty()) return;
+      e.preventDefault();
+      e.stopPropagation();
+      void latest.current.guardLeave(() => latest.current.navigate(url.pathname + url.search + url.hash));
+    };
+    const editEvents = ["input", "change", "click", "keyup"] as const;
+    for (const ev of editEvents) root?.addEventListener(ev, onEdit, true);
+    window.addEventListener("popstate", onPopState);
+    document.addEventListener("click", onClick, true);
+    return () => {
+      for (const ev of editEvents) root?.removeEventListener(ev, onEdit, true);
+      window.removeEventListener("popstate", onPopState);
+      document.removeEventListener("click", onClick, true);
+      for (const t of timers) clearTimeout(t);
+    };
+  }, []);
+  // Cerrar la pestaña o recargar: el aviso del navegador.
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (!isDirty()) return;
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  });
 
   // "Reabrir y validar" en curso: viaja con la validacion (tambien si antes
   // sale la pregunta de bienes/servicios). Enter nunca lo pone.
   const reopenRef = useRef(false);
 
+  // Valida (o guarda la correccion de una ya validada) y dice como ha ido:
+  // "ok", "error", o "asked" si ha hecho falta una confirmacion de duplicado
+  // (el aviso de cambios sin guardar no navega entonces: el gestor se queda
+  // en la factura).
+  const validateNow = (goodsTypeScope: GoodsTypeScope, reopen: boolean): Promise<"ok" | "error" | "asked"> => trackSaving(async () => {
+    let asked = false;
+    const fields = {
+      nextId: nextPendingId ?? "",
+      goodsTypeScope,
+      goodsTypeAssignedSeen: assignedGoodsType ?? "",
+      ...(reopen ? { reopen: "1" } : {}),
+    };
+    // Una por revisar salta a la siguiente al validar; una validada se queda.
+    if (!isValidated) departingRef.current = true;
+    let sent = reviewSnapshot(buildFormData());
+    let res = await validateInvoice(null, buildFormData(fields));
+    // Posibles duplicados (F-010, F-016): otra ya validada con este numero
+    // y emisor, o un aviso de duplicado abierto. El servidor no valida sin
+    // que el gestor los confirme, todos en una sola confirmacion. Si con el
+    // dialogo abierto aparece otro, vuelve a preguntar con la lista nueva
+    // (con tope, por si acaso).
+    for (let round = 0; round < 3 && res?.duplicateOf?.length; round++) {
+      const duplicates = res.duplicateOf;
+      // En una ya validada es una correccion: se pregunta por guardarla.
+      const again = isValidated ? "¿Guardar la corrección igualmente?" : "¿Validar igualmente?";
+      const ok = await confirm({
+        title: again,
+        message: (
+          <>
+            <ul className="space-y-2">
+              {duplicates.map((dup, i) => (
+                <li key={i}>
+                  {dup.kind === "validated" ? (
+                    <>
+                      Ya hay otra factura con este número y este emisor:{" "}
+                      <Link href={`/dashboard/worker/review/${dup.id}`} target="_blank" className="font-medium underline">
+                        {dup.label}<span className="sr-only"> (se abre en una pestaña nueva)</span>
+                      </Link>
+                      .
+                    </>
+                  ) : (
+                    <>
+                      {dup.label}{" "}
+                      {dup.id && (
+                        <Link href={`/dashboard/worker/review/${dup.id}`} target="_blank" className="font-medium underline">
+                          Ver la original<span className="sr-only"> (se abre en una pestaña nueva)</span>
+                        </Link>
+                      )}
+                    </>
+                  )}
+                </li>
+              ))}
+            </ul>
+            <p className="mt-2">
+              {duplicates.some((d) => d.kind === "openIssue") && "Al validarla, el aviso se cierra. "}
+              {again}
+            </p>
+          </>
+        ),
+        confirmLabel: isValidated ? "Guardar igualmente" : "Validar igualmente",
+        tone: "primary",
+        // Se llega aqui validando con Enter: un segundo Enter no confirma.
+        focusCancel: true,
+      });
+      asked = true;
+      if (!ok) {
+        departingRef.current = false;
+        setValidateState(null);
+        return "asked";
+      }
+      sent = reviewSnapshot(buildFormData());
+      res = await validateInvoice(null, buildFormData({ ...fields, confirmDuplicate: duplicates.map((d) => d.key).join(",") }));
+    }
+    setValidateState(res);
+    departingRef.current = false;
+    if (res?.error) {
+      error(isValidated
+        ? `No se ha guardado la corrección: ${errorText(res.error)}`
+        : `No se ha podido validar: ${errorText(res.error)}`);
+      return "error";
+    }
+    // Una ya validada no salta a otra: se queda en ella con la correccion.
+    success(isValidated ? "Corrección guardada" : "Factura validada");
+    if (isValidated) {
+      markSaved(sent);
+    }
+    return asked ? "asked" : "ok";
+  });
+
   const runValidate = (goodsTypeScope: GoodsTypeScope) => {
     setGoodsQuestion(null);
     const reopen = reopenRef.current;
     reopenRef.current = false;
-    startValidate(async () => {
-      const fields = {
-        nextId: nextPendingId ?? "",
-        goodsTypeScope,
-        goodsTypeAssignedSeen: assignedGoodsType ?? "",
-        ...(reopen ? { reopen: "1" } : {}),
-      };
-      let res = await validateInvoice(null, buildFormData(fields));
-      // Posibles duplicados (F-010, F-016): otra ya validada con este numero
-      // y emisor, o un aviso de duplicado abierto. El servidor no valida sin
-      // que el gestor los confirme, todos en una sola confirmacion. Si con el
-      // dialogo abierto aparece otro, vuelve a preguntar con la lista nueva
-      // (con tope, por si acaso).
-      for (let round = 0; round < 3 && res?.duplicateOf?.length; round++) {
-        const duplicates = res.duplicateOf;
-        // En una ya validada es una correccion: se pregunta por guardarla.
-        const again = isValidated ? "¿Guardar la corrección igualmente?" : "¿Validar igualmente?";
-        const ok = await confirm({
-          title: again,
-          message: (
-            <>
-              <ul className="space-y-2">
-                {duplicates.map((dup, i) => (
-                  <li key={i}>
-                    {dup.kind === "validated" ? (
-                      <>
-                        Ya hay otra factura con este número y este emisor:{" "}
-                        <Link href={`/dashboard/worker/review/${dup.id}`} target="_blank" className="font-medium underline">
-                          {dup.label}<span className="sr-only"> (se abre en una pestaña nueva)</span>
-                        </Link>
-                        .
-                      </>
-                    ) : (
-                      <>
-                        {dup.label}{" "}
-                        {dup.id && (
-                          <Link href={`/dashboard/worker/review/${dup.id}`} target="_blank" className="font-medium underline">
-                            Ver la original<span className="sr-only"> (se abre en una pestaña nueva)</span>
-                          </Link>
-                        )}
-                      </>
-                    )}
-                  </li>
-                ))}
-              </ul>
-              <p className="mt-2">
-                {duplicates.some((d) => d.kind === "openIssue") && "Al validarla, el aviso se cierra. "}
-                {again}
-              </p>
-            </>
-          ),
-          confirmLabel: isValidated ? "Guardar igualmente" : "Validar igualmente",
-          tone: "primary",
-          // Se llega aqui validando con Enter: un segundo Enter no confirma.
-          focusCancel: true,
-        });
-        if (!ok) {
-          setValidateState(null);
-          return;
-        }
-        res = await validateInvoice(null, buildFormData({ ...fields, confirmDuplicate: duplicates.map((d) => d.key).join(",") }));
-      }
-      setValidateState(res);
-      if (res?.error) {
-        error(isValidated
-          ? `No se ha guardado la corrección: ${errorText(res.error)}`
-          : `No se ha podido validar: ${errorText(res.error)}`);
-      } else {
-        // Una ya validada no salta a otra: se queda en ella con la correccion.
-        success(isValidated ? "Corrección guardada" : "Factura validada");
-      }
-    });
+    startValidate(async () => { await validateNow(goodsTypeScope, reopen); });
   };
 
   // En una intracomunitaria se pregunta antes si el tercero va siempre como
   // bienes o como servicios. Validar redirige a la siguiente factura, asi
   // que la respuesta tiene que viajar con la propia validacion.
+  const pendingGoodsQuestion = () => goodsTypeQuestion({
+    direction: type,
+    operationType,
+    goodsType: goodsTypeShown,
+    thirdParty: assignedGoodsType,
+    canRemember: counterpartyChanged ? Boolean(counterpartyNif) : canRememberGoodsType,
+  });
   const handleValidate = () => {
-    const question = goodsTypeQuestion({
-      direction: type,
-      operationType,
-      goodsType: goodsTypeShown,
-      thirdParty: assignedGoodsType,
-      canRemember: counterpartyChanged ? Boolean(counterpartyNif) : canRememberGoodsType,
-    });
+    const question = pendingGoodsQuestion();
     if (question) {
       setGoodsQuestion(question);
       return;
@@ -1202,7 +1545,10 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       // siguiente de todo el lote.
       fd.set("bucket", bucket);
       if (back) fd.set("back", back);
+      setReplaceHistory(fd);
+      departingRef.current = true;
       const res = await rejectInvoice(null, fd);
+      departingRef.current = false;
       setRejectState(res);
       if (res?.error) {
         error(typeof res.error === "string" ? res.error : res.error.message);
@@ -1252,9 +1598,13 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       fd.set("nextId", nextPendingId ?? "");
       fd.set("bucket", bucket);
       if (back) fd.set("back", back);
+      setReplaceHistory(fd);
+      departingRef.current = true;
       const res = await deferInvoice(null, fd);
       // El action redirecciona en caso de exito; solo veremos retorno si hay error.
+      departingRef.current = false;
       if (res?.error) {
+        restoreDiscarded();
         error(typeof res.error === "string" ? res.error : res.error.message);
       }
     });
@@ -1287,6 +1637,9 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       try {
         const res = await fetch(`/api/invoices/${invoice.id}/process`, { method: "POST" });
         if (res.ok) {
+          // Lo tecleado ya no cuenta: la recarga trae lo que lea el OCR (y
+          // si no, el navegador preguntaria al recargar).
+          markClean();
           success("OCR relanzado — recarga en unos segundos");
           setTimeout(() => window.location.reload(), 3000);
         } else {
@@ -1297,6 +1650,23 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
         error("Error de conexión al reprocesar");
       }
     });
+  };
+
+  // Con cambios, Reprocesar no ofrece «Guardar»: guardar pasa una OCR_ERROR
+  // a «Por revisar», y entonces ya no se puede reprocesar; y el OCR
+  // sustituye los datos de todas formas. Solo se confirma que se pierden.
+  const reprocessGuarded = async () => {
+    if (isDirty()) {
+      const ok = await confirm({
+        title: "¿Reprocesar la factura?",
+        message: "El OCR sustituirá los datos por los que lea: se pierden los cambios sin guardar.",
+        confirmLabel: "Reprocesar",
+        tone: "primary",
+        focusCancel: true,
+      });
+      if (!ok) return;
+    }
+    handleReprocess();
   };
 
   const inputClass = "w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[13px] text-slate-800 outline-none focus:border-accent-500 focus:ring-2 focus:ring-accent-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500";
@@ -1332,12 +1702,12 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       setRejectReason((prev) => prev || "Factura duplicada");
       setShowRejectModal(true);
     },
-    onNext: () => { if (nextId) router.push(`/dashboard/worker/review/${nextId}${queueSuffix}`); },
-    onPrev: () => { if (prevId) router.push(`/dashboard/worker/review/${prevId}${queueSuffix}`); },
+    onNext: () => { if (nextId) void guardLeave(() => navigate(`/dashboard/worker/review/${nextId}${queueSuffix}`)); },
+    onPrev: () => { if (prevId) void guardLeave(() => navigate(`/dashboard/worker/review/${prevId}${queueSuffix}`)); },
     onToggleHelp: () => setShowHelp((s) => !s),
     // Con «¿Reabrir y validar?» abierto, Ctrl+S guardaba por detras y
     // Alt+flechas cambiaba de factura.
-    isBlocked: () => showRejectModal || showHelp || showSplitModal || showSplitPdfModal || goodsQuestion !== null || confirmDialog != null,
+    isBlocked: () => showRejectModal || showHelp || showSplitModal || showSplitPdfModal || goodsQuestion !== null || confirmDialog != null || unsavedDialog != null,
   });
 
   // Etiqueta del bucket activo en la sesion. Ayuda al gestor a saber
@@ -1367,7 +1737,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   const closeRejectModal = () => { setShowRejectModal(false); setRejectReason(""); };
 
   return (
-    <div className="flex h-full flex-col overflow-hidden">
+    <div ref={rootRef} className="flex h-full flex-col overflow-hidden">
       {/* Header bar */}
       <div className="flex flex-shrink-0 items-center justify-between border-b border-slate-200 bg-white px-5 py-3">
         <div className="flex items-center gap-3">
@@ -1704,7 +2074,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                   </div>
                   <button
                     type="button"
-                    onClick={handleReprocess}
+                    onClick={() => void reprocessGuarded()}
                     disabled={isPendingReprocess}
                     className="flex flex-shrink-0 items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-red-700 disabled:opacity-50"
                   >
@@ -1811,6 +2181,26 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
               id={lockedSide === "issuer" ? "issuerCif" : "receiverCif"}
               defaultValue={lockedSide === "issuer" ? (invoice.issuerCif ?? "") : (invoice.receiverCif ?? "")}
             />
+
+            {/* A nombre de otro (F-019): el lado del cliente lleva siempre sus
+                datos; si el OCR leyo ahi otro CIF valido, se ve aqui sin ir a
+                la auditoria. */}
+            {partyWarning && (
+              <p role="note" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
+                {/* Con el tipo sin confirmar, el formulario arranca como
+                    recibida por defecto: «el receptor es X» en una venta seria
+                    falso. Hasta que el gestor elija el tipo, un aviso neutro. */}
+                {partyWarning.kind === "foreign" && invoice.typeUnconfirmed && type === invoice.type ? (
+                  "El cliente no aparece como emisor ni como receptor: indica el tipo y comprueba que la factura es suya."
+                ) : partyWarning.kind === "foreign" ? (
+                  <>
+                    En la factura, el {lockedSide === "receiver" ? "receptor" : "emisor"} es{" "}
+                    <span className="font-semibold">{partyWarning.name ? `${partyWarning.name} (${partyWarning.cif})` : partyWarning.cif}</span>
+                    , no el cliente. Comprueba que la factura es suya antes de validarla.
+                  </>
+                ) : clientPartyWarningText(partyWarning)}
+              </p>
+            )}
 
             <div className="grid grid-cols-2 gap-2.5">
               {/* Lado editable: Emisor en PURCHASE, Receptor en SALE.
@@ -2830,7 +3220,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
             {canDefer && (
               <button
                 type="button"
-                onClick={handleDefer}
+                onClick={() => void guardLeave(handleDefer)}
                 disabled={isPendingDefer || !nextPendingId}
                 title={!nextPendingId ? "No quedan más facturas por revisar en el lote" : "Posponer: saltar a la siguiente sin tocar esta"}
                 aria-label="Posponer"
@@ -3102,6 +3492,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       </div>
 
       {confirmDialog}
+      {unsavedDialog}
 
       {showSplitModal && previewUrl && (
         <SplitInvoiceModal
@@ -3109,6 +3500,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
           imageUrl={previewUrl}
           bucket={bucket ?? "all"}
           back={back}
+          replaceHistory={() => sentinelRef.current}
           onClose={() => setShowSplitModal(false)}
         />
       )}
@@ -3118,6 +3510,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
           pdfUrl={previewUrl}
           bucket={bucket ?? "all"}
           back={back}
+          replaceHistory={() => sentinelRef.current}
           onClose={() => setShowSplitPdfModal(false)}
         />
       )}

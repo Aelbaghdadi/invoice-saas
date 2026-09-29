@@ -5,13 +5,15 @@ import { prisma } from "@/lib/prisma";
 import { canAccessClient } from "@/lib/accessibleClients";
 import { appendAuditLogs } from "@/lib/auditLog";
 import { learnProviderRule } from "@/lib/providerRouting";
+import { clientPartyIssue } from "@/lib/clientParty";
 import { detectInvoiceType } from "@/lib/invoiceRouting";
 import { duplicateField, findPossibleDuplicate } from "@/lib/duplicates";
 import { intracomVatIssue, mathIssues } from "@/lib/mathIssues";
 import { isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { anyNegativeAmount, hasRectificativeMention, rectificativeSignHint } from "@/lib/rectificative";
 import { facturaeXmlIsCorrective } from "@/lib/ocr";
-import { proposeSurchargesFromTotal } from "@/lib/equivalenceSurcharge";
+import { proposeSurchargesFromTotal, surchargeAuditValue } from "@/lib/equivalenceSurcharge";
+import { clientPartyAudit } from "@/lib/auditValue";
 import { proposeOperationType } from "@/lib/operationTypeProposal";
 import { parseTaxId, taxIdWithCountry } from "@/lib/validators";
 import { accountEntryKey } from "@/lib/supplierMatching";
@@ -150,6 +152,7 @@ async function classify(invoiceId: string, clientId: string): Promise<ClassifySt
   // Cliente en recargo de equivalencia: se propone el recargo desde el total,
   // como hace el OCR con los clientes que ya conoce. Sin esto salia «Error
   // matemático: diferencia 5,20 €» donde el OCR habria puesto el recargo.
+  const readSurcharge = surchargeAuditValue(lines);
   const surchargeProposals = client.equivalenceSurchargeCustomer
     ? proposeSurchargesFromTotal(
         lines,
@@ -161,6 +164,16 @@ async function classify(invoiceId: string, clientId: string): Promise<ClassifySt
     lines[p.index].equivalenceSurchargeRate = p.rate;
     lines[p.index].equivalenceSurchargeAmount = p.amount;
   }
+  // Lo que cambia el sistema al clasificar, como en processInvoice (F-024):
+  // la parte del cliente y el recargo propuesto.
+  const autoAudit: { field: string; oldValue: string | null; newValue: string | null }[] = [];
+  const substituted = clientPartyAudit(
+    isPurchase ? { name: invoice.receiverName, cif: invoice.receiverCif } : { name: invoice.issuerName, cif: invoice.issuerCif },
+    client,
+  );
+  if (substituted) autoAudit.push({ field: "auto:parteCliente", ...substituted });
+  const finalSurcharge = surchargeAuditValue(lines);
+  if (finalSurcharge !== readSurcharge) autoAudit.push({ field: "auto:recargo", oldValue: readSurcharge, newValue: finalSurcharge });
   const totalAmount = invoice.totalAmount == null ? null : Number(invoice.totalAmount);
   const irpfAmount = invoice.irpfAmount == null ? null : Number(invoice.irpfAmount);
   const mathProblems = mathIssues({
@@ -202,6 +215,15 @@ async function classify(invoiceId: string, clientId: string): Promise<ClassifySt
   }
   const signHint = rectificativeSignHint(signAmounts, null, mentioned);
   if (signHint) mathProblems.push({ type: "MANUAL", description: signHint, field: "isRectificative" });
+  // A nombre de otro (F-019), con lo que leyo el OCR en el lado del cliente.
+  // Con el tipo sin confirmar, el lado del cliente es una suposicion.
+  // En la factura el CIF va sin prefijo y el pais aparte: se vuelve a unir
+  // para que un VAT extranjero cuente como tal.
+  const foreign = typeStillUnconfirmed ? null : clientPartyIssue(effectiveType, {
+    issuerName: invoice.issuerName, issuerCif: taxIdWithCountry(invoice.issuerCif, invoice.issuerCountry),
+    receiverName: invoice.receiverName, receiverCif: taxIdWithCountry(invoice.receiverCif, invoice.receiverCountry),
+  }, client);
+  if (foreign) mathProblems.push(foreign);
   // isValid con el recargo ya propuesto, como `finalIsValid` en el OCR: el
   // del buzon se calculo sin recargo y la ficha lo pintaba en rojo.
   const isValid = lines.length > 0 && totalAmount != null
@@ -265,7 +287,7 @@ async function classify(invoiceId: string, clientId: string): Promise<ClassifySt
       field: "status",
       oldValue: "PENDING_ROUTING",
       newValue: targetStatus,
-    }], tx);
+    }, ...autoAudit.map((e) => ({ invoiceId, userId: session.user.id, ...e }))], tx);
     return true;
   }, { timeout: 15_000, maxWait: 5_000 });
   if (!claimed) return { error: "La factura no está pendiente de clasificar" };

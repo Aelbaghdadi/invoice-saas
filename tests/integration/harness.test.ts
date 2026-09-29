@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { prisma } from "./helpers/db";
-import { requireTestDatabase } from "./setup/guard";
+import { requireTestDatabase } from "../shared/testDatabase";
 import { fakeS3 } from "./helpers/fakeS3";
 import { getObjectBytes, putObject } from "@/lib/storage";
 

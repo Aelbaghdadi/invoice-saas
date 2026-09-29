@@ -12,15 +12,19 @@ import {
 } from "@/lib/ocrLlm";
 import { detectIssues } from "@/lib/issueDetector";
 import { appendAuditLogs } from "@/lib/auditLog";
+import { clientPartyAudit, irpfAuditValue, partyAuditValue } from "@/lib/auditValue";
+import { clientPartyIssue } from "@/lib/clientParty";
 import { ocrFenceWhere } from "@/lib/invoiceStatuses";
 import { isInvoiceBalanced } from "@/lib/invoiceBalance";
-import { percentOf, roundCents } from "@/lib/money";
+import { roundCents } from "@/lib/money";
+import { isLegalRetentionRate, legalRateFor, resolveIrpf } from "@/lib/irpfResolution";
 
 // La escritura final son unas pocas consultas; 15 s por si espera un bloqueo
 // de fila (los 5 s por defecto dejaban el resultado en OCR_ERROR).
 const OCR_WRITE_TRANSACTION_OPTIONS = { timeout: 15_000, maxWait: 5_000 } as const;
 import {
   parseTaxId,
+  taxIdWithCountry,
   isPersonaFisica,
   textMentionsRetention,
   RETENTION_DEFAULT_RATE,
@@ -30,10 +34,11 @@ import {
   foldSurchargeLines,
   completeReadSurcharges,
   proposeSurchargesFromTotal,
+  surchargeAuditValue,
 } from "@/lib/equivalenceSurcharge";
 import { rectificativeSignHint, textMentionsRectificative, withRectificativeMention } from "@/lib/rectificative";
 import { routeByCif, clientSideCif, routeByText, detectInvoiceType } from "@/lib/invoiceRouting";
-import { lookupProviderClient } from "@/lib/providerRouting";
+import { lookupProviderClient, normalizeProviderNif } from "@/lib/providerRouting";
 import { accountEntryKey } from "@/lib/supplierMatching";
 import { proposeOperationType, unclassifiedGoodsType } from "@/lib/operationTypeProposal";
 import { classifyOcrError, DocumentError, userMessageForError } from "@/lib/ocrErrors";
@@ -153,11 +158,17 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     // no pone el signo de una rectificativa (F-012): lo pone la revision al
     // marcar la casilla.
     const positive = (v: number | null) => (v == null ? v : Math.abs(v));
+    // Lo que cambia el sistema sin que lo toque el gestor queda en la
+    // auditoria como auto:* (F-024). Primero, el signo de la retencion.
+    const autoAudit: { field: string; oldValue: string | null; newValue: string | null }[] = [];
+    const printedIrpf = irpfAuditValue(roundCents(extracted.irpfRate), roundCents(extracted.irpfAmount));
     extracted.irpfAmount = roundCents(positive(extracted.irpfAmount));
     // Los % tambien: con 7,005 % la cuota se calculaba con el % sin redondear
     // y la BD guardaba 7,01, asi que la revision la daba por descuadrada.
     extracted.vatRate = roundCents(extracted.vatRate);
     extracted.irpfRate = roundCents(positive(extracted.irpfRate));
+    const readIrpf = irpfAuditValue(extracted.irpfRate, extracted.irpfAmount);
+    if (printedIrpf !== readIrpf) autoAudit.push({ field: "auto:signo", oldValue: printedIrpf, newValue: readIrpf });
     extracted.vatLines = extracted.vatLines.map((l) => ({
       ...l,
       taxBase: roundCents(l.taxBase),
@@ -225,6 +236,7 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     // pipeline opera con el cliente real (forzar parte conocida, aprendizaje,
     // dedupe). Si no casa, queda "Por clasificar" (PENDING_ROUTING) en el buzón.
     let routingReason: string | null = null;
+    let routedByRule: { field: string; oldValue: string | null; newValue: string | null } | null = null;
     const isRoutingUpload = invoice.routingCandidateIds.length > 0;
     if (isRoutingUpload) {
       const candidates = await prisma.client.findMany({
@@ -242,31 +254,79 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
         otherCif,
       );
 
-      // 1) match por CIF del cliente. 2) si no casa, regla aprendida por
-      // proveedor (otra parte): si ese proveedor ya se clasificó antes a una de
-      // las empresas candidatas, lo auto-ruteamos ahí.
       let resolvedClientId: string | null = null;
+      const byCifCandidates = candidates.map((c) => ({ clientId: c.id, cif: c.cif }));
+      const other = normalizeProviderNif(otherCif);
+      const otherIsCandidate = !!other && candidates.some((c) => normalizeProviderNif(c.cif) === other);
+      // Texto y regla, cuando el CIF del lado del cliente no decide.
+      const byTextAndRule = async (textCandidates: typeof candidates, ruleAllowed: boolean) => {
+        // Document AI a veces no rellena el CIF estructurado aunque el CIF
+        // o el nombre del cliente esten en el documento. Solo rutea si casa
+        // exactamente uno; con varios (intragrupo), al buzon y sin la regla.
+        const byText = routeByText(
+          ocrResult.rawText,
+          textCandidates.map((c) => ({ clientId: c.id, cif: c.cif, name: c.name })),
+        );
+        if (byText && "clientId" in byText) return byText.clientId;
+        const firmId = candidates[0]?.advisoryFirmId;
+        if (!ruleAllowed || !firmId || (byText != null && "ambiguous" in byText)) return null;
+        const learned = await lookupProviderClient(firmId, otherCif);
+        if (!learned || !candidates.some((c) => c.id === learned)) return null;
+        const chosen = candidates.find((c) => c.id === learned)!;
+        const providerParsed = parseTaxId(otherCif);
+        routedByRule = {
+          field: "auto:ruteo",
+          oldValue: null,
+          // «·» como las demas auto:*: las pantallas ya pintan «viejo → nuevo».
+          // La otra parte: el proveedor en una compra, el cliente en una venta.
+          newValue: `${partyAuditValue(chosen.name, chosen.cif)} · ${invoice.type === "SALE" ? "cliente" : "proveedor"} ${taxIdWithCountry(providerParsed.clean, providerParsed.countryCode)}`,
+        };
+        return learned;
+      };
+      const sideUnreadable = routing.status === "unclassified" && (routing.reason === "no_cif" || routing.reason === "invalid_cif");
       if (routing.status === "routed") {
         resolvedClientId = routing.clientId;
+      } else if (invoice.typeUnconfirmed && routing.reason !== "ambiguous") {
+        routingReason = routing.reason;
+        // «Detectar automaticamente»: el tipo guardado (compra) es solo un
+        // marcador, y que el receptor no enrute no quiere decir nada. Primero
+        // el emisor: si casa, es una venta del cliente (detectInvoiceType la
+        // fija mas abajo). Despues el texto, con todos los candidatos. La
+        // regla del proveedor solo si el emisor no es del grupo: si lo es, es
+        // una venta suya, no una compra a un proveedor.
+        const swapped = routeByCif(byCifCandidates, otherCif, sideCif);
+        if (swapped.status === "routed") {
+          // Con el receptor ilegible, puede ser una factura de A a otra
+          // empresa del grupo cuyo CIF no se relleno: si el texto trae el CIF
+          // de otra candidata, al buzon. Si no, B perdia la compra y quedaba
+          // como venta de A confirmada. Con el CIF de B legible ya va al
+          // buzon por ambiguous.
+          const toOther = sideUnreadable
+            ? routeByText(
+                ocrResult.rawText,
+                candidates.filter((c) => c.id !== swapped.clientId).map((c) => ({ clientId: c.id, cif: c.cif, name: c.name })),
+                { cifOnly: true },
+              )
+            : null;
+          if (toOther) routingReason = "ambiguous";
+          else resolvedClientId = swapped.clientId;
+        } else {
+          resolvedClientId = await byTextAndRule(candidates, sideUnreadable && !otherIsCandidate);
+        }
       } else {
         routingReason = routing.reason;
-        const firmId = candidates[0]?.advisoryFirmId;
-        if (firmId) {
-          const learned = await lookupProviderClient(firmId, otherCif);
-          if (learned && candidates.some((c) => c.id === learned)) {
-            resolvedClientId = learned;
-          }
-        }
-        // 3) Fallback por texto crudo del OCR: Document AI a veces no rellena
-        // el CIF estructurado aunque el CIF/nombre del cliente esté en el
-        // documento. Buscamos el CIF de un candidato en el texto, y si no, su
-        // nombre. Solo rutea si casa exactamente uno (intragrupo → manual).
-        if (!resolvedClientId) {
-          const byText = routeByText(
-            ocrResult.rawText,
-            candidates.map((c) => ({ clientId: c.id, cif: c.cif, name: c.name })),
-          );
-          if (byText) resolvedClientId = byText.clientId;
+        // 1) Match por CIF del cliente. Si no hay CIF legible en su lado (no
+        // se leyo, o no pasa el digito de control), 2) el texto crudo del OCR
+        // y 3) la regla aprendida por proveedor (otra parte). Con un CIF
+        // valido que no casa (o casa con varias) no se adivina: probablemente
+        // es de otro (F-019) y va a «Por clasificar» (F-021).
+        // Con el tipo confirmado, el CIF de la otra parte siempre esta en el
+        // texto: si es una empresa del grupo (factura de A a B), el texto la
+        // encontraria a ella y la factura acabaria en A como compra de A a si
+        // misma. Esa no es candidata.
+        if (sideUnreadable) {
+          const textCandidates = other ? candidates.filter((c) => normalizeProviderNif(c.cif) !== other) : candidates;
+          resolvedClientId = await byTextAndRule(textCandidates, true);
         }
       }
 
@@ -287,6 +347,8 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
         } else {
           invoice.clientId = resolvedClientId; // reasignar al cliente real
           routingReason = null;
+          // Enrutada por la regla del proveedor: que quede el rastro.
+          if (routedByRule) autoAudit.push(routedByRule);
         }
       }
     }
@@ -319,6 +381,7 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     // contradice a los datos que se guardan unas lineas mas abajo, ademas de
     // mandar la factura a "Requiere atencion". Con Document AI el recargo no
     // se lee NUNCA, asi que le pasaba a todas las facturas de un cliente en RE.
+    const readSurcharge = surchargeAuditValue(extracted.vatLines);
     if (clientRecord?.equivalenceSurchargeCustomer) {
       for (const p of proposeSurchargesFromTotal(extracted.vatLines, extracted.totalAmount, extracted.irpfAmount)) {
         extracted.vatLines[p.index].equivalenceSurchargeRate = p.rate;
@@ -371,6 +434,15 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     let finalReceiverCountry = receiverParsed.countryCode;
 
     if (clientRecord) {
+      // Si el OCR leyo en el lado del cliente otra cosa, se sustituye y queda
+      // en la auditoria. Si no leyo nada, rellenarlo no es un cambio.
+      const substituted = clientPartyAudit(
+        invoice.type === "PURCHASE"
+          ? { name: extracted.receiverName, cif: receiverParsed.clean }
+          : { name: extracted.issuerName, cif: issuerParsed.clean },
+        clientRecord,
+      );
+      if (substituted) autoAudit.push({ field: "auto:parteCliente", ...substituted });
       if (invoice.type === "PURCHASE") {
         finalReceiverName    = clientRecord.name;
         finalReceiverCif     = clientRecord.cif;
@@ -475,11 +547,12 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       // Si el OCR dio el importe pero no el %, lo deducimos de las bases en
       // vez de asumir el 15%: al recalcular la cuota mas abajo, un default
       // equivocado sobrescribiria el importe real extraido del documento.
+      // Solo un tipo legal: base / importe a secas daba 12,5 % con una linea
+      // al 0 %, o 6,99 % con una base pequeña.
       const baseParaTipo = vatLines.reduce((acc, l) => acc + l.taxBase, 0);
-      const tipoDeducido =
-        extracted.irpfAmount != null && baseParaTipo > 0
-          ? parseFloat((Math.abs(extracted.irpfAmount / baseParaTipo) * 100).toFixed(2))
-          : null;
+      const tipoDeducido = extracted.irpfAmount != null
+        ? legalRateFor(baseParaTipo, (baseParaTipo < 0 ? -1 : 1) * Math.abs(extracted.irpfAmount))
+        : null;
       retentionRate =
         extracted.irpfRate ?? tipoDeducido ?? RETENTION_DEFAULT_RATE.PROFESSIONAL;
     }
@@ -487,15 +560,44 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
     // Calculamos cuota e importe de la base de retencion solo si hay
     // tipo. La base por defecto es la suma de bases imponibles del IVA.
     const sumBasesAll = vatLines.reduce((s, l) => s + l.taxBase, 0);
-    const retentionBase = retentionType ? sumBasesAll : null;
-    const computedIrpfAmount = retentionType && retentionRate != null
-      // El mismo redondeo que la pantalla (percentOf): con toFixed, 100,30
-      // al 15 % daba 15,04 frente a los 15,05 impresos y la factura quedaba
-      // isValid=false sin ninguna incidencia.
-      ? percentOf(sumBasesAll, retentionRate)
-      : (extracted.irpfAmount ?? null);
-    const finalIrpfRate = retentionRate ?? extracted.irpfRate ?? null;
-    const finalIrpfAmount = computedIrpfAmount;
+    // Si la factura cuadra con el importe leido, se queda ese (F-073); si
+    // no, base × % con el mismo redondeo que la pantalla (percentOf): con
+    // toFixed, 100,30 al 15 % daba 15,04 frente a los 15,05 impresos y la
+    // factura quedaba isValid=false sin ninguna incidencia.
+    const sumVat = vatLines.reduce((s, l) => s + l.vatAmount, 0);
+    const sumSurcharge = vatLines.reduce((s, l) => s + (l.equivalenceSurchargeAmount ?? 0), 0);
+    const { rate: finalIrpfRate, amount: finalIrpfAmount, base: irpfBase } = resolveIrpf({
+      hasRetention: retentionType != null,
+      retentionRate,
+      readRate: extracted.irpfRate ?? null,
+      readAmount: extracted.irpfAmount ?? null,
+      sumBases: sumBasesAll,
+      balancedWith: (irpf) => extracted.totalAmount != null
+        && isInvoiceBalanced({ sumBase: sumBasesAll, sumAmount: sumVat, sumSurcharge, irpf, total: extracted.totalAmount }),
+      taxedBases: vatLines.filter((l) => l.vatRate > 0).reduce((s, l) => s + l.taxBase, 0),
+    });
+    const retentionBase = retentionType ? (irpfBase ?? sumBasesAll) : null;
+    // El % aprendido del tercero no es un tipo legal y es el que se ha
+    // guardado: aunque la factura cuadre, que se vea.
+    const illegalLearnedRate = retentionType != null && retentionRate != null && finalIrpfRate === retentionRate
+      && finalIrpfRate !== (extracted.irpfRate ?? null) && !isLegalRetentionRate(retentionRate);
+    // Solo cuando de verdad se sustituye lo leido: retencion propuesta
+    // (tercero aprendido, persona fisica) o recalculada.
+    const finalIrpf = irpfAuditValue(finalIrpfRate, finalIrpfAmount);
+    if (finalIrpf === printedIrpf) {
+      // Se guarda exactamente lo impreso (un abono con el IRPF en negativo:
+      // auto:signo lo paso a positivo y resolveIrpf le devuelve el signo de
+      // la base): ni auto:signo ni auto:irpf, que se anulaban.
+      const signo = autoAudit.findIndex((e) => e.field === "auto:signo");
+      if (signo >= 0) autoAudit.splice(signo, 1);
+    } else if (finalIrpf !== readIrpf) {
+      // Si ademas se cambio el signo (un abono sin % impreso: −70 → 70 → 7 %
+      // · −70), una sola entrada de lo impreso al final, en vez de dos que
+      // se anulan en parte. Sin mas cambios, auto:signo se queda sola.
+      const signo = autoAudit.findIndex((e) => e.field === "auto:signo");
+      if (signo >= 0) autoAudit.splice(signo, 1);
+      autoAudit.push({ field: "auto:irpf", oldValue: signo >= 0 ? printedIrpf : readIrpf, newValue: finalIrpf });
+    }
 
     // Detect issues (duplicates, low confidence, math mismatch, IVA no-cero
     // en intracomunitarias, etc.). En las "Por clasificar" no tiene sentido
@@ -516,6 +618,22 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
         totalAmount: extracted.totalAmount, irpfAmount: finalIrpfAmount, retentionBase,
       }, ocrResult.rawText, extracted.isCorrective === true);
       if (hint) issues.push({ type: "MANUAL", description: hint, field: "isRectificative" });
+    }
+    if (!isUnclassified && illegalLearnedRate) {
+      issues.push({
+        type: "MANUAL",
+        field: "irpfRate",
+        description: `La retención aprendida del tercero (${String(retentionRate).replace(".", ",")} %) no es un tipo legal: revisa el % de la factura.`,
+      });
+    }
+    // A nombre de otro (F-019): en el lado del cliente se leyo un CIF valido
+    // que no es el suyo. Los datos se sustituyen igual, pero se avisa. Con el
+    // tipo sin confirmar, el lado del cliente es una suposicion: el «Por
+    // confirmar» ya obliga a revisarlo, y el aviso de la pantalla se
+    // recalcula al elegir el tipo.
+    if (!isUnclassified && clientRecord && !typeUnconfirmed) {
+      const foreign = clientPartyIssue(invoice.type, extracted, clientRecord);
+      if (foreign) issues.push(foreign);
     }
     const targetStatus: InvoiceStatus = isUnclassified
       ? "PENDING_ROUTING"
@@ -569,6 +687,10 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
       }
     }
     const totalSurchargeAmount = lineSurcharges.reduce((s, ls) => s + (ls.amount ?? 0), 0);
+    const finalSurcharge = surchargeAuditValue(amounts.lines.map((l, i) => ({
+      ...l, equivalenceSurchargeRate: lineSurcharges[i].rate, equivalenceSurchargeAmount: lineSurcharges[i].amount,
+    })));
+    if (finalSurcharge !== readSurcharge) autoAudit.push({ field: "auto:recargo", oldValue: readSurcharge, newValue: finalSurcharge });
 
     // isValid final: Σ(bases) + Σ(cuotas) + Σ(recargo) - IRPF = Total, con
     // los importes que se guardan (el `isValid` de mas arriba es un
@@ -679,7 +801,7 @@ export async function processInvoice(invoiceId: string, triggeredByUserId: strin
         field: "status",
         oldValue: "UPLOADED",
         newValue: targetStatus,
-      }], tx);
+      }, ...autoAudit.map((e) => ({ invoiceId, userId: triggeredByUserId, ...e }))], tx);
       return true;
     }, OCR_WRITE_TRANSACTION_OPTIONS);
     if (!written) {

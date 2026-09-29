@@ -88,13 +88,16 @@ export type TextRoutingCandidate = { clientId: string; cif: string; name: string
  * aunque el dato esté claramente en el documento). Busca, en cascada:
  *   1) el CIF (normalizado y con dígito de control válido) de un candidato;
  *   2) si no, el nombre del candidato.
- * Solo rutea si EXACTAMENTE un candidato casa; si casan varios (p.ej. factura
- * intragrupo donde aparecen dos empresas) devuelve null y se queda manual.
+ * Solo rutea si EXACTAMENTE un candidato casa. Si casan varios (p.ej. factura
+ * intragrupo donde aparecen dos empresas) devuelve { ambiguous: true }: la
+ * factura se queda manual y tampoco se mira la regla del proveedor, que la
+ * mandaria a la empresa de la ultima clasificacion. null: no casa ninguno.
  */
 export function routeByText(
   rawText: string | null | undefined,
   candidates: TextRoutingCandidate[],
-): { clientId: string; via: "cif" | "name" } | null {
+  options: { cifOnly?: boolean } = {},
+): { clientId: string; via: "cif" | "name" } | { ambiguous: true } | null {
   if (!rawText || candidates.length === 0) return null;
 
   // Texto compacto (sin separadores) para encontrar el CIF aunque el OCR lo
@@ -105,7 +108,8 @@ export function routeByText(
     return cif.length >= 8 && isValidNIF(cif) && compact.includes(cif);
   });
   if (byCif.length === 1) return { clientId: byCif[0].clientId, via: "cif" };
-  if (byCif.length > 1) return null; // varios CIF de candidatos en el texto → ambiguo
+  if (byCif.length > 1) return { ambiguous: true }; // varios CIF de candidatos en el texto
+  if (options.cifOnly) return null;
 
   // Texto normalizado (sin tildes ni puntuación) para buscar el nombre.
   const normText = normalizeBusinessName(rawText);
@@ -114,6 +118,7 @@ export function routeByText(
     return name.length >= 4 && normText.includes(name);
   });
   if (byName.length === 1) return { clientId: byName[0].clientId, via: "name" };
+  if (byName.length > 1) return { ambiguous: true };
   return null;
 }
 

@@ -9,6 +9,7 @@ import { periodLabel } from "@/lib/period";
 import { formatDateEs } from "@/lib/dates";
 import { IssueActions } from "./IssueActions";
 import { isVatLinesIssue } from "@/lib/mathIssues";
+import { IssueStatus, IssueType } from "@prisma/client";
 
 const TYPE_LABELS: Record<string, string> = {
   OCR_FAILED: "Error OCR",
@@ -32,6 +33,12 @@ const STATUS_VARIANT: Record<string, "green" | "slate" | "yellow"> = {
   DISMISSED: "slate",
 };
 
+/** El valor si es uno del enum de Prisma; si no, null. Del propio enum, para
+ *  que un tipo nuevo en el schema no quede fuera del filtro. */
+function enumValue<T extends string>(values: Record<string, T>, value: string | undefined): T | null {
+  return value != null && (Object.values(values) as string[]).includes(value) ? (value as T) : null;
+}
+
 export default async function WorkerIssuesPage({
   searchParams,
 }: {
@@ -42,8 +49,10 @@ export default async function WorkerIssuesPage({
     redirect("/login");
 
   const sp = await searchParams;
-  const filterType = sp.type ?? "ALL";
-  const filterStatus = sp.status ?? "OPEN";
+  // Solo valores del enum: uno inventado en la URL llegaba a Prisma y daba un
+  // 500 (y un aviso por webhook con lo que se hubiera escrito ahi).
+  const filterType: IssueType | "ALL" = enumValue(IssueType, sp.type) ?? "ALL";
+  const filterStatus: IssueStatus | "ALL" = sp.status === "ALL" ? "ALL" : enumValue(IssueStatus, sp.status) ?? "OPEN";
 
   // ADMIN ve issues de toda su firma; WORKER solo de sus clientes asignados.
   let clientIds: string[];
@@ -64,8 +73,8 @@ export default async function WorkerIssuesPage({
   }
 
   const where = {
-    ...(filterStatus !== "ALL" ? { status: filterStatus as "OPEN" | "RESOLVED" | "DISMISSED" } : {}),
-    ...(filterType !== "ALL" ? { type: filterType as "OCR_FAILED" | "LOW_CONFIDENCE" | "POSSIBLE_DUPLICATE" | "MATH_MISMATCH" | "MANUAL" } : {}),
+    ...(filterStatus !== "ALL" ? { status: filterStatus } : {}),
+    ...(filterType !== "ALL" ? { type: filterType } : {}),
     invoice: { clientId: { in: clientIds } },
   };
 

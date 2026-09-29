@@ -9,7 +9,9 @@ Los secretos van en Coolify (Environment Variables), nunca en el repo.
 - **Port:** `3000`.
 - **Connect To Predefined Network: ON** — para que la app resuelva por nombre
   a Postgres y (cuando se migre) a Garage en la red interna de Docker.
-- **Health check** (opcional): path `/login`, puerto 3000.
+- **Health check:** path `/api/health/live`, puerto 3000, con un *start
+  period* generoso (60–120 s: el contenedor corre `prisma migrate deploy`
+  antes de `next start`). Ver §8: no uses `/api/health` aquí.
 
 ## 2. Variables de entorno
 
@@ -26,7 +28,8 @@ arrancar:
   para que `garage` resuelva en la red interna.
 
 Opcionales: `RESEND_API_KEY` + `EMAIL_FROM` (emails; sin clave son no-op),
-Document AI (`GOOGLE_*`, fallback de OCR), `CRON_SECRET` (ver §5).
+Document AI (`GOOGLE_*`, fallback de OCR), `CRON_SECRET` (ver §5),
+`ALERT_WEBHOOK_URL` (avisos de errores, ver §8).
 
 ## 3. Migraciones
 
@@ -140,3 +143,76 @@ interna ("Connect To Predefined Network: ON" para que `garage` resuelva).
 - Dominio + HTTPS (Coolify + Let's Encrypt) cuando se decida el nombre →
   actualizar `NEXTAUTH_URL`.
 - Backup offsite del bucket de facturas (Garage).
+
+## 8. Salud del servicio y alertas
+
+### `/api/health`
+
+`GET /api/health` comprueba Postgres (`SELECT 1`) y Garage (`HeadBucket`),
+cada uno con un timeout de 2 s, y responde:
+
+- **200** `{"db":true,"storage":true}` si los dos responden;
+- **503** con el que falle a `false` en cuanto uno no responda o tarde más.
+
+No pide sesión y no dice nada interno (ni hosts ni mensajes de error; el
+detalle va al log del contenedor con el prefijo `[health]`).
+
+- **En Coolify, `/api/health/live`** (§1): solo el proceso y Postgres
+  (`{"db":true}`). Con el health check activo, Traefik deja de enrutar a un
+  contenedor *unhealthy*: todo el dominio da 404, `/login` incluido, y un
+  Redeploy que no pasa el health check se revierte. Por eso Coolify no mira
+  Garage: una caída o lentitud de Garage (compartido entre dev y prod en el
+  mismo servidor) tumbaría la app entera, también las pantallas que no lo
+  usan. Antes era `/login`, que responde 200 aunque la BD esté caída.
+- **Monitor externo, `/api/health`** (Uptime Kuma, UptimeRobot, Better
+  Stack…): el completo, BD y Garage. Un chequeo HTTP cada 1–5 min a
+  `https://<dominio>/api/health` que avise si no es 200. Avisa de Garage sin
+  sacar la app de Traefik, y es lo único que avisa si se cae el servidor
+  entero, porque entonces Coolify tampoco puede avisar.
+
+### Errores del servidor
+
+[`src/instrumentation.ts`](src/instrumentation.ts) (`onRequestError`) escribe
+cada error del servidor (páginas, route handlers, server actions) como una
+línea JSON en el log: `level`, `time`, `path` (sin la query), `method`,
+`routePath`, `routeType`, `digest`, `name` y `message`. El mensaje se limpia
+(lo entrecomillado, correos, NIF/CIF/NIE, IBAN, teléfonos y números largos) y
+no se guardan cabeceras ni cookies. El `digest` es el que ve el usuario en la
+pantalla de error: con él se encuentra la línea en el log.
+
+> La limpieza protege lo que sale **fuera** (el webhook). El log del
+> contenedor no queda limpio: Next escribe además el error completo con
+> `console.error`, con los datos que lleve. Trata el log como dato personal
+> (acceso restringido, retención limitada).
+
+- **`ALERT_WEBHOOK_URL`** (opcional): si está, cada error se manda también por
+  POST a esa URL (webhook entrante de Slack, Discord o Mattermost), como mucho
+  10 en cualquier ventana de 5 minutos por proceso; los que se callan se
+  cuentan en el siguiente aviso. El JSON lleva `text` (Slack, Mattermost),
+  `content` (Discord), `allowed_mentions` vacío y los campos de arriba. El
+  aviso sale sin esperar respuesta, así que no retrasa la página de error.
+- **Servicio de errores (GlitchTip, Sentry…):** por decidir. No aceptan este
+  JSON: se enganchan con su propio protocolo (su SDK o su endpoint de
+  ingesta) dentro de `onRequestError`, no con `ALERT_WEBHOOK_URL`.
+
+### Alertas que conviene tener
+
+| Alerta | Umbral orientativo | Cómo |
+|---|---|---|
+| Facturas en «Error OCR» | más de 5 en una hora | consulta de abajo, desde el monitor o una Scheduled Task |
+| Facturas atascadas analizándose | alguna más de 15 min | consulta de abajo; si pasa a menudo, mira que `retry-stuck` (§5) corre |
+| Fallos de correo | cualquiera | líneas `[NOTIFY]` en el log y el panel de Resend |
+| Disco del servidor | por encima del 80 % | métricas del servidor en Coolify o Hetzner (Postgres y Garage comparten disco) |
+
+Consultas de solo lectura:
+
+```sql
+-- Error OCR en la última hora
+SELECT count(*) FROM "Invoice"
+WHERE status = 'OCR_ERROR' AND "updatedAt" > now() - interval '1 hour';
+
+-- Atascadas: subidas o analizándose desde hace más de 15 min
+SELECT count(*) FROM "Invoice"
+WHERE status IN ('UPLOADED', 'ANALYZING') AND "updatedAt" < now() - interval '15 minutes';
+```
+

@@ -28,7 +28,7 @@ async function stuck(status: "ANALYZING" | "UPLOADED", ocrAttempts: number, minu
 
 beforeEach(async () => {
   w = await makeFirm("A");
-  fakeS3().put("k-xml", facturaeXml({ buyerCif: w.client.cif }));
+  fakeS3().put("k-xml", facturaeXml({ buyerCif: w.client.cif, buyerName: w.client.name }));
 });
 
 const inv = () => prisma.invoice.findUniqueOrThrow({ where: { id } });

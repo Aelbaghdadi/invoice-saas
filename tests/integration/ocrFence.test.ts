@@ -14,7 +14,7 @@ let id: string;
 
 beforeEach(async () => {
   w = await makeFirm("A");
-  fakeS3().put("k-xml", facturaeXml({ buyerCif: w.client.cif }));
+  fakeS3().put("k-xml", facturaeXml({ buyerCif: w.client.cif, buyerName: w.client.name }));
   ({ id } = await makeInvoice(w.client, {
     filename: "f.xml", storageKey: "k-xml", fileType: "application/xml", status: "UPLOADED",
     invoiceNumber: null, invoiceDate: null, issuerName: null, issuerCif: null,
@@ -53,7 +53,7 @@ describe("valla del OCR (ocrAttempts)", () => {
   it("rechazada mientras analizaba: sigue rechazada, sin nada del OCR", async () => {
     // Una factura que SI produce incidencias (100 al 10 % con cuota 21): si
     // no, «sin incidencias» no probaria nada de la valla.
-    fakeS3().put("k-xml", facturaeXml({ buyerCif: w.client.cif, taxRate: "10.00" }));
+    fakeS3().put("k-xml", facturaeXml({ buyerCif: w.client.cif, buyerName: w.client.name, taxRate: "10.00" }));
     fakeS3().setMode("hold");
     const run = inFlight(processInvoice(id, w.worker.id));
     // Reclamada y descargando el fichero: se rechaza en ese momento.
@@ -70,6 +70,32 @@ describe("valla del OCR (ocrAttempts)", () => {
     expect(s.extractions).toBe(0);
     expect(s.history).toEqual(["UPLOADED->ANALYZING"]);
     expect(s.audit).toEqual([]);
+  });
+
+  describe("con una entrada auto:* (PR #11, punto 13)", () => {
+    // Otro receptor en el XML: el OCR pone el cliente y lo deja auditado.
+    const otherBuyer = () => fakeS3().put("k-xml", facturaeXml({ buyerCif: "B87654321", buyerName: "Otra Empresa SL" }));
+
+    it("sin cruce: estado y auto:parteCliente", async () => {
+      otherBuyer();
+      await processInvoice(id, w.worker.id);
+      const s = await state();
+      expect(s.audit).toEqual([
+        `status:UPLOADED->${s.status}`,
+        `auto:parteCliente:Otra Empresa SL (B87654321)->${w.client.name} (${w.client.cif})`,
+      ]);
+    });
+
+    it("rechazada mientras analizaba: ninguna entrada, tampoco las auto:*", async () => {
+      otherBuyer();
+      fakeS3().setMode("hold");
+      const run = inFlight(processInvoice(id, w.worker.id));
+      await vi.waitFor(() => expect(fakeS3().heldGets()).toBe(1));
+      await prisma.invoice.updateMany({ where: { id }, data: { status: "REJECTED", rejectionReason: "Ilegible" } });
+      fakeS3().releaseGets();
+      await run;
+      expect((await state()).audit).toEqual([]);
+    });
   });
 
   it("el error de una ejecución que ya no es la dueña no pasa a OCR_ERROR una rechazada", async () => {
@@ -123,7 +149,7 @@ describe("valla del OCR (ocrAttempts)", () => {
     await vi.waitFor(() => expect(fakeS3().heldGets()).toBe(2));
 
     // Termina la vieja (lee «F-VIEJA») con la nueva aun en ANALYZING.
-    fakeS3().put("k-xml", facturaeXml({ buyerCif: w.client.cif, number: "F-VIEJA" }));
+    fakeS3().put("k-xml", facturaeXml({ buyerCif: w.client.cif, buyerName: w.client.name, number: "F-VIEJA" }));
     fakeS3().releaseGets({ count: 1 });
     await vieja;
     const trasLaVieja = await state();
@@ -134,7 +160,7 @@ describe("valla del OCR (ocrAttempts)", () => {
     expect(trasLaVieja.audit).toEqual([]);
 
     // Termina la nueva (lee «F-NUEVA»): es la unica que escribe.
-    fakeS3().put("k-xml", facturaeXml({ buyerCif: w.client.cif, number: "F-NUEVA" }));
+    fakeS3().put("k-xml", facturaeXml({ buyerCif: w.client.cif, buyerName: w.client.name, number: "F-NUEVA" }));
     fakeS3().releaseGets();
     await nueva;
     const s = await state();
@@ -145,7 +171,7 @@ describe("valla del OCR (ocrAttempts)", () => {
   });
 
   it("un dato del OCR que desborda la columna (P2020) acaba en ERR-OCR-002", async () => {
-    fakeS3().put("k-xml", facturaeXml({ buyerCif: w.client.cif, taxRate: "1000.00" }));
+    fakeS3().put("k-xml", facturaeXml({ buyerCif: w.client.cif, buyerName: w.client.name, taxRate: "1000.00" }));
     await processInvoice(id, w.worker.id);
     const inv = await prisma.invoice.findUniqueOrThrow({ where: { id } });
     expect(inv.status).toBe("OCR_ERROR");

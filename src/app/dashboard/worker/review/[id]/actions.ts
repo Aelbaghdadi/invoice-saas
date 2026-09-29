@@ -5,7 +5,7 @@ import { createHash } from "crypto";
 import { splitStorageKey } from "@/lib/splitStorageKey";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { redirect } from "next/navigation";
+import { redirect, RedirectType } from "next/navigation";
 import { revalidatePath, refresh } from "next/cache";
 import { notifyClientInvoiceValidated } from "@/lib/email";
 import {
@@ -18,6 +18,7 @@ import {
   type QueueFilter,
 } from "@/lib/reviewQueue";
 import { appendAuditLogs } from "@/lib/auditLog";
+import { auditValue } from "@/lib/auditValue";
 import { canAccessClient } from "@/lib/accessibleClients";
 import { parseTaxId, isPersonaFisica, operationTypeLabel, OPERATION_TYPE_OPTIONS, OPERATION_TYPE_LABEL, type OperationTypeName } from "@/lib/validators";
 import { learnAccountsForDirection, normalizePlanAccount } from "@/lib/accountingAccount";
@@ -54,6 +55,7 @@ import { Prisma, type Invoice, type RejectionCategory } from "@prisma/client";
 import { EXPORT_TRANSACTION_OPTIONS } from "@/lib/exportBatch";
 import { closedPeriodError, conditionalWriteError, invoicePeriod } from "@/lib/reviewGuards";
 import { notifyRejection, rejectInvoiceCore } from "@/lib/invoiceRejection";
+import { clientPartyWarning } from "@/lib/clientParty";
 
 /** Un posible duplicado al validar: otra factura ya validada con el mismo
  *  numero y emisor («validated»), o una incidencia de posible duplicado
@@ -288,6 +290,12 @@ async function parseAndSave(
   // Asi el gestor ni siquiera con devtools puede sustituir los datos
   // del Client por otros distintos.
   const isPurchase = effectiveType === "PURCHASE";
+  // Lo que leyo el OCR, para la incidencia de otra parte (F-019).
+  const lastRead = await prisma.invoiceExtraction.findFirst({
+    where: { invoiceId }, orderBy: { createdAt: "desc" },
+    select: { issuerName: true, issuerCif: true, receiverName: true, receiverCif: true },
+  });
+  const clientPartyStillApplies = lastRead != null && clientPartyWarning(effectiveType, lastRead, invoice.client) != null;
   const finalIssuerName      = isPurchase ? (data.issuerName || null)    : invoice.client.name;
   const finalIssuerCif       = isPurchase ? (issuerParsed.clean || null) : invoice.client.cif;
   const finalIssuerCountry   = isPurchase ? issuerParsed.countryCode     : null;
@@ -450,19 +458,33 @@ async function parseAndSave(
   if (options.reopen && invoice.rejectionCategory) {
     auditEntries.push({ field: "rejectionCategory", oldValue: invoice.rejectionCategory, newValue: null });
   }
+  // Todo lo que se guarda deja rastro (F-024): antes la fecha, las cuentas,
+  // el periodo contable, la retencion, los paises, la serie rectificada, el
+  // art. 80.Tres y el origen de bienes/servicios se cambiaban sin dejarlo.
+  // Normalizado con auditValue: sin cambios falsos por el formato.
   const trackedFields = [
     "type",
-    "issuerName","issuerCif","receiverName","receiverCif",
-    "invoiceNumber","taxBase","vatRate","vatAmount","irpfRate","irpfAmount","totalAmount","currency",
-    "operationType","intracomGoodsType",
-    "isRectificative","rectifiedInvoiceNumber","rectificativeType",
+    "issuerName","issuerCif","issuerCountry","receiverName","receiverCif","receiverCountry",
+    "invoiceNumber","invoiceDate","taxBase","vatRate","vatAmount","irpfRate","irpfAmount","totalAmount","currency",
+    "retentionType","retentionBase",
+    "accountingPeriodMonth","accountingPeriodYear","supplierAccount","expenseAccount",
+    "operationType","intracomGoodsType","intracomGoodsSource",
+    "isRectificative","rectifiedInvoiceSeries","rectifiedInvoiceNumber","rectificativeType","art80Tres",
   ] as const;
 
+  // El periodo contable, por su valor efectivo: sin el, cuenta el del lote.
+  // processInvoice no lo rellena y el formulario manda siempre el del lote,
+  // asi que el primer guardado auditaba «Mes contable — → 9» en todas.
+  // Y el pais «ES» es lo mismo que sin pais: un NIF leido con prefijo ES
+  // guarda "ES", la pantalla lo ensena sin prefijo y al guardar queda null.
+  const effective = (source: typeof invoice | typeof newData, field: (typeof trackedFields)[number]) =>
+    field === "accountingPeriodMonth" ? source.accountingPeriodMonth ?? invoice.periodMonth
+      : field === "accountingPeriodYear" ? source.accountingPeriodYear ?? invoice.periodYear
+        : (field === "issuerCountry" || field === "receiverCountry") ? (source[field]?.trim().toUpperCase() === "ES" ? null : source[field])
+          : source[field];
   for (const field of trackedFields) {
-    const oldVal = invoice[field] !== null && invoice[field] !== undefined
-      ? String(invoice[field]) : null;
-    const newVal = newData[field] !== null && newData[field] !== undefined
-      ? String(newData[field]) : null;
+    const oldVal = auditValue(effective(invoice, field));
+    const newVal = auditValue(effective(newData, field));
     if (oldVal !== newVal) {
       auditEntries.push({ field, oldValue: oldVal, newValue: newVal });
     }
@@ -539,7 +561,10 @@ async function parseAndSave(
     || normalizeInvoiceNumber(newData.invoiceNumber) !== normalizeInvoiceNumber(invoice.invoiceNumber)
     || (newData.type !== "SALE" && newData.issuerCif !== invoice.issuerCif)
     || yearOf(newData.invoiceDate) !== yearOf(invoice.invoiceDate);
-  const checkValidated = firstValidation || (validate && duplicateKeyChanged);
+  // enforceRules y no validate: guardar una VALIDATED/EXPORTED (el «Guardar»
+  // del aviso de cambios sin guardar, o una llamada directa) tambien mira las
+  // validadas si cambia la clave; si no, se colaba un duplicado en el Excel.
+  const checkValidated = firstValidation || (enforceRules && duplicateKeyChanged);
   //
   // confirmDuplicate lleva las claves de lo que el gestor vio y confirmo: si
   // con el dialogo abierto aparece otro (otro gestor valida una tercera
@@ -714,6 +739,16 @@ async function parseAndSave(
           data: { status: "RESOLVED", resolvedBy: userId, resolvedAt: new Date() },
         });
       }
+      // Factura a nombre de otro (F-019): si con el tipo que se guarda lo
+      // leido en el lado del cliente ya es el cliente (se corrigio el tipo),
+      // la incidencia se cierra. Si no, seguia abierta, la factura seguia
+      // «Con incidencias» y la revision no enseñaba nada.
+      if (!clientPartyStillApplies) {
+        await tx.invoiceIssue.updateMany({
+          where: { invoiceId, field: "clientParty", status: "OPEN" },
+          data: { status: "RESOLVED", resolvedBy: userId, resolvedAt: new Date() },
+        });
+      }
       if (auditEntries.length > 0) {
         await appendAuditLogs(
           auditEntries.map((e) => ({
@@ -880,6 +915,7 @@ export async function validateInvoice(
   const fallbackNext = formData.get("nextId") as string | null;
   const bucket = parseBucket(formData.get("bucket"));
   const back = parseBackHref(formData.get("back"));
+  const replaceHistory = formData.get("replaceHistory") === "1";
   const expectedUpdatedAt = formData.get("updatedAt") as string | null;
   // Solo el boton "Reabrir y validar" lo manda; Enter nunca.
   const reopen = formData.get("reopen") === "1";
@@ -940,7 +976,7 @@ export async function validateInvoice(
   revalidatePath("/dashboard/worker/invoices");
   revalidatePath("/dashboard/worker/batch", "layout");
   revalidatePath("/dashboard/admin/batch", "layout");
-  goToNext(nextId, bucket, back);
+  goToNext(nextId, bucket, back, replaceHistory);
 }
 
 /**
@@ -965,10 +1001,18 @@ async function resolveNextId(
 
 /** A la siguiente pendiente, conservando la cola y el listado de origen; si
  *  no queda ninguna, de vuelta a ese listado. */
-function goToNext(nextId: string | null, bucket: QueueBucket, back: string | null): never {
+/**
+ * Salta a la siguiente. Con `replace` (la pantalla tiene puesta la entrada
+ * «centinela» del aviso de cambios sin guardar, F-047) sustituye la entrada
+ * actual del historial en vez de añadir otra: si no, quedaba una pulsacion
+ * de Atras muerta en cada factura corregida. En una server action, redirect
+ * es push por defecto.
+ */
+function goToNext(nextId: string | null, bucket: QueueBucket, back: string | null, replace = false): never {
   const suffix = queueToSearchParams({ bucket, back }).toString();
-  if (nextId) redirect(`/dashboard/worker/review/${nextId}${suffix ? `?${suffix}` : ""}`);
-  redirect(back ?? "/dashboard/worker/invoices");
+  const type = replace ? RedirectType.replace : RedirectType.push;
+  if (nextId) redirect(`/dashboard/worker/review/${nextId}${suffix ? `?${suffix}` : ""}`, type);
+  redirect(back ?? "/dashboard/worker/invoices", type);
 }
 
 /**
@@ -990,6 +1034,7 @@ export async function deferInvoice(
   const fallbackNext = formData.get("nextId") as string | null;
   const bucket = parseBucket(formData.get("bucket"));
   const back = parseBackHref(formData.get("back"));
+  const replaceHistory = formData.get("replaceHistory") === "1";
 
   const invoice = await prisma.invoice.findUnique({ where: { id } });
   if (!invoice) return { error: "Factura no encontrada" };
@@ -1020,7 +1065,7 @@ export async function deferInvoice(
   revalidatePath("/dashboard/worker/invoices");
   revalidatePath("/dashboard/worker/batch", "layout");
   revalidatePath("/dashboard/admin/batch", "layout");
-  goToNext(nextId, bucket, back);
+  goToNext(nextId, bucket, back, replaceHistory);
 }
 
 /**
@@ -1102,6 +1147,7 @@ export async function rejectInvoice(
   const fallbackNext = formData.get("nextId") as string | null;
   const bucket = parseBucket(formData.get("bucket"));
   const back = parseBackHref(formData.get("back"));
+  const replaceHistory = formData.get("replaceHistory") === "1";
 
   if (!reason) {
     return { error: "Debes indicar el motivo del rechazo." };
@@ -1133,7 +1179,7 @@ export async function rejectInvoice(
   revalidatePath("/dashboard/worker/invoices");
   revalidatePath("/dashboard/worker/batch", "layout");
   revalidatePath("/dashboard/admin/batch", "layout");
-  goToNext(nextId, bucket, back);
+  goToNext(nextId, bucket, back, replaceHistory);
 }
 
 // ── División multi-ticket ──────────────────────────────────────────────────
@@ -1311,6 +1357,7 @@ export async function splitInvoice(
   tickets: SplitTicket[],
   bucket: string,
   back?: string | null,
+  replaceHistory = false,
 ): Promise<{ error?: string }> {
   const session = await auth();
   if (!session?.user || !["ADMIN", "WORKER"].includes(session.user.role)) {
@@ -1398,7 +1445,7 @@ export async function splitInvoice(
   revalidatePath("/dashboard/worker/batch", "layout");
   revalidatePath("/dashboard/admin/batch", "layout");
 
-  goToNext(nextId, parsedBucket, parseBackHref(back));
+  goToNext(nextId, parsedBucket, parseBackHref(back), replaceHistory);
 }
 
 // ── División PDF multi-factura ────────────────────────────────────────────────
@@ -1422,6 +1469,7 @@ export async function splitPdfInvoice(
   parts: PdfSplitPart[],
   bucket: string,
   back?: string | null,
+  replaceHistory = false,
 ): Promise<{ error?: string }> {
   const session = await auth();
   if (!session?.user || !["ADMIN", "WORKER"].includes(session.user.role)) {
@@ -1548,7 +1596,7 @@ export async function splitPdfInvoice(
   revalidatePath("/dashboard/worker/batch", "layout");
   revalidatePath("/dashboard/admin/batch", "layout");
 
-  goToNext(nextId, parsedBucket, parseBackHref(back));
+  goToNext(nextId, parsedBucket, parseBackHref(back), replaceHistory);
 }
 
 function extractFields(fd: FormData): FieldData {

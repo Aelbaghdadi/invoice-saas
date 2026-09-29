@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseTestDatabaseUrl, testDatabaseUrlProblem } from "../integration/setup/guard";
+import { parseTestDatabaseUrl, testDatabaseUrlProblem } from "../shared/testDatabase";
 
 describe("guarda de la base de datos de los tests de integración", () => {
   it.each([
@@ -9,6 +9,11 @@ describe("guarda de la base de datos de los tests de integración", () => {
     "postgresql://u:p@db.interno:5432/facturocr_test?sslmode=require",
   ])("acepta %s (nombre de pruebas)", (url) => {
     expect(testDatabaseUrlProblem(url)).toBeNull();
+  });
+
+  it("el e2e usa la misma guarda con su propia variable", () => {
+    expect(parseTestDatabaseUrl(undefined, "E2E_DATABASE_URL")).toMatchObject({ ok: false, problem: expect.stringMatching(/^Falta E2E_DATABASE_URL/) });
+    expect(parseTestDatabaseUrl("postgresql://u:p@localhost:5432/postgres", "E2E_DATABASE_URL")).toMatchObject({ ok: false, problem: expect.stringMatching(/^E2E_DATABASE_URL apunta/) });
   });
 
   it("sin TEST_DATABASE_URL no arranca (nunca cae a DATABASE_URL)", () => {

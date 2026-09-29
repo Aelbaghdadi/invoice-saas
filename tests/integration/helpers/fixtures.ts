@@ -1,15 +1,15 @@
 /** Ficheros de prueba. */
 
 /** Facturae minima: el parser real la lee sin OCR (camino xml_parse). */
-export function facturaeXml(opts: { number?: string; base?: string; taxRate?: string; taxAmount?: string; total?: string; buyerCif?: string } = {}) {
-  const { number = "F-XML-1", base = "100.00", taxRate = "21.00", taxAmount = "21.00", total = "121.00", buyerCif = "B00000002" } = opts;
+export function facturaeXml(opts: { number?: string; base?: string; taxRate?: string; taxAmount?: string; total?: string; buyerCif?: string; buyerName?: string } = {}) {
+  const { number = "F-XML-1", base = "100.00", taxRate = "21.00", taxAmount = "21.00", total = "121.00", buyerCif = "B00000002", buyerName = "Cliente Prueba SL" } = opts;
   return `<?xml version="1.0" encoding="UTF-8"?>
 <fe:Facturae xmlns:fe="http://www.facturae.es/Facturae/2014/v3.2.1/Facturae">
   <Parties>
     <SellerParty><TaxIdentification><TaxIdentificationNumber>B12345674</TaxIdentificationNumber></TaxIdentification>
       <LegalEntity><CorporateName>Proveedor SL</CorporateName></LegalEntity></SellerParty>
     <BuyerParty><TaxIdentification><TaxIdentificationNumber>${buyerCif}</TaxIdentificationNumber></TaxIdentification>
-      <LegalEntity><CorporateName>Cliente Prueba SL</CorporateName></LegalEntity></BuyerParty>
+      <LegalEntity><CorporateName>${buyerName}</CorporateName></LegalEntity></BuyerParty>
   </Parties>
   <Invoices><Invoice>
     <InvoiceHeader><InvoiceNumber>${number}</InvoiceNumber></InvoiceHeader>

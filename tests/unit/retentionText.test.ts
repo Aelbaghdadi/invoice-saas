@@ -8,6 +8,11 @@ describe("textMentionsRetention", () => {
     expect(textMentionsRetention("RETENCION 7%")).toBe(true);
     expect(textMentionsRetention("Total retenido: 45,00")).toBe(true);
     expect(textMentionsRetention("irpf")).toBe(true);
+    expect(textMentionsRetention("Base 1000,00 Ret. 7% -70,00")).toBe(true);
+    expect(textMentionsRetention("Ret. (15%): -150,00")).toBe(true);
+    expect(textMentionsRetention("Ret. −15 %")).toBe(true);
+    // Otras «ret.» sin porcentaje no cuentan.
+    expect(textMentionsRetention("Ref. pedido 123, ret. en almacén")).toBe(false);
   });
 
   it("no detecta una factura normal", () => {
@@ -40,6 +45,37 @@ describe("familia de cuenta segun el sentido", () => {
   it("vacio nunca casa (no sugerimos nada)", () => {
     expect(partyAccountMatchesType("", "SALE")).toBe(false);
     expect(resultAccountMatchesType(null, "PURCHASE")).toBe(false);
+  });
+});
+
+describe("textMentionsRetention — protección de datos (F-073)", () => {
+  it("el pie de la LOPD no es una retención de IRPF", () => {
+    const lopd = "De conformidad con el RGPD, le informamos de que sus datos se conservarán durante los plazos de retención " +
+      "legalmente establecidos. La retención de los datos se limitará al tiempo necesario. Política de retención: " +
+      "consulte la retención de la información en nuestra web. Conservación de los datos: 5 años.";
+    expect(textMentionsRetention(`Base imponible 100 IVA 21% Total 121\n${lopd}`)).toBe(false);
+  });
+
+  it("más redacciones del pie de protección de datos", () => {
+    for (const phrase of [
+      "la retención de su información", "la retención de tu información", "la retención de esta información",
+      "el plazo legal de retención", "los plazos legales de retención", "sus datos serán retenidos",
+      "plazo de conservación y retención", "el periodo máximo de retención",
+      "Sus datos personales serán retenidos durante el tiempo necesario",
+      "Los datos personales proporcionados serán retenidos", "La información será retenida",
+    ]) {
+      expect(textMentionsRetention(`Base 100 IVA 21 Total 121. ${phrase}.`), phrase).toBe(false);
+    }
+  });
+
+  it("«Datos …» seguido de «Retenido»: es una retención de verdad", () => {
+    expect(textMentionsRetention("Datos bancarios\nRetenido 15%: 150,00")).toBe(true);
+    expect(textMentionsRetention("Datos fiscales Retenido: 150,00")).toBe(true);
+  });
+
+  it("con el pie de la LOPD, una retención de verdad se sigue viendo", () => {
+    expect(textMentionsRetention("Retención IRPF 15%: -150,00\nLa retención de los datos se limitará al tiempo necesario.")).toBe(true);
+    expect(textMentionsRetention("Retención 7%: -70,00\nSus datos serán retenidos durante el plazo legal de retención.")).toBe(true);
   });
 });
 

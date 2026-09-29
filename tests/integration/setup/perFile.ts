@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, vi } from "vitest";
-import { requireTestDatabase } from "./guard";
+import { requireTestDatabase } from "../../shared/testDatabase";
 import { startFakeS3 } from "../helpers/fakeS3";
 
 // Antes de importar nada de la app: src/lib/prisma lee DATABASE_URL al
@@ -35,8 +35,10 @@ vi.mock("next/cache", () => ({
   updateTag: () => {},
 }));
 vi.mock("next/navigation", () => ({
-  redirect: (url: string) => {
-    throw Object.assign(new Error("NEXT_REDIRECT"), { digest: `NEXT_REDIRECT;replace;${url};307;`, url });
+  RedirectType: { push: "push", replace: "replace" },
+  // Como el real en una server action: push salvo que se pida replace.
+  redirect: (url: string, type: "push" | "replace" = "push") => {
+    throw Object.assign(new Error("NEXT_REDIRECT"), { digest: `NEXT_REDIRECT;${type};${url};307;`, url, redirectType: type });
   },
   notFound: () => {
     throw Object.assign(new Error("NEXT_NOT_FOUND"), { digest: "NEXT_HTTP_ERROR_FALLBACK;404" });

@@ -177,4 +177,9 @@ describe("auditFieldLabelInline (Actividad reciente del panel)", () => {
     expect(auditFieldLabelInline("vatRate")).toBe("% IVA");
     expect(auditFieldLabelInline("campoRaro")).toBe("campoRaro");
   });
+
+  it("sin «(automático)»: la frase ya empieza por «Automático (lanzado por …)»", () => {
+    expect(auditFieldLabelInline("auto:recargo")).toBe("recargo propuesto");
+    expect(auditFieldLabelInline("auto:irpf")).toBe("retención recalculada");
+  });
 });

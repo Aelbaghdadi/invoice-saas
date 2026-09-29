@@ -466,6 +466,26 @@ describe("«Por clasificar»: al clasificar se miran también el cuadre y el des
     expect(after.vatLines.map((l) => [Number(l.equivalenceSurchargeRate), Number(l.equivalenceSurchargeAmount)])).toEqual([[5.2, 5.2]]);
   });
 
+  it("auto:* al clasificar: recargo propuesto y parte del cliente sustituida (PR #11, punto 9)", async () => {
+    await prisma.client.update({ where: { id: w.client.id }, data: { equivalenceSurchargeCustomer: true } });
+    const inv = await routed([[100, 21, 21]], 126.2);
+    await prisma.invoice.update({ where: { id: inv }, data: { receiverName: "Otra Empresa SL", receiverCif: "B87654321" } });
+    await classifyInvoice(inv, w.client.id);
+    const auto = (await prisma.auditLog.findMany({ where: { invoiceId: inv, field: { startsWith: "auto:" } }, orderBy: { field: "asc" } }))
+      .map((e) => [e.field, e.oldValue, e.newValue, e.userId]);
+    expect(auto).toEqual([
+      ["auto:parteCliente", "Otra Empresa SL (B87654321)", `${w.client.name} (${w.client.cif})`, w.worker.id],
+      ["auto:recargo", null, "21%: 5.2% 5.2", w.worker.id],
+    ]);
+  });
+
+  it("al clasificar con el CIF del cliente leído: sin auto:parteCliente", async () => {
+    const inv = await routed([[100, 21, 21]], 121);
+    await prisma.invoice.update({ where: { id: inv }, data: { receiverName: w.client.name.toUpperCase(), receiverCif: w.client.cif } });
+    await classifyInvoice(inv, w.client.id);
+    expect(await prisma.auditLog.count({ where: { invoiceId: inv, field: { startsWith: "auto:" } } })).toBe(0);
+  });
+
   it("dos clasificaciones a la vez: solo una escribe incidencias, historial y auditoría", async () => {
     const inv = await routed([[100, 21, 21]], 121.01);
     const results = await Promise.all([classifyInvoice(inv, w.client.id), classifyInvoice(inv, w.client.id)]);
@@ -1071,6 +1091,17 @@ describe("al validar, confirmación si ya hay otra validada con el mismo número
       const r = await validateInvoice(null, await form({ invoiceNumber: "F-2026-001", invoiceDate: "2026-01-10" }));
       expect(r?.duplicateOf?.map((d) => d.id)).toEqual([del2026.id]);
       expect((await row()).invoiceDate?.toISOString().slice(0, 10)).toBe("2025-12-20");
+    });
+
+    it("guardar (sin validar) una validada con el número de otra validada: { error, duplicateOf } y no escribe (PR #11, punto 1)", async () => {
+      const original = await otra("VALIDATED");
+      await prisma.invoice.update({ where: { id }, data: { status: "VALIDATED", invoiceNumber: "F-OTRO", issuerCif: "B12345674" } });
+      const r = await saveInvoiceFields(null, await form({ invoiceNumber: "F-2026-001" }));
+      expect(r?.duplicateOf?.map((d) => d.id)).toEqual([original.id]);
+      expect((await row()).invoiceNumber).toBe("F-OTRO");
+      // Una pendiente se sigue guardando sin preguntar: el aviso es al validar.
+      await prisma.invoice.update({ where: { id }, data: { status: "PENDING_REVIEW" } });
+      expect((await save({ invoiceNumber: "F-2026-001" })).error).toBeNull();
     });
 
     it("cambiando el número a uno ya validado: pregunta y no guarda sin confirmar", async () => {

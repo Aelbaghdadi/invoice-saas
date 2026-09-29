@@ -6,7 +6,10 @@ const globalForPrisma = globalThis as unknown as {
 };
 
 function createPrismaClient() {
-  const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL });
+  // Sin limite, con la BD colgada (o el pool lleno de consultas colgadas)
+  // cada peticion esperaba una conexion para siempre. pg aplica este tiempo
+  // tanto a abrir la conexion como a esperar turno en la cola del pool.
+  const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL, connectionTimeoutMillis: 10_000 });
   return new PrismaClient({
     adapter,
     log:
