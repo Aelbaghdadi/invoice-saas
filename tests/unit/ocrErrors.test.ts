@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classifyOcrError, isDatabaseError, userMessageForOcrError } from "@/lib/ocrErrors";
+import { classifyOcrError, isDatabaseError, OriginalMissingError, userMessageForError, userMessageForOcrError } from "@/lib/ocrErrors";
 import { pickCronOcrActor } from "@/lib/cronActor";
 
 // Como llega un error de Prisma: clase con code P2xxx y mensaje "Invalid ...".
@@ -46,5 +46,16 @@ describe("pickCronOcrActor", () => {
     expect(pickCronOcrActor("u1", "a1")).toBe("u1");
     expect(pickCronOcrActor(null, "a1")).toBe("a1");
     expect(pickCronOcrActor(null, null)).toBeNull();
+  });
+});
+
+describe("original que no está (revisión 2 del PR #15)", () => {
+  it("es ERR-OCR-004 y pide volver a subirlo; el tope de tiempo sigue pidiendo reprocesar", () => {
+    const missing = new OriginalMissingError({ cause: new Error("NoSuchKey") });
+    expect(classifyOcrError(missing)).toBe("ERR-OCR-004");
+    expect(userMessageForError(missing, "ERR-OCR-004")).toBe("El archivo original no está en el almacenamiento. Hay que volver a subirlo.");
+    expect(missing.message).not.toMatch(/\d/);
+    const timeout = new Error("Almacenamiento: timeout (30 s) descargando k");
+    expect(userMessageForError(timeout, classifyOcrError(timeout))).toMatch(/Vuelve a procesarla/);
   });
 });

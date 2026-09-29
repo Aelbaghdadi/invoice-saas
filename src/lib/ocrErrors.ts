@@ -101,5 +101,9 @@ export function userMessageForOcrError(code: OcrErrorCode): string {
 /** Mensaje para el gestor de un error concreto: el suyo si es un
  *  DocumentError; si no, el generico del codigo. */
 export function userMessageForError(err: unknown, code: OcrErrorCode): string {
-  return err instanceof DocumentError ? err.message : userMessageForOcrError(code);
+  if (err instanceof DocumentError) return err.message;
+  // «Vuelve a procesarla» no va a funcionar nunca: el fichero no esta
+  // (revision 2 del PR #15, punto 3). Se queda para el tope de tiempo.
+  if (err instanceof OriginalMissingError) return "El archivo original no está en el almacenamiento. Hay que volver a subirlo.";
+  return userMessageForOcrError(code);
 }

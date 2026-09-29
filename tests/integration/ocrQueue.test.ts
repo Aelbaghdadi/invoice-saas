@@ -276,7 +276,8 @@ describe("original que no está (revisión 2 del PR #15, punto 2)", () => {
     expect(fakeS3().getCount() - before).toBe(1);
     const row = await prisma.invoice.findUniqueOrThrow({ where: { id } });
     expect(row.status).toBe("OCR_ERROR");
-    expect(row.lastOcrError).toMatch(/^\[ERR-OCR-004\]/);
+    // Reprocesar no va a servir: hay que volver a subirlo (punto 3).
+    expect(row.lastOcrError).toBe("[ERR-OCR-004] El archivo original no está en el almacenamiento. Hay que volver a subirlo.");
   });
 });
 
