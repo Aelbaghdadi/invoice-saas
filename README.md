@@ -19,7 +19,7 @@ exportar a programas contables tipo **A3 Asesor**.
 | ORM | Prisma 7.5 + `@prisma/adapter-pg` |
 | Base de datos | PostgreSQL (Supabase) |
 | Auth | NextAuth v5 (credentials + bcryptjs) |
-| OCR | Gemini; Google Document AI (Invoice Parser) solo si no hay clave de Gemini |
+| OCR | Gemini API (PDF e imágenes) + parser propio para XML Facturae |
 | Storage de PDFs | Supabase Storage |
 | Email | Resend |
 | Deploy | Vercel |
@@ -38,9 +38,7 @@ exportar a programas contables tipo **A3 Asesor**.
 ### Requisitos
 - Node 20+
 - Cuenta Supabase (DB + Storage)
-- Clave de Gemini (`GEMINI_API_KEY`), o, sin ella, una cuenta Google Cloud
-  con Document AI habilitado y un processor de tipo *Invoice Parser* en la
-  región `eu`.
+- Clave de la API de Gemini (AI Studio) con la facturación activa.
 - Cuenta Resend (opcional en dev — si falta, los emails se loguean
   en consola).
 
@@ -69,9 +67,8 @@ Las explica en detalle [.env.example](.env.example). Resumen:
 | `AUTH_SECRET` | Firma de JWTs de NextAuth |
 | `NEXTAUTH_URL` | URL pública (emails, callbacks) |
 | `S3_ENDPOINT`, `S3_REGION`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_FORCE_PATH_STYLE` | Storage de PDFs (Garage / S3-compatible) |
-| `GEMINI_API_KEY`, `GEMINI_MODEL` | OCR (Gemini) |
+| `GEMINI_API_KEY`, `GEMINI_MODEL` | OCR (Gemini). Obligatoria para PDF e imágenes |
 | `OCR_CONCURRENCY` | Análisis a la vez en el proceso (4 por defecto); lo demás espera en «Subida» |
-| `GOOGLE_APPLICATION_CREDENTIALS_JSON`, `GOOGLE_CLOUD_PROJECT_ID`, `GOOGLE_DOCUMENT_AI_PROCESSOR_ID`, `GOOGLE_DOCUMENT_AI_LOCATION` | OCR con Document AI, **solo si no hay `GEMINI_API_KEY`**. No es un fallback: si Gemini falla, no se prueba con Document AI |
 | `RESEND_API_KEY`, `EMAIL_FROM` | Emails transaccionales |
 | `CRON_SECRET` | Protege endpoints `/api/cron/*` |
 
@@ -114,7 +111,8 @@ src/
 ├── lib/
 │   ├── auth.ts                # Config NextAuth
 │   ├── prisma.ts              # Cliente Prisma singleton
-│   ├── ocr.ts                 # Wrapper Document AI (NO TOCAR)
+│   ├── ocr.ts                 # Tipos del OCR + parser XML Facturae
+│   ├── ocrLlm.ts              # Extracción con Gemini (PDF e imágenes)
 │   ├── processInvoice.ts      # Orquesta OCR → BD + pre-fill
 │   ├── auditLog.ts            # Cadena de hash SHA-256
 │   ├── exportFormats.ts       # Generador Excel A3
@@ -172,7 +170,7 @@ after(): processInvoice.ts
     espera turno en la cola del OCR (OCR_CONCURRENCY a la vez), sin salir de UPLOADED
     ↓ claim → status: ANALYZING
     ↓
-ocrLlm.ts (Gemini), u ocr.ts (Document AI) si no hay GEMINI_API_KEY
+ocrLlm.ts (Gemini; ocr.ts para los XML Facturae). Sin GEMINI_API_KEY → OCR_ERROR (ERR-OCR-005)
     (reintentos con backoff exponencial y Retry-After; al agotarlos, OCR_ERROR)
     ↓
 parseTaxId + pre-fill cliente + aprendizaje de cuentas
@@ -214,8 +212,6 @@ Vercel toma el repo directamente. Necesita:
 
 ## Limitaciones conocidas
 
-- **OCR multi-IVA mixto**: Document AI a veces agrega líneas en vez de
-  separarlas. El gestor lo corrige a mano en la pantalla de revisión.
 - **Rate limiter en memoria** (`src/lib/rateLimit.ts`): funciona en una
   sola instancia. Si se escala horizontal hay que migrar a Redis/Upstash.
 - **`@prisma/adapter-pg`**: en lugar del binario nativo de Prisma porque

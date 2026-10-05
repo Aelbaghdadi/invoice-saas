@@ -25,7 +25,7 @@ si se toca algo.
                   ▼                  ▼                    ▼
             ┌──────────┐     ┌──────────────┐     ┌──────────────┐
             │ Postgres │     │ Gemini (OCR) │     │    Garage    │
-            │          │     │ o Document AI│     │     (S3)     │
+            │          │     │              │     │     (S3)     │
             └──────────┘     └──────────────┘     └──────────────┘
 ```
 
@@ -60,7 +60,7 @@ importante:
 UPLOADED   (también mientras espera turno en la cola del OCR)
    │  claim (ocrAttempts + 1)
    ▼
-ANALYZING ────► OCR_ERROR (el OCR falló tras sus reintentos)
+ANALYZING ────► OCR_ERROR (Gemini falló tras sus reintentos o falta GEMINI_API_KEY)
    │
    ▼
 PENDING_REVIEW ◄────► NEEDS_ATTENTION
@@ -93,9 +93,11 @@ export para mostrar "ya exportada" en la UI sin perder el estado.
    «Reprocesar» (`POST /api/invoices/[id]/process`) usa la misma cola, pero
    delante.
 4. `processInvoice()` orquesta:
-   - `ocrLlm.ts` (Gemini) → extrae campos; `ocr.ts` (Document AI) solo si no
-     hay `GEMINI_API_KEY`. Reintentos con backoff exponencial y
-     `Retry-After`, con un plazo total de 4 minutos.
+   - `ocrLlm.ts` (Gemini) → extrae campos de PDF e imágenes; `ocr.ts`
+     lee los XML Facturae. Reintentos con backoff exponencial y
+     `Retry-After`, con un plazo total de 4 minutos. Sin `GEMINI_API_KEY`,
+     los PDF e imágenes acaban en `OCR_ERROR` con `ERR-OCR-005`, sin
+     reintentos.
    - `parseTaxId()` normaliza NIFs (quita guiones, detecta prefijo
      país).
    - **Pre-rellena la parte cliente**: en `PURCHASE`, el receptor =
@@ -318,7 +320,7 @@ Windows con un Postgres local. Lo que más pesa es el lote de 3.000 facturas.
   ficheros corren uno detrás de otro: comparten la BD.
 - Solo se simulan la sesión (`@/lib/auth`, con `signInAs`), `next/cache`,
   `next/navigation`, `after()` (se encola; el test lo ejecuta con
-  `runAfterCallbacks`), el OCR (Document AI y Gemini, con `stubOcr`; el
+  `runAfterCallbacks`), el OCR (Gemini, con `stubOcr`; el
   parser Facturae es el real) y S3 (un servidor en memoria por fichero, que
   puede ir lento o caerse con `fakeS3().setMode(...)`). Prisma y Postgres son
   los reales. Sin `RESEND_API_KEY`, el correo no sale.
@@ -344,19 +346,16 @@ Windows con un Postgres local. Lo que más pesa es el lote de 3.000 facturas.
 
 ## Limitaciones conocidas / deuda
 
-1. **OCR multi-IVA mixto**: Document AI Invoice Parser agrupa líneas
-   con tipos de IVA distintos. Workaround: el gestor las separa
-   manualmente. Solución pendiente: parser custom.
-2. **Rate limiter en memoria**: ver `src/lib/rateLimit.ts`. Si la
+1. **Rate limiter en memoria**: ver `src/lib/rateLimit.ts`. Si la
    app pasa a multi-instancia, hay que migrar a Redis/Upstash.
-3. **`Invoice.vatRate`**: denormalizado de las `InvoiceVatLine`.
+2. **`Invoice.vatRate`**: denormalizado de las `InvoiceVatLine`.
    Solo es significativo cuando hay 1 línea; con multi-IVA es
    `null`. Tenedlo en cuenta al hacer queries.
-4. **`STATUS_LABELS` duplicado**: `src/lib/invoiceStatuses.ts` tiene
+3. **`STATUS_LABELS` duplicado**: `src/lib/invoiceStatuses.ts` tiene
    los labels canónicos, pero
    `src/app/dashboard/admin/invoices/[id]/page.tsx` tiene su propia
    copia local. Consolidar.
-5. **Reset demo + auditoría**: el bypass via `SET LOCAL` funciona,
+4. **Reset demo + auditoría**: el bypass via `SET LOCAL` funciona,
    pero es un cuchillo: si alguien lo usa fuera de `demoSeed.ts`,
    se carga la inmutabilidad. Hay que mantenerlo restringido.
 

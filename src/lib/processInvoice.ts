@@ -1,11 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { getObjectBytes, isStorageConfigured, isStorageNotFound } from "@/lib/storage";
 import type { InvoiceStatus, Prisma } from "@prisma/client";
-import {
-  extractInvoiceFromPdf,
-  extractInvoiceFromImage,
-  extractInvoiceFromXml,
-} from "@/lib/ocr";
+import { extractInvoiceFromXml } from "@/lib/ocr";
 import {
   extractPdfWithGemini,
   extractFromDocumentWithGemini,
@@ -41,7 +37,7 @@ import { routeByCif, clientSideCif, routeByText, detectInvoiceType } from "@/lib
 import { lookupProviderClient, normalizeProviderNif } from "@/lib/providerRouting";
 import { accountEntryKey } from "@/lib/supplierMatching";
 import { proposeOperationType, unclassifiedGoodsType } from "@/lib/operationTypeProposal";
-import { classifyOcrError, DocumentError, OcrHttpError, OriginalMissingError, userMessageForError } from "@/lib/ocrErrors";
+import { classifyOcrError, DocumentError, OcrHttpError, OcrNotConfiguredError, OriginalMissingError, userMessageForError } from "@/lib/ocrErrors";
 import { retryDelayMs } from "@/lib/retryBackoff";
 import { runQueuedOcr } from "@/lib/ocrQueue";
 import { closeOpenIssues } from "@/lib/invoiceIssues";
@@ -124,7 +120,7 @@ async function analyzeInvoice(invoiceId: string, triggeredByUserId: string) {
     const ft = invoice.fileType;
 
     // Reintento ante fallos TRANSITORIOS del OCR (timeout, rate limit, red): el
-    // proveedor (Gemini/Document AI) falla a veces de forma puntual y al
+    // proveedor (Gemini) falla a veces de forma puntual y al
     // reprocesar va — lo automatizamos para no dejar la factura en Error OCR
     // por un hipo. Los fallos deterministas (archivo inválido) no se reintentan.
     const MAX_OCR_ATTEMPTS = 4;
@@ -138,32 +134,22 @@ async function analyzeInvoice(invoiceId: string, triggeredByUserId: string) {
           const base64 = (await downloadOriginal(invoice.storageKey)).toString("base64");
 
           if (ft === "application/pdf" || invoice.filename.endsWith(".pdf")) {
-            if (process.env.GEMINI_API_KEY) {
-              // Solo lanza si falla la llamada que no tiene alternativa: la
-              // del texto, o la de la imagen cuando el texto no valia. Si el
-              // texto ya salio (aunque incompleto) y la imagen falla, devuelve
-              // el del texto: el reintento no repite una llamada que ya fue
-              // bien (temperatura 0, saldria lo mismo).
-              ({ source, result: ocrResult } = await extractPdfWithGemini(base64));
-            } else {
-              source = "document_ai";
-              ocrResult = await extractInvoiceFromPdf(base64);
-            }
+            // Solo lanza si falla la llamada que no tiene alternativa: la
+            // del texto, o la de la imagen cuando el texto no valia. Si el
+            // texto ya salio (aunque incompleto) y la imagen falla, devuelve
+            // el del texto: el reintento no repite una llamada que ya fue
+            // bien (temperatura 0, saldria lo mismo).
+            ({ source, result: ocrResult } = await extractPdfWithGemini(base64));
           } else {
-            if (process.env.GEMINI_API_KEY) {
-              source = "gemini_multimodal";
-              ocrResult = await extractFromDocumentWithGemini(base64, ft || "image/jpeg");
-            } else {
-              source = "document_ai";
-              ocrResult = await extractInvoiceFromImage(base64, ft || "image/jpeg");
-            }
+            source = "gemini_multimodal";
+            ocrResult = await extractFromDocumentWithGemini(base64, ft || "image/jpeg");
           }
         }
         break; // OCR completado
       } catch (ocrErr) {
         // Un error del documento no es transitorio aunque su texto lo parezca:
         // «El XML trae 500 facturas (lote)» casaba con el 500 de la regex.
-        if (ocrErr instanceof DocumentError || ocrErr instanceof OriginalMissingError) throw ocrErr;
+        if (ocrErr instanceof DocumentError || ocrErr instanceof OriginalMissingError || ocrErr instanceof OcrNotConfiguredError) throw ocrErr;
         const m = ocrErr instanceof Error ? ocrErr.message : String(ocrErr);
         if (attempt >= MAX_OCR_ATTEMPTS || !isTransientError(ocrErr, m)) throw ocrErr;
         // Exponencial con jitter, o lo que pida el proveedor en Retry-After

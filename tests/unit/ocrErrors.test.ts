@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classifyOcrError, isDatabaseError, OriginalMissingError, userMessageForError, userMessageForOcrError } from "@/lib/ocrErrors";
+import { classifyOcrError, isDatabaseError, OcrNotConfiguredError, OriginalMissingError, userMessageForError, userMessageForOcrError } from "@/lib/ocrErrors";
 import { pickCronOcrActor } from "@/lib/cronActor";
 
 // Como llega un error de Prisma: clase con code P2xxx y mensaje "Invalid ...".
@@ -34,6 +34,14 @@ describe("classifyOcrError", () => {
     expect(classifyOcrError("algo raro")).toBe("ERR-OCR-001");
     // Un code que no es de Prisma no cambia nada.
     expect(classifyOcrError(Object.assign(new Error("Invalid image"), { code: "ENOENT" }))).toBe("ERR-OCR-002");
+  });
+
+  it("sin GEMINI_API_KEY: ERR-OCR-005, con un mensaje que dice qué falta", () => {
+    const err = new OcrNotConfiguredError();
+    expect(classifyOcrError(err)).toBe("ERR-OCR-005");
+    const message = userMessageForError(err, "ERR-OCR-005");
+    expect(message).toMatch(/clave de Gemini/);
+    expect(message).toMatch(/administrador/);
   });
 
   it("el mensaje del error del sistema no dice que el documento sea ilegible", () => {

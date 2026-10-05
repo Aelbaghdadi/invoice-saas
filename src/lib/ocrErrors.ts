@@ -5,10 +5,10 @@
  * Sin dependencias de Prisma ni de Next: se reconoce el error de Prisma por su
  * forma (code P2xxx o el nombre de la clase), no con instanceof.
  */
-export type OcrErrorCode = "ERR-OCR-001" | "ERR-OCR-002" | "ERR-OCR-003" | "ERR-OCR-004" | "ERR-SYS-001";
+export type OcrErrorCode = "ERR-OCR-001" | "ERR-OCR-002" | "ERR-OCR-003" | "ERR-OCR-004" | "ERR-OCR-005" | "ERR-SYS-001";
 
 /**
- * El proveedor de OCR (Gemini, Document AI) respondio con un error HTTP. Lleva
+ * El proveedor de OCR (Gemini) respondio con un error HTTP. Lleva
  * el Retry-After, si vino, para que el reintento espere lo que pide (F-029).
  * El mensaje es el de siempre («Gemini Flash respondió 429: …»): la
  * clasificacion de errores sigue leyendolo.
@@ -69,7 +69,20 @@ export class OriginalMissingError extends Error {
   }
 }
 
+/**
+ * Falta GEMINI_API_KEY: es configuracion del servidor, no culpa del
+ * documento. No se reintenta y el gestor ve un mensaje que lo dice claro,
+ * en vez del generico "vuelve a intentarlo" (reintentar no lo arregla).
+ */
+export class OcrNotConfiguredError extends Error {
+  constructor() {
+    super("Falta la variable de entorno GEMINI_API_KEY: sin ella no se pueden leer facturas PDF ni imágenes.");
+    this.name = "OcrNotConfiguredError";
+  }
+}
+
 export function classifyOcrError(err: unknown): OcrErrorCode {
+  if (err instanceof OcrNotConfiguredError) return "ERR-OCR-005";
   if (err instanceof DocumentError) return "ERR-OCR-002";
   if (err instanceof OriginalMissingError) return "ERR-OCR-004";
   if (isDatabaseError(err)) {
@@ -93,6 +106,7 @@ export function userMessageForOcrError(code: OcrErrorCode): string {
     case "ERR-SYS-001": return "Error interno al guardar el análisis. Vuelve a procesarla; si se repite, avisa a soporte.";
     case "ERR-OCR-003": return "El análisis tardó demasiado. Vuelve a procesarla.";
     case "ERR-OCR-004": return "No se pudo descargar el archivo. Vuelve a procesarla.";
+    case "ERR-OCR-005": return "La lectura automática de facturas no está configurada (falta la clave de Gemini). Avisa al administrador; cuando esté configurada, vuelve a procesar la factura.";
     case "ERR-OCR-002": return "No se pudieron leer los datos del documento (ilegible o con formato no válido). Revísala manualmente.";
     default:            return "No se pudo procesar la factura. Vuelve a intentarlo o revísala manualmente.";
   }
