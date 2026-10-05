@@ -110,7 +110,8 @@ export default async function ReviewPage({
   );
 
   // Bounding boxes: cada extractor guarda coordenadas en formato diferente.
-  // document_ai       → formato entities de Document AI.
+  // document_ai       → formato entities de Document AI (solo extracciones
+  //                     antiguas: ya no se usa para procesar).
   // gemini_text       → JSON con boundingBoxes por campo (posiciones de pdfjs).
   // gemini_multimodal → mismo JSON propio pero coordenadas de Gemini multimodal.
   // xml_parse         → sin coordenadas.

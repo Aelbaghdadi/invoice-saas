@@ -27,10 +27,11 @@ export type AppErrorCode =
   | "ERR-UPLOAD-006"  // Duplicado (mismo hash en una factura activa)
   | "ERR-UPLOAD-007"  // Nombre de archivo inválido
   // ── OCR ──────────────────────────────────────────────────
-  | "ERR-OCR-001"     // Document AI no disponible / fallo de red
+  | "ERR-OCR-001"     // Gemini no disponible / fallo de red
   | "ERR-OCR-002"     // PDF/imagen corrupto o no procesable
   | "ERR-OCR-003"     // Timeout del procesado (>60s)
   | "ERR-OCR-004"     // Storage download fallo (archivo borrado en Storage)
+  | "ERR-OCR-005"     // Falta GEMINI_API_KEY en el servidor
   // ── Validación ───────────────────────────────────────────
   | "ERR-VALIDATE-001"  // CIF emisor coincide con CIF receptor
   | "ERR-VALIDATE-002"  // Periodo contable cerrado
@@ -66,6 +67,7 @@ export const ERROR_MESSAGES: Record<AppErrorCode, string> = {
   "ERR-OCR-002": "El archivo no se pudo leer. Asegúrate de que el PDF o imagen no esté dañado.",
   "ERR-OCR-003": "El OCR tardó demasiado y se canceló. Si el archivo tiene muchas páginas, prueba a dividirlo.",
   "ERR-OCR-004": "El archivo original no se encuentra en almacenamiento. Vuelve a subirlo.",
+  "ERR-OCR-005": "La lectura automática de facturas no está configurada (falta la clave de Gemini). Avisa al administrador.",
 
   "ERR-VALIDATE-001": "El CIF del emisor y del receptor no pueden coincidir.",
   "ERR-VALIDATE-002": "El periodo contable está cerrado. Pide a un administrador que lo reabra en Cierres para poder validar.",

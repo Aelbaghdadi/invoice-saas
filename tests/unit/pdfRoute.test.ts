@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { readFileSync } from "fs";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import { computeBboxesFromPdf, extractPdfTextAndItems, extractPdfWithGemini, isUsefulPdfText, pagesToRead, textHasTaxId } from "@/lib/ocrLlm";
+import { OcrNotConfiguredError } from "@/lib/ocrErrors";
 
 const factura = {
   issuerName: "Proveedor SL", issuerCif: "B12345674", receiverName: "Cliente SA", receiverCif: "A58818501",
@@ -57,6 +58,14 @@ describe("extractPdfWithGemini: vía de texto o de imagen", () => {
     const raw = JSON.parse(result.rawJson);
     expect(raw.textExcerpt).toContain("B85800949");
     expect(raw.textExcerpt.length).toBe(raw.textLength);
+  });
+
+  it("sin GEMINI_API_KEY lanza OcrNotConfiguredError, por texto y por imagen, sin llamar a Gemini", async () => {
+    vi.stubEnv("GEMINI_API_KEY", "");
+    await expect(extractPdfWithGemini(readFileSync("scripts/demo-pdfs/amazon-oficina.pdf").toString("base64")))
+      .rejects.toBeInstanceOf(OcrNotConfiguredError);
+    await expect(extractPdfWithGemini(await pdfWithText([]))).rejects.toBeInstanceOf(OcrNotConfiguredError);
+    expect(calls).toEqual([]);
   });
 
   it("un escaneado (sin texto) va por imagen", async () => {

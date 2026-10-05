@@ -3,7 +3,7 @@ import type { FieldBoundingBoxes, BoundingBox } from "./boundingBoxes";
 import { normalizeCurrency } from "./currency";
 import { normalizeGoodsType } from "./intracomGoods";
 import { isValidNIF } from "./validators";
-import { OcrHttpError } from "./ocrErrors";
+import { OcrHttpError, OcrNotConfiguredError } from "./ocrErrors";
 import { parseRetryAfter, retryDelayFromGoogleBody } from "./retryBackoff";
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL ?? "gemini-2.5-flash-lite";
@@ -434,7 +434,7 @@ async function callGemini(
   prompt: string = EXTRACTION_PROMPT,
 ): Promise<GeminiResult> {
   const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("Falta GEMINI_API_KEY en las variables de entorno");
+  if (!apiKey) throw new OcrNotConfiguredError();
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
 

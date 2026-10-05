@@ -11,9 +11,9 @@ import { startOfDayInMadrid, yearMonthInMadrid } from "@/lib/dates";
  * - Analisis de OCR: InvoiceExtraction que no son de un XML (Gemini por
  *   texto o por imagen, Document AI; los XML de Facturae se leen sin OCR y
  *   van aparte), mas los que acabaron en «Error
- *   OCR» (historial ANALYZING → OCR_ERROR), sin los XML ni los que no
- *   pudieron descargar el original (ERR-OCR-004), que no llegaron al
- *   proveedor. Un 500 de Garage no se distingue de un fallo del proveedor
+ *   OCR» (historial ANALYZING → OCR_ERROR), sin los XML, los que no
+ *   pudieron descargar el original (ERR-OCR-004) ni los que fallaron por
+ *   falta de GEMINI_API_KEY (ERR-OCR-005), que no llegaron al proveedor. Un 500 de Garage no se distingue de un fallo del proveedor
  *   (los dos son ERR-OCR-001). Los reintentos dentro de un mismo
  *   analisis (429, 5xx) no se guardan en ningun sitio: no se pueden contar.
  * - Validadas: facturas distintas que pasaron a VALIDATED ese mes.
@@ -96,10 +96,11 @@ export async function usageReport(firmId: string, now = new Date(), count = 12):
         WHERE c."advisoryFirmId" = ${firmId} AND h."fromStatus" = 'ANALYZING'
       ) AS x
       WHERE x."toStatus" = 'OCR_ERROR'
-        -- Sin llegar al proveedor: un XML (se lee sin OCR) o el original que
-        -- no se pudo descargar (ERR-OCR-004).
+        -- Sin llegar al proveedor: un XML (se lee sin OCR), el original que
+        -- no se pudo descargar (ERR-OCR-004) o sin GEMINI_API_KEY (ERR-OCR-005).
         AND x."fileType" NOT IN ('application/xml', 'text/xml')
         AND coalesce(x.reason, '') NOT LIKE '[ERR-OCR-004]%'
+        AND coalesce(x.reason, '') NOT LIKE '[ERR-OCR-005]%'
         AND x."createdAt" >= ${fromUtc}
       GROUP BY 1`,
     prisma.$queryRaw<Counted[]>`

@@ -1,7 +1,7 @@
 import type { OcrResult } from "@/lib/ocr";
 
 /**
- * OCR simulado (Document AI y Gemini): nunca se llama a un proveedor real.
+ * OCR simulado (Gemini): nunca se llama a un proveedor real.
  * Por defecto falla, para que un test que lo necesite lo diga. El camino
  * Facturae (XML) no es OCR y va con el parser real.
  */
