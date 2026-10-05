@@ -10,6 +10,12 @@
 FROM node:22-alpine AS base
 # openssl: lo necesita el engine de Prisma. libc6-compat: binarios nativos en alpine.
 RUN apk add --no-cache libc6-compat openssl
+# binaries.prisma.sh resuelve a IPv6 (Cloudflare) y el IPv6 del servidor no sale
+# a internet: la descarga de los binarios de Prisma moria con "Client network
+# socket disconnected before secure TLS connection was established" y tumbaba el
+# build entero. Node prueba primero por IPv4 con esto. Hasta ahora no se notaba
+# porque esa capa venia de la cache de Docker y no descargaba nada.
+ENV NODE_OPTIONS=--dns-result-order=ipv4first
 WORKDIR /app
 
 # ---- deps (todas: dev + prod, para el build) ----
