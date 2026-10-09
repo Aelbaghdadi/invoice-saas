@@ -382,15 +382,28 @@ describe("validateForA3Export — cuentas del sentido contrario", () => {
 });
 
 describe("validateForA3Export — intracomunitarias", () => {
-  it("avisa si una compra intracomunitaria (bienes o servicios) declara IVA distinto de 0", () => {
-    const bienes = validateForA3Export([
-      mkInvoice({ operationType: "INTRACOM" as any, vatAmount: 21 as any }),
+  it("avisa si una venta intracomunitaria declara IVA distinto de 0", () => {
+    const venta = validateForA3Export([
+      mkInvoice({ type: "SALE", operationType: "INTRACOM" as any, intracomGoodsType: "BIENES" as any, vatAmount: 21 as any }),
     ]);
-    const servicios = validateForA3Export([
-      mkInvoice({ operationType: "INTRACOM_SERVICIOS" as any, vatAmount: 21 as any }),
+    expect(venta[0].warnings.some((w) => w.includes("IVA declarado"))).toBe(true);
+  });
+
+  it("en una compra intracomunitaria la cuota es autorrepercutida: ni «IVA declarado» ni descuadre", () => {
+    for (const operationType of ["INTRACOM", "INTRACOM_SERVICIOS"]) {
+      const res = validateForA3Export([
+        mkInvoice({ operationType: operationType as any, issuerCountry: "IE" as any, vatAmount: 21 as any, totalAmount: 100 as any }),
+      ]);
+      const warnings = res.flatMap((r) => r.warnings);
+      expect(warnings.filter((w) => w.includes("IVA declarado") || w.includes("Descuadre"))).toEqual([]);
+    }
+  });
+
+  it("si el total de la compra intracomunitaria lleva la cuota, avisa del descuadre", () => {
+    const res = validateForA3Export([
+      mkInvoice({ operationType: "INTRACOM_SERVICIOS" as any, issuerCountry: "IE" as any, vatAmount: 21 as any, totalAmount: 121 as any }),
     ]);
-    expect(bienes[0].warnings.some((w) => w.includes("IVA declarado"))).toBe(true);
-    expect(servicios[0].warnings.some((w) => w.includes("IVA declarado"))).toBe(true);
+    expect(res.flatMap((r) => r.warnings)).toContain("Descuadre Base+IVA vs Total: 21,00 €");
   });
 
   it("no avisa de IVA si la intracomunitaria ya va a 0%", () => {
@@ -529,7 +542,7 @@ describe("generateA3Excel — recargo de equivalencia", () => {
   });
 });
 
-describe("generateA3Excel — autorrepercusión de servicios intracomunitarios (código 8)", () => {
+describe("generateA3Excel — autorrepercusión de adquisiciones intracomunitarias (códigos 3 y 8)", () => {
   function purchaseRow(buf: Buffer): unknown[] {
     const wb = XLSX.read(buf, { type: "buffer" });
     return (XLSX.utils.sheet_to_json(wb.Sheets["Facturas recibidas"], { header: 1 }) as unknown[][])[1];
@@ -558,17 +571,40 @@ describe("generateA3Excel — autorrepercusión de servicios intracomunitarios (
     expect(row[11]).toBe(-19.84);
   });
 
-  it("si la factura ya trae cuota, va tal cual", () => {
-    const row = purchaseRow(generateA3Excel([intracomServicios({ vatRate: 21 as any, vatAmount: 20 as any, totalAmount: 1970 as any })]));
-    expect(row[10]).toBe(21);
-    expect(row[11]).toBe(20);
+  it("lo que ha guardado la revisión (21 % por defecto u otro tipo) va tal cual", () => {
+    const revisada = purchaseRow(generateA3Excel([intracomServicios({ vatRate: 21 as any, vatAmount: 409.5 as any })]));
+    expect([revisada[10], revisada[11]]).toEqual([21, 409.5]);
+    const otroTipo = purchaseRow(generateA3Excel([intracomServicios({ vatRate: 10 as any, vatAmount: 195 as any })]));
+    expect([otroTipo[10], otroTipo[11]]).toEqual([10, 195]);
   });
 
-  it("no toca las adquisiciones de bienes ni las compras interiores al 0 %", () => {
+  it("también la que llegó al 21 % con cuota 0 (la plantilla del OCR trae el 21)", () => {
+    const row = purchaseRow(generateA3Excel([intracomServicios({ vatRate: 21 as any, vatAmount: 0 as any })]));
+    expect([row[10], row[11]]).toEqual([21, 409.5]);
+  });
+
+  it("avisa si la cuota autorrepercutida no es base × %, y no si la completa el export", () => {
+    const tecleo = validateForA3Export([intracomServicios({ vatRate: 21 as any, vatAmount: 40.95 as any })]);
+    expect(tecleo.flatMap((r) => r.warnings)).toContain("Línea 1: la cuota de IVA es 40,95 € y la base × 21 % da 409,50 €");
+    const completada = validateForA3Export([intracomServicios()]);
+    expect(completada.flatMap((r) => r.warnings).filter((w) => w.startsWith("Línea"))).toEqual([]);
+  });
+
+  it("también las adquisiciones de bienes (código 3) al 0 %", () => {
     const bienes = purchaseRow(generateA3Excel([intracomServicios({ operationType: "INTRACOM" as any })]));
+    expect([bienes[6], bienes[10], bienes[11]]).toEqual([3, 21, 409.5]);
+  });
+
+  it("no toca las compras interiores al 0 % ni las entregas intracomunitarias", () => {
     const interior = purchaseRow(generateA3Excel([mkInvoice({ vatRate: 0 as any, vatAmount: 0 as any, totalAmount: 100 as any })]));
-    expect([bienes[10], bienes[11]]).toEqual([0, 0]);
     expect([interior[10], interior[11]]).toEqual([0, 0]);
+    const wb = XLSX.read(generateA3Excel([mkInvoice({
+      type: "SALE", operationType: "INTRACOM" as any, intracomGoodsType: "SERVICIOS" as any,
+      receiverCif: "123456789", receiverCountry: "DE" as any, expenseAccount: "7050001",
+      vatRate: 0 as any, vatAmount: 0 as any, totalAmount: 100 as any,
+    })]), { type: "buffer" });
+    const venta = (XLSX.utils.sheet_to_json(wb.Sheets["Facturas expedidas"], { header: 1 }) as unknown[][])[1];
+    expect([venta[10], venta[11]]).toEqual([0, 0]);
   });
 
   it("no avisa de «IVA declarado»: lo guardado sigue siendo el 0 % de la factura", () => {

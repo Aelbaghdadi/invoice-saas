@@ -12,6 +12,7 @@ import { clientPartyAudit, irpfAuditValue, partyAuditValue } from "@/lib/auditVa
 import { clientPartyIssue } from "@/lib/clientParty";
 import { ocrFenceWhere } from "@/lib/invoiceStatuses";
 import { isInvoiceBalanced } from "@/lib/invoiceBalance";
+import { isSelfAssessedVat } from "@/lib/selfAssessedVat";
 import { roundCents } from "@/lib/money";
 import { isLegalRetentionRate, legalRateFor, resolveIrpf } from "@/lib/irpfResolution";
 
@@ -520,6 +521,8 @@ async function analyzeInvoice(invoiceId: string, triggeredByUserId: string) {
       ai: extracted.supplyType,
     });
     const operationType = intracomProposal.operationType;
+    // Adquisicion intracomunitaria: la cuota autorrepercutida no suma al total.
+    const selfAssessedVat = isSelfAssessedVat(invoice.type, operationType);
     const goods = isUnclassified ? unclassifiedGoodsType(intracomProposal, extracted.supplyType) : intracomProposal;
 
     // ── Deteccion de retencion IRPF ────────────────────────────────────
@@ -592,7 +595,7 @@ async function analyzeInvoice(invoiceId: string, triggeredByUserId: string) {
       readAmount: extracted.irpfAmount ?? null,
       sumBases: sumBasesAll,
       balancedWith: (irpf) => extracted.totalAmount != null
-        && isInvoiceBalanced({ sumBase: sumBasesAll, sumAmount: sumVat, sumSurcharge, irpf, total: extracted.totalAmount }),
+        && isInvoiceBalanced({ sumBase: sumBasesAll, sumAmount: sumVat, sumSurcharge, irpf, total: extracted.totalAmount, selfAssessedVat }),
       taxedBases: vatLines.filter((l) => l.vatRate > 0).reduce((s, l) => s + l.taxBase, 0),
     });
     const retentionBase = retentionType ? (irpfBase ?? sumBasesAll) : null;
@@ -721,7 +724,7 @@ async function analyzeInvoice(invoiceId: string, triggeredByUserId: string) {
       const sAmount = amounts.lines.reduce((s, l) => s + l.vatAmount, 0);
       finalIsValid = isInvoiceBalanced({
         sumBase: sBase, sumAmount: sAmount, sumSurcharge: totalSurchargeAmount,
-        irpf: amounts.irpfAmount ?? 0, total: amounts.totalAmount,
+        irpf: amounts.irpfAmount ?? 0, total: amounts.totalAmount, selfAssessedVat,
       });
     } else {
       finalIsValid = isValid;

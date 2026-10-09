@@ -9,6 +9,7 @@
  */
 import { formatEur } from "@/lib/format";
 import { percentCents, toCents } from "@/lib/money";
+import { isSelfAssessedVat } from "@/lib/selfAssessedVat";
 
 export type CheckedLine = {
   taxBase: number;
@@ -28,7 +29,9 @@ export type VatLineMismatch = {
 };
 
 /** Inversion del sujeto pasivo e intracomunitarias: la factura va sin cuota
- *  (la autoliquida el destinatario), asi que la cuota no es base × %. */
+ *  (la autoliquida el destinatario), asi que la cuota no es base × %. Salvo
+ *  la autorrepercutida que se guarda en las adquisiciones intracomunitarias
+ *  (selfAssessedVat): esa si es base × %, y va asi a A3. */
 const OPERATIONS_WITHOUT_OWN_VAT = new Set(["INVERSION_SP", "INTRACOM", "INTRACOM_SERVICIOS"]);
 
 /** Tolerancia: max(2 centimos; 0,5 % de la cuota esperada). */
@@ -40,8 +43,17 @@ function mismatch(base: number, rate: number, actual: number): { expected: numbe
   return { expected: expectedCents / 100 };
 }
 
-export function vatLineMismatches(lines: CheckedLine[], operationType?: string | null): VatLineMismatch[] {
-  if (operationType && OPERATIONS_WITHOUT_OWN_VAT.has(operationType)) return [];
+/** `direction` solo cuando las lineas llevan ya la cuota autorrepercutida
+ *  (revision y export). Lo leido del documento (OCR) no la lleva: sin el, una
+ *  intracomunitaria no se comprueba. */
+export function vatLineMismatches(
+  lines: CheckedLine[],
+  operationType?: string | null,
+  direction?: "PURCHASE" | "SALE" | null,
+): VatLineMismatch[] {
+  if (operationType && OPERATIONS_WITHOUT_OWN_VAT.has(operationType) && !isSelfAssessedVat(direction, operationType)) {
+    return [];
+  }
   const found: VatLineMismatch[] = [];
   lines.forEach((line, index) => {
     const iva = mismatch(line.taxBase, line.vatRate, line.vatAmount);
