@@ -20,6 +20,17 @@ describe("mathIssues", () => {
     expect(mathIssues({ ...base, lines: [{ taxBase: 100, vatRate: 21, vatAmount: 21 }], totalAmount: null })).toEqual([]);
   });
 
+  it("adquisición intracomunitaria: la cuota autorrepercutida no suma al total", () => {
+    const compra = { ...base, lines: [{ taxBase: 94.46, vatRate: 21, vatAmount: 19.84 }], operationType: "INTRACOM_SERVICIOS", direction: "PURCHASE" as const };
+    expect(mathIssues({ ...compra, totalAmount: 94.46 })).toEqual([]);
+    expect(mathIssues({ ...compra, totalAmount: 114.3 })).toEqual([{
+      type: "MATH_MISMATCH",
+      description: "El total (114,30 €) no coincide con Base (94,46 €). Diferencia: 19,84 €. En una adquisición intracomunitaria la cuota autorrepercutida no suma al total.",
+    }]);
+    // En una venta (entrega) el IVA sí suma.
+    expect(mathIssues({ ...compra, operationType: "INTRACOM", direction: "SALE", totalAmount: 114.3 })).toEqual([]);
+  });
+
   it("cuotas cruzadas: aviso de desglose, aunque el total cuadre", () => {
     const issues = mathIssues({
       ...base, totalAmount: 341,
@@ -50,5 +61,13 @@ describe("intracomVatIssue", () => {
   it("con IVA 0 o de otro tipo: nada", () => {
     expect(intracomVatIssue({ lines: [line(0, 0)], vatAmount: 0, vatRate: 0, operationType: "INTRACOM" })).toBeNull();
     expect(intracomVatIssue({ lines: [line(21, 21)], vatAmount: 21, vatRate: 21, operationType: "INTERIOR" })).toBeNull();
+  });
+
+  it("en una compra el IVA es el autorrepercutido: solo avisa en las ventas", () => {
+    for (const operationType of ["INTRACOM", "INTRACOM_SERVICIOS"]) {
+      expect(intracomVatIssue({ lines: [line(21, 21)], vatAmount: 21, vatRate: 21, operationType, direction: "PURCHASE" })).toBeNull();
+    }
+    expect(intracomVatIssue({ lines: [line(21, 21)], vatAmount: 21, vatRate: 21, operationType: "INTRACOM", direction: "SALE" }))
+      .not.toBeNull();
   });
 });

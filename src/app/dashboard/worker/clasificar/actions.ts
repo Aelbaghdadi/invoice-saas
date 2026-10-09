@@ -10,6 +10,7 @@ import { detectInvoiceType } from "@/lib/invoiceRouting";
 import { duplicateField, findPossibleDuplicate } from "@/lib/duplicates";
 import { intracomVatIssue, mathIssues } from "@/lib/mathIssues";
 import { isInvoiceBalanced } from "@/lib/invoiceBalance";
+import { isSelfAssessedVat } from "@/lib/selfAssessedVat";
 import { anyNegativeAmount, hasRectificativeMention, rectificativeSignHint } from "@/lib/rectificative";
 import { facturaeXmlIsCorrective } from "@/lib/ocr";
 import { proposeSurchargesFromTotal, surchargeAuditValue } from "@/lib/equivalenceSurcharge";
@@ -183,14 +184,16 @@ async function classify(invoiceId: string, clientId: string): Promise<ClassifySt
     totalAmount,
     irpfAmount,
     operationType: proposal.operationType,
+    direction: effectiveType,
   });
-  // Intracomunitaria con IVA declarado, con el tipo propuesto para el
-  // cliente elegido (el OCR no la mira en «Por clasificar»).
+  // Entrega intracomunitaria con IVA declarado, con el tipo propuesto para
+  // el cliente elegido (el OCR no la mira en «Por clasificar»).
   const intracomVat = intracomVatIssue({
     lines,
     vatAmount: invoice.vatAmount == null ? null : Number(invoice.vatAmount),
     vatRate: invoice.vatRate == null ? null : Number(invoice.vatRate),
     operationType: proposal.operationType,
+    direction: effectiveType,
   });
   if (intracomVat) mathProblems.push(intracomVat);
   // Signo (F-012): el OCR no crea incidencias en el buzon. Se miran los
@@ -233,6 +236,7 @@ async function classify(invoiceId: string, clientId: string): Promise<ClassifySt
         sumSurcharge: lines.reduce((s, l) => s + (l.equivalenceSurchargeAmount ?? 0), 0),
         irpf: irpfAmount ?? 0,
         total: totalAmount,
+        selfAssessedVat: isSelfAssessedVat(effectiveType, proposal.operationType),
       })
     : invoice.isValid;
   const targetStatus = isDuplicate || mathProblems.length > 0 ? "NEEDS_ATTENTION" : "PENDING_REVIEW";

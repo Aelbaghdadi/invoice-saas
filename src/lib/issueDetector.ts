@@ -83,21 +83,24 @@ export async function detectIssues(
       totalAmount: extraction.totalAmount,
       irpfAmount: extraction.irpfAmount ?? null,
       operationType: operationTypeHint,
+      direction: invoice.type,
     }));
   } else {
     issues.push(...mathIssues({
       lines: extraction.vatLines, taxBase: null, vatAmount: null, totalAmount: null, irpfAmount: null,
       operationType: operationTypeHint,
+      direction: invoice.type,
     }));
   }
 
-  // 4. INTRACOM_VAT — intracomunitaria con IVA declarado (intracomVatIssue,
-  // tambien en la clasificacion manual).
+  // 4. INTRACOM_VAT — entrega intracomunitaria con IVA declarado
+  // (intracomVatIssue, tambien en la clasificacion manual).
   const intracomVat = intracomVatIssue({
     lines: extraction.vatLines,
     vatAmount: extraction.vatAmount ?? null,
     vatRate: extraction.vatRate ?? null,
     operationType: operationTypeHint,
+    direction: invoice.type,
   });
   if (intracomVat) issues.push(intracomVat);
 

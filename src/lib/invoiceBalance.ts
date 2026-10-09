@@ -6,6 +6,10 @@ export type InvoiceBalanceInput = {
   sumSurcharge?: number;
   irpf?: number;
   total: number;
+  /** Cuota autorrepercutida (adquisicion intracomunitaria, ver
+   *  selfAssessedVat): la paga el comprador a Hacienda, no al proveedor, y
+   *  no suma al total. */
+  selfAssessedVat?: boolean;
 };
 
 /**
@@ -23,9 +27,14 @@ export const BALANCE_TOLERANCE_CENTS = 0;
  *  en positivo que en negativo (toCents): con Math.round una rectificativa
  *  salia descuadrada con los dos importes iguales en pantalla. */
 export function invoiceBalanceDiffCents(params: InvoiceBalanceInput): number {
-  const { sumBase, sumAmount, sumSurcharge = 0, irpf = 0, total } = params;
-  const expected = sumBase + sumAmount + sumSurcharge - irpf;
-  return toCents(expected) - toCents(total);
+  return toCents(invoiceBalanceExpected(params)) - toCents(params.total);
+}
+
+/** Lo que tendria que dar el total: Base + IVA + Recargo - IRPF, sin el IVA
+ *  si es autorrepercutido. */
+export function invoiceBalanceExpected(params: InvoiceBalanceInput): number {
+  const { sumBase, sumAmount, sumSurcharge = 0, irpf = 0, selfAssessedVat = false } = params;
+  return sumBase + (selfAssessedVat ? 0 : sumAmount) + sumSurcharge - irpf;
 }
 
 /** ¿Cuadra con la tolerancia comun? La usan la revision (servidor y

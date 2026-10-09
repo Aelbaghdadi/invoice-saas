@@ -46,7 +46,10 @@ import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { useUnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { formSnapshot } from "@/lib/formSnapshot";
 import { clientPartyWarning, clientPartyWarningText } from "@/lib/clientParty";
-import { invoiceBalanceDiffCents, isInvoiceBalanced } from "@/lib/invoiceBalance";
+import { invoiceBalanceDiffCents, invoiceBalanceExpected, isInvoiceBalanced } from "@/lib/invoiceBalance";
+import {
+  applySelfAssessedRate, isSelfAssessedVat, isUntouchedSelfAssessedProposal, removeSelfAssessedRate, SELF_ASSESSED_VAT_RATE,
+} from "@/lib/selfAssessedVat";
 import { amountFieldsProblem, parseVatLineInputs, vatLinesProblem } from "@/lib/vatLineInput";
 import { accountsAgainstDirection, validationProblems } from "@/lib/invoiceRules";
 import { anyNegativeAmount } from "@/lib/rectificative";
@@ -405,18 +408,30 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
 
   // Form state — lineas de IVA dinamicas. Si no hay nada, una linea vacia
   // para que el gestor pueda empezar a teclear.
-  const [vatLines, setVatLines] = useState<VatLineInput[]>(() => {
-    if (initialVatLines.length === 0) {
-      return [{ taxBase: "", vatRate: "", vatAmount: "", equivalenceSurchargeRate: "", equivalenceSurchargeAmount: "" }];
-    }
-    return initialVatLines.map((l) => ({
-      taxBase: String(l.taxBase),
-      vatRate: String(l.vatRate),
-      vatAmount: String(l.vatAmount),
-      equivalenceSurchargeRate: l.equivalenceSurchargeRate != null ? String(l.equivalenceSurchargeRate) : "",
-      equivalenceSurchargeAmount: l.equivalenceSurchargeAmount != null ? String(l.equivalenceSurchargeAmount) : "",
-    }));
+  // Adquisicion intracomunitaria sin validar (selfAssessedVat): la factura
+  // viene sin cuota y se propone el 21 % autorrepercutido, con un aviso para
+  // que el gestor lo confirme. Al abrir, no al tocar nada: no cuenta como
+  // cambio sin guardar. Una ya validada se abre tal como se valido. Un
+  // borrador guardado con el 21 % sin tocar sigue contando como propuesto.
+  const [initialLines] = useState(() => {
+    const lines: VatLineInput[] = initialVatLines.length === 0
+      ? [{ taxBase: "", vatRate: "", vatAmount: "", equivalenceSurchargeRate: "", equivalenceSurchargeAmount: "" }]
+      : initialVatLines.map((l) => ({
+          taxBase: String(l.taxBase),
+          vatRate: String(l.vatRate),
+          vatAmount: String(l.vatAmount),
+          equivalenceSurchargeRate: l.equivalenceSurchargeRate != null ? String(l.equivalenceSurchargeRate) : "",
+          equivalenceSurchargeAmount: l.equivalenceSurchargeAmount != null ? String(l.equivalenceSurchargeAmount) : "",
+        }));
+    const propose = !isValidated && !readOnly && isSelfAssessedVat(invoice.type, invoice.operationType);
+    if (!propose) return { lines, applied: false };
+    const proposal = applySelfAssessedRate(lines);
+    return { lines: proposal.lines, applied: proposal.applied || isUntouchedSelfAssessedProposal(proposal.lines) };
   });
+  const [vatLines, setVatLines] = useState<VatLineInput[]>(initialLines.lines);
+  // El 21 % lo ha puesto el formulario y el gestor aun no ha tocado el % ni
+  // la cuota: se ensena el aviso, y si deja de ser intracomunitaria se quita.
+  const [selfAssessedProposed, setSelfAssessedProposed] = useState(initialLines.applied);
   const [totalAmount, setTotalAmount] = useState(fmt(invoice.totalAmount));
   const [invoiceDateVal, setInvoiceDateVal] = useState(fmtDate(invoice.invoiceDate));
   // Bienes o servicios en intracomunitarias. Se decide al abrir, antes que el
@@ -480,6 +495,25 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   const goodsTypeShown: IntracomGoodsTypeName | null = !isIntracom
     ? null
     : type === "PURCHASE" ? goodsTypeFromOperationType(operationType) : intracomGoodsType;
+  // Adquisicion intracomunitaria: IVA autorrepercutido, que no suma al total.
+  const selfAssessed = isSelfAssessedVat(type, operationType);
+
+  // Al cambiar el sentido o el tipo de operacion: si pasa a ser adquisicion
+  // intracomunitaria se propone el 21 % en las lineas a 0; si deja de serlo,
+  // se quita el 21 % que habia puesto el formulario (no uno tecleado).
+  const syncSelfAssessedVat = (nextType: "PURCHASE" | "SALE", nextOperationType: OperationTypeName) => {
+    const willBe = isSelfAssessedVat(nextType, nextOperationType);
+    if (willBe && !selfAssessed) {
+      const proposal = applySelfAssessedRate(vatLines);
+      if (proposal.applied) {
+        setVatLines(proposal.lines);
+        setSelfAssessedProposed(true);
+      }
+    } else if (!willBe && selfAssessed && selfAssessedProposed) {
+      setVatLines(removeSelfAssessedRate(vatLines));
+      setSelfAssessedProposed(false);
+    }
+  };
 
   // Botones Bienes/Servicios: en compras cambian el codigo 3/8 y en ventas
   // ponen la cuenta de ingreso 700/705 (sustituyendo otra 7xx si la hubiera).
@@ -653,6 +687,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   const accountsIncomplete = !supplierAccountVal.trim() || !expenseAccountVal.trim();
 
   const updateVatLine = (idx: number, field: keyof VatLineInput, value: string) => {
+    // Tocar el % o la cuota es decidir el IVA: el 21 % ya no es el propuesto.
+    if (field === "vatRate" || field === "vatAmount") setSelfAssessedProposed(false);
     setVatLines((prev) => {
       const copy = [...prev];
       copy[idx] = { ...copy[idx], [field]: value };
@@ -823,6 +859,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     sumSurcharge: vatTotals.sumSurcharge,
     irpf: retentionAmount,
     total: totalNum,
+    selfAssessedVat: selfAssessed,
   };
   const balanceDiffCents = invoiceBalanceDiffCents(balanceInput);
   // Una linea a medio rellenar no cuadra nunca: el servidor no la guarda
@@ -849,13 +886,13 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
         equivalenceSurchargeRate: Number.isNaN(surchargeRate) ? null : surchargeRate,
         equivalenceSurchargeAmount: Number.isNaN(surchargeAmount) ? null : surchargeAmount,
       };
-      for (const m of vatLineMismatches([line], operationType)) found.push({ ...m, index });
+      for (const m of vatLineMismatches([line], operationType, type)) found.push({ ...m, index });
     });
     return found;
-  }, [vatLines, operationType]);
+  }, [vatLines, operationType, type]);
   const mathOk = vatLineIssue ? false : hasValues ? isInvoiceBalanced(balanceInput) : null;
   // Lo que suman las lineas, para ensenarlo junto al total cuando no cuadra.
-  const calculado = vatTotals.sumBase + vatTotals.sumAmount + vatTotals.sumSurcharge - retentionAmount;
+  const calculado = invoiceBalanceExpected(balanceInput);
 
   // Aviso si la fecha de la factura no corresponde al periodo del lote.
   const periodMismatch = useMemo(() => {
@@ -2322,12 +2359,15 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                       // sentido: en compras bienes/servicios es el 3 o el 8 y
                       // en ventas siempre el 3. Cualquier otro tipo que no
                       // exista en el otro sentido se rechazaria al guardar.
+                      let nextOperationType = operationType;
                       if (isIntracom && goodsTypeShown) {
                         setIntracomGoodsType(goodsTypeShown);
-                        setOperationType(next === "PURCHASE" ? purchaseOperationTypeForGoods(goodsTypeShown) : "INTRACOM");
+                        nextOperationType = next === "PURCHASE" ? purchaseOperationTypeForGoods(goodsTypeShown) : "INTRACOM";
                       } else if (!OPERATION_TYPE_OPTIONS[next].includes(operationType)) {
-                        setOperationType(OPERATION_TYPE_OPTIONS[next][0]);
+                        nextOperationType = OPERATION_TYPE_OPTIONS[next][0];
                       }
+                      setOperationType(nextOperationType);
+                      syncSelfAssessedVat(next, nextOperationType);
                       // Las cuentas del otro sentido (las genericas de
                       // proveedor y gasto en una emitida, una 43x/7xx en una
                       // recibida) no valen y el servidor las rechaza: se vacian.
@@ -2394,6 +2434,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                     onChange={(value) => {
                       const next = value as OperationTypeName;
                       setOperationType(next);
+                      syncSelfAssessedVat(type, next);
                       // Elegir 3 u 8 en una compra es marcar bienes o servicios a mano.
                       if (type === "PURCHASE" && isIntracomOperation("PURCHASE", next)) {
                         setIntracomGoodsType(goodsTypeFromOperationType(next));
@@ -2465,8 +2506,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                     <p className="mt-1.5 text-[11px] text-slate-500">
                       En A3: tipo de operación {OPERATION_TYPE_CODE[operationType]}
                       {type === "SALE" && <> y cuenta de ingreso {expenseAccountVal || SALE_ACCOUNT_GROUP[goodsTypeShown]}</>}
-                      {/* La autorrepercusion la pone el export (a3Vat): aqui se queda el 0 % de la factura. */}
-                      {type === "PURCHASE" && operationType === "INTRACOM_SERVICIOS" && <>, con IVA al 21 % autorrepercutido</>}.
+                      {selfAssessed && <>, con el IVA autorrepercutido del desglose</>}.
                     </p>
                   )}
                   {assignedGoodsType && goodsTypeShown && assignedGoodsType !== goodsTypeShown && (
@@ -2479,9 +2519,12 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
               );
             })()}
 
-            {/* Aviso ISP/intracom — fuera del grid para no romper alturas. */}
+            {/* Aviso ISP/intracom — fuera del grid para no romper alturas.
+                En una adquisicion intracomunitaria el IVA es el
+                autorrepercutido: no se avisa (ver el desglose). */}
             {operationType !== "INTERIOR" && operationType !== "AGRARIA"
               && operationType !== "IVA_NO_DEDUCIBLE"
+              && !selfAssessed
               && vatTotals.sumAmount > 0.01 && (
               <p className="flex flex-wrap items-center gap-1.5 text-[11px] text-amber-600">
                 <AlertTriangle className="h-3 w-3 flex-shrink-0" />
@@ -2695,6 +2738,16 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
               <legend className="px-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 Desglose de IVA
               </legend>
+
+              {selfAssessed && selfAssessedProposed && (
+                <p className="flex items-start gap-2 rounded-lg bg-blue-50 px-3 py-2 text-[12px] text-blue-700">
+                  <Sparkles className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+                  <span>
+                    <strong>Operación intracomunitaria detectada:</strong> se ha aplicado un {SELF_ASSESSED_VAT_RATE} % de IVA
+                    autorrepercutido por defecto para A3. Compruébalo en la factura y, si es otro tipo, cámbialo.
+                  </span>
+                </p>
+              )}
 
               <div className="space-y-2">
                 {/* Cabecera */}
@@ -3039,6 +3092,11 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                   );
                 })()}
               </div>
+              {selfAssessed && Math.abs(vatTotals.sumAmount) >= 0.005 && (
+                <p className="text-right text-[11px] text-slate-500">
+                  Cuota autorrepercutida: <span className="font-semibold tabular-nums">{formatEur(vatTotals.sumAmount)}</span> (no suma al total)
+                </p>
+              )}
             </fieldset>
 
             {/* Semaforo de cuadre matematico. Se muestra aqui, justo encima de
@@ -3059,8 +3117,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                   {vatLineIssue
                     ? vatLineIssue
                     : mathOk
-                    ? `Validación matemática correcta — Σ Bases + Σ Cuotas${vatTotals.sumSurcharge !== 0 ? " + Σ Recargo" : ""}${retentionAmount > 0 ? " − Retención" : ""} = Total`
-                    : `No cuadra: las líneas suman ${formatEur(calculado)} y el total es ${formatEur(totalNum)} (diferencia: ${formatEur(Math.abs(balanceDiffCents) / 100)})`
+                    ? `Validación matemática correcta — Σ Bases${selfAssessed ? "" : " + Σ Cuotas"}${vatTotals.sumSurcharge !== 0 ? " + Σ Recargo" : ""}${retentionAmount > 0 ? " − Retención" : ""} = Total${selfAssessed ? " (la cuota autorrepercutida no suma)" : ""}`
+                    : `No cuadra: ${selfAssessed ? "sin la cuota autorrepercutida, " : ""}las líneas suman ${formatEur(calculado)} y el total es ${formatEur(totalNum)} (diferencia: ${formatEur(Math.abs(balanceDiffCents) / 100)})`
                   }
                 </span>
               </div>

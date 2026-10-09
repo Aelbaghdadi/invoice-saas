@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { BALANCE_TOLERANCE_CENTS, invoiceBalanceDiffCents, isInvoiceBalanced } from "@/lib/invoiceBalance";
+import { BALANCE_TOLERANCE_CENTS, invoiceBalanceDiffCents, invoiceBalanceExpected, isInvoiceBalanced } from "@/lib/invoiceBalance";
 
 describe("invoiceBalanceDiffCents", () => {
   it("Base + IVA + Recargo - IRPF frente al Total, en céntimos", () => {
@@ -33,5 +33,24 @@ describe("isInvoiceBalanced (F-058: una sola tolerancia)", () => {
   it("abonos: el signo no cambia el resultado", () => {
     expect(isInvoiceBalanced({ sumBase: -100, sumAmount: -21, total: -121 })).toBe(true);
     expect(isInvoiceBalanced({ sumBase: -100, sumAmount: -21, total: -121.01 })).toBe(false);
+  });
+});
+
+describe("IVA autorrepercutido (adquisición intracomunitaria)", () => {
+  it("la cuota no suma: 94,46 € de base y 19,84 € de cuota dan 94,46 € de total", () => {
+    const shopify = { sumBase: 94.46, sumAmount: 19.84, total: 94.46, selfAssessedVat: true };
+    expect(isInvoiceBalanced(shopify)).toBe(true);
+    expect(invoiceBalanceExpected(shopify)).toBe(94.46);
+    expect(isInvoiceBalanced({ ...shopify, total: 114.3 })).toBe(false);
+    expect(invoiceBalanceDiffCents({ ...shopify, total: 114.3 })).toBe(-1984);
+  });
+
+  it("el recargo y la retención siguen contando", () => {
+    expect(invoiceBalanceExpected({ sumBase: 100, sumAmount: 21, sumSurcharge: 5.2, irpf: 15, total: 0, selfAssessedVat: true }))
+      .toBeCloseTo(90.2, 10);
+  });
+
+  it("sin la marca, la cuota suma como siempre", () => {
+    expect(invoiceBalanceExpected({ sumBase: 94.46, sumAmount: 19.84, total: 0 })).toBeCloseTo(114.3, 10);
   });
 });

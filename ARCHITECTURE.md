@@ -224,6 +224,18 @@ donde no: una factura con NIF español puede ser INVERSION_SP
 (Art. 84.Uno.2º LIVA). Por eso `issuerCountry` y `operationType`
 son campos distintos.
 
+### Por qué las adquisiciones intracomunitarias llevan un IVA que no suma
+
+Una compra con código 3 (bienes) u 8 (servicios) llega al 0 %, pero A3
+necesita el % y la cuota para autorrepercutirla: genera la 472 al debe
+y la 477 al haber, que se anulan. Con 0 % no sale ninguna. La revisión
+propone el 21 % en las líneas a 0 y avisa al gestor para que lo
+confirme o lo cambie. La cuota no se paga al proveedor, así que el
+cuadre es Σ Bases = Total, sin ella. El export completa al 21 % las que
+sigan a 0. Las ventas intracomunitarias van al 0 % como siempre. La
+regla está en [src/lib/selfAssessedVat.ts](src/lib/selfAssessedVat.ts).
+Lo pidió el asesor el 2026-10-09.
+
 ### Por qué `RectificativeType` y `art80Tres`
 
 Las rectificativas tienen dos tipos contables (BOE Real Decreto

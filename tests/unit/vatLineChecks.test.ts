@@ -54,6 +54,17 @@ describe("vatLineMismatches (F-022)", () => {
     ])).toEqual([]);
   });
 
+  it("la cuota autorrepercutida de una compra intracomunitaria sí es base × %", () => {
+    for (const op of ["INTRACOM", "INTRACOM_SERVICIOS"]) {
+      expect(vatLineMismatches([{ taxBase: 94.46, vatRate: 21, vatAmount: 19.84 }], op, "PURCHASE")).toEqual([]);
+      expect(vatLineMismatches([{ taxBase: 94.46, vatRate: 21, vatAmount: 1.98 }], op, "PURCHASE")).toEqual([
+        { index: 0, kind: "iva", rate: 21, expected: 19.84, actual: 1.98 },
+      ]);
+    }
+    // En una venta intracomunitaria no hay cuota que comprobar.
+    expect(vatLineMismatches([{ taxBase: 100, vatRate: 21, vatAmount: 0 }], "INTRACOM", "SALE")).toEqual([]);
+  });
+
   it("ni en inversión del sujeto pasivo ni en intracomunitarias", () => {
     const line = [{ taxBase: 100, vatRate: 21, vatAmount: 0 }];
     for (const op of ["INVERSION_SP", "INTRACOM", "INTRACOM_SERVICIOS"]) expect(vatLineMismatches(line, op)).toEqual([]);

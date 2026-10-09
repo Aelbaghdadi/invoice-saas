@@ -16,6 +16,7 @@ import { goodsTypeFromSaleAccount } from "@/lib/intracomGoods";
 import { invoiceBalanceDiffCents, isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { describeVatLineMismatch, vatLineMismatches, type CheckedLine } from "@/lib/vatLineChecks";
 import { percentOf, toCents } from "@/lib/money";
+import { isSelfAssessedVat, lacksSelfAssessedVat, SELF_ASSESSED_VAT_RATE } from "@/lib/selfAssessedVat";
 import { formatEur } from "@/lib/format";
 import { findNumberingGaps } from "@/lib/invoiceNumbering";
 import { isStandardVatRate, isSurchargeRate } from "@/lib/equivalenceSurcharge";
@@ -267,32 +268,28 @@ const A3_HEADERS = [
   "Cuota Retención IRPF",        // P
 ];
 
-/** % con el que se autorrepercute una adquisicion intracomunitaria de
- *  servicios en A3. */
-const INTRACOM_SERVICES_SELF_ASSESSED_RATE = 21;
-
 /**
  * % IVA y cuota que van a A3 (columnas K y L).
  *
- * Adquisicion intracomunitaria de servicios (codigo 8): la factura viene al
- * 0 % (Meta, Shopify...), pero A3 necesita el 21 % y su cuota para
- * autorrepercutirla: genera la 472 en el debe y la 477 en el haber, que se
- * anulan. Con 0 % no sale ni el soportado ni el devengado. Lo pidio el asesor
- * el 2026-10-09.
+ * Adquisicion intracomunitaria (compra con codigo 3 u 8, ver
+ * selfAssessedVat): A3 necesita el % y la cuota para autorrepercutirla.
+ * Genera la 472 en el debe y la 477 en el haber, que se anulan. Con 0 % no
+ * sale ni el soportado ni el devengado.
  *
- * Solo se toca la linea a 0: lo guardado en la revision sigue siendo lo que
- * dice la factura (y el cuadre con su total). Si la factura trae una cuota,
- * va tal cual y ya se avisa aparte («IVA declarado»).
+ * La revision ya guarda el 21 % por defecto. Aqui solo se completa la linea
+ * que sigue sin cuota (validada antes del cambio, o sin pasar por la
+ * pantalla). Si trae cuota, va tal cual: es lo que ha confirmado el gestor.
  */
-function a3Vat(inv: InvoiceWithClient, line: ExportVatLine): { vatRate: number; vatAmount: number } {
-  const selfAssessed = inv.type === "PURCHASE"
-    && inv.operationType === "INTRACOM_SERVICIOS"
-    && toCents(line.vatRate) === 0
-    && toCents(line.vatAmount) === 0;
-  if (!selfAssessed) return { vatRate: line.vatRate, vatAmount: line.vatAmount };
+function a3Vat(
+  inv: InvoiceWithClient,
+  line: { taxBase: number; vatRate: number; vatAmount: number },
+): { vatRate: number; vatAmount: number } {
+  if (!isSelfAssessedVat(inv.type, inv.operationType) || !lacksSelfAssessedVat(line)) {
+    return { vatRate: line.vatRate, vatAmount: line.vatAmount };
+  }
   return {
-    vatRate: INTRACOM_SERVICES_SELF_ASSESSED_RATE,
-    vatAmount: percentOf(line.taxBase, INTRACOM_SERVICES_SELF_ASSESSED_RATE),
+    vatRate: SELF_ASSESSED_VAT_RATE,
+    vatAmount: percentOf(line.taxBase, SELF_ASSESSED_VAT_RATE),
   };
 }
 
@@ -501,12 +498,13 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
       );
     }
 
-    // Intracomunitaria con IVA declarado: mismo aviso que en revision, pero
-    // aqui es la ultima linea de defensa antes de que el fichero salga hacia
-    // A3. No bloqueamos el export (el gestor puede tener un motivo real),
-    // pero no debe poder pasar inadvertido.
+    // Entrega intracomunitaria con IVA declarado: mismo aviso que en
+    // revision, pero aqui es la ultima linea de defensa antes de que el
+    // fichero salga hacia A3. No bloqueamos el export (el gestor puede tener
+    // un motivo real), pero no debe poder pasar inadvertido. En las
+    // adquisiciones (compras) el IVA es el autorrepercutido: no se avisa.
     const isIntracomOp = inv.operationType === "INTRACOM" || inv.operationType === "INTRACOM_SERVICIOS";
-    if (isIntracomOp) {
+    if (isIntracomOp && !isPurchase) {
       const lines = getExportLines(inv);
       const sumVat = lines.reduce((s, l) => s + l.vatAmount, 0);
       if (Math.abs(sumVat) > 0.01) {
@@ -581,7 +579,10 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
 
     // Cada cuota tiene que ser su base × % (F-022): el total no lo ve si las
     // cuotas estan cruzadas entre tipos, y A3 se lleva el desglose tal cual.
-    for (const m of vatLineMismatches(checkedLines(inv), inv.operationType)) {
+    // Con el % y la cuota que salen en el fichero (a3Vat): en una adquisicion
+    // intracomunitaria se comprueba la cuota autorrepercutida.
+    const sentLines = checkedLines(inv).map((l) => ({ ...l, ...a3Vat(inv, l) }));
+    for (const m of vatLineMismatches(sentLines, inv.operationType, isPurchase ? "PURCHASE" : "SALE")) {
       warnings.push(describeVatLineMismatch(m));
     }
     // Cuota de recargo sin %: vatLineMismatches no la mira (no hay % con el
@@ -612,6 +613,7 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
     if (direction) warnings.push(direction.message.replace(/\.$/, ""));
 
     // Base + IVA + Recargo - IRPF = Total. Suma sobre las lineas si las hay.
+    // Sin el IVA en una adquisicion intracomunitaria (autorrepercutido).
     if (inv.totalAmount && Math.abs(totalNum) >= 0.005) {
       const lines = getExportLines(inv);
       const sumBase = lines.reduce((s, l) => s + l.taxBase, 0);
@@ -619,7 +621,10 @@ export function validateForA3Export(invoices: InvoiceWithClient[]): A3Validation
       const sumSurcharge = lines.reduce((s, l) => s + l.equivalenceSurchargeAmount, 0);
       const irpf    = inv.irpfAmount ? Number(inv.irpfAmount) : 0;
       if (Math.abs(sumBase) > 0 || Math.abs(sumAmt) > 0) {
-        const balance = { sumBase, sumAmount: sumAmt, sumSurcharge, irpf, total: totalNum };
+        const balance = {
+          sumBase, sumAmount: sumAmt, sumSurcharge, irpf, total: totalNum,
+          selfAssessedVat: isSelfAssessedVat(inv.type, inv.operationType),
+        };
         if (!isInvoiceBalanced(balance)) {
           warnings.push(`Descuadre Base+IVA vs Total: ${formatEur(Math.abs(invoiceBalanceDiffCents(balance)) / 100)}`);
         }

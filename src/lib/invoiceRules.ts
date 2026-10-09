@@ -6,7 +6,8 @@
  * Sin dependencias de Next ni de Prisma: lo usan la accion de validar, la
  * pantalla de revision (para avisar antes de enviar) y el export.
  */
-import { isInvoiceBalanced } from "@/lib/invoiceBalance";
+import { invoiceBalanceExpected, isInvoiceBalanced } from "@/lib/invoiceBalance";
+import { isSelfAssessedVat } from "@/lib/selfAssessedVat";
 import { formatEur } from "@/lib/format";
 import { isForeignCurrency } from "@/lib/currency";
 import { normalizePlanAccount, padAccountingAccount, partyAccountMatchesType, resultAccountMatchesType } from "@/lib/accountingAccount";
@@ -215,21 +216,28 @@ export function accountDirectionProblem(
 }
 
 /** Descuadre con la tolerancia comun (F-058), o null. Sin total o sin lineas
- *  no se calcula: eso ya lo dice missingDataProblems. */
-export function balanceProblem(inv: Pick<RuleInvoice, "lines" | "totalAmount" | "irpfAmount">): RuleProblem | null {
+ *  no se calcula: eso ya lo dice missingDataProblems. En una adquisicion
+ *  intracomunitaria la cuota autorrepercutida no suma al total. */
+export function balanceProblem(
+  inv: Pick<RuleInvoice, "lines" | "totalAmount" | "irpfAmount" | "type" | "operationType">,
+): RuleProblem | null {
   if (inv.totalAmount === null || Number.isNaN(inv.totalAmount) || inv.lines.length === 0) return null;
+  const selfAssessedVat = isSelfAssessedVat(inv.type, inv.operationType);
   const balance = {
     sumBase: inv.lines.reduce((s, l) => s + l.taxBase, 0),
     sumAmount: inv.lines.reduce((s, l) => s + l.vatAmount, 0),
     sumSurcharge: inv.lines.reduce((s, l) => s + (l.equivalenceSurchargeAmount ?? 0), 0),
     irpf: inv.irpfAmount ?? 0,
     total: inv.totalAmount,
+    selfAssessedVat,
   };
   if (isInvoiceBalanced(balance)) return null;
-  const expected = balance.sumBase + balance.sumAmount + balance.sumSurcharge - balance.irpf;
+  const expected = invoiceBalanceExpected(balance);
   return {
     rule: "descuadre",
-    message: `El importe no cuadra: las líneas suman ${formatEur(expected)} y el total es ${formatEur(inv.totalAmount)}.`,
+    message: selfAssessedVat
+      ? `El importe no cuadra: sin la cuota autorrepercutida, las líneas suman ${formatEur(expected)} y el total es ${formatEur(inv.totalAmount)}.`
+      : `El importe no cuadra: las líneas suman ${formatEur(expected)} y el total es ${formatEur(inv.totalAmount)}.`,
   };
 }
 

@@ -32,6 +32,7 @@ import {
 } from "@/lib/intracomGoods";
 import { normalizeCurrency } from "@/lib/currency";
 import { isInvoiceBalanced } from "@/lib/invoiceBalance";
+import { isSelfAssessedVat } from "@/lib/selfAssessedVat";
 import { amountFieldsProblem, parseVatLineInputs } from "@/lib/vatLineInput";
 import { validationProblems } from "@/lib/invoiceRules";
 import { percentOf } from "@/lib/money";
@@ -435,12 +436,14 @@ async function parseAndSave(
 
   // Math validation: Sigma(bases) + Sigma(cuotas) + Sigma(recargo) - IRPF =
   // Total (el signo es invariante: negar ambos lados no cambia la diferencia).
+  // En una adquisicion intracomunitaria la cuota autorrepercutida no suma.
   let isValid: boolean | null = null;
   if (signedLines.lines.length > 0 && newData.totalAmount !== null) {
     const sBase = signedLines.lines.reduce((s, l) => s + l.taxBase, 0);
     const sAmount = signedLines.lines.reduce((s, l) => s + l.vatAmount, 0);
     isValid = isInvoiceBalanced({
       sumBase: sBase, sumAmount: sAmount, sumSurcharge, irpf: newData.irpfAmount ?? 0, total: newData.totalAmount,
+      selfAssessedVat: isSelfAssessedVat(effectiveType, submittedOperationType),
     });
   }
 

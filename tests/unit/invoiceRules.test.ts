@@ -165,11 +165,13 @@ describe("NIF del tercero", () => {
 
   it("en intracomunitarias, el NIF-IVA con el prefijo del país (decidido en el PR #7)", () => {
     for (const operationType of ["INTRACOM", "INTRACOM_SERVICIOS"]) {
+      // Compra intracomunitaria: la cuota es autorrepercutida y el total es la base.
+      const intracom = { operationType, totalAmount: 100 };
       expect(thirdPartyTaxIdRequired({ ...ok, operationType })).toBe(true);
-      expect(rules({ operationType, thirdPartyTaxId: "515160873", thirdPartyCountry: "PT" })).toEqual([]);
-      expect(rules({ operationType, thirdPartyTaxId: null })).toEqual(["sin_nif"]);
-      expect(rules({ operationType, thirdPartyTaxId: "515160873", thirdPartyCountry: null })).toEqual(["sin_nif_iva"]);
-      expect(rules({ operationType, thirdPartyTaxId: "B12345674", thirdPartyCountry: "ES" })).toEqual(["sin_nif_iva"]);
+      expect(rules({ ...intracom, thirdPartyTaxId: "515160873", thirdPartyCountry: "PT" })).toEqual([]);
+      expect(rules({ ...intracom, thirdPartyTaxId: null })).toEqual(["sin_nif"]);
+      expect(rules({ ...intracom, thirdPartyTaxId: "515160873", thirdPartyCountry: null })).toEqual(["sin_nif_iva"]);
+      expect(rules({ ...intracom, thirdPartyTaxId: "B12345674", thirdPartyCountry: "ES" })).toEqual(["sin_nif_iva"]);
     }
     expect(validationProblems({ ...ok, operationType: "INTRACOM", thirdPartyTaxId: null })[0].message)
       .toBe("Falta el NIF-IVA del proveedor: en una operación intracomunitaria hace falta para el modelo 349 y para A3.");
@@ -178,7 +180,33 @@ describe("NIF del tercero", () => {
   });
 
   it("la cuenta genérica no exime a una intracomunitaria", () => {
-    expect(rules({ operationType: "INTRACOM", thirdPartyTaxId: null, supplierAccount: "40099999" })).toEqual(["sin_nif"]);
+    expect(rules({ operationType: "INTRACOM", totalAmount: 100, thirdPartyTaxId: null, supplierAccount: "40099999" })).toEqual(["sin_nif"]);
+  });
+});
+
+describe("cuadre de las adquisiciones intracomunitarias (IVA autorrepercutido)", () => {
+  // La factura de Shopify que mandó el asesor: base 94,46 € al 0 %.
+  const compra: Partial<RuleInvoice> = {
+    operationType: "INTRACOM_SERVICIOS",
+    thirdPartyTaxId: "515160873",
+    thirdPartyCountry: "PT",
+    lines: [{ taxBase: 94.46, vatAmount: 19.84 }],
+  };
+
+  it("la cuota no suma al total, en bienes (3) y en servicios (8)", () => {
+    expect(rules({ ...compra, totalAmount: 94.46 })).toEqual([]);
+    expect(rules({ ...compra, operationType: "INTRACOM", totalAmount: 94.46 })).toEqual([]);
+  });
+
+  it("si el total lleva la cuota no cuadra, y el mensaje dice por qué", () => {
+    expect(validationProblems({ ...ok, ...compra, totalAmount: 114.3 })[0].message)
+      .toBe("El importe no cuadra: sin la cuota autorrepercutida, las líneas suman 94,46 € y el total es 114,30 €.");
+  });
+
+  it("en una venta intracomunitaria la cuota sí suma", () => {
+    const venta = { type: "SALE" as const, supplierAccount: "43000001", expenseAccount: "70000001" };
+    expect(rules({ ...compra, ...venta, operationType: "INTRACOM", totalAmount: 94.46 })).toEqual(["descuadre"]);
+    expect(rules({ ...compra, ...venta, operationType: "INTRACOM", totalAmount: 114.3 })).toEqual([]);
   });
 });
 
