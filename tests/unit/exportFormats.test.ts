@@ -529,6 +529,54 @@ describe("generateA3Excel — recargo de equivalencia", () => {
   });
 });
 
+describe("generateA3Excel — autorrepercusión de servicios intracomunitarios (código 8)", () => {
+  function purchaseRow(buf: Buffer): unknown[] {
+    const wb = XLSX.read(buf, { type: "buffer" });
+    return (XLSX.utils.sheet_to_json(wb.Sheets["Facturas recibidas"], { header: 1 }) as unknown[][])[1];
+  }
+  const intracomServicios = (overrides: Partial<InvoiceWithClient> = {}) => mkInvoice({
+    operationType: "INTRACOM_SERVICIOS" as any,
+    issuerName: "Meta Platforms Ireland Limited",
+    issuerCif: "9692928F", issuerCountry: "IE" as any,
+    taxBase: 1950 as any, vatRate: 0 as any, vatAmount: 0 as any, totalAmount: 1950 as any,
+    ...overrides,
+  });
+
+  it("la factura al 0 % sale al 21 % con su cuota para que A3 genere soportado y devengado", () => {
+    const row = purchaseRow(generateA3Excel([intracomServicios()]));
+    expect(row[6]).toBe(8);
+    expect(row[9]).toBe(1950);
+    expect(row[10]).toBe(21);
+    expect(row[11]).toBe(409.5);
+  });
+
+  it("redondea la cuota a céntimos y respeta el signo en una rectificativa", () => {
+    const row = purchaseRow(generateA3Excel([intracomServicios({
+      isRectificative: true, taxBase: -94.46 as any, totalAmount: -94.46 as any,
+    })]));
+    expect(row[10]).toBe(21);
+    expect(row[11]).toBe(-19.84);
+  });
+
+  it("si la factura ya trae cuota, va tal cual", () => {
+    const row = purchaseRow(generateA3Excel([intracomServicios({ vatRate: 21 as any, vatAmount: 20 as any, totalAmount: 1970 as any })]));
+    expect(row[10]).toBe(21);
+    expect(row[11]).toBe(20);
+  });
+
+  it("no toca las adquisiciones de bienes ni las compras interiores al 0 %", () => {
+    const bienes = purchaseRow(generateA3Excel([intracomServicios({ operationType: "INTRACOM" as any })]));
+    const interior = purchaseRow(generateA3Excel([mkInvoice({ vatRate: 0 as any, vatAmount: 0 as any, totalAmount: 100 as any })]));
+    expect([bienes[10], bienes[11]]).toEqual([0, 0]);
+    expect([interior[10], interior[11]]).toEqual([0, 0]);
+  });
+
+  it("no avisa de «IVA declarado»: lo guardado sigue siendo el 0 % de la factura", () => {
+    const res = validateForA3Export([intracomServicios()]);
+    expect(res.flatMap((r) => r.warnings).filter((w) => w.includes("IVA declarado"))).toEqual([]);
+  });
+});
+
 describe("generateA3Excel — prefijo de pais en la columna E", () => {
   function readRows(buf: Buffer, sheetName: string): unknown[][] {
     const wb = XLSX.read(buf, { type: "buffer" });
