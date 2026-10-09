@@ -15,7 +15,7 @@ import { anyNegativeAmount } from "@/lib/rectificative";
 import { goodsTypeFromSaleAccount } from "@/lib/intracomGoods";
 import { invoiceBalanceDiffCents, isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { describeVatLineMismatch, vatLineMismatches, type CheckedLine } from "@/lib/vatLineChecks";
-import { toCents } from "@/lib/money";
+import { percentOf, toCents } from "@/lib/money";
 import { formatEur } from "@/lib/format";
 import { findNumberingGaps } from "@/lib/invoiceNumbering";
 import { isStandardVatRate, isSurchargeRate } from "@/lib/equivalenceSurcharge";
@@ -267,6 +267,35 @@ const A3_HEADERS = [
   "Cuota Retención IRPF",        // P
 ];
 
+/** % con el que se autorrepercute una adquisicion intracomunitaria de
+ *  servicios en A3. */
+const INTRACOM_SERVICES_SELF_ASSESSED_RATE = 21;
+
+/**
+ * % IVA y cuota que van a A3 (columnas K y L).
+ *
+ * Adquisicion intracomunitaria de servicios (codigo 8): la factura viene al
+ * 0 % (Meta, Shopify...), pero A3 necesita el 21 % y su cuota para
+ * autorrepercutirla: genera la 472 en el debe y la 477 en el haber, que se
+ * anulan. Con 0 % no sale ni el soportado ni el devengado. Lo pidio el asesor
+ * el 2026-10-09.
+ *
+ * Solo se toca la linea a 0: lo guardado en la revision sigue siendo lo que
+ * dice la factura (y el cuadre con su total). Si la factura trae una cuota,
+ * va tal cual y ya se avisa aparte («IVA declarado»).
+ */
+function a3Vat(inv: InvoiceWithClient, line: ExportVatLine): { vatRate: number; vatAmount: number } {
+  const selfAssessed = inv.type === "PURCHASE"
+    && inv.operationType === "INTRACOM_SERVICIOS"
+    && toCents(line.vatRate) === 0
+    && toCents(line.vatAmount) === 0;
+  if (!selfAssessed) return { vatRate: line.vatRate, vatAmount: line.vatAmount };
+  return {
+    vatRate: INTRACOM_SERVICES_SELF_ASSESSED_RATE,
+    vatAmount: percentOf(line.taxBase, INTRACOM_SERVICES_SELF_ASSESSED_RATE),
+  };
+}
+
 function buildA3Row(
   inv: InvoiceWithClient,
   line: ExportVatLine,
@@ -293,6 +322,7 @@ function buildA3Row(
   // tipo de IVA puede llevar su propio recargo, o ninguno) — no se limita a
   // la primera fila del multi-IVA.
   const surchargeRate   = line.equivalenceSurchargeRate;
+  const vat = a3Vat(inv, line);
   const surchargeAmount = line.equivalenceSurchargeAmount;
   // Fecha de Contabilizacion (col B): obligatoria segun plantilla A3.
   // Por defecto = fecha de la factura. El gestor puede sobreescribirla
@@ -316,8 +346,8 @@ function buildA3Row(
     inv.supplierAccount ?? "",                                 // H: Cuenta proveedor/cliente
     inv.expenseAccount ?? "",                                  // I: Cuenta compras/ventas
     line.taxBase,                                              // J: Base (signo respetado en rectificativa)
-    line.vatRate,                                              // K: % IVA
-    line.vatAmount,                                            // L: Cuota IVA (signo respetado)
+    vat.vatRate,                                               // K: % IVA
+    vat.vatAmount,                                             // L: Cuota IVA (signo respetado)
     surchargeRate,                                              // M: % Rec. Equiv.
     surchargeAmount,                                            // N: Cutoa Rec. Equiv.
     retentionRate,                                             // O: % Retención IRPF

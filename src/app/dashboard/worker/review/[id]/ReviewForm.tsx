@@ -2464,7 +2464,9 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                   {goodsTypeShown && (
                     <p className="mt-1.5 text-[11px] text-slate-500">
                       En A3: tipo de operación {OPERATION_TYPE_CODE[operationType]}
-                      {type === "SALE" && <> y cuenta de ingreso {expenseAccountVal || SALE_ACCOUNT_GROUP[goodsTypeShown]}</>}.
+                      {type === "SALE" && <> y cuenta de ingreso {expenseAccountVal || SALE_ACCOUNT_GROUP[goodsTypeShown]}</>}
+                      {/* La autorrepercusion la pone el export (a3Vat): aqui se queda el 0 % de la factura. */}
+                      {type === "PURCHASE" && operationType === "INTRACOM_SERVICIOS" && <>, con IVA al 21 % autorrepercutido</>}.
                     </p>
                   )}
                   {assignedGoodsType && goodsTypeShown && assignedGoodsType !== goodsTypeShown && (
