@@ -64,10 +64,12 @@ export default async function SupportTicketPage({ params, searchParams }: Props)
               Abierto por <span className="font-medium text-slate-700">{ticket.createdBy.name}</span>
               {actor.staff && <> · <span className="font-medium text-slate-700">{ticket.advisoryFirm.name}</span></>}
               {" "}el {formatDateTimeEs(ticket.createdAt)}
-              {ticket.resolvedAt && <> · resuelto el {formatDateTimeEs(ticket.resolvedAt)}</>}
+              {ticket.resolvedAt && <> · {ticket.status === "CLOSED" ? "cerrado" : "resuelto"} el {formatDateTimeEs(ticket.resolvedAt)}</>}
             </p>
           </div>
-          <StatusButtons ticketId={ticket.id} status={ticket.status} allowed={statuses} staff={actor.staff} />
+          {/* key: el desplegable guarda el estado elegido; si el estado cambia
+              por otro lado (una respuesta lo pone «en curso»), se rehace. */}
+          <StatusButtons key={ticket.status} ticketId={ticket.id} status={ticket.status} allowed={statuses} staff={actor.staff} />
         </div>
         {(ticket.pageUrl || (actor.staff && ticket.userAgent)) && (
           <dl className="mt-4 grid gap-x-6 gap-y-1 border-t border-slate-100 pt-3 text-[11px] text-slate-500 sm:grid-cols-[auto_1fr]">
