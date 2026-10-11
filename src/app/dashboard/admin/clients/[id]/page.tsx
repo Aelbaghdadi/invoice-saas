@@ -1,188 +1,53 @@
 import { auth } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
 import { notFound, redirect } from "next/navigation";
-import { PageHeader } from "@/components/ui/PageHeader";
-import { Badge } from "@/components/ui/Badge";
-import { ChevronLeft, Mail, Building2, FileText, Users, BookOpen } from "lucide-react";
-import Link from "next/link";
-import { PENDING_WORK } from "@/lib/invoiceStatuses";
-import { periodLabel } from "@/lib/period";
-import { InvoiceStatusBadge } from "@/components/ui/InvoiceStatusBadge";
-import { DownloadClientData } from "./DownloadClientData";
+import { ADMIN_CLIENT_TABS, parseClientTab } from "@/lib/clientSheet";
+import { loadClientSheet } from "@/lib/clientSheetData";
+import { ClientSheetShell } from "@/components/clients/ClientSheetShell";
+import { ClientSummaryTab } from "@/components/clients/ClientSummaryTab";
+import { ClientInvoicesTab, type InvoicesTabParams } from "@/components/clients/ClientInvoicesTab";
+import { ClientPeriodsTab } from "@/components/clients/ClientPeriodsTab";
+import { ClientExportsTab } from "@/components/clients/ClientExportsTab";
+import { ClientActivityTab } from "@/components/clients/ClientActivityTab";
+import { ClientSettingsTab } from "@/components/clients/ClientSettingsTab";
 
-export default async function ClientDetailPage({ params }: { params: Promise<{ id: string }> }) {
+type Props = {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<InvoicesTabParams & { tab?: string }>;
+};
+
+/** Ficha completa de un cliente para el administrador. */
+export default async function ClientDetailPage({ params, searchParams }: Props) {
   const session = await auth();
   if (!session?.user || session.user.role !== "ADMIN") redirect("/login");
-  const firmId = session.user.advisoryFirmId ?? undefined;
+  const firmId = session.user.advisoryFirmId;
+  if (!firmId) notFound();
 
   const { id } = await params;
-  const client = await prisma.client.findUnique({
-    where: { id },
-    include: {
-      invoices: {
-        orderBy: { createdAt: "desc" },
-        take: 10,
-        include: { exportBatchItems: { take: 1, select: { id: true } } },
-      },
-      assignedWorkers: { include: { worker: true } },
-    },
-  });
-  if (!client) notFound();
-  if (client.advisoryFirmId !== firmId) notFound();
+  const sp = await searchParams;
+  const data = await loadClientSheet(id);
+  // Un cliente de otra asesoria da el mismo 404 que uno que no existe.
+  if (!data || data.client.advisoryFirmId !== firmId) notFound();
 
-  // Las tarjetas se contaban sobre las 10 de la tabla: un cliente con 800
-  // facturas salia con "Total facturas 10".
-  const [totalInvoices, pendingInvoices] = await Promise.all([
-    prisma.invoice.count({ where: { clientId: id } }),
-    prisma.invoice.count({ where: { clientId: id, status: { in: PENDING_WORK } } }),
-  ]);
-
-  const stats = [
-    { label: "Total facturas", value: totalInvoices.toLocaleString("es-ES"), icon: FileText },
-    { label: "Gestores asignados", value: client.assignedWorkers.length, icon: Users },
-    { label: "Pendientes", value: pendingInvoices.toLocaleString("es-ES"), icon: Building2 },
-  ];
+  const basePath = `/dashboard/admin/clients/${id}`;
+  const tab = parseClientTab(sp.tab, ADMIN_CLIENT_TABS);
 
   return (
-    <div>
-      <Link href="/dashboard/admin/clients" className="mb-4 flex items-center gap-1.5 text-[13px] text-slate-500 hover:text-slate-700">
-        <ChevronLeft className="h-4 w-4" />
-        Volver a clientes
-      </Link>
-
-      <PageHeader title={client.name} description={`CIF: ${client.cif}`} />
-
-      {/* Info card */}
-      <div className="mb-6 grid grid-cols-3 gap-4">
-        {stats.map((s) => {
-          const Icon = s.icon;
-          return (
-            <div key={s.label} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="flex items-center gap-2 text-slate-400">
-                <Icon className="h-4 w-4" />
-                <span className="text-[12px] font-medium uppercase tracking-wide">{s.label}</span>
-              </div>
-              <p className="mt-2 text-2xl font-bold tabular-nums text-slate-900">{s.value}</p>
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="grid grid-cols-3 gap-5">
-        {/* Client info */}
-        <div className="col-span-1 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="mb-4 text-[14px] font-semibold text-slate-800">Información del cliente</h2>
-          <div className="space-y-3 text-[13px]">
-            <div className="flex items-center gap-2 text-slate-500">
-              <Mail className="h-4 w-4 text-slate-300" />
-              {client.email ?? <span className="italic text-slate-300">Sin acceso al portal</span>}
-            </div>
-            <div className="flex items-center gap-2 text-slate-500">
-              <Building2 className="h-4 w-4 text-slate-300" />
-              {client.accountingProgram ?? <span className="italic text-slate-300">Sin programa</span>}
-            </div>
-          </div>
-
-          <Link
-            href={`/dashboard/admin/clients/${id}/accounts`}
-            className="mt-5 flex items-center gap-2 rounded-lg border border-slate-200 px-3.5 py-2.5 text-[13px] font-medium text-slate-700 shadow-sm hover:bg-slate-50"
-          >
-            <BookOpen className="h-4 w-4 text-slate-400" />
-            Plan de Cuentas
-          </Link>
-          <DownloadClientData clientId={id} />
-
-          <h3 className="mb-3 mt-6 text-[13px] font-semibold text-slate-700">Gestores asignados</h3>
-          {client.assignedWorkers.length === 0 ? (
-            <p className="text-[12px] text-slate-400">Sin gestores asignados.</p>
-          ) : (
-            <ul className="space-y-2">
-              {client.assignedWorkers.map((a) => (
-                <li key={a.workerId} className="flex items-center gap-2">
-                  <div className="flex h-6 w-6 items-center justify-center rounded-full bg-violet-100 text-[10px] font-bold text-violet-700">
-                    {a.worker.name.split(" ").map(n => n[0]).join("").slice(0,2)}
-                  </div>
-                  <span className="text-[13px] text-slate-600">{a.worker.name}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        {/* Invoices */}
-        <div className="col-span-2 rounded-xl border border-slate-200 bg-white shadow-sm">
-          <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
-            <h2 className="text-[14px] font-semibold text-slate-800">Últimas facturas</h2>
-            <Link
-              href={`/dashboard/admin/invoices?clientId=${id}`}
-              className="text-[12px] font-medium text-blue-600 hover:text-blue-700"
-            >
-              Ver todas
-            </Link>
-          </div>
-          {client.invoices.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 text-center">
-              <FileText className="mb-3 h-8 w-8 text-slate-200" />
-              <p className="text-[13px] text-slate-400">Sin facturas subidas.</p>
-            </div>
-          ) : (
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-slate-100">
-                  {["Factura", "Periodo", "Tipo", "Estado", ""].map((h) => (
-                    <th key={h} className="px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-50">
-                {client.invoices.map((inv) => {
-                  const exported = inv.exportBatchItems.length > 0;
-                  const counterpart = inv.type === "SALE" ? inv.receiverName : inv.issuerName;
-                  return (
-                    <tr key={inv.id} className="hover:bg-slate-50/60">
-                      <td className="px-5 py-3">
-                        <div className="flex items-center gap-2">
-                          <FileText className="h-4 w-4 flex-shrink-0 text-slate-300" />
-                          <div className="min-w-0">
-                            <p className="max-w-[200px] truncate text-[13px] font-semibold text-slate-800" title={inv.filename}>
-                              {inv.invoiceNumber ?? inv.filename}
-                            </p>
-                            {(counterpart || inv.invoiceNumber) && (
-                              <p className="max-w-[200px] truncate text-[11px] text-slate-400" title={counterpart ?? inv.filename}>
-                                {counterpart ?? inv.filename}
-                              </p>
-                            )}
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-5 py-3 text-[13px] text-slate-500">
-                        {periodLabel(inv.periodType, inv.periodMonth, inv.periodYear)}
-                      </td>
-                      <td className="px-5 py-3">
-                        <Badge variant={inv.type === "PURCHASE" ? "blue" : "purple"}>
-                          {inv.type === "PURCHASE" ? "Recibida" : "Emitida"}
-                        </Badge>
-                      </td>
-                      <td className="px-5 py-3">
-                        <InvoiceStatusBadge
-                          status={inv.status}
-                          exported={exported}
-                          pendingReexport={exported && inv.exportBatchId == null}
-                        />
-                      </td>
-                      <td className="px-5 py-3">
-                        <Link href={`/dashboard/admin/invoices/${inv.id}`} className="text-[13px] font-medium text-blue-600 hover:text-blue-700">
-                          Ver
-                        </Link>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
-        </div>
-      </div>
-    </div>
+    <ClientSheetShell
+      client={data.client}
+      stats={data.stats}
+      role="ADMIN"
+      basePath={basePath}
+      backHref="/dashboard/admin/clients"
+      backLabel="Volver a clientes"
+      tab={tab}
+      tabs={ADMIN_CLIENT_TABS}
+    >
+      {tab === "resumen" && <ClientSummaryTab data={data} role="ADMIN" basePath={basePath} />}
+      {tab === "facturas" && <ClientInvoicesTab clientId={id} role="ADMIN" basePath={basePath} params={sp} />}
+      {tab === "periodos" && <ClientPeriodsTab clientId={id} periods={data.periods} role="ADMIN" basePath={basePath} />}
+      {tab === "exportaciones" && <ClientExportsTab clientId={id} firmId={firmId} basePath={basePath} page={sp.page} />}
+      {tab === "actividad" && <ClientActivityTab clientId={id} role="ADMIN" basePath={basePath} page={sp.page} />}
+      {tab === "ajustes" && <ClientSettingsTab data={data} firmId={firmId} />}
+    </ClientSheetShell>
   );
 }

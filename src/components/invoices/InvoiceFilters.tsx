@@ -48,6 +48,7 @@ export function InvoiceFilters({
   years,
   values,
   keep = {},
+  hideClient = false,
 }: {
   basePath: string;
   clients: { id: string; name: string }[];
@@ -55,6 +56,8 @@ export function InvoiceFilters({
   values: InvoiceFilterValues;
   /** Parametros que se conservan al filtrar (pestaña de estado, orden...). */
   keep?: Record<string, string | undefined>;
+  /** En la ficha de un cliente el cliente ya esta elegido: sin desplegable. */
+  hideClient?: boolean;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -130,16 +133,18 @@ export function InvoiceFilters({
 
   return (
     <div className="mb-4 flex flex-wrap items-center gap-2">
-      <Select
-        id="filtro-cliente"
-        aria-label="Cliente"
-        size="sm"
-        className="w-[230px]"
-        value={f.clientId}
-        options={clientOptions}
-        onChange={(v) => go({ clientId: v })}
-        searchable={clients.length > 6}
-      />
+      {!hideClient && (
+        <Select
+          id="filtro-cliente"
+          aria-label="Cliente"
+          size="sm"
+          className="w-[230px]"
+          value={f.clientId}
+          options={clientOptions}
+          onChange={(v) => go({ clientId: v })}
+          searchable={clients.length > 6}
+        />
+      )}
       <Select
         id="filtro-periodo"
         aria-label="Periodo"

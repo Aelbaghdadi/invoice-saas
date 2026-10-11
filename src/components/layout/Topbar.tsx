@@ -36,6 +36,9 @@ const ROUTE_LABELS: Record<string, string> = {
   "/dashboard/client":             "Panel de control",
   "/dashboard/client/invoices":    "Mis facturas",
   "/dashboard/client/upload":      "Subir facturas",
+  "/dashboard/support":            "Soporte",
+  "/dashboard/support/new":        "Nuevo ticket",
+  "/dashboard/support/team":       "Equipo de soporte",
 };
 
 /** Subtítulo contextual — solo en las raíces (paneles), donde aporta. */

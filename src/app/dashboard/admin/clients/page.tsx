@@ -49,7 +49,7 @@ export default async function ClientsPage({
 
   // Se filtra en memoria: son los clientes de una asesoria (decenas) y asi
   // la busqueda ignora tildes igual que el resto de listados.
-  const visibleClients = clients.filter((c) => matchesSearch([c.name, c.cif, c.email], query));
+  const visibleClients = clients.filter((c) => matchesSearch([c.name, c.cif, c.email, c.contactName, c.phone], query));
 
   // Vuelta de «Nuevo cliente» con la invitacion sin enviar (F-039). Se busca
   // entre los clientes de la asesoria: un id de otra no muestra nada.
@@ -165,7 +165,12 @@ export default async function ClientsPage({
                       </div>
                       <div>
                         <p className="text-[13px] font-semibold text-slate-800">{client.name}</p>
-                        <p className="text-[11px] text-slate-400">{client.email ?? <span className="italic text-slate-300">Sin acceso al portal</span>}</p>
+                        {/* La persona de contacto y su telefono, si estan; si no, el acceso al portal. */}
+                        <p className="text-[11px] text-slate-400">
+                          {client.contactName || client.phone
+                            ? [client.contactName, client.phone].filter(Boolean).join(" · ")
+                            : client.email ?? <span className="italic text-slate-300">Sin acceso al portal</span>}
+                        </p>
                       </div>
                     </div>
                   </td>

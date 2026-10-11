@@ -21,6 +21,8 @@ import {
   Inbox,
   Boxes,
   BarChart3,
+  LifeBuoy,
+  Headset,
 } from "lucide-react";
 import { BRAND } from "@/lib/brand";
 
@@ -72,6 +74,7 @@ const NAV_SECTIONS: Record<Role, NavSection[]> = {
         { href: "/dashboard/admin/audit",    label: "Auditoría", icon: ClipboardList },
         { href: "/dashboard/admin/usage",    label: "Uso",       icon: BarChart3 },
         { href: "/dashboard/admin/settings", label: "Ajustes",   icon: Settings },
+        { href: "/dashboard/support",        label: "Soporte",   icon: LifeBuoy },
       ],
     },
   ],
@@ -87,6 +90,7 @@ const NAV_SECTIONS: Record<Role, NavSection[]> = {
         { href: "/dashboard/worker/clasificar", label: "Por clasificar", icon: Inbox },
         { href: "/dashboard/worker/groups",   label: "Grupos",         icon: Boxes },
         { href: "/dashboard/worker/batch",    label: "Lotes",          icon: Layers },
+        { href: "/dashboard/support",         label: "Soporte",        icon: LifeBuoy },
       ],
     },
   ],
@@ -118,7 +122,12 @@ type SidebarProps = {
   /** Modo "solo iconos" en desktop. Controlado por DashboardShell, que
    *  tambien renderiza el boton de toggle como pestania en el borde. */
   collapsed?: boolean;
+  /** Esta en SUPPORT_USERNAMES: ve el panel con los tickets de todas las asesorias. */
+  supportStaff?: boolean;
 };
+
+/** El panel del equipo de soporte, al final del menu de quien lo tenga. */
+const SUPPORT_TEAM_ITEM: NavItem = { href: "/dashboard/support/team", label: "Equipo de soporte", icon: Headset };
 
 // Mismo texto que la entrada del menu y el titulo de la pagina a la que lleva.
 const BATCH_LINKS: Record<Role, { href: string; label: string }> = {
@@ -136,13 +145,17 @@ const ROLE_LABELS: Record<Role, string> = {
 
 const STORAGE_KEY = "facturocr.sidebar.openSections";
 
-export function Sidebar({ role, userName, firmName, firmLogo, collapsed = false }: SidebarProps) {
+export function Sidebar({ role, userName, firmName, firmLogo, collapsed = false, supportStaff = false }: SidebarProps) {
   const pathname = usePathname();
-  const sections = NAV_SECTIONS[role];
+  const sections = supportStaff
+    ? NAV_SECTIONS[role].map((s, i, all) => (i === all.length - 1 ? { ...s, items: [...s.items, SUPPORT_TEAM_ITEM] } : s))
+    : NAV_SECTIONS[role];
   const batchLink = BATCH_LINKS[role];
 
   const isActive = (href: string) => {
     if (href === ROOTS[role]) return pathname === href;
+    // «Soporte» no se marca cuando lo que esta activo es el panel del equipo.
+    if (href === "/dashboard/support" && pathname.startsWith(SUPPORT_TEAM_ITEM.href)) return false;
     return pathname.startsWith(href);
   };
 

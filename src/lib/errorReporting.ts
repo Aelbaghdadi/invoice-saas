@@ -131,7 +131,7 @@ type Deps = {
  * de ancho cero. Discord no usa este texto: su `content` va sin escapar (lo
  * mostraria tal cual) y sus menciones las apaga allowed_mentions.
  */
-function textForSlack(text: string): string {
+export function textForSlack(text: string): string {
   return text
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     .replace(/@(channel|all|here|everyone)\b/gi, "@\u200b$1");

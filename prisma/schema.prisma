@@ -156,6 +156,7 @@ model AdvisoryFirm {
   clients Client[]
   clientGroups ClientGroup[]
   providerRoutingRules ProviderRoutingRule[]
+  supportTickets SupportTicket[]
 }
 
 model User {
@@ -177,6 +178,8 @@ model User {
   assignedClients WorkerClientAssignment[]
   clientProfile   Client?                  @relation("ClientUser")
   auditLogs       AuditLog[]
+  supportTickets  SupportTicket[]
+  supportMessages SupportMessage[]
 }
 
 model Client {
@@ -204,6 +207,12 @@ model Client {
   /// sostiene las facturas subidas en modo clasificar mientras se rutean. Se
   /// excluye de selectores, listados, colas y exportación.
   isUnclassifiedBucket Boolean @default(false)
+  /// Ficha del cliente: la persona de contacto y su teléfono no dan acceso al
+  /// portal (eso es `email` + `user`); son para que el gestor sepa a quién
+  /// llamar. Las notas son internas de la asesoría: el cliente no las ve.
+  contactName String?
+  phone       String?
+  notes       String? @db.Text
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -659,4 +668,65 @@ model AccountEntry {
   // tipo de operacion y retencion, que no dependen del sentido.
   @@unique([clientId, nif])
   @@index([clientId])
+}
+
+// ─── Soporte ─────────────────────────────────────────────────────────────────
+
+enum SupportTicketType {
+  BUG
+  SUGGESTION
+  QUESTION
+  OTHER
+}
+
+enum SupportTicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+/// Un aviso de la asesoría al equipo del producto: un fallo, una sugerencia o
+/// una consulta. Cuelga de la asesoría (multitenancy); el equipo de soporte
+/// (usuarios de SUPPORT_USERNAMES) ve los de todas. El primer mensaje es la
+/// descripción con la que se abrió.
+model SupportTicket {
+  id             String              @id @default(cuid())
+  advisoryFirmId String
+  advisoryFirm   AdvisoryFirm        @relation(fields: [advisoryFirmId], references: [id], onDelete: Cascade)
+  createdById    String
+  createdBy      User                @relation(fields: [createdById], references: [id])
+  type           SupportTicketType
+  status         SupportTicketStatus @default(OPEN)
+  subject        String
+  /// Desde dónde se abrió (ruta de la app sin parámetros) y con qué navegador:
+  /// contexto para reproducir un fallo. Nada personal.
+  pageUrl        String?
+  userAgent      String?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  resolvedAt     DateTime?
+
+  messages SupportMessage[]
+
+  @@index([advisoryFirmId, status, updatedAt])
+  @@index([status, updatedAt])
+}
+
+model SupportMessage {
+  id          String        @id @default(cuid())
+  ticketId    String
+  ticket      SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  authorId    String
+  author      User          @relation(fields: [authorId], references: [id])
+  /// true si lo escribe el equipo de soporte; false si lo escribe la asesoría.
+  fromSupport Boolean       @default(false)
+  body        String        @db.Text
+  /// Una captura o un PDF adjunto, en el almacenamiento (support/...).
+  attachmentKey  String?
+  attachmentName String?
+  attachmentType String?
+  createdAt   DateTime      @default(now())
+
+  @@index([ticketId, createdAt])
 }

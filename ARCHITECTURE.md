@@ -53,6 +53,7 @@ importante:
 | `PeriodClosure` | Cierre de periodo (mes/año/cliente). Bloquea modificaciones. |
 | `AccountEntry` | Plan de cuentas aprendido por NIF. Acelera la siguiente factura del mismo proveedor. |
 | `ExportBatch` | Lote exportado. Las facturas se marcan vía `Invoice.exportBatchId`. |
+| `SupportTicket` / `SupportMessage` | Soporte: un aviso de la asesoría al equipo del producto y su hilo. Cuelga de la asesoría; el equipo (`SUPPORT_USERNAMES`) ve los de todas. |
 
 ### Estados de Invoice
 
@@ -252,6 +253,32 @@ Todo dato cuelga de `AdvisoryFirm`. No hay queries sin `firmId`
 en el `WHERE` (directa o transitivamente). Si añades una entidad
 nueva, **asegúrate de filtrar por firma** en cualquier query no
 trivial. Una query rota aquí es un leak entre asesorías.
+
+### Soporte y ficha de cliente
+
+- **Soporte** (`/dashboard/support`): la asesoría (ADMIN y WORKER, no los
+  clientes del portal) abre tickets (fallo, sugerencia, consulta) con un
+  adjunto opcional (`support/<firmId>/<ticketId>/<messageId>.<ext>` en el
+  almacenamiento). El administrador ve los de su asesoría; el gestor, los
+  suyos. No hay rol nuevo: los usuarios de `SUPPORT_USERNAMES` son del
+  equipo del producto y ven y contestan los de todas las asesorías en
+  `/dashboard/support/team` (la única pantalla que cruza asesorías a
+  propósito). Sus respuestas llevan `fromSupport` y ponen el ticket «en
+  curso»; la asesoría solo lo da por resuelto o lo reabre (contestar un
+  resuelto lo reabre); «cerrado» es del equipo. Avisos: correo a
+  `SUPPORT_EMAIL` y webhook `SUPPORT_WEBHOOK_URL` al abrir y al contestar la
+  asesoría; correo a quien abrió el ticket cuando contesta el equipo. Todo en
+  `after()`: un correo que no sale no tumba la acción. Lógica pura en
+  [src/lib/support.ts](src/lib/support.ts).
+- **Ficha de cliente** (`/dashboard/admin/clients/[id]` y la del gestor):
+  cabecera con cifras, y pestañas Resumen, Facturas (mismos filtros y orden
+  que el listado), Periodos (por mes/trimestre: cuántas, pendientes,
+  exportadas y si está cerrado), Exportaciones (solo admin), Actividad
+  (auditoría del cliente) y Ajustes (solo admin: editar razón social, CIF,
+  software, contacto, teléfono y notas internas; recargo; cuentas por
+  defecto; gestores). Las cifras y los periodos salen de `groupBy` y se
+  juntan en [src/lib/clientSheet.ts](src/lib/clientSheet.ts). El acceso al
+  portal de un cliente ya creado sigue sin poder cambiarse (aparcado).
 
 ## Cron jobs
 

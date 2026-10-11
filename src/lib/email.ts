@@ -552,3 +552,80 @@ export async function notifyWorkersNewUpload(params: {
   // Un envío en lote para todos los gestores del cliente (F-040).
   await sendMany("nuevas-facturas-gestor", params.workerEmails.map((to) => ({ to, subject, html })));
 }
+
+// ─── soporte ─────────────────────────────────────────────────────────────────
+
+/** Texto libre del usuario en el correo: escapado y con los saltos de linea. */
+function multiline(text: string): string {
+  return escapeHtml(text).replace(/\n/g, "<br>");
+}
+
+/**
+ * Al equipo de soporte (SUPPORT_EMAIL): se ha abierto un ticket. El cuerpo
+ * va entero, para poder leerlo desde el correo sin entrar.
+ */
+export async function notifySupportTeamNewTicket(params: {
+  to: string;
+  firmName: string;
+  userName: string;
+  typeLabel: string;
+  subject: string;
+  body: string;
+  ticketUrl: string;
+}): Promise<EmailResult> {
+  const html = wrap({
+    preheader: `${escapeHtml(params.firmName)}: ${escapeHtml(params.subject)}`,
+    heroIcon: "&#128172;",
+    heroColor: "#2563eb",
+    heroBg: "#eff6ff",
+    title: "Nuevo ticket de soporte",
+    body: `
+      ${detailCard(
+        detailRow("Asesoría", escapeHtml(params.firmName)) +
+        detailRow("Abierto por", escapeHtml(params.userName)) +
+        detailRow("Tipo", escapeHtml(params.typeLabel)) +
+        detailRow("Asunto", escapeHtml(params.subject))
+      )}
+      <p style="margin:0;font-size:14px;color:#475569;line-height:1.7">${multiline(params.body)}</p>`,
+    ctaText: "Ver el ticket",
+    ctaUrl: params.ticketUrl,
+  });
+  return send("soporte-nuevo-ticket", params.to, `[Soporte] ${params.typeLabel}: ${params.subject}`, html);
+}
+
+/**
+ * Una respuesta en un ticket: al equipo si escribe la asesoria y a quien
+ * abrio el ticket si escribe el equipo.
+ */
+export async function notifySupportReply(params: {
+  to: string;
+  recipientName: string;
+  authorName: string;
+  fromSupport: boolean;
+  subject: string;
+  body: string;
+  ticketUrl: string;
+}): Promise<EmailResult> {
+  const intro = params.fromSupport
+    ? `El equipo de ${BRAND} ha respondido a tu ticket <strong style="color:#0f172a">«${escapeHtml(params.subject)}»</strong>:`
+    : `<strong style="color:#0f172a">${escapeHtml(params.authorName)}</strong> ha escrito en el ticket <strong style="color:#0f172a">«${escapeHtml(params.subject)}»</strong>:`;
+  const html = wrap({
+    preheader: `${escapeHtml(params.authorName)}: ${escapeHtml(params.body.slice(0, 120))}`,
+    heroIcon: "&#128172;",
+    heroColor: "#2563eb",
+    heroBg: "#eff6ff",
+    title: params.fromSupport ? "Respuesta de soporte" : "Nueva respuesta en un ticket",
+    body: `
+      <p style="margin:0 0 4px;font-size:15px;color:#475569;line-height:1.7">
+        Hola <strong style="color:#0f172a">${escapeHtml(params.recipientName)}</strong>,
+      </p>
+      <p style="margin:0 0 16px;font-size:15px;color:#475569;line-height:1.7">${intro}</p>
+      ${detailCard(`<tr><td style="padding:14px 16px;font-size:14px;color:#0f172a;line-height:1.7">${multiline(params.body)}</td></tr>`)}
+      <p style="margin:0;font-size:13px;color:#94a3b8;line-height:1.6">
+        Para contestar, entra en el ticket: así queda todo en el mismo sitio.
+      </p>`,
+    ctaText: "Abrir el ticket",
+    ctaUrl: params.ticketUrl,
+  });
+  return send("soporte-respuesta", params.to, `Re: [Soporte] ${params.subject}`, html);
+}
