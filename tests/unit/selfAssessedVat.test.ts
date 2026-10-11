@@ -69,14 +69,22 @@ describe("applySelfAssessedRate", () => {
 
 describe("isUntouchedSelfAssessedProposal", () => {
   it("un borrador guardado con el 21 % propuesto sigue contando como propuesto", () => {
-    expect(isUntouchedSelfAssessedProposal([line("94.46", "21", "19.84"), line("", "", "")])).toBe(true);
+    expect(isUntouchedSelfAssessedProposal([line("94.46", "21", "19.84"), line("", "", "")], 94.46)).toBe(true);
+    expect(isUntouchedSelfAssessedProposal([line("94.46", "21", "19.84")], null)).toBe(true);
   });
 
   it("no si el gestor ha cambiado el tipo o la cuota, o no hay líneas con base", () => {
-    expect(isUntouchedSelfAssessedProposal([line("94.46", "10", "9.45")])).toBe(false);
-    expect(isUntouchedSelfAssessedProposal([line("94.46", "21", "20")])).toBe(false);
-    expect(isUntouchedSelfAssessedProposal([line("94.46", "21", "19.84"), line("10", "10", "1")])).toBe(false);
-    expect(isUntouchedSelfAssessedProposal([line("", "", "")])).toBe(false);
+    expect(isUntouchedSelfAssessedProposal([line("94.46", "10", "9.45")], 94.46)).toBe(false);
+    expect(isUntouchedSelfAssessedProposal([line("94.46", "21", "20")], 94.46)).toBe(false);
+    expect(isUntouchedSelfAssessedProposal([line("94.46", "21", "19.84"), line("10", "10", "1")], 104.46)).toBe(false);
+    expect(isUntouchedSelfAssessedProposal([line("", "", "")], 0)).toBe(false);
+  });
+
+  it("no si la cuota va dentro del total: la ha cobrado el proveedor (Meta Irlanda a quien no está en el ROI)", () => {
+    const meta = [line("94.46", "21", "19.84")];
+    expect(isUntouchedSelfAssessedProposal(meta, 114.3)).toBe(false);
+    // Con retención, igual: 94,46 + 19,84 - 14,17 = 100,13.
+    expect(isUntouchedSelfAssessedProposal(meta, 100.13, 14.17)).toBe(false);
   });
 });
 

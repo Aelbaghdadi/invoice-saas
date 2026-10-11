@@ -412,7 +412,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
   // viene sin cuota y se propone el 21 % autorrepercutido, con un aviso para
   // que el gestor lo confirme. Al abrir, no al tocar nada: no cuenta como
   // cambio sin guardar. Una ya validada se abre tal como se valido. Un
-  // borrador guardado con el 21 % sin tocar sigue contando como propuesto.
+  // borrador guardado con el 21 % sin tocar sigue contando como propuesto,
+  // salvo que la cuota vaya dentro del total (la ha cobrado el proveedor).
   const [initialLines] = useState(() => {
     const lines: VatLineInput[] = initialVatLines.length === 0
       ? [{ taxBase: "", vatRate: "", vatAmount: "", equivalenceSurchargeRate: "", equivalenceSurchargeAmount: "" }]
@@ -426,7 +427,10 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     const propose = !isValidated && !readOnly && isSelfAssessedVat(invoice.type, invoice.operationType);
     if (!propose) return { lines, applied: false };
     const proposal = applySelfAssessedRate(lines);
-    return { lines: proposal.lines, applied: proposal.applied || isUntouchedSelfAssessedProposal(proposal.lines) };
+    return {
+      lines: proposal.lines,
+      applied: proposal.applied || isUntouchedSelfAssessedProposal(proposal.lines, invoice.totalAmount, invoice.irpfAmount),
+    };
   });
   const [vatLines, setVatLines] = useState<VatLineInput[]>(initialLines.lines);
   // El 21 % lo ha puesto el formulario y el gestor aun no ha tocado el % ni

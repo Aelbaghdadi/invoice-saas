@@ -12,6 +12,7 @@
  * revision (pantalla y servidor), el OCR, el cuadre y el export.
  */
 import { isIntracomOperation } from "@/lib/intracomGoods";
+import { isInvoiceBalanced } from "@/lib/invoiceBalance";
 import { percentCents, percentOf, toCents } from "@/lib/money";
 
 /** % que se propone. Casi siempre es el general; si la factura va a otro
@@ -80,10 +81,27 @@ export function applySelfAssessedRate<T extends VatLineText>(lines: T[]): { line
  * ¿Sigue el desglose tal como lo propone applySelfAssessedRate? Todas las
  * lineas con base al % por defecto y con su cuota exacta. Asi un borrador
  * guardado sin tocar el IVA sigue contando como propuesto al volver a abrirlo.
+ *
+ * Salvo que la cuota vaya dentro del total: entonces la ha cobrado el
+ * proveedor (Meta o Google Irlanda con IVA español a quien no esta en el
+ * ROI) y no es la propuesta. Si contara como propuesta, el aviso diria que
+ * la ha puesto el formulario y, al cambiar el tipo de operacion,
+ * removeSelfAssessedRate dejaria a 0 un IVA que si esta en la factura.
  */
-export function isUntouchedSelfAssessedProposal(lines: VatLineText[]): boolean {
+export function isUntouchedSelfAssessedProposal(
+  lines: VatLineText[],
+  totalAmount: number | null,
+  irpfAmount: number | null = null,
+): boolean {
   const withBase = lines.map(parsedLine).filter((l): l is NonNullable<typeof l> => l != null && toCents(l.taxBase) !== 0);
-  return withBase.length > 0 && withBase.every(hasDefaultRate);
+  if (withBase.length === 0 || !withBase.every(hasDefaultRate)) return false;
+  if (totalAmount == null) return true;
+  return !isInvoiceBalanced({
+    sumBase: withBase.reduce((s, l) => s + l.taxBase, 0),
+    sumAmount: withBase.reduce((s, l) => s + l.vatAmount, 0),
+    irpf: irpfAmount ?? 0,
+    total: totalAmount,
+  });
 }
 
 /**

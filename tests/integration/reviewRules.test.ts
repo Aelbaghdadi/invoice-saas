@@ -401,7 +401,9 @@ describe("«Por clasificar»: al clasificar se miran también el cuadre y el des
     expect(await issuesOf(inv)).toEqual([]);
   });
 
-  it("intracomunitaria con IVA declarado: el mismo aviso que en el OCR", async () => {
+  it("adquisición intracomunitaria con IVA cobrado: descuadre, porque la cuota autorrepercutida no suma al total", async () => {
+    // El aviso «IVA declarado» queda para las ventas: en una compra el IVA es
+    // el autorrepercutido, y si el proveedor lo ha cobrado lo dice el cuadre.
     await prisma.accountEntry.create({
       data: { clientId: w.client.id, nif: "B12345674", name: "Proveedor SL", defaultOperationType: "INTRACOM" },
     });
@@ -411,7 +413,8 @@ describe("«Por clasificar»: al clasificar se miran también el cuadre y el des
     expect(after.operationType).toBe("INTRACOM");
     expect(after.status).toBe("NEEDS_ATTENTION");
     expect(await issuesOf(inv)).toEqual([[
-      "MANUAL", "Operación intracomunitaria con IVA declarado (21%): las intracomunitarias suelen ir con IVA 0%. Revisa el desglose antes de exportar.",
+      "MATH_MISMATCH",
+      "El total (121,00 €) no coincide con Base (100,00 €). Diferencia: 21,00 €. En una adquisición intracomunitaria la cuota autorrepercutida no suma al total.",
     ]]);
   });
 
