@@ -31,8 +31,15 @@ export default auth((req) => {
   if (pathname === "/login" || pathname.startsWith("/login/")) {
     // Redirect authenticated users away from /login only
     if (session?.user && pathname === "/login") {
-      return NextResponse.redirect(new URL(getDashboardUrl(session.user.role), req.url));
+      return NextResponse.redirect(
+        new URL(getDashboardUrl(session.user.role), req.url)
+      );
     }
+    return NextResponse.next();
+  }
+
+  // Páginas públicas: la landing y el aviso legal al que enlaza.
+  if (pathname === "/" || pathname === "/legal") {
     return NextResponse.next();
   }
 
