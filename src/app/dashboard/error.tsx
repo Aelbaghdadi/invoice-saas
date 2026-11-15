@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { AlertCircle, RotateCcw } from "lucide-react";
 
 export default function DashboardError({
@@ -9,6 +10,23 @@ export default function DashboardError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  // Se avisa al equipo de soporte (ticket automatico). Con digest el error
+  // vino del servidor y ya esta apuntado: la ruta lo descarta.
+  useEffect(() => {
+    if (error.digest) return;
+    fetch("/api/support/error-report", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      keepalive: true,
+      body: JSON.stringify({
+        name: error.name,
+        message: error.message,
+        stack: error.stack,
+        path: window.location.pathname,
+      }),
+    }).catch(() => {});
+  }, [error]);
+
   return (
     <div className="flex min-h-[60vh] flex-col items-center justify-center text-center">
       <div className="mb-4 rounded-full bg-red-100 p-4">
@@ -16,7 +34,8 @@ export default function DashboardError({
       </div>
       <h2 className="mb-2 text-lg font-semibold text-slate-800">Algo salió mal</h2>
       <p className="mb-6 max-w-md text-[13px] text-slate-500">
-        Se ha producido un error inesperado. Si el problema persiste, contacta con soporte.
+        Se ha producido un error inesperado y el equipo de soporte ya ha recibido el aviso. Prueba a reintentar; si
+        sigue pasando, cuéntanoslo en Soporte.
       </p>
       <button
         onClick={reset}

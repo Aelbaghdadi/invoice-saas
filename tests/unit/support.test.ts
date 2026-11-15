@@ -24,7 +24,8 @@ const otherAdmin: SupportActor = { id: "admin-b", role: "ADMIN", advisoryFirmId:
 const staff: SupportActor = { id: "azn", role: "ADMIN", advisoryFirmId: "firm-b", staff: true };
 const client: SupportActor = { id: "cli", role: "CLIENT", advisoryFirmId: null, staff: false };
 
-const ticket = { advisoryFirmId: firmA, createdById: "worker" };
+const ticket = { advisoryFirmId: firmA, createdById: "worker", source: "USER" as const };
+const autoTicket = { advisoryFirmId: firmA, createdById: "worker", source: "AUTO" as const };
 
 describe("quién es del equipo de soporte", () => {
   it("lee los nombres de usuario separados por comas o espacios", () => {
@@ -48,10 +49,18 @@ describe("quién es del equipo de soporte", () => {
 });
 
 describe("quién ve qué", () => {
-  it("el administrador lista los de su asesoría y el gestor solo los suyos", () => {
-    expect(ticketListWhere(admin)).toEqual({ advisoryFirmId: firmA });
-    expect(ticketListWhere(worker)).toEqual({ advisoryFirmId: firmA, createdById: "worker" });
+  it("el administrador lista los de su asesoría y el gestor solo los suyos; los automáticos, solo el equipo", () => {
+    expect(ticketListWhere(admin)).toEqual({ advisoryFirmId: firmA, source: "USER" });
+    expect(ticketListWhere(worker)).toEqual({ advisoryFirmId: firmA, createdById: "worker", source: "USER" });
     expect(ticketListWhere(staff)).toEqual({});
+  });
+
+  it("un ticket automático no lo lee ni lo cambia la asesoría, aunque sea de la suya; el equipo sí", () => {
+    expect(canReadTicket(admin, autoTicket)).toBe(false);
+    expect(canReadTicket(worker, autoTicket)).toBe(false);
+    expect(allowedStatuses(admin, autoTicket)).toEqual([]);
+    expect(canReadTicket(staff, autoTicket)).toBe(true);
+    expect(canReadTicket(staff, { ...autoTicket, advisoryFirmId: null, createdById: null })).toBe(true);
   });
 
   it("sin asesoría o sin rol de asesoría no se lista nada (nunca un filtro vacío)", () => {

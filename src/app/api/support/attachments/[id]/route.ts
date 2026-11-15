@@ -29,7 +29,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       attachmentKey: true,
       attachmentName: true,
       attachmentType: true,
-      ticket: { select: { advisoryFirmId: true, createdById: true } },
+      ticket: { select: { advisoryFirmId: true, createdById: true, source: true } },
     },
   });
   if (!message || !canReadTicket(actor, message.ticket)) return NextResponse.json({ error: "Not found" }, { status: 404 });

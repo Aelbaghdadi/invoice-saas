@@ -679,6 +679,13 @@ enum SupportTicketType {
   OTHER
 }
 
+/// Quién abrió el ticket: una persona de la asesoría, o la propia app al
+/// detectar un error inesperado (ver src/lib/autoTickets.ts).
+enum SupportTicketSource {
+  USER
+  AUTO
+}
+
 enum SupportTicketStatus {
   OPEN
   IN_PROGRESS
@@ -692,10 +699,18 @@ enum SupportTicketStatus {
 /// descripción con la que se abrió.
 model SupportTicket {
   id             String              @id @default(cuid())
-  advisoryFirmId String
-  advisoryFirm   AdvisoryFirm        @relation(fields: [advisoryFirmId], references: [id], onDelete: Cascade)
-  createdById    String
-  createdBy      User                @relation(fields: [createdById], references: [id])
+  /// En los automáticos puede faltar: un error sin sesión (el login, un cron).
+  advisoryFirmId String?
+  advisoryFirm   AdvisoryFirm?       @relation(fields: [advisoryFirmId], references: [id], onDelete: Cascade)
+  /// En los automáticos, quien se encontró el error (si había sesión).
+  createdById    String?
+  createdBy      User?               @relation(fields: [createdById], references: [id])
+  source         SupportTicketSource @default(USER)
+  /// Huella del error (automáticos): el mismo fallo suma una vez más al
+  /// ticket que siga sin cerrar en vez de abrir otro.
+  fingerprint    String?
+  occurrences    Int                 @default(1)
+  lastSeenAt     DateTime?
   type           SupportTicketType
   status         SupportTicketStatus @default(OPEN)
   subject        String
@@ -711,14 +726,16 @@ model SupportTicket {
 
   @@index([advisoryFirmId, status, updatedAt])
   @@index([status, updatedAt])
+  @@index([fingerprint, status])
 }
 
 model SupportMessage {
   id          String        @id @default(cuid())
   ticketId    String
   ticket      SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
-  authorId    String
-  author      User          @relation(fields: [authorId], references: [id])
+  /// null: lo ha escrito la app (el detalle de un ticket automático).
+  authorId    String?
+  author      User?         @relation(fields: [authorId], references: [id])
   /// true si lo escribe el equipo de soporte; false si lo escribe la asesoría.
   fromSupport Boolean       @default(false)
   body        String        @db.Text

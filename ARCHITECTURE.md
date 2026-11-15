@@ -270,6 +270,19 @@ trivial. Una query rota aquí es un leak entre asesorías.
   asesoría; correo a quien abrió el ticket cuando contesta el equipo. Todo en
   `after()`: un correo que no sale no tumba la acción. Lógica pura en
   [src/lib/support.ts](src/lib/support.ts).
+- **Tickets automáticos** ([src/lib/autoTickets.ts](src/lib/autoTickets.ts)):
+  un error inesperado abre un ticket en Soporte con `source = AUTO`, que
+  solo ve el equipo. Vienen de tres sitios: `onRequestError`
+  (instrumentation.ts, errores del servidor; la sesión sale del cookie de
+  NextAuth), el OCR (ERR-OCR-001, -005 y SYS-001 en `processInvoice`; los
+  del documento no) y la pantalla «Algo salió mal» del navegador
+  (`/api/support/error-report`, solo sin digest para no duplicar los del
+  servidor). El mismo fallo (misma huella: ruta, clase y mensaje sin ids ni
+  números; en el OCR, código y estado HTTP) suma `occurrences` al ticket que
+  siga sin cerrar, con un `pg_advisory_xact_lock` para que dos a la vez no
+  abran dos. Cerrado, la siguiente vez abre otro. Como mucho 20 nuevos por
+  hora y proceso; aviso al equipo solo al abrirse. Nunca lanza y espera
+  como mucho 5 s.
 - **Ficha de cliente** (`/dashboard/admin/clients/[id]` y la del gestor):
   cabecera con cifras, y pestañas Resumen, Facturas (mismos filtros y orden
   que el listado), Periodos (por mes/trimestre: cuántas, pendientes,

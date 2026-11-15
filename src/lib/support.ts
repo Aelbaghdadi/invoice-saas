@@ -6,7 +6,7 @@
  * lo que llega del formulario y el texto de los avisos. Las consultas y las
  * acciones estan en src/app/dashboard/support.
  */
-import type { Prisma, SupportTicketStatus, SupportTicketType } from "@prisma/client";
+import type { Prisma, SupportTicketSource, SupportTicketStatus, SupportTicketType } from "@prisma/client";
 import type { BadgeVariant } from "@/components/ui/Badge";
 import type { AllowedFileKind } from "@/lib/fileValidation";
 
@@ -89,22 +89,26 @@ export type SupportActor = {
   staff: boolean;
 };
 
-type TicketScope = { advisoryFirmId: string; createdById: string };
+type TicketScope = { advisoryFirmId: string | null; createdById: string | null; source: SupportTicketSource };
 
 /**
  * Lo que lista cada uno. El equipo, todo; el administrador, los de su
  * asesoria; el gestor, los que abrio el. Sin asesoria no se ve nada: un
  * filtro «undefined» se convertiria en «sin filtro» (F-006).
+ *
+ * Los automaticos (errores que ha detectado la app) son solo del equipo: la
+ * asesoria no los ha abierto y son detalle tecnico.
  */
 export function ticketListWhere(actor: SupportActor): Prisma.SupportTicketWhereInput | null {
   if (actor.staff) return {};
   if (!actor.advisoryFirmId || !canUseSupport(actor.role)) return null;
-  if (actor.role === "ADMIN") return { advisoryFirmId: actor.advisoryFirmId };
-  return { advisoryFirmId: actor.advisoryFirmId, createdById: actor.id };
+  if (actor.role === "ADMIN") return { advisoryFirmId: actor.advisoryFirmId, source: "USER" };
+  return { advisoryFirmId: actor.advisoryFirmId, createdById: actor.id, source: "USER" };
 }
 
 export function canReadTicket(actor: SupportActor, ticket: TicketScope): boolean {
   if (actor.staff) return true;
+  if (ticket.source !== "USER") return false;
   if (!actor.advisoryFirmId || ticket.advisoryFirmId !== actor.advisoryFirmId) return false;
   if (actor.role === "ADMIN") return true;
   return actor.role === "WORKER" && ticket.createdById === actor.id;

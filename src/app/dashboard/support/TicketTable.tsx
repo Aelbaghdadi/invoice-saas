@@ -1,6 +1,6 @@
 import Link from "next/link";
-import { MessageSquare, Paperclip } from "lucide-react";
-import type { SupportTicketStatus, SupportTicketType } from "@prisma/client";
+import { Bot, MessageSquare, Paperclip } from "lucide-react";
+import type { SupportTicketSource, SupportTicketStatus, SupportTicketType } from "@prisma/client";
 import { formatDateTimeEs } from "@/lib/dates";
 import { TicketStatusBadge, TicketTypeChip } from "./TicketBadges";
 
@@ -9,8 +9,11 @@ export type TicketRow = {
   subject: string;
   type: SupportTicketType;
   status: SupportTicketStatus;
-  createdByName: string;
-  firmName: string;
+  source: SupportTicketSource;
+  /** Veces que ha pasado (automaticos). */
+  occurrences: number;
+  createdByName: string | null;
+  firmName: string | null;
   createdAt: Date;
   updatedAt: Date;
   messages: number;
@@ -42,12 +45,22 @@ export function TicketTable({ rows, showFirm }: { rows: TicketRow[]; showFirm: b
                     <Link href={`/dashboard/support/${t.id}`} className="block max-w-[420px] truncate font-semibold text-slate-800 hover:text-blue-700">
                       {t.subject}
                     </Link>
-                    <p className="text-[11px] text-slate-400">Abierto el {formatDateTimeEs(t.createdAt)}</p>
+                    <p className="flex items-center gap-1.5 text-[11px] text-slate-400">
+                      {t.source === "AUTO" && (
+                        <span className="inline-flex items-center gap-1 rounded bg-violet-50 px-1.5 py-0.5 font-semibold text-violet-700">
+                          <Bot className="h-3 w-3" />
+                          Automático{t.occurrences > 1 ? ` · ${t.occurrences.toLocaleString("es-ES")} veces` : ""}
+                        </span>
+                      )}
+                      Abierto el {formatDateTimeEs(t.createdAt)}
+                    </p>
                   </div>
                 </div>
               </td>
-              {showFirm && <td className="px-5 py-3 text-slate-600">{t.firmName}</td>}
-              <td className="px-5 py-3 text-slate-600">{t.createdByName}</td>
+              {showFirm && <td className="px-5 py-3 text-slate-600">{t.firmName ?? <span className="text-slate-400">Sin asesoría</span>}</td>}
+              <td className="px-5 py-3 text-slate-600">
+                {t.createdByName ?? <span className="text-slate-400">{t.source === "AUTO" ? "La aplicación" : "—"}</span>}
+              </td>
               <td className="px-5 py-3"><TicketStatusBadge status={t.status} /></td>
               <td className="px-5 py-3 text-right tabular-nums text-slate-600">
                 <span className="inline-flex items-center gap-1.5">

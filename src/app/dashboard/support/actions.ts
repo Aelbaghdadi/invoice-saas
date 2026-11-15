@@ -198,20 +198,25 @@ export async function addSupportMessage(ticketId: string, _prev: MessageFormStat
   }
 
   const attachmentSaved = attachment.file
-    ? await storeAttachment(ticket.advisoryFirmId, ticketId, messageId, attachment.file)
+    // Los automaticos sin asesoria van a su propia carpeta.
+    ? await storeAttachment(ticket.advisoryFirmId ?? "sin-asesoria", ticketId, messageId, attachment.file)
     : true;
 
   const authorName = (await prisma.user.findUnique({ where: { id: actor.id }, select: { name: true } }))?.name ?? "Usuario";
-  after(() => notifyReply({
-    ticketId,
-    type: ticket.type,
-    subject: ticket.subject,
-    body: parsed.body,
-    firmName: ticket.advisoryFirm.name,
-    authorName,
-    fromSupport,
-    author: { name: ticket.createdBy.name, email: ticket.createdBy.email },
-  }));
+  // Un ticket automatico no lo abrio nadie: no hay a quien escribir.
+  if (ticket.source === "USER" && ticket.createdBy) {
+    const author = ticket.createdBy;
+    after(() => notifyReply({
+      ticketId,
+      type: ticket.type,
+      subject: ticket.subject,
+      body: parsed.body,
+      firmName: ticket.advisoryFirm?.name ?? "Sin asesoría",
+      authorName,
+      fromSupport,
+      author: { name: author.name, email: author.email },
+    }));
+  }
 
   revalidateSupport(ticketId);
   return attachmentSaved ? { ok: true } : { ok: true, warning: ATTACHMENT_LOST };
@@ -225,7 +230,7 @@ export async function setSupportTicketStatus(ticketId: string, status: string): 
 
   const ticket = await prisma.supportTicket.findUnique({
     where: { id: ticketId },
-    select: { advisoryFirmId: true, createdById: true, status: true, resolvedAt: true },
+    select: { advisoryFirmId: true, createdById: true, source: true, status: true, resolvedAt: true },
   });
   if (!ticket || !canReadTicket(actor, ticket)) return { error: NO_ACCESS };
   if (!allowedStatuses(actor, ticket).includes(status)) return { error: "No puedes poner este ticket en ese estado." };

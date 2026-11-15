@@ -41,6 +41,7 @@ import { proposeOperationType, unclassifiedGoodsType } from "@/lib/operationType
 import { classifyOcrError, DocumentError, OcrHttpError, OcrNotConfiguredError, OriginalMissingError, userMessageForError } from "@/lib/ocrErrors";
 import { retryDelayMs } from "@/lib/retryBackoff";
 import { runQueuedOcr } from "@/lib/ocrQueue";
+import { recordOcrErrorTicket } from "@/lib/autoTickets";
 import { closeOpenIssues } from "@/lib/invoiceIssues";
 
 /**
@@ -854,6 +855,9 @@ async function analyzeInvoice(invoiceId: string, triggeredByUserId: string) {
     } catch (writeErr) {
       console.error(`[processInvoice] ${invoiceId}: no se pudo guardar el OCR_ERROR:`, writeErr);
     }
+    // Un fallo nuestro o del proveedor (no del documento) abre o suma un
+    // ticket automatico para el equipo. No lanza.
+    await recordOcrErrorTicket(invoiceId, code, err);
   }
 }
 

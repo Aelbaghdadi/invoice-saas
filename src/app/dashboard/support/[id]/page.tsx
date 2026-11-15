@@ -2,7 +2,7 @@ import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
-import { AlertTriangle, ChevronLeft, Headset, Paperclip } from "lucide-react";
+import { AlertTriangle, Bot, ChevronLeft, Headset, Paperclip } from "lucide-react";
 import { formatDateTimeEs } from "@/lib/dates";
 import { allowedStatuses, canReadTicket, canUseSupport } from "@/lib/support";
 import { supportActorFor } from "@/lib/supportAccess";
@@ -58,14 +58,33 @@ export default async function SupportTicketPage({ params, searchParams }: Props)
             <div className="flex flex-wrap items-center gap-2">
               <TicketTypeChip type={ticket.type} />
               <TicketStatusBadge status={ticket.status} />
+              {ticket.source === "AUTO" && (
+                <span className="inline-flex items-center gap-1 rounded-md bg-violet-50 px-1.5 py-1 text-[11px] font-semibold text-violet-700 ring-1 ring-inset ring-violet-100">
+                  <Bot className="h-3.5 w-3.5" />
+                  Automático
+                </span>
+              )}
             </div>
-            <h1 className="mt-2 text-[20px] font-bold tracking-tight text-slate-900">{ticket.subject}</h1>
+            <h1 className="mt-2 break-words text-[20px] font-bold tracking-tight text-slate-900">{ticket.subject}</h1>
             <p className="mt-1 text-[12px] text-slate-500">
-              Abierto por <span className="font-medium text-slate-700">{ticket.createdBy.name}</span>
-              {actor.staff && <> · <span className="font-medium text-slate-700">{ticket.advisoryFirm.name}</span></>}
+              {ticket.source === "AUTO" ? (
+                <>
+                  Detectado por la aplicación
+                  {ticket.createdBy && <> al usar <span className="font-medium text-slate-700">{ticket.createdBy.name}</span></>}
+                </>
+              ) : (
+                <>Abierto por <span className="font-medium text-slate-700">{ticket.createdBy?.name ?? "—"}</span></>
+              )}
+              {actor.staff && <> · <span className="font-medium text-slate-700">{ticket.advisoryFirm?.name ?? "sin asesoría"}</span></>}
               {" "}el {formatDateTimeEs(ticket.createdAt)}
               {ticket.resolvedAt && <> · {ticket.status === "CLOSED" ? "cerrado" : "resuelto"} el {formatDateTimeEs(ticket.resolvedAt)}</>}
             </p>
+            {ticket.source === "AUTO" && (
+              <p className="mt-1 text-[12px] font-medium text-violet-700">
+                Ha pasado {ticket.occurrences.toLocaleString("es-ES")} {ticket.occurrences === 1 ? "vez" : "veces"}
+                {ticket.lastSeenAt && <> · la última, el {formatDateTimeEs(ticket.lastSeenAt)}</>}
+              </p>
+            )}
           </div>
           {/* key: el desplegable guarda el estado elegido; si el estado cambia
               por otro lado (una respuesta lo pone «en curso»), se rehace. */}
@@ -100,19 +119,19 @@ export default async function SupportTicketPage({ params, searchParams }: Props)
           >
             <div className="flex items-center gap-2.5">
               <div className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full text-[10px] font-bold ${
-                m.fromSupport ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600"
+                m.fromSupport ? "bg-blue-600 text-white" : m.author ? "bg-slate-100 text-slate-600" : "bg-violet-100 text-violet-700"
               }`}>
-                {m.fromSupport ? <Headset className="h-3.5 w-3.5" /> : initials(m.author.name)}
+                {m.fromSupport ? <Headset className="h-3.5 w-3.5" /> : m.author ? initials(m.author.name) : <Bot className="h-3.5 w-3.5" />}
               </div>
               <div className="min-w-0 flex-1">
                 <p className="text-[13px] font-semibold text-slate-800">
-                  {m.author.name}
+                  {m.author?.name ?? "La aplicación"}
                   {m.fromSupport && <span className="ml-1.5 rounded-md bg-blue-100 px-1.5 py-0.5 text-[10px] font-semibold text-blue-700">Equipo de soporte</span>}
                 </p>
                 <p className="text-[11px] text-slate-400">{formatDateTimeEs(m.createdAt)}</p>
               </div>
             </div>
-            <p className="mt-3 whitespace-pre-wrap text-[13px] leading-relaxed text-slate-700">{m.body}</p>
+            <p className={`mt-3 whitespace-pre-wrap break-words leading-relaxed text-slate-700 ${m.author ? "text-[13px]" : "font-mono text-[12px]"}`}>{m.body}</p>
             {m.attachmentKey && (
               <a
                 href={`/api/support/attachments/${m.id}`}

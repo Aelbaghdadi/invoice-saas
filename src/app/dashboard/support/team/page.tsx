@@ -12,7 +12,14 @@ import { supportActorFor } from "@/lib/supportAccess";
 import { TicketTable, type TicketRow } from "../TicketTable";
 import type { Prisma } from "@prisma/client";
 
-type Props = { searchParams: Promise<{ estado?: string; page?: string }> };
+type Props = { searchParams: Promise<{ estado?: string; origen?: string; page?: string }> };
+
+/** Quien abrio el ticket: todos, solo los automaticos o solo los de las asesorias. */
+const ORIGINS: { label: string; value: string; where: Prisma.SupportTicketWhereInput }[] = [
+  { label: "Todos", value: "", where: {} },
+  { label: "De las asesorías", value: "usuarios", where: { source: "USER" } },
+  { label: "Automáticos", value: "auto", where: { source: "AUTO" } },
+];
 
 /**
  * Panel del equipo (SUPPORT_USERNAMES): los tickets de todas las asesorias.
@@ -26,12 +33,16 @@ export default async function SupportTeamPage({ searchParams }: Props) {
 
   const sp = await searchParams;
   const estado = sp.estado ?? "";
-  const where: Prisma.SupportTicketWhereInput = isSupportTicketStatus(estado)
-    ? { status: estado }
-    : estado === "todos" ? {} : { status: { in: SUPPORT_OPEN_STATUSES } };
+  const origin = ORIGINS.find((o) => o.value === (sp.origen ?? "")) ?? ORIGINS[0];
+  const where: Prisma.SupportTicketWhereInput = {
+    ...origin.where,
+    ...(isSupportTicketStatus(estado)
+      ? { status: estado }
+      : estado === "todos" ? {} : { status: { in: SUPPORT_OPEN_STATUSES } }),
+  };
 
   const [byStatus, total] = await Promise.all([
-    prisma.supportTicket.groupBy({ by: ["status"], _count: { _all: true } }),
+    prisma.supportTicket.groupBy({ by: ["status"], where: origin.where, _count: { _all: true } }),
     prisma.supportTicket.count({ where }),
   ]);
   const count = (s: string) => byStatus.find((r) => r.status === s)?._count._all ?? 0;
@@ -59,17 +70,20 @@ export default async function SupportTeamPage({ searchParams }: Props) {
     subject: t.subject,
     type: t.type,
     status: t.status,
-    createdByName: t.createdBy.name,
-    firmName: t.advisoryFirm.name,
+    source: t.source,
+    occurrences: t.occurrences,
+    createdByName: t.createdBy?.name ?? null,
+    firmName: t.advisoryFirm?.name ?? null,
     createdAt: t.createdAt,
     updatedAt: t.updatedAt,
     messages: t._count.messages,
     hasAttachment: t.messages.length > 0,
   }));
 
-  const hrefFor = (page: number, estadoValue = estado) => {
+  const hrefFor = (page: number, estadoValue = estado, origenValue = origin.value) => {
     const qs = new URLSearchParams();
     if (estadoValue) qs.set("estado", estadoValue);
+    if (origenValue) qs.set("origen", origenValue);
     if (page > 1) qs.set("page", String(page));
     const s = qs.toString();
     return s ? `/dashboard/support/team?${s}` : "/dashboard/support/team";
@@ -87,7 +101,27 @@ export default async function SupportTeamPage({ searchParams }: Props) {
         <ChevronLeft className="h-4 w-4" />
         Mis tickets
       </Link>
-      <PageHeader title="Panel del equipo de soporte" description="Los tickets de todas las asesorías. Lo que contestes aquí les llega por correo." />
+      <PageHeader
+        title="Panel del equipo de soporte"
+        description="Los tickets de todas las asesorías y los que abre la aplicación al encontrarse un error. Lo que contestes en los de una asesoría le llega por correo."
+      />
+
+      <div className="mb-3 flex w-fit items-center gap-1 rounded-lg border border-slate-200 bg-white p-1 shadow-sm">
+        {ORIGINS.map((o) => {
+          const active = origin.value === o.value;
+          return (
+            <Link
+              key={o.value}
+              href={hrefFor(1, estado, o.value)}
+              className={`rounded-md px-3 py-1.5 text-[12px] font-medium transition-all ${
+                active ? "bg-slate-800 text-white shadow-sm" : "text-slate-500 hover:text-slate-700"
+              }`}
+            >
+              {o.label}
+            </Link>
+          );
+        })}
+      </div>
 
       <div className="mb-4 flex w-fit flex-wrap items-center gap-1 rounded-lg border border-slate-200 bg-white p-1 shadow-sm">
         {tabs.map((tab) => {

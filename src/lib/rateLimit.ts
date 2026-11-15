@@ -62,3 +62,5 @@ export function getClientIp(headers: Headers): string {
 // Instancias compartidas para endpoints sensibles
 export const loginRateLimit = rateLimit({ windowMs: 15 * 60 * 1000, max: 10 });
 export const resetPasswordRateLimit = rateLimit({ windowMs: 60 * 60 * 1000, max: 5 });
+/** Errores del navegador que manda una sesion (ver /api/support/error-report). */
+export const errorReportRateLimit = rateLimit({ windowMs: 10 * 60 * 1000, max: 20 });
