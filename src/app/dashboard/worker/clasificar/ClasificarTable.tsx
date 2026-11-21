@@ -7,18 +7,25 @@ import {
   ChevronLeft, ChevronRight, Zap,
 } from "lucide-react";
 import { useToast } from "@/components/ui/Toast";
+import { useConfirm } from "@/components/ui/ConfirmDialog";
 import { Badge } from "@/components/ui/Badge";
 import { formatEur } from "@/lib/format";
 import { formatDateEs } from "@/lib/dates";
 import PdfViewer from "@/components/ui/PdfViewerDynamic";
 import ImageViewer from "@/components/ui/ImageViewer";
+import { thirdPartyName } from "@/lib/invoiceSort";
 import { classifyInvoice, discardUnclassified } from "./actions";
 
 type Candidate = { id: string; name: string };
 type Row = {
   id: string;
   filename: string;
+  invoiceNumber: string | null;
   type: "PURCHASE" | "SALE";
+  /** Subida con «Detectar automáticamente»: `type` es solo un marcador. */
+  typeUnconfirmed: boolean;
+  issuerName: string | null;
+  receiverName: string | null;
   issuerCif: string | null;
   receiverCif: string | null;
   total: number | null;
@@ -37,9 +44,28 @@ const REASON_LABEL: Record<string, string> = {
   periodo_cerrado: "Periodo cerrado",
 };
 
+/** La otra parte (el proveedor en una recibida): es lo que el gestor
+ *  reconoce del papel. Con el tipo sin determinar se supone recibida. */
+function counterpart(row: Row): { name: string | null; cif: string | null } {
+  return { name: thirdPartyName(row), cif: row.type === "SALE" ? row.receiverCif : row.issuerCif };
+}
+
+function TypeBadge({ row }: { row: Row }) {
+  if (row.typeUnconfirmed) return <Badge variant="slate">Sin determinar</Badge>;
+  return (
+    <Badge variant={row.type === "PURCHASE" ? "blue" : "purple"}>
+      {row.type === "PURCHASE" ? "Recibida" : "Emitida"}
+    </Badge>
+  );
+}
+
 export function ClasificarTable({ rows }: { rows: Row[] }) {
   const { success, error: toastError } = useToast();
+  const { confirm, dialog } = useConfirm();
   const router = useRouter();
+  // Con la confirmación de descartar abierta, los atajos del carrusel no
+  // cuentan: un Enter clasificaba la factura detrás del diálogo.
+  const [confirming, setConfirming] = useState(false);
   const [done, setDone] = useState<Set<string>>(new Set());
   const [chainIdx, setChainIdx] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
@@ -84,10 +110,19 @@ export function ClasificarTable({ rows }: { rows: Row[] }) {
       .finally(() => setBusy(false));
   }, [cur, busy, advance, success, toastError]);
 
-  const doDiscard = useCallback(() => {
-    if (!cur || busy) return;
-    setBusy(true);
+  const doDiscard = useCallback(async () => {
+    if (!cur || busy || confirming) return;
     const id = cur.id;
+    setConfirming(true);
+    const ok = await confirm({
+      title: "¿Descartar esta factura?",
+      message: "Se rechaza y sale del reparto para todos: úsalo solo si no es de ninguna de las empresas.",
+      confirmLabel: "Descartar",
+      tone: "danger",
+    });
+    setConfirming(false);
+    if (!ok) return;
+    setBusy(true);
     discardUnclassified(id)
       .then((res) => {
         if (res?.error) toastError(res.error);
@@ -95,16 +130,17 @@ export function ClasificarTable({ rows }: { rows: Row[] }) {
       })
       .catch(() => toastError("No se pudo descartar la factura. Inténtalo de nuevo."))
       .finally(() => setBusy(false));
-  }, [cur, busy, advance, success, toastError]);
+  }, [cur, busy, confirming, confirm, advance, success, toastError]);
 
+  // Solo por las pendientes: una ya clasificada no se puede volver a abrir.
   const goPrev = useCallback(() => {
     if (chainIdx == null) return;
-    for (let i = chainIdx - 1; i >= 0; i--) { setChainIdx(i); return; }
-  }, [chainIdx]);
+    for (let i = chainIdx - 1; i >= 0; i--) if (!done.has(rows[i].id)) { setChainIdx(i); return; }
+  }, [chainIdx, done, rows]);
   const goNext = useCallback(() => {
     if (chainIdx == null) return;
-    for (let i = chainIdx + 1; i < rows.length; i++) { setChainIdx(i); return; }
-  }, [chainIdx, rows.length]);
+    for (let i = chainIdx + 1; i < rows.length; i++) if (!done.has(rows[i].id)) { setChainIdx(i); return; }
+  }, [chainIdx, done, rows]);
 
   // Cargar vista previa del documento actual.
   useEffect(() => {
@@ -122,13 +158,15 @@ export function ClasificarTable({ rows }: { rows: Row[] }) {
   useEffect(() => {
     if (chainIdx == null || !cur) return;
     const onKey = (e: KeyboardEvent) => {
-      if (busy) return;
+      if (busy || confirming) return;
       if (e.key === "Escape") { e.preventDefault(); close(); return; }
       if (e.key === "ArrowLeft") { e.preventDefault(); goPrev(); return; }
       if (e.key === "ArrowRight") { e.preventDefault(); goNext(); return; }
+      // Enter solo con sugerencia: sin ella asignaba a la primera empresa de
+      // la lista, a ciegas.
       if (e.key === "Enter") {
         e.preventDefault();
-        doClassify(cur.suggestedClientId ?? cur.candidates[0]?.id ?? "");
+        if (cur.suggestedClientId) doClassify(cur.suggestedClientId);
         return;
       }
       if (e.key === "d" || e.key === "D") { e.preventDefault(); doDiscard(); return; }
@@ -140,7 +178,7 @@ export function ClasificarTable({ rows }: { rows: Row[] }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [chainIdx, cur, busy, close, goPrev, goNext, doClassify, doDiscard]);
+  }, [chainIdx, cur, busy, confirming, close, goPrev, goNext, doClassify, doDiscard]);
 
   const nameById = new Map(rows.flatMap((r) => r.candidates.map((c) => [c.id, c.name] as const)));
 
@@ -162,9 +200,10 @@ export function ClasificarTable({ rows }: { rows: Row[] }) {
         <table className="w-full">
           <thead>
             <tr className="border-b border-slate-100 bg-slate-50/80 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-              <th className="px-4 py-3">Archivo</th>
+              <th className="px-4 py-3">Factura</th>
+              <th className="px-4 py-3">Proveedor / cliente</th>
               <th className="px-4 py-3">Tipo</th>
-              <th className="px-4 py-3">CIF detectado</th>
+              <th className="px-4 py-3">CIF de la empresa</th>
               <th className="px-4 py-3">Fecha factura</th>
               <th className="px-4 py-3 text-right">Total</th>
               <th className="px-4 py-3">Motivo</th>
@@ -175,6 +214,7 @@ export function ClasificarTable({ rows }: { rows: Row[] }) {
           <tbody className="divide-y divide-slate-50">
             {rows.map((row, i) => {
               const sideCif = row.type === "PURCHASE" ? row.receiverCif : row.issuerCif;
+              const other = counterpart(row);
               const isDone = done.has(row.id);
               return (
                 <tr key={row.id} className={`text-[13px] ${isDone ? "text-slate-300" : "text-slate-700 hover:bg-slate-50/60"}`}>
@@ -186,13 +226,16 @@ export function ClasificarTable({ rows }: { rows: Row[] }) {
                       disabled={isDone}
                     >
                       <Eye className="h-3.5 w-3.5 flex-shrink-0" />
-                      <span className="truncate">{row.filename}</span>
+                      <span className="truncate">{row.invoiceNumber ?? row.filename}</span>
                     </button>
+                    {row.invoiceNumber && <p className="truncate pl-5 text-[11px] text-slate-400" title={row.filename}>{row.filename}</p>}
+                  </td>
+                  <td className="px-4 py-3 max-w-[220px]">
+                    {other.name ? <p className="truncate">{other.name}</p> : <span className="text-slate-400">—</span>}
+                    {other.cif && <p className="font-mono text-[11px] text-slate-400">{other.cif}</p>}
                   </td>
                   <td className={`px-4 py-3 ${isDone ? "opacity-40" : ""}`}>
-                    <Badge variant={row.type === "PURCHASE" ? "blue" : "purple"}>
-                      {row.type === "PURCHASE" ? "Recibida" : "Emitida"}
-                    </Badge>
+                    <TypeBadge row={row} />
                   </td>
                   <td className="px-4 py-3 font-mono text-[12px]">{sideCif || <span className="text-slate-400">—</span>}</td>
                   <td className="px-4 py-3 whitespace-nowrap tabular-nums">{formatDateEs(row.date)}</td>
@@ -222,11 +265,12 @@ export function ClasificarTable({ rows }: { rows: Row[] }) {
         </table>
       </div>
 
+      {dialog}
       {cur && (
         <ChainOverlay
           row={cur}
-          index={chainIdx!}
-          total={rows.length}
+          index={rows.slice(0, chainIdx!).filter((r) => !done.has(r.id)).length}
+          total={pendingCount}
           preview={preview[cur.id]}
           previewLoading={previewLoading && !preview[cur.id]}
           busy={busy}
@@ -260,6 +304,7 @@ function ChainOverlay({
   const isImage = (preview?.type ?? "").startsWith("image/");
   const url = preview?.url ?? null;
   const sideCif = row.type === "PURCHASE" ? row.receiverCif : row.issuerCif;
+  const other = counterpart(row);
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-black/60">
@@ -304,8 +349,15 @@ function ChainOverlay({
 
         {/* Panel de decisión */}
         <div className="flex w-[320px] flex-shrink-0 flex-col gap-3 overflow-y-auto border-l border-slate-200 bg-white p-4">
-          <div className="text-[12px] text-slate-500">
-            <div>CIF detectado: <span className="font-mono text-slate-700">{sideCif || "—"}</span></div>
+          <div className="space-y-0.5 text-[12px] text-slate-500">
+            <div className="mb-1"><TypeBadge row={row} /></div>
+            <div>Nº factura: <span className="text-slate-700">{row.invoiceNumber || "—"}</span></div>
+            <div>
+              {row.type === "SALE" ? "Cliente final" : "Proveedor"}:{" "}
+              <span className="text-slate-700">{other.name || "—"}</span>
+              {other.cif && <span className="font-mono text-slate-400"> · {other.cif}</span>}
+            </div>
+            <div>CIF de la empresa: <span className="font-mono text-slate-700">{sideCif || "—"}</span></div>
             <div>Fecha factura: <span className="tabular-nums text-slate-700">{formatDateEs(row.date)}</span></div>
             <div>Total: <span className="tabular-nums text-slate-700">{formatEur(row.total)}</span></div>
             <div className="mt-1">
@@ -315,7 +367,12 @@ function ChainOverlay({
             </div>
           </div>
 
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">¿A qué empresa?</p>
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">¿A qué empresa?</p>
+            {!row.suggestedClientId && row.candidates.length > 0 && (
+              <p className="mt-0.5 text-[11px] text-slate-400">Sin sugerencia: pulsa el número de la empresa.</p>
+            )}
+          </div>
           <div className="space-y-1.5">
             {row.candidates.map((c, i) => {
               const suggested = c.id === row.suggestedClientId;

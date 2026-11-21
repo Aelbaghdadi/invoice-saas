@@ -59,7 +59,7 @@ const NAV_SECTIONS: Record<Role, NavSection[]> = {
       items: [
         { href: "/dashboard/admin",         label: "Panel",           icon: LayoutDashboard },
         { href: "/dashboard/worker/upload", label: "Subir facturas",  icon: Upload },
-        { href: "/dashboard/worker/clasificar", label: "Por clasificar", icon: Inbox },
+        { href: "/dashboard/worker/clasificar", label: "Reparto", icon: Inbox },
         { href: "/dashboard/admin/batch",   label: "Lotes",           icon: Layers },
         { href: "/dashboard/admin/export",  label: "Exportar",        icon: Download },
         { href: "/dashboard/archivo",       label: "Archivo",         icon: Archive },
@@ -89,7 +89,7 @@ const NAV_SECTIONS: Record<Role, NavSection[]> = {
         { href: "/dashboard/worker/clients",  label: "Clientes",       icon: Building2 },
         { href: "/dashboard/worker/invoices", label: "Facturas",       icon: FileText },
         { href: "/dashboard/worker/upload",   label: "Subir facturas", icon: Upload },
-        { href: "/dashboard/worker/clasificar", label: "Por clasificar", icon: Inbox },
+        { href: "/dashboard/worker/clasificar", label: "Reparto", icon: Inbox },
         { href: "/dashboard/worker/groups",   label: "Grupos",         icon: Boxes },
         { href: "/dashboard/worker/batch",    label: "Lotes",          icon: Layers },
         { href: "/dashboard/archivo",         label: "Archivo",        icon: Archive },
@@ -127,6 +127,8 @@ type SidebarProps = {
   collapsed?: boolean;
   /** Esta en SUPPORT_USERNAMES: ve el panel con los tickets de todas las asesorias. */
   supportStaff?: boolean;
+  /** Contadores junto a una entrada, por href (p. ej. lo pendiente del reparto). */
+  badges?: Record<string, number>;
 };
 
 /** El panel del equipo de soporte, al final del menu de quien lo tenga. */
@@ -148,7 +150,7 @@ const ROLE_LABELS: Record<Role, string> = {
 
 const STORAGE_KEY = "facturocr.sidebar.openSections";
 
-export function Sidebar({ role, userName, firmName, firmLogo, collapsed = false, supportStaff = false }: SidebarProps) {
+export function Sidebar({ role, userName, firmName, firmLogo, collapsed = false, supportStaff = false, badges = {} }: SidebarProps) {
   const pathname = usePathname();
   const sections = supportStaff
     ? NAV_SECTIONS[role].map((s, i, all) => (i === all.length - 1 ? { ...s, items: [...s.items, SUPPORT_TEAM_ITEM] } : s))
@@ -218,11 +220,12 @@ export function Sidebar({ role, userName, firmName, firmLogo, collapsed = false,
   const renderItem = (item: NavItem) => {
     const active = isActive(item.href);
     const Icon = item.icon;
+    const badge = badges[item.href] ?? 0;
     return (
       <li key={item.href}>
         <Link
           href={item.href}
-          title={collapsed ? item.label : undefined}
+          title={collapsed ? (badge > 0 ? `${item.label} (${badge})` : item.label) : undefined}
           className={`relative flex items-center rounded-lg text-[13px] transition-colors duration-150 ${
             collapsed ? "justify-center px-2 py-2.5" : "gap-3 px-3 py-2"
           } ${
@@ -237,6 +240,13 @@ export function Sidebar({ role, userName, firmName, firmLogo, collapsed = false,
           )}
           <Icon className={`h-[18px] w-[18px] flex-shrink-0 ${active ? "text-blue-700" : "text-slate-400"}`} strokeWidth={1.8} />
           {!collapsed && item.label}
+          {badge > 0 && (collapsed ? (
+            <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-amber-500" />
+          ) : (
+            <span className="ml-auto rounded-full bg-amber-100 px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-amber-700">
+              {badge}
+            </span>
+          ))}
         </Link>
       </li>
     );

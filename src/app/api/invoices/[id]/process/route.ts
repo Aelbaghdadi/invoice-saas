@@ -48,8 +48,13 @@ export async function POST(
   }
 
   // WORKER: solo clientes asignados. ADMIN: solo clientes de su asesoria
-  // (antes un ADMIN podia reprocesar la factura de otra asesoria).
-  if (!(await canAccessClient(session, invoice.clientId))) {
+  // (antes un ADMIN podia reprocesar la factura de otra asesoria). Una del
+  // buzon «Sin clasificar» (subida entre varios), si puede con alguna de las
+  // candidatas: el buzon no se asigna a nadie, y con error de lectura no
+  // tenia otra salida.
+  const allowed = (await canAccessClient(session, invoice.clientId))
+    || (await Promise.all(invoice.routingCandidateIds.map((id) => canAccessClient(session, id)))).some(Boolean);
+  if (!allowed) {
     return NextResponse.json({ error: NOT_FOUND }, { status: 404 });
   }
 

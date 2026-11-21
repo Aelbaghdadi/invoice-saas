@@ -1,4 +1,5 @@
 import { auth } from "@/lib/auth";
+import { RoutingInboxNotice } from "@/components/invoices/RoutingInboxNotice";
 import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
 import {
@@ -166,6 +167,8 @@ export default async function AdminDashboard() {
 
   return (
     <div className="space-y-5">
+      <RoutingInboxNotice user={session.user} />
+
       {/* Stat cards */}
       <div className="stagger grid grid-cols-1 sm:grid-cols-2 2xl:grid-cols-4 gap-4">
         {stats.map((s) => {

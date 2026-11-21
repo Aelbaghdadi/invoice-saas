@@ -500,7 +500,7 @@ export function reviewActionBlockReason(
     case "SPLIT_SOURCE":
       return "Esta factura se dividió en otras y es solo de consulta: trabaja con las facturas que salieron de ella.";
     case "PENDING_ROUTING":
-      return "Esta factura está por clasificar: asígnale su cliente en «Por clasificar» antes de revisarla.";
+      return "Esta factura está por clasificar: asígnale su empresa en «Reparto» antes de revisarla.";
     case "REJECTED":
       if (action === "validate") return "La factura está rechazada: para validarla usa «Reabrir y validar».";
       if (action === "reject") return "Esta factura ya está rechazada.";

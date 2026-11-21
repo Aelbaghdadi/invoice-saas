@@ -18,12 +18,14 @@ type Props = {
   firmLogo?: string | null;
   /** Esta en SUPPORT_USERNAMES: el menu lleva el panel del equipo de soporte. */
   supportStaff?: boolean;
+  /** Contadores junto a una entrada del menú, por href. */
+  navBadges?: Record<string, number>;
   children: React.ReactNode;
 };
 
 const COLLAPSED_KEY = "facturocr.sidebar.collapsed";
 
-export function DashboardShell({ role, userName, userEmail, firmName, firmLogo, supportStaff = false, children }: Props) {
+export function DashboardShell({ role, userName, userEmail, firmName, firmLogo, supportStaff = false, navBadges, children }: Props) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   // Modo "solo iconos" — persistido en localStorage. Solo aplica en
   // desktop; en movil el sidebar siempre se abre completo como overlay.
@@ -106,7 +108,7 @@ export function DashboardShell({ role, userName, userEmail, firmName, firmLogo, 
           <X className="h-5 w-5" />
         </button>
 
-        <Sidebar role={role} userName={userName} userEmail={userEmail} firmName={firmName} firmLogo={firmLogo} collapsed={collapsed} supportStaff={supportStaff} />
+        <Sidebar role={role} userName={userName} userEmail={userEmail} firmName={firmName} firmLogo={firmLogo} collapsed={collapsed} supportStaff={supportStaff} badges={navBadges} />
 
         {/* Edge toggle (desktop). Aparece "encajado" sobre el borde
             derecho del sidebar, centrado verticalmente. Sutilmente

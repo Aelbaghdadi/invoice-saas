@@ -3,6 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
 import { DashboardShell } from "@/components/layout/DashboardShell";
 import { supportActorFor } from "@/lib/supportAccess";
+import { getAccessibleClientIds } from "@/lib/accessibleClients";
+import { routingNeedsActionCount } from "@/lib/routingInbox";
 import { Role } from "@prisma/client";
 
 export default async function DashboardLayout({
@@ -17,7 +19,7 @@ export default async function DashboardLayout({
 
   // Logo + nombre de la asesoría para la marca de la barra lateral (arriba a la
   // izquierda). null -> se usa la marca por defecto (Faktury).
-  const [firm, supportActor] = await Promise.all([
+  const [firm, supportActor, routingPending] = await Promise.all([
     session.user.advisoryFirmId
       ? prisma.advisoryFirm.findUnique({
           where: { id: session.user.advisoryFirmId },
@@ -26,6 +28,10 @@ export default async function DashboardLayout({
       : null,
     // Solo para pintar «Equipo de soporte» en el menu de quien lo tenga.
     supportActorFor(session.user),
+    // El contador de «Reparto»: lo que espera a alguien en el buzón.
+    role === "ADMIN" || role === "WORKER"
+      ? getAccessibleClientIds(session).then(routingNeedsActionCount).catch(() => 0)
+      : 0,
   ]);
 
   return (
@@ -36,6 +42,7 @@ export default async function DashboardLayout({
       firmName={firm?.name ?? null}
       firmLogo={firm?.logoDataUrl ?? null}
       supportStaff={supportActor.staff}
+      navBadges={{ "/dashboard/worker/clasificar": routingPending }}
     >
       {children}
     </DashboardShell>

@@ -5,6 +5,7 @@ import {
   Layers, PenLine,
 } from "lucide-react";
 import Link from "next/link";
+import { RoutingInboxNotice } from "@/components/invoices/RoutingInboxNotice";
 import type { PeriodType } from "@prisma/client";
 import { DONE_WORK, PENDING_WORK, PERIOD_BLOCKING_STATUSES } from "@/lib/invoiceStatuses";
 import { periodLabel } from "@/lib/period";
@@ -241,6 +242,10 @@ export default async function WorkerDashboard() {
               ? `${cleanTotal} factura${cleanTotal !== 1 ? "s" : ""} lista${cleanTotal !== 1 ? "s" : ""} para validar.`
               : "No hay trabajo pendiente. Buen momento para un café."}
         </p>
+      </div>
+
+      <div className="mb-6 empty:hidden">
+        <RoutingInboxNotice user={session.user} />
       </div>
 
       {/* KPIs */}

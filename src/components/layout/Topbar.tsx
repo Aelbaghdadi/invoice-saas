@@ -29,7 +29,7 @@ const ROUTE_LABELS: Record<string, string> = {
   "/dashboard/worker/invoices":    "Facturas",
   "/dashboard/worker/upload":      "Subir facturas",
   "/dashboard/worker/batch":       "Lotes",
-  "/dashboard/worker/clasificar":  "Por clasificar",
+  "/dashboard/worker/clasificar":  "Reparto",
   "/dashboard/worker/groups":      "Grupos de empresas",
   "/dashboard/worker/issues":      "Incidencias",
   "/dashboard/worker/review":      "Revisión",

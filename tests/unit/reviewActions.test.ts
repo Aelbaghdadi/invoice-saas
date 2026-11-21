@@ -69,8 +69,8 @@ describe("reviewActionBlockReason", () => {
     expect(reviewActionBlockReason("SPLIT_SOURCE", action)).toMatch(/solo de consulta/);
   });
 
-  it.each(ACTIONS)("por clasificar, %s manda a «Por clasificar»", (action) => {
-    expect(reviewActionBlockReason("PENDING_ROUTING", action)).toMatch(/Por clasificar/);
+  it.each(ACTIONS)("por clasificar, %s manda a «Reparto»", (action) => {
+    expect(reviewActionBlockReason("PENDING_ROUTING", action)).toMatch(/«Reparto»/);
   });
 
   it("rechazada: validar pide «Reabrir y validar»; rechazar dice que ya lo está", () => {

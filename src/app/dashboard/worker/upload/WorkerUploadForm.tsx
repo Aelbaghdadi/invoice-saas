@@ -2,6 +2,7 @@
 
 import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useToast } from "@/components/ui/Toast";
 import { Select } from "@/components/ui/Select";
 import {
@@ -111,6 +112,9 @@ export function WorkerUploadForm({ clients, groups, openBatches, lastPeriodTypes
   // Modo de subida: "single" = un cliente; "classify" = clasificar por CIF
   // entre varias empresas candidatas (grupo guardado o selección ad-hoc).
   const [mode, setMode] = useState<"single" | "classify">("single");
+  // Tras subir entre varios: cuántas se están repartiendo. El reparto se hace
+  // al leerlas, después de la subida; sin este aviso no se sabía dónde verlo.
+  const [classifyNotice, setClassifyNotice] = useState<number | null>(null);
   const [candidateIds, setCandidateIds] = useState<Set<string>>(new Set());
   const [groupId, setGroupId] = useState("");
   const [type, setType] = useState<UploadType>("PURCHASE");
@@ -286,6 +290,7 @@ export function WorkerUploadForm({ clients, groups, openBatches, lastPeriodTypes
       success(`${okCount} factura${okCount !== 1 ? "s" : ""} subida${okCount !== 1 ? "s" : ""} correctamente`);
       // Los lotes abiertos cambian (el de esta subida ya lo es): sin perder lo elegido.
       router.refresh();
+      if (mode === "classify") setClassifyNotice(okCount);
     }
     if (dupCount > 0 && okCount === 0) {
       info(`${dupCount} duplicada${dupCount !== 1 ? "s" : ""} omitida${dupCount !== 1 ? "s" : ""}`);
@@ -305,6 +310,25 @@ export function WorkerUploadForm({ clients, groups, openBatches, lastPeriodTypes
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
+      {classifyNotice !== null && (
+        <div role="status" className="flex items-start justify-between gap-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-[13px] text-blue-800">
+          <p>
+            {classifyNotice === 1 ? "La factura se está leyendo" : `Las ${classifyNotice} facturas se están leyendo`} y{" "}
+            {classifyNotice === 1 ? "irá sola a su empresa" : "irán solas a su empresa"} por el CIF.{" "}
+            <Link href="/dashboard/worker/clasificar" className="font-semibold underline underline-offset-2 hover:text-blue-900">
+              Ver el reparto
+            </Link>
+          </p>
+          <button
+            type="button"
+            onClick={() => setClassifyNotice(null)}
+            aria-label="Cerrar aviso"
+            className="flex-shrink-0 text-blue-400 hover:text-blue-700"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
       <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="mb-4 text-[14px] font-semibold text-slate-800">
           Configuración del lote
@@ -475,7 +499,7 @@ export function WorkerUploadForm({ clients, groups, openBatches, lastPeriodTypes
                 ))}
               </div>
               <p className="mt-1.5 text-[11px] text-slate-400">
-                Cada factura se asigna automáticamente a su empresa por el CIF —y si no, por el nombre— que aparezca en el documento (según el tipo de abajo); las que no casen con claridad quedan en “Por clasificar”.
+                Cada factura se asigna automáticamente a su empresa por el CIF —y si no, por el nombre— que aparezca en el documento (según el tipo de abajo); las que no casen con claridad quedan en «Reparto» para que elijas tú.
               </p>
             </div>
           </div>
