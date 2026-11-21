@@ -1,4 +1,5 @@
 import type { OcrResult } from "@/lib/ocr";
+import type { PageReading } from "@/lib/pdfSegmentation";
 
 /**
  * OCR simulado (Gemini): nunca se llama a un proveedor real.
@@ -17,6 +18,23 @@ export function stubOcr(next: Reply) {
 
 export function resetOcrStub() {
   reply = notConfigured;
+  pagesReply = noPages;
+}
+
+/**
+ * Clasificacion de paginas de un taco (separacion automatica). Por defecto
+ * no hay lectura: el PDF se analiza entero, como antes de la separacion.
+ */
+type PagesReply = () => Promise<PageReading[] | null>;
+const noPages: PagesReply = async () => null;
+let pagesReply: PagesReply = noPages;
+
+export function stubPages(next: PagesReply) {
+  pagesReply = next;
+}
+
+export function pagesReplyFor(): Promise<PageReading[] | null> {
+  return pagesReply();
 }
 
 export function ocrReply(): Promise<OcrResult> {

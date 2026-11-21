@@ -6,6 +6,7 @@ import { isValidNIF } from "./validators";
 import { OcrHttpError, OcrNotConfiguredError } from "./ocrErrors";
 import { parseRetryAfter, retryDelayFromGoogleBody } from "./retryBackoff";
 import { cleanPdfInfoText, type PdfReading } from "./originalMedium";
+import { parsePageReadings, type PageReading } from "./pdfSegmentation";
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL ?? "gemini-2.5-flash-lite";
 
@@ -467,10 +468,19 @@ type GeminiResult = {
 };
 
 /** Llama a la API de Gemini Flash con las partes del mensaje. */
-async function callGemini(
-  parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }>,
-  prompt: string = EXTRACTION_PROMPT,
-): Promise<GeminiResult> {
+type GeminiPart = { text: string } | { inlineData: { mimeType: string; data: string } };
+
+/** Llama a la API de Gemini Flash con las partes del mensaje. */
+async function callGemini(parts: GeminiPart[], prompt: string = EXTRACTION_PROMPT): Promise<GeminiResult> {
+  return parseGeminiResponse(await postGemini(parts, prompt, { maxOutputTokens: 1024, timeoutMs: 30_000 }));
+}
+
+/** La llamada HTTP a Gemini: devuelve el texto (JSON) de la respuesta. */
+async function postGemini(
+  parts: GeminiPart[],
+  prompt: string,
+  { maxOutputTokens, timeoutMs }: { maxOutputTokens: number; timeoutMs: number },
+): Promise<string> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new OcrNotConfiguredError();
 
@@ -485,10 +495,10 @@ async function callGemini(
       generationConfig: {
         responseMimeType: "application/json",
         temperature: 0,
-        maxOutputTokens: 1024,
+        maxOutputTokens,
       },
     }),
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
 
   if (!res.ok) {
@@ -503,22 +513,26 @@ async function callGemini(
   const rawText: string = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
   if (!rawText) throw new Error("Gemini no devolvió contenido en la respuesta");
 
-  return parseGeminiResponse(rawText);
+  return rawText;
 }
 
-/** Parsea y normaliza el JSON que devuelve Gemini al tipo ExtractedInvoice. */
-function parseGeminiResponse(raw: string): GeminiResult {
-  let parsed: any;
+/** El JSON de la respuesta de Gemini. */
+function parseGeminiJson(raw: string): any {
   try {
     // Gemini a veces envuelve en ```json ... ```, limpiar si ocurre
     const clean = raw
       .replace(/^```(?:json)?\s*/i, "")
       .replace(/\s*```$/i, "")
       .trim();
-    parsed = JSON.parse(clean);
+    return JSON.parse(clean);
   } catch {
     throw new Error(`JSON inválido de Gemini: ${raw.slice(0, 300)}`);
   }
+}
+
+/** Parsea y normaliza el JSON que devuelve Gemini al tipo ExtractedInvoice. */
+function parseGeminiResponse(raw: string): GeminiResult {
+  const parsed = parseGeminiJson(raw);
 
   const num = (v: any): number | null => {
     if (v === null || v === undefined) return null;
@@ -722,4 +736,42 @@ export async function extractPdfWithGemini(
     console.warn("extractPdfWithGemini: la imagen fallo; se usa lo que salio del texto", e);
     return { source: "gemini_text", result: fromText.result };
   }
+}
+
+const PAGE_CLASSIFICATION_PROMPT = `Eres un clasificador de documentos de una asesoría española. Te llega un PDF que puede ser un taco escaneado con varias facturas seguidas, mezcladas con albaranes, páginas en blanco y otros papeles. Clasifica CADA página, en orden, sin saltarte ninguna, y devuelve SOLO un JSON válido con esta estructura exacta:
+
+{
+  "pages": [
+    { "page": 1, "kind": "FACTURA", "startsInvoice": true, "invoiceNumber": "F-2026/001", "issuerCif": "B12345678" }
+  ]
+}
+
+Reglas:
+- page: número de página empezando en 1. Una entrada por página del PDF.
+- kind:
+  - "FACTURA": página de una factura o factura simplificada (ticket), incluidas sus páginas de continuación, detalle de líneas, condiciones o anexos de esa misma factura. También las facturas rectificativas (abonos).
+  - "ALBARAN": albarán o nota de entrega (no lleva cuadro de IVA ni total a pagar como factura).
+  - "EN_BLANCO": página vacía o casi vacía (reverso en blanco de un escaneo a doble cara, solo ruido o una marca).
+  - "OTRO": cualquier otro papel que no forma parte de una factura: cartas, publicidad, presupuestos, pedidos, recibos bancarios, hojas separadoras.
+- startsInvoice: true solo si la página es la PRIMERA de una factura (cabecera con emisor, número y fecha). false en las páginas de continuación y en las que no son FACTURA.
+- invoiceNumber: número de la factura que aparece en la página, o null si no aparece.
+- issuerCif: NIF/CIF del emisor de la factura sin espacios ni guiones, o null si no aparece.
+- Ante la duda entre una factura nueva y la continuación de la anterior, es continuación (startsInvoice false).`;
+
+/**
+ * Lee el PDF entero (como documento, sirve para escaneados y digitales) y
+ * clasifica cada pagina para la separacion automatica (pdfSegmentation.ts).
+ * null si la respuesta no tiene la forma esperada; lanza si falla la llamada.
+ */
+export async function classifyPdfPagesWithGemini(base64: string): Promise<PageReading[] | null> {
+  const raw = await postGemini(
+    [
+      { text: "Clasifica cada página de este PDF:" },
+      { inlineData: { mimeType: "application/pdf", data: base64 } },
+    ],
+    PAGE_CLASSIFICATION_PROMPT,
+    // Unos 40 tokens por pagina: da para tacos de varios cientos de paginas.
+    { maxOutputTokens: 16_384, timeoutMs: 120_000 },
+  );
+  return parsePageReadings(parseGeminiJson(raw));
 }

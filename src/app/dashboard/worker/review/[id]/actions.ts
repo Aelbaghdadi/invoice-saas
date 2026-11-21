@@ -1,9 +1,7 @@
 "use server";
 
 import { after } from "next/server";
-import { createHash } from "crypto";
 import { splitStorageKey } from "@/lib/splitStorageKey";
-import { planSplitArchive, splitPartArchiveData } from "@/lib/archiveSplit";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { redirect, RedirectType } from "next/navigation";
@@ -43,7 +41,8 @@ import { closeOpenIssues } from "@/lib/invoiceIssues";
 import { foldSurchargeLines, completeReadSurcharges, surchargeAuditValue } from "@/lib/equivalenceSurcharge";
 import { exportFingerprint, type FingerprintInvoice } from "@/lib/exportFingerprint";
 import { appError, type AppError } from "@/lib/errorCodes";
-import { putObject, getObjectBytes, deleteObject, sanitizeFilenameForStorage, isStorageConfigured } from "@/lib/storage";
+import { getObjectBytes, sanitizeFilenameForStorage, isStorageConfigured } from "@/lib/storage";
+import { createSplitChildren, discardSplitPieces, pdfSplitPieces, recordSplitSource, uploadSplitPieces, type SplitPiece } from "@/lib/invoiceSplit";
 import {
   NEEDS_REVIEW,
   reviewActionBlockReason,
@@ -1190,30 +1189,6 @@ function splitPeriods(
   return [invoicePeriod(invoice), { month: invoice.periodMonth, year: invoice.periodYear }];
 }
 
-/** Un trozo de una division, ya en memoria y listo para subir. */
-type SplitPiece = {
-  label: string;
-  filename: string;
-  storageKey: string;
-  fileType: string;
-  body: Buffer;
-};
-
-/** Sube los trozos de una division. Si uno falla, borra los ya subidos. */
-async function uploadSplitPieces(pieces: SplitPiece[]): Promise<string | null> {
-  const uploaded: string[] = [];
-  for (const piece of pieces) {
-    try {
-      await putObject(piece.storageKey, piece.body, piece.fileType);
-      uploaded.push(piece.storageKey);
-    } catch (e) {
-      await Promise.all(uploaded.map((key) => deleteObject(key)));
-      return `Error subiendo "${piece.label}": ${e instanceof Error ? e.message : "fallo"}`;
-    }
-  }
-  return null;
-}
-
 /**
  * Reserva la original y crea sus hijas, en una sola transaccion (F-056).
  *
@@ -1232,7 +1207,7 @@ async function reserveAndCreateSplit(
   userId: string,
   pieces: SplitPiece[],
 ): Promise<{ childIds: string[] } | { error: string }> {
-  const discardFiles = () => Promise.all(pieces.map((p) => deleteObject(p.storageKey)));
+  const discardFiles = () => discardSplitPieces(pieces);
   let childIds: string[] | null;
   try {
     childIds = await prisma.$transaction(async (tx) => {
@@ -1251,63 +1226,11 @@ async function reserveAndCreateSplit(
         data: { status: "SPLIT_SOURCE" },
       });
       if (reserved.count === 0) return null;
-      // Las hijas heredan la fila de archivo de la original (llegada, tanda,
-      // medio…) con su nº de parte; bloquea la de la raíz de la familia.
-      const archive = await planSplitArchive(tx, invoice.id);
 
-      const ids: string[] = [];
-      for (const piece of pieces) {
-        const fileHash = createHash("sha256").update(piece.body).digest("hex");
-        const document = await tx.document.create({
-          data: {
-            filename: piece.filename,
-            storageKey: piece.storageKey,
-            fileType: piece.fileType,
-            fileHash,
-            sizeBytes: piece.body.length,
-            uploadedBy: userId,
-            clientId: invoice.clientId,
-          },
-        });
-        const child = await tx.invoice.create({
-          data: {
-            filename: piece.filename,
-            storageKey: piece.storageKey,
-            fileType: piece.fileType,
-            fileHash,
-            type: invoice.type,
-            // Si el tipo de la original estaba sin confirmar ("No lo sé"), el
-            // de las hijas tambien; y una trimestral sigue siendo trimestral:
-            // en MONTHLY salian en otro lote.
-            typeUnconfirmed: invoice.typeUnconfirmed,
-            periodType: invoice.periodType,
-            periodMonth: invoice.periodMonth,
-            periodYear: invoice.periodYear,
-            clientId: invoice.clientId,
-            documentId: document.id,
-            splitFromId: invoice.id,
-            // La hija hereda la moneda: si su recorte no la muestra, el OCR no
-            // la veria y el aviso de "no es euro" desapareceria en silencio.
-            currency: invoice.currency,
-          },
-        });
-        await tx.invoiceArchive.update({ where: { invoiceId: child.id }, data: splitPartArchiveData(archive, ids.length) });
-        ids.push(child.id);
-      }
-
-      // F-057: la original sale del flujo; las hijas generan las suyas al
-      // pasar por el OCR.
-      await closeOpenIssues(tx, invoice.id, userId);
-      await tx.invoiceStatusHistory.create({
-        data: { invoiceId: invoice.id, fromStatus: invoice.status, toStatus: "SPLIT_SOURCE", changedBy: userId },
-      });
-      await appendAuditLogs([{
-        invoiceId: invoice.id,
-        userId,
-        field: "status",
-        oldValue: invoice.status,
-        newValue: "SPLIT_SOURCE",
-      }], tx);
+      // A mano solo se divide una factura ya clasificada: las hijas no se
+      // vuelven a rutear.
+      const ids = await createSplitChildren(tx, { ...invoice, routingCandidateIds: [] }, userId, pieces);
+      await recordSplitSource(tx, invoice.id, invoice.status, userId);
       return ids;
     }, { timeout: 30_000, maxWait: 5_000 });
   } catch (e) {
@@ -1526,13 +1449,11 @@ export async function splitPdfInvoice(
   // nada, en vez de lanzar a la UI.
   const { PDFDocument } = await import("pdf-lib");
   const unreadablePdf = { error: "No se ha podido leer el PDF para dividirlo (¿está protegido o dañado?)." };
-  let srcDoc: Awaited<ReturnType<typeof PDFDocument.load>>;
   let totalPages: number;
   try {
-    srcDoc = await PDFDocument.load(originalBytes);
     // pdf-lib carga sin error un PDF sin /Pages (o con /Pages roto) y es el
     // recuento lo que lanza.
-    totalPages = srcDoc.getPageCount();
+    totalPages = (await PDFDocument.load(originalBytes)).getPageCount();
   } catch (e) {
     console.warn(`[split] ${invoice.id}: no se pudo leer el PDF:`, e);
     return unreadablePdf;
@@ -1547,27 +1468,12 @@ export async function splitPdfInvoice(
   }
 
   // Todas las partes, generadas en memoria antes de subir nada.
-  const pieces: SplitPiece[] = [];
+  let pieces: SplitPiece[];
   try {
-    for (const part of parts) {
-      const newDoc = await PDFDocument.create();
-      // copyPages devuelve las páginas en el mismo orden que el array de índices
-      const pageIndices = Array.from(
-        { length: part.endPage - part.startPage + 1 },
-        (_, i) => part.startPage - 1 + i,
-      );
-      const copiedPages = await newDoc.copyPages(srcDoc, pageIndices);
-      for (const p of copiedPages) newDoc.addPage(p);
-
-      const safeName = sanitizeFilenameForStorage(`${part.name}.pdf`);
-      pieces.push({
-        label: part.name,
-        filename: `${part.name}.pdf`,
-        storageKey: splitStorageKey(invoice, safeName),
-        fileType: "application/pdf",
-        body: Buffer.from(await newDoc.save()),
-      });
-    }
+    pieces = await pdfSplitPieces(invoice, originalBytes, parts.map((part) => ({
+      name: part.name,
+      pages: Array.from({ length: part.endPage - part.startPage + 1 }, (_, i) => part.startPage + i),
+    })));
   } catch (e) {
     console.warn(`[split] ${invoice.id}: no se pudieron generar las partes del PDF:`, e);
     return unreadablePdf;

@@ -51,12 +51,13 @@ vi.mock("next/server", async (importOriginal) => {
 });
 vi.mock("@/lib/ocrLlm", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/lib/ocrLlm")>();
-  const { ocrReply } = await import("../helpers/ocr");
+  const { ocrReply, pagesReplyFor } = await import("../helpers/ocr");
   return {
     ...original,
     extractPdfWithGemini: async () => ({ source: "gemini_text" as const, result: await ocrReply() }),
     extractFromPdfTextWithGemini: async () => ({ result: await ocrReply(), complete: true }),
     extractFromDocumentWithGemini: () => ocrReply(),
+    classifyPdfPagesWithGemini: () => pagesReplyFor(),
   };
 });
 

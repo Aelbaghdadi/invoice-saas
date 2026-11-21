@@ -182,6 +182,7 @@ export const AUDIT_FIELD_LABELS: Record<string, string> = {
   "auto:parteCliente": "Datos del cliente puestos (automático)",
   "auto:signo": "Signo corregido (automático)",
   "auto:ruteo": "Empresa elegida por la otra parte (automático)",
+  "auto:division": "Taco separado en facturas (automático)",
   rectificativeSign: "Signo de la rectificativa",
   equivalenceSurcharge: "Recargo de equivalencia",
   export: "Exportación",

@@ -48,6 +48,7 @@ import { retryDelayMs } from "@/lib/retryBackoff";
 import { runQueuedOcr } from "@/lib/ocrQueue";
 import { recordOcrErrorTicket } from "@/lib/autoTickets";
 import { closeOpenIssues } from "@/lib/invoiceIssues";
+import { autoSplitPdf } from "@/lib/autoSplit";
 
 /**
  * Convierte el string de fecha del OCR a Date. Si el OCR devuelve algo
@@ -97,10 +98,20 @@ export const OCR_WAITS = {
  * adelanta. Si ya esperaba sin prioridad, vuelve al momento sin hacer nada.
  */
 export async function processInvoice(invoiceId: string, triggeredByUserId: string, options: { priority?: boolean } = {}) {
-  await runQueuedOcr(invoiceId, () => analyzeInvoice(invoiceId, triggeredByUserId), options);
+  let splitChildIds: string[] = [];
+  await runQueuedOcr(invoiceId, async () => {
+    splitChildIds = (await analyzeInvoice(invoiceId, triggeredByUserId)) ?? [];
+  }, options);
+  // Las hijas de un taco separado, fuera del hueco de la madre: piden el suyo.
+  await Promise.all(splitChildIds.map((childId) =>
+    processInvoice(childId, triggeredByUserId).catch((err) => {
+      console.error(`[processInvoice] hija ${childId} de ${invoiceId} falló:`, err);
+    }),
+  ));
 }
 
-async function analyzeInvoice(invoiceId: string, triggeredByUserId: string) {
+/** Devuelve las hijas si el PDF se ha separado en varias facturas. */
+async function analyzeInvoice(invoiceId: string, triggeredByUserId: string): Promise<string[] | void> {
   // Claim atomico: solo arranca si sigue en UPLOADED. El fencing token de
   // esta ejecucion es el ocrAttempts que deja el propio UPDATE; leido despues
   // con otra consulta podria ser ya el de un claim posterior.
@@ -153,6 +164,7 @@ async function analyzeInvoice(invoiceId: string, triggeredByUserId: string) {
     let source: string;
     let ocrResult;
     const ft = invoice.fileType;
+    let splitTried = false;
 
     // Reintento ante fallos TRANSITORIOS del OCR (timeout, rate limit, red): el
     // proveedor (Gemini) falla a veces de forma puntual y al
@@ -166,10 +178,24 @@ async function analyzeInvoice(invoiceId: string, triggeredByUserId: string) {
           const xmlText = (await downloadOriginal(invoice.storageKey)).toString("utf-8");
           ocrResult = await extractInvoiceFromXml(xmlText);
         } else {
-          const base64 = (await downloadOriginal(invoice.storageKey)).toString("base64");
+          const original = await downloadOriginal(invoice.storageKey);
+          const base64 = original.toString("base64");
 
           if (ft === "application/pdf" || invoice.filename.endsWith(".pdf")) {
             pdfRead ??= await extractPdfTextAndItems(base64);
+            // Un taco (varias facturas, albaranes, paginas en blanco): se
+            // separa antes del OCR y cada hija se analiza sola. Ver
+            // autoSplit.ts. Una sola vez: no falla, y un reintento del OCR no
+            // la repite. El medio se pone en la original, en la misma
+            // transaccion: las partes lo heredan (sus PDF son de pdf-lib).
+            if (!splitTried) {
+              splitTried = true;
+              const childIds = await autoSplitPdf(invoice, ocrToken, triggeredByUserId, original, async (tx) => {
+                const mediumAudit = await applyMedium(tx);
+                if (mediumAudit.length > 0) await appendAuditLogs(mediumAudit, tx);
+              });
+              if (childIds) return childIds;
+            }
             // Solo lanza si falla la llamada que no tiene alternativa: la
             // del texto, o la de la imagen cuando el texto no valia. Si el
             // texto ya salio (aunque incompleto) y la imagen falla, devuelve
