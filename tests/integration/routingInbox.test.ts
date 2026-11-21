@@ -4,11 +4,12 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { NextRequest } from "next/server";
 import { prisma } from "./helpers/db";
 import { makeFirm, makeInvoice, makeUser, type FirmWorld } from "./helpers/factories";
-import { signInAs } from "./helpers/session";
+import { signInAs, signOut } from "./helpers/session";
 import { discardAfterCallbacks } from "./helpers/after";
 import { getOrCreateUnclassifiedClient } from "@/lib/unclassifiedClient";
 import { recentlyRoutedByClient, routingNeedsActionCount } from "@/lib/routingInbox";
 import { POST as processRoute } from "@/app/api/invoices/[id]/process/route";
+import { GET as countRoute } from "@/app/api/routing-inbox/count/route";
 
 let w: FirmWorld;
 let bucket: { id: string };
@@ -80,5 +81,35 @@ describe("reprocesar desde el reparto", () => {
     const other = await makeFirm("B");
     signInAs(other.admin);
     expect((await reprocess(id)).status).toBe(404);
+  });
+});
+
+describe("contador del menú (/api/routing-inbox/count)", () => {
+  const count = async () => {
+    const res = await countRoute();
+    return { status: res.status, body: await res.json() };
+  };
+
+  it("el gestor ve las que esperan a alguien en sus empresas", async () => {
+    await fromMultiUpload({ status: "PENDING_ROUTING" });
+    await fromMultiUpload({ status: "OCR_ERROR" });
+    await fromMultiUpload({ status: "ANALYZING" });
+    signInAs(w.worker);
+    expect(await count()).toEqual({ status: 200, body: { count: 2 } });
+  });
+
+  it("el administrador de otra asesoría no ve las de esta", async () => {
+    await fromMultiUpload();
+    const other = await makeFirm("B");
+    signInAs(other.admin);
+    expect((await count()).body).toEqual({ count: 0 });
+  });
+
+  it("un cliente siempre 0, y sin sesión 401", async () => {
+    await fromMultiUpload();
+    signInAs(w.clientUser);
+    expect((await count()).body).toEqual({ count: 0 });
+    signOut();
+    expect((await count()).status).toBe(401);
   });
 });

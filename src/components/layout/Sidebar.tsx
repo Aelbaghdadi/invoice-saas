@@ -26,6 +26,7 @@ import {
   Archive,
 } from "lucide-react";
 import { BRAND } from "@/lib/brand";
+import { useRoutingInboxCount } from "./useRoutingInboxCount";
 
 type NavItem = {
   href: string;
@@ -131,6 +132,8 @@ type SidebarProps = {
   badges?: Record<string, number>;
 };
 
+const ROUTING_HREF = "/dashboard/worker/clasificar";
+
 /** El panel del equipo de soporte, al final del menu de quien lo tenga. */
 const SUPPORT_TEAM_ITEM: NavItem = { href: "/dashboard/support/team", label: "Equipo de soporte", icon: Headset };
 
@@ -152,6 +155,8 @@ const STORAGE_KEY = "facturocr.sidebar.openSections";
 
 export function Sidebar({ role, userName, firmName, firmLogo, collapsed = false, supportStaff = false, badges = {} }: SidebarProps) {
   const pathname = usePathname();
+  const routingCount = useRoutingInboxCount(badges[ROUTING_HREF] ?? 0, role === "ADMIN" || role === "WORKER");
+  const liveBadges: Record<string, number> = { ...badges, [ROUTING_HREF]: routingCount };
   const sections = supportStaff
     ? NAV_SECTIONS[role].map((s, i, all) => (i === all.length - 1 ? { ...s, items: [...s.items, SUPPORT_TEAM_ITEM] } : s))
     : NAV_SECTIONS[role];
@@ -220,7 +225,7 @@ export function Sidebar({ role, userName, firmName, firmLogo, collapsed = false,
   const renderItem = (item: NavItem) => {
     const active = isActive(item.href);
     const Icon = item.icon;
-    const badge = badges[item.href] ?? 0;
+    const badge = liveBadges[item.href] ?? 0;
     return (
       <li key={item.href}>
         <Link
