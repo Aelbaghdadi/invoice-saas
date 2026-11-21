@@ -163,6 +163,8 @@ export const AUDIT_FIELD_LABELS: Record<string, string> = {
   retentionBase: "Base de la retención",
   accountingPeriodMonth: "Mes contable",
   accountingPeriodYear: "Año contable",
+  // «Mover a otro lote…» de Lotes: «Noviembre 2026 · Recibidas» → «Octubre 2026 · Recibidas».
+  lote: "Lote",
   supplierAccount: "Cuenta del proveedor o cliente",
   expenseAccount: "Cuenta de gasto o ingreso",
   operationType: "Tipo de operación",

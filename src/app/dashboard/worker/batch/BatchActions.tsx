@@ -1,13 +1,15 @@
 "use client";
 
-import { useActionState, useEffect, useState, useTransition } from "react";
-import { Loader2, Lock, Ban, AlertTriangle } from "lucide-react";
+import { useActionState, useEffect, useRef, useState, useTransition } from "react";
+import { Loader2, Lock, Ban, AlertTriangle, FolderInput } from "lucide-react";
 import { useToast } from "@/components/ui/Toast";
+import type { MoveTarget } from "@/lib/batchTarget";
 import {
   closePeriodFromBatch,
   rejectBatch,
   type BatchAction,
 } from "./actions";
+import { MoveBatchPanel } from "./MoveBatchPanel";
 
 type Props = {
   clientId: string;
@@ -25,6 +27,12 @@ type Props = {
   rejectableCount: number;
   /** Cuantas de esas ya estaban validadas: el gestor tiene que saberlo. */
   validatedCount: number;
+  /** Las que se llevaria «Mover a otro lote…»: las que no salieron en un Excel. */
+  movableCount: number;
+  /** Las que ya salieron en un Excel: se quedan al mover. */
+  exportedCount: number;
+  /** Los demas lotes del mismo cliente y tipo (moveTargetsFor). */
+  moveTargets: MoveTarget[];
 };
 
 /**
@@ -34,6 +42,8 @@ type Props = {
  *  - "Rechazar lote": rechaza de golpe todas las facturas del lote que aun
  *    no esten exportadas/rechazadas (p.ej. se subio por error). Pide
  *    confirmación explícita y un motivo antes de ejecutar.
+ *  - "Mover a otro lote…": junta el lote con otro del mismo cliente y tipo
+ *    (las de octubre que se subieron con noviembre).
  *
  * Se renderiza siempre, pero cada boton se oculta si no aplica.
  */
@@ -47,12 +57,18 @@ export function BatchActions({
   alreadyClosed,
   rejectableCount,
   validatedCount,
+  movableCount,
+  exportedCount,
+  moveTargets,
 }: Props) {
   const { success, error: toastError } = useToast();
   const [closeState, closeAction, closePending] = useActionState<BatchAction, FormData>(
     closePeriodFromBatch,
     null,
   );
+  const [showMove, setShowMove] = useState(false);
+  const moveButtonRef = useRef<HTMLButtonElement>(null);
+  const returnFocusToMove = useRef(false);
   const [showRejectConfirm, setShowRejectConfirm] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
   const [rejectError, setRejectError] = useState<string | null>(null);
@@ -63,6 +79,19 @@ export function BatchActions({
     if (closeState.error) toastError(closeState.error);
     else if (closeState.ok) success("Periodo cerrado");
   }, [closeState]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Al cerrar el panel de mover (Cancelar o hecho) el foco vuelve a su boton,
+  // si sigue ahi. No al pasar a «Rechazar lote»: ahi se queda en ese.
+  useEffect(() => {
+    if (showMove || !returnFocusToMove.current) return;
+    returnFocusToMove.current = false;
+    moveButtonRef.current?.focus();
+  }, [showMove]);
+
+  const closeMovePanel = () => {
+    returnFocusToMove.current = true;
+    setShowMove(false);
+  };
 
   // Llamada directa (no useActionState) para poder cerrar el panel de
   // confirmación desde el propio callback en vez de un efecto reaccionando
@@ -89,7 +118,7 @@ export function BatchActions({
     });
   };
 
-  if (!readyToClose && !alreadyClosed && rejectableCount === 0) return null;
+  if (!readyToClose && !alreadyClosed && rejectableCount === 0 && movableCount === 0) return null;
 
   return (
     <div className="mt-4 space-y-2.5 border-t border-slate-100 pt-3">
@@ -123,10 +152,23 @@ export function BatchActions({
           </span>
         )}
 
+        {!alreadyClosed && movableCount > 0 && !showMove && (
+          <button
+            ref={moveButtonRef}
+            type="button"
+            onClick={() => { setShowMove(true); setShowRejectConfirm(false); }}
+            title="Lleva las facturas de este lote a otro lote del mismo cliente (p. ej. las de octubre que se subieron con noviembre)"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-[12px] font-medium text-slate-700 hover:bg-slate-50"
+          >
+            <FolderInput className="h-3.5 w-3.5" />
+            Mover a otro lote…
+          </button>
+        )}
+
         {!alreadyClosed && rejectableCount > 0 && !showRejectConfirm && (
           <button
             type="button"
-            onClick={() => setShowRejectConfirm(true)}
+            onClick={() => { setShowRejectConfirm(true); setShowMove(false); }}
             title="Rechaza de golpe todas las facturas del lote (p. ej. se subió por error)"
             className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-[12px] font-medium text-red-700 hover:bg-red-100"
           >
@@ -135,6 +177,20 @@ export function BatchActions({
           </button>
         )}
       </div>
+
+      {showMove && (
+        <MoveBatchPanel
+          clientId={clientId}
+          type={type}
+          periodType={periodType}
+          month={month}
+          year={year}
+          movableCount={movableCount}
+          exportedCount={exportedCount}
+          targets={moveTargets}
+          onClose={closeMovePanel}
+        />
+      )}
 
       {showRejectConfirm && (
         <div className="rounded-lg border border-red-200 bg-red-50 p-3">

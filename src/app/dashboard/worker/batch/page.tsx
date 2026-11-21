@@ -11,6 +11,7 @@ import Link from "next/link";
 import type { Prisma } from "@prisma/client";
 import { completionPercent, PERIOD_BLOCKING_STATUSES } from "@/lib/invoiceStatuses";
 import { batchWindowWhere, groupBatches, loadBatchRows } from "@/lib/batchGroups";
+import { moveTargetsFor } from "@/lib/batchTarget";
 import { periodLabel } from "@/lib/period";
 import { reviewHref } from "@/lib/reviewNavigation";
 import { BatchActions } from "./BatchActions";
@@ -492,6 +493,9 @@ export default async function WorkerBatchPage({
                     alreadyClosed={closed}
                     rejectableCount={g.rejectable}
                     validatedCount={g.rejectableValidated}
+                    movableCount={g.total - g.exported}
+                    exportedCount={g.exported}
+                    moveTargets={moveTargetsFor(g, groups, (l) => closedSet.has(`${l.clientId}-${l.periodYear}-${l.periodMonth}`))}
                   />
                 )}
               </div>

@@ -156,10 +156,15 @@ export type ExportBatchData = {
  * facturas con `exportBatchId: null` y `status: VALIDATED`: si otra
  * exportacion simultanea se ha llevado alguna, el recuento no cuadra y se
  * aborta la transaccion entera (F-049).
+ *
+ * `scope` es el cliente, el periodo y el tipo de la peticion
+ * (exportPeriodWhere): si mientras se generaba el fichero alguien ha movido
+ * el lote a otro periodo («Mover a otro lote…»), tampoco cuadra.
  */
 export async function commitExportBatch(
   batch: ExportBatchData,
   invoices: ExportInvoice[],
+  scope: Prisma.InvoiceWhereInput = {},
 ): Promise<void> {
   const invoiceIds = invoices.map((i) => i.id);
   try {
@@ -168,7 +173,7 @@ export async function commitExportBatch(
       await tx.exportBatch.create({ data: { ...batch, invoiceCount: invoices.length } });
 
       const reserved = await tx.invoice.updateMany({
-        where: { id: { in: invoiceIds }, exportBatchId: null, status: "VALIDATED" },
+        where: { AND: [{ id: { in: invoiceIds }, exportBatchId: null, status: "VALIDATED" }, scope] },
         data: { exportBatchId: batch.id },
       });
       if (reserved.count !== invoiceIds.length) {

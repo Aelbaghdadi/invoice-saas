@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { useToast } from "@/components/ui/Toast";
 import { Select } from "@/components/ui/Select";
 import {
@@ -11,6 +12,8 @@ import {
   X,
   CheckCircle2,
   AlertCircle,
+  AlertTriangle,
+  Layers,
   Loader2,
   CloudUpload,
   Copy,
@@ -20,27 +23,37 @@ import {
   type UploadStatus,
   type UploadResult,
 } from "@/lib/uploadDirectClient";
-import { quarterStartMonth, QUARTER_OPTIONS } from "@/lib/period";
+import { MONTH_OPTIONS, periodLabel, quarterFromMonth, quarterStartMonth, QUARTER_OPTIONS, type PeriodTypeName } from "@/lib/period";
+import { yearMonthInMadrid } from "@/lib/dates";
+import {
+  batchLabel,
+  defaultUploadTarget,
+  isPeriodClosed,
+  matchingOpenBatches,
+  openBatchCounts,
+  overlappingOpenBatches,
+  pickBatchLabel,
+  samePeriod,
+  uploadNotice,
+  type BatchPeriod,
+  type ClosedPeriod,
+  type OpenBatch,
+} from "@/lib/batchTarget";
 
-const MONTHS = [
-  { value: "1", label: "Enero" },
-  { value: "2", label: "Febrero" },
-  { value: "3", label: "Marzo" },
-  { value: "4", label: "Abril" },
-  { value: "5", label: "Mayo" },
-  { value: "6", label: "Junio" },
-  { value: "7", label: "Julio" },
-  { value: "8", label: "Agosto" },
-  { value: "9", label: "Septiembre" },
-  { value: "10", label: "Octubre" },
-  { value: "11", label: "Noviembre" },
-  { value: "12", label: "Diciembre" },
-];
+type UploadType = "PURCHASE" | "SALE" | "UNKNOWN";
 
-const YEARS = Array.from({ length: 5 }, (_, i) => {
-  const y = new Date().getFullYear() - i;
-  return { value: String(y), label: String(y) };
-});
+/** El periodo del formulario. Mes y trimestre van a la par: al cambiar de
+ *  mensual a trimestral se ve el trimestre del mes elegido, y al reves. */
+type PeriodState = { periodType: PeriodTypeName; month: number; quarter: number; year: number };
+
+function periodStateOf(period: BatchPeriod): PeriodState {
+  return {
+    periodType: period.periodType,
+    month: period.periodMonth,
+    quarter: quarterFromMonth(period.periodMonth),
+    year: period.periodYear,
+  };
+}
 
 const ACCEPTED_EXTS = new Set(["pdf", "xml", "jpg", "jpeg", "png", "webp", "heic"]);
 const ACCEPTED_MIME = new Set([
@@ -65,11 +78,34 @@ type Item = {
 type Props = {
   clients: { id: string; name: string; cif: string }[];
   groups: { id: string; name: string; clientIds: string[] }[];
+  /** Lotes abiertos de estos clientes (loadOpenBatches). */
+  openBatches: OpenBatch[];
+  /** Agrupacion de la ultima subida de cada cliente. */
+  lastPeriodTypes: Record<string, PeriodTypeName>;
+  /** Periodos con cierre activo de cada cliente: ahi no se puede subir. */
+  closedPeriods: Record<string, ClosedPeriod[]>;
+  /** Hora del servidor: lo que se propone sale igual al pintar y al hidratar. */
+  now: string;
 };
 
-export function WorkerUploadForm({ clients, groups }: Props) {
+export function WorkerUploadForm({ clients, groups, openBatches, lastPeriodTypes, closedPeriods, now: nowIso }: Props) {
   const { success, error: toastError, info } = useToast();
-  const now = new Date();
+  const router = useRouter();
+  const now = new Date(nowIso);
+  // El periodo que se propone para un cliente y un tipo: su lote abierto o,
+  // sin el, el del mes anterior (defaultUploadTarget).
+  const proposedPeriod = (forClientId: string, forType: UploadType) =>
+    periodStateOf(defaultUploadTarget({
+      openBatches: openBatches.filter((b) => b.clientId === forClientId),
+      type: forType,
+      lastPeriodType: lastPeriodTypes[forClientId] ?? null,
+      closedPeriods: closedPeriods[forClientId] ?? [],
+      now,
+    }));
+  // «Clasificar entre varios» no tiene un cliente: lo que se propone a uno
+  // sin lotes ni subidas (mensual, el mes anterior), no lo del primero de la lista.
+  const unassignedPeriod = () =>
+    periodStateOf(defaultUploadTarget({ openBatches: [], type: "UNKNOWN", lastPeriodType: null, now }));
   const [items, setItems] = useState<Item[]>([]);
   const [clientId, setClientId] = useState(clients[0]?.id ?? "");
   // Modo de subida: "single" = un cliente; "classify" = clasificar por CIF
@@ -77,14 +113,72 @@ export function WorkerUploadForm({ clients, groups }: Props) {
   const [mode, setMode] = useState<"single" | "classify">("single");
   const [candidateIds, setCandidateIds] = useState<Set<string>>(new Set());
   const [groupId, setGroupId] = useState("");
-  const [periodType, setPeriodType] = useState<"MONTHLY" | "QUARTERLY">("MONTHLY");
-  const [month, setMonth] = useState(String(now.getMonth() + 1));
-  const [quarter, setQuarter] = useState(Math.ceil((now.getMonth() + 1) / 3));
-  const [year, setYear] = useState(String(now.getFullYear()));
-  const [type, setType] = useState<"PURCHASE" | "SALE" | "UNKNOWN">("PURCHASE");
+  const [type, setType] = useState<UploadType>("PURCHASE");
+  const [period, setPeriod] = useState<PeriodState>(() => proposedPeriod(clients[0]?.id ?? "", "PURCHASE"));
+  // Tocado a mano (o elegido un lote): cambiar el tipo ya no lo vuelve a
+  // proponer. Cambiar de cliente si.
+  const [periodTouched, setPeriodTouched] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [isPending, setIsPending] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const { periodType, quarter } = period;
+  const effectivePeriodMonth = periodType === "QUARTERLY" ? quarterStartMonth(quarter) : period.month;
+  const selection = { periodType, periodMonth: effectivePeriodMonth, periodYear: period.year, type };
+  const clientOpenBatches = mode === "single" ? openBatches.filter((b) => b.clientId === clientId) : [];
+  const matching = matchingOpenBatches(clientOpenBatches, selection);
+  // Con «Detectar automáticamente» puede haber uno de cada tipo en el mismo periodo: un aviso por periodo.
+  const overlapping = overlappingOpenBatches(clientOpenBatches, selection)
+    .filter((b, i, all) => all.findIndex((o) => samePeriod(o, b)) === i);
+  // La subida lo rechazaria fichero a fichero (ERR-UPLOAD-004): se dice antes.
+  const selectionClosed = mode === "single" && isPeriodClosed(closedPeriods[clientId] ?? [], selection);
+  const notice = uploadNotice(selection, matching, selectionClosed);
+
+  const thisYear = yearMonthInMadrid(now).year;
+  const yearOptions = [...new Set([
+    ...Array.from({ length: 5 }, (_, i) => thisYear - i),
+    ...clientOpenBatches.map((b) => b.periodYear),
+    period.year,
+  ])]
+    .sort((a, b) => b - a)
+    .map((y) => ({ value: String(y), label: String(y) }));
+
+  const chooseClient = (nextClientId: string) => {
+    setClientId(nextClientId);
+    setPeriod(proposedPeriod(nextClientId, type));
+    setPeriodTouched(false);
+  };
+
+  const chooseType = (nextType: UploadType) => {
+    setType(nextType);
+    if (mode === "single" && !periodTouched) setPeriod(proposedPeriod(clientId, nextType));
+  };
+
+  const chooseMode = (nextMode: "single" | "classify") => {
+    setMode(nextMode);
+    if (periodTouched) return;
+    setPeriod(nextMode === "single" ? proposedPeriod(clientId, type) : unassignedPeriod());
+  };
+
+  const changePeriod = (patch: Partial<PeriodState>) => {
+    setPeriod((p) => ({ ...p, ...patch }));
+    setPeriodTouched(true);
+  };
+
+  /** «Añadir a este lote»: su periodo y, con un tipo elegido, tambien el suyo
+   *  (pickBatchLabel lo dice en el boton). Con «Detectar automaticamente» el
+   *  tipo se queda: cada factura va al lote de su tipo. */
+  const pickBatch = (batch: OpenBatch) => {
+    setPeriod(periodStateOf(batch));
+    if (type !== "UNKNOWN") setType(batch.type);
+    setPeriodTouched(true);
+  };
+
+  /** El aviso de solape: el periodo de ese lote, con el tipo elegido. */
+  const pickPeriod = (batch: OpenBatch) => {
+    setPeriod(periodStateOf(batch));
+    setPeriodTouched(true);
+  };
 
   // Empresas del grupo que este usuario puede ver/subir: un gestor puede no
   // tener asignadas todas las del grupo (que es de la firma). Filtramos el
@@ -132,7 +226,7 @@ export function WorkerUploadForm({ clients, groups }: Props) {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!items.length || isPending) return;
-    if (mode === "single" && !clientId) return;
+    if (mode === "single" && (!clientId || selectionClosed)) return;
     if (mode === "classify" && candidateIds.size === 0) return;
 
     setIsPending(true);
@@ -147,7 +241,6 @@ export function WorkerUploadForm({ clients, groups }: Props) {
       .map((it, idx) => ({ it, idx }))
       .filter(({ it }) => it.status !== "ok" && it.status !== "duplicate");
 
-    const effectivePeriodMonth = periodType === "QUARTERLY" ? quarterStartMonth(quarter) : Number(month);
     const results = await uploadFilesDirect(
       toUpload.map((x) => x.it.file),
       mode === "classify"
@@ -155,14 +248,14 @@ export function WorkerUploadForm({ clients, groups }: Props) {
             candidateClientIds: [...candidateIds],
             periodType,
             periodMonth: effectivePeriodMonth,
-            periodYear: Number(year),
+            periodYear: period.year,
             type,
           }
         : {
             clientId,
             periodType,
             periodMonth: effectivePeriodMonth,
-            periodYear: Number(year),
+            periodYear: period.year,
             type,
           },
       3,
@@ -191,6 +284,8 @@ export function WorkerUploadForm({ clients, groups }: Props) {
 
     if (okCount > 0) {
       success(`${okCount} factura${okCount !== 1 ? "s" : ""} subida${okCount !== 1 ? "s" : ""} correctamente`);
+      // Los lotes abiertos cambian (el de esta subida ya lo es): sin perder lo elegido.
+      router.refresh();
     }
     if (dupCount > 0 && okCount === 0) {
       info(`${dupCount} duplicada${dupCount !== 1 ? "s" : ""} omitida${dupCount !== 1 ? "s" : ""}`);
@@ -224,7 +319,7 @@ export function WorkerUploadForm({ clients, groups }: Props) {
               <button
                 key={m}
                 type="button"
-                onClick={() => setMode(m)}
+                onClick={() => chooseMode(m)}
                 disabled={m === "classify" && clients.length < 2}
                 className={`flex-1 rounded-lg border px-3 py-2 text-[12px] font-medium transition disabled:opacity-40 ${
                   mode === m ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 text-slate-500 hover:bg-slate-50"
@@ -237,16 +332,104 @@ export function WorkerUploadForm({ clients, groups }: Props) {
         </div>
 
         {mode === "single" ? (
-          <div className="mb-4">
-            <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
-              Cliente
-            </label>
-            <Select
-              value={clientId}
-              onChange={setClientId}
-              options={clients.map((c) => ({ value: c.id, label: `${c.name} (${c.cif})` }))}
-            />
-          </div>
+          <>
+            <div className="mb-4">
+              <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                Cliente
+              </label>
+              <Select
+                value={clientId}
+                onChange={chooseClient}
+                options={clients.map((c) => ({ value: c.id, label: `${c.name} (${c.cif})` }))}
+              />
+            </div>
+
+            {clientOpenBatches.length > 0 && (
+              <div className="mb-4">
+                <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                  Lotes abiertos de este cliente
+                </label>
+                <ul className="space-y-1.5">
+                  {clientOpenBatches.map((b) => {
+                    const chosen = matching.includes(b);
+                    return (
+                      <li
+                        key={`${b.periodType}-${b.periodYear}-${b.periodMonth}-${b.type}`}
+                        className={`flex items-center justify-between gap-3 rounded-lg border px-3 py-2 ${
+                          chosen ? "border-blue-300 bg-blue-50" : "border-slate-200 bg-white"
+                        }`}
+                      >
+                        <span className="min-w-0 truncate text-[12px] text-slate-700">
+                          <span className="font-medium">{batchLabel(b)}</span>
+                          <span className="text-slate-500"> · {openBatchCounts(b)}</span>
+                        </span>
+                        {/* El mismo boton en los dos estados: al elegir, el foco
+                            se queda en el (con un span en su lugar se perdia). */}
+                        <button
+                          type="button"
+                          onClick={() => { if (!chosen) pickBatch(b); }}
+                          disabled={isPending}
+                          aria-disabled={chosen}
+                          className={`inline-flex flex-shrink-0 items-center gap-1 text-[11px] font-semibold text-blue-700 transition disabled:opacity-50 ${
+                            chosen ? "cursor-default px-1 py-1" : "rounded-lg border border-blue-200 bg-white px-2.5 py-1 hover:bg-blue-50"
+                          }`}
+                        >
+                          {chosen ? (
+                            <>
+                              <CheckCircle2 className="h-3.5 w-3.5" />
+                              Elegido
+                            </>
+                          ) : pickBatchLabel(b.type, type)}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            )}
+
+            {/* A donde van: el lote abierto que se ha elegido (lo que pidio el
+                asesor), ninguno o un periodo cerrado, para que no se abra otro
+                lote sin verlo. Se anuncia al cambiar. */}
+            <div role="status">
+              {clientId && (notice.tone === "closed" ? (
+                <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+                  <p>{notice.text}</p>
+                </div>
+              ) : notice.tone === "open" ? (
+                <div className="mb-4 flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-[12px] text-blue-800">
+                  <Layers className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+                  <p>{notice.text}</p>
+                </div>
+              ) : (
+                <p className="mb-4 text-[12px] text-slate-500">{notice.text}</p>
+              ))}
+            </div>
+
+            {overlapping.map((b) => {
+              const label = periodLabel(b.periodType, b.periodMonth, b.periodYear);
+              return (
+                <div
+                  key={`solape-${b.periodType}-${b.periodYear}-${b.periodMonth}`}
+                  className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800"
+                >
+                  <p className="flex items-start gap-1.5">
+                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+                    Ya hay un lote abierto de {label} para este cliente: ¿las añades a ese?
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => pickPeriod(b)}
+                    disabled={isPending}
+                    className="rounded-lg bg-amber-600 px-2.5 py-1 text-[11px] font-semibold text-white transition hover:bg-amber-700 disabled:opacity-50"
+                  >
+                    Añadir a {label}
+                  </button>
+                </div>
+              );
+            })}
+          </>
         ) : (
           <div className="mb-4 space-y-2">
             {visibleGroups.length > 0 && (
@@ -307,7 +490,7 @@ export function WorkerUploadForm({ clients, groups }: Props) {
               <button
                 key={pt}
                 type="button"
-                onClick={() => setPeriodType(pt)}
+                onClick={() => changePeriod({ periodType: pt })}
                 className={`flex-1 rounded-lg border px-3 py-2 text-[12px] font-medium transition ${
                   periodType === pt
                     ? "border-blue-500 bg-blue-50 text-blue-700"
@@ -326,11 +509,15 @@ export function WorkerUploadForm({ clients, groups }: Props) {
               {periodType === "MONTHLY" ? "Mes" : "Trimestre"}
             </label>
             {periodType === "MONTHLY" ? (
-              <Select value={month} onChange={setMonth} options={MONTHS} />
+              <Select
+                value={String(period.month)}
+                onChange={(v) => changePeriod({ month: Number(v), quarter: quarterFromMonth(Number(v)) })}
+                options={MONTH_OPTIONS}
+              />
             ) : (
               <Select
                 value={String(quarter)}
-                onChange={(v) => setQuarter(Number(v))}
+                onChange={(v) => changePeriod({ quarter: Number(v), month: quarterStartMonth(Number(v)) })}
                 options={QUARTER_OPTIONS.map((q) => ({ value: String(q.value), label: q.label }))}
               />
             )}
@@ -339,7 +526,7 @@ export function WorkerUploadForm({ clients, groups }: Props) {
             <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
               Año
             </label>
-            <Select value={year} onChange={setYear} options={YEARS} />
+            <Select value={String(period.year)} onChange={(v) => changePeriod({ year: Number(v) })} options={yearOptions} />
           </div>
           <div>
             <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
@@ -347,7 +534,7 @@ export function WorkerUploadForm({ clients, groups }: Props) {
             </label>
             <Select
               value={type}
-              onChange={(v) => setType(v as "PURCHASE" | "SALE" | "UNKNOWN")}
+              onChange={(v) => chooseType(v as UploadType)}
               options={[
                 { value: "PURCHASE", label: "Facturas recibidas" },
                 { value: "SALE", label: "Facturas emitidas" },
@@ -426,7 +613,7 @@ export function WorkerUploadForm({ clients, groups }: Props) {
         </p>
         <button
           type="submit"
-          disabled={!items.length || isPending || pendingCount === 0 || (mode === "single" ? !clientId : candidateIds.size === 0)}
+          disabled={!items.length || isPending || pendingCount === 0 || (mode === "single" ? !clientId || selectionClosed : candidateIds.size === 0)}
           className="flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-[13px] font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}

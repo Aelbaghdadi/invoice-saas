@@ -19,6 +19,7 @@ import { BatchFilters } from "@/components/batch/BatchFilters";
 import { ClientAccordionSection } from "@/components/batch/ClientAccordionSection";
 import { BatchWindowNote } from "@/components/batch/BatchWindowNote";
 import { batchKey, batchWindowWhere, groupBatches, loadBatchRows, type BatchGroup } from "@/lib/batchGroups";
+import { moveTargetsFor } from "@/lib/batchTarget";
 import { BatchActions } from "@/app/dashboard/worker/batch/BatchActions";
 
 // La pagina muestra estados de OCR en curso — la marcamos dynamic para
@@ -460,6 +461,9 @@ export default async function BatchPage({
                     alreadyClosed={false}
                     rejectableCount={g.rejectable}
                     validatedCount={g.rejectableValidated}
+                    movableCount={g.total - g.exported}
+                    exportedCount={g.exported}
+                    moveTargets={moveTargetsFor(g, groups, (l) => closedSet.has(`${l.clientId}-${l.periodYear}-${l.periodMonth}`))}
                   />
                 )}
               </div>

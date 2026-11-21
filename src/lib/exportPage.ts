@@ -1,6 +1,7 @@
 import { z } from "zod";
-import { yearMonthInMadrid } from "@/lib/dates";
-import { quarterFromMonth, quarterStartMonth, type PeriodTypeName } from "@/lib/period";
+import { previousPeriod, quarterFromMonth, quarterStartMonth, type PeriodTypeName } from "@/lib/period";
+
+export { previousPeriod };
 
 /**
  * Lo que la pantalla de Exportar tiene elegido al abrirse (F-041): el cliente,
@@ -15,16 +16,6 @@ export type ExportSelection = {
   year: number;
   type: "ALL" | "PURCHASE" | "SALE";
 };
-
-/** El mes o el trimestre anterior a hoy (en Madrid), con su año. */
-export function previousPeriod(periodType: PeriodTypeName, now = new Date()): { month: number; year: number } {
-  const { year, month } = yearMonthInMadrid(now);
-  if (periodType === "QUARTERLY") {
-    const quarter = quarterFromMonth(month);
-    return quarter === 1 ? { month: 10, year: year - 1 } : { month: quarterStartMonth(quarter - 1), year };
-  }
-  return month === 1 ? { month: 12, year: year - 1 } : { month: month - 1, year };
-}
 
 // Lo que no valga se ignora y queda el valor por defecto: es un enlace, no
 // un formulario, y un parámetro viejo no tiene que dejar la pantalla vacía.

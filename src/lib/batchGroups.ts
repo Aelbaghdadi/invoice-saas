@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { QUEUE_ORDER } from "@/lib/reviewQueue";
 import { isBatchRejectable, PENDING_WORK } from "@/lib/invoiceStatuses";
 import { yearMonthInMadrid } from "@/lib/dates";
+import { isPeriodClosed, periodSpan, type ClosedPeriod, type OpenBatch } from "@/lib/batchTarget";
 
 /**
  * Datos de la pantalla de Lotes (gestor y admin), sin cargar el historico
@@ -175,6 +176,90 @@ export async function loadBatchRows(where: Prisma.InvoiceWhereInput): Promise<Ba
     for (const r of items) exported.add(r.invoiceId);
   }
   return rows.map((r) => ({ ...r, hasOpenIssue: openIssue.has(r.id), everExported: exported.has(r.id) }));
+}
+
+/**
+ * Lo que «Subir facturas» necesita para proponer el lote y no abrir otro:
+ * - los lotes abiertos de estos clientes en la ventana (los ultimos
+ *   BATCH_WINDOW_MONTHS meses): con algo por revisar o validadas sin
+ *   exportar, y sin cierre activo, que en un periodo cerrado no se sube;
+ * - la agrupacion (mensual o trimestral) de la ultima subida de cada cliente,
+ *   sin contar las rechazadas (una trimestral subida por error);
+ * - los periodos con cierre activo de cada cliente desde el inicio de la
+ *   ventana: la propuesta se los salta y el formulario avisa si se elige uno.
+ * «Sin exportar» es sin puntero a un Excel, como cuenta Lotes lo que se
+ * llevaria Exportar: una corregida despues de exportarla vuelve a estarlo.
+ */
+export async function loadOpenBatches(
+  firmId: string | null | undefined,
+  clientIds: string[],
+  now = new Date(),
+): Promise<{
+  openBatches: OpenBatch[];
+  lastPeriodTypes: Record<string, PeriodType>;
+  closedPeriods: Record<string, ClosedPeriod[]>;
+}> {
+  if (!firmId || clientIds.length === 0) return { openBatches: [], lastPeriodTypes: {}, closedPeriods: {} };
+  const scope: Prisma.InvoiceWhereInput = {
+    AND: [{ clientId: { in: clientIds }, client: { advisoryFirmId: firmId } }, recentPeriodsWhere(now)],
+  };
+  const start = batchWindowStart(now);
+  const [byStatus, toExport, closures] = await Promise.all([
+    prisma.invoice.groupBy({
+      by: ["clientId", "periodType", "periodYear", "periodMonth", "type", "status"],
+      where: { AND: [scope, { status: { notIn: ["SPLIT_SOURCE", "PENDING_ROUTING", "REJECTED"] } }] },
+      _count: { _all: true },
+      _max: { createdAt: true },
+    }),
+    prisma.invoice.groupBy({
+      by: ["clientId", "periodType", "periodYear", "periodMonth", "type"],
+      where: { AND: [scope, { status: "VALIDATED", exportBatchId: null }] },
+      _count: { _all: true },
+    }),
+    prisma.periodClosure.findMany({
+      where: {
+        clientId: { in: clientIds },
+        client: { advisoryFirmId: firmId },
+        reopenedAt: null,
+        OR: [{ year: { gt: start.year } }, { year: start.year, month: { gte: start.month } }],
+      },
+      select: { clientId: true, month: true, year: true },
+    }),
+  ]);
+
+  const lots = new Map<string, OpenBatch>();
+  const lotOf = (row: { clientId: string; periodType: PeriodType; periodYear: number; periodMonth: number; type: InvoiceType }) => {
+    const key = batchKey(row);
+    let lot = lots.get(key);
+    if (!lot) {
+      lot = {
+        clientId: row.clientId, periodType: row.periodType, periodMonth: row.periodMonth, periodYear: row.periodYear,
+        type: row.type, pending: 0, toExport: 0,
+      };
+      lots.set(key, lot);
+    }
+    return lot;
+  };
+  const latest = new Map<string, { at: Date; periodType: PeriodType }>();
+  for (const row of byStatus) {
+    if (PENDING_WORK.includes(row.status)) lotOf(row).pending += row._count._all;
+    const at = row._max.createdAt;
+    const seen = latest.get(row.clientId);
+    if (at && (!seen || at > seen.at)) latest.set(row.clientId, { at, periodType: row.periodType });
+  }
+  for (const row of toExport) lotOf(row).toExport += row._count._all;
+
+  const closedPeriods: Record<string, ClosedPeriod[]> = {};
+  for (const c of closures) (closedPeriods[c.clientId] ??= []).push({ month: c.month, year: c.year });
+  const openBatches = [...lots.values()]
+    .filter((l) => !isPeriodClosed(closedPeriods[l.clientId] ?? [], l))
+    .sort((a, b) =>
+      periodSpan(b).from - periodSpan(a).from || a.type.localeCompare(b.type) || a.periodType.localeCompare(b.periodType));
+  return {
+    openBatches,
+    lastPeriodTypes: Object.fromEntries([...latest].map(([clientId, v]) => [clientId, v.periodType])),
+    closedPeriods,
+  };
 }
 
 /** Clave de un lote: cliente, periodo, agrupacion y tipo. */

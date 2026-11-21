@@ -9,6 +9,8 @@ import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { sendPeriodSummary } from "@/lib/periodSummary";
 import { canAccessClient } from "@/lib/accessibleClients";
+import { moveBatchInvoices, type MoveBatchResult } from "@/lib/batchMove";
+import { parseBatchPeriod } from "@/lib/batchTarget";
 import type { InvoiceType, InvoiceStatus, PeriodType } from "@prisma/client";
 
 export type BatchAction =
@@ -253,4 +255,48 @@ export async function rejectBatch(
   revalidatePath("/dashboard/worker/invoices");
   revalidatePath("/dashboard/admin/invoices");
   return { ok: true, rejectedCount: rejected.length };
+}
+
+/**
+ * «Mover a otro lote…» de las tarjetas de Lotes (gestor y admin): lleva las
+ * facturas del lote a otro lote del mismo cliente y tipo (moveBatchInvoices).
+ * Campos: el lote (clientId, type, periodType, month, year) y el periodo de
+ * destino (toPeriodType, toMonth, toYear). Nunca lanza: { error } o cuántas
+ * se han movido y cuántas se quedan por estar ya en un Excel.
+ */
+export async function moveBatch(formData: FormData): Promise<MoveBatchResult> {
+  try {
+    const session = await auth();
+    if (!session?.user || !["ADMIN", "WORKER"].includes(session.user.role) || !session.user.advisoryFirmId) {
+      return { error: "No autorizado" };
+    }
+    const clientId = formData.get("clientId");
+    const type = formData.get("type");
+    const from = parseBatchPeriod({ periodType: formData.get("periodType"), month: formData.get("month"), year: formData.get("year") });
+    const to = parseBatchPeriod({ periodType: formData.get("toPeriodType"), month: formData.get("toMonth"), year: formData.get("toYear") });
+    if (typeof clientId !== "string" || !clientId || (type !== "PURCHASE" && type !== "SALE") || !from || !to) {
+      return { error: "Parámetros inválidos" };
+    }
+
+    const access = await assertBatchAccess(session, clientId);
+    if (access) return access;
+
+    const result = await moveBatchInvoices({
+      firmId: session.user.advisoryFirmId,
+      clientId,
+      from: { ...from, type },
+      to,
+      userId: session.user.id,
+    });
+    if ("error" in result) return result;
+
+    revalidatePath("/dashboard/worker/batch", "layout");
+    revalidatePath("/dashboard/admin/batch", "layout");
+    revalidatePath("/dashboard/worker/invoices");
+    revalidatePath("/dashboard/admin/invoices");
+    return result;
+  } catch (e) {
+    console.error("[moveBatch]", e);
+    return { error: "No se pudo mover el lote. Inténtalo de nuevo." };
+  }
 }

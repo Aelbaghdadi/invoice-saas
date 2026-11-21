@@ -165,6 +165,39 @@ Ver [src/lib/exportFormats.ts](src/lib/exportFormats.ts).
   tipo de IVA). "Fecha Contabilización" es obligatoria y va en
   columna F.
 
+### 5. Lotes: a cuál va una subida y cómo se juntan
+
+Un lote es cliente + periodo + agrupación (mensual o trimestral) + tipo
+(`batchKey`); octubre y T4 son lotes distintos. Ver
+[src/lib/batchTarget.ts](src/lib/batchTarget.ts) (puro, también en el
+navegador).
+
+- **Subir facturas** (un cliente) enseña los lotes abiertos del cliente
+  (`loadOpenBatches`: algo por revisar o validadas sin exportar, últimos
+  12 meses, sin cierre) y propone uno (`defaultUploadTarget`): el lote
+  abierto del tipo elegido desde el periodo del mes anterior en adelante
+  o, sin él, ese periodo con la agrupación de la última subida (las
+  facturas llegan un mes después: en noviembre, octubre; en trimestral,
+  el T4, no el trimestre anterior que propone Exportar). Si ese periodo
+  está cerrado, el que está en curso. Avisa si hay un lote abierto con la
+  otra agrupación que comparte meses, y si el periodo elegido está
+  cerrado no deja subir. «Clasificar entre varios» no hereda la propuesta
+  de ningún cliente: mensual y el mes anterior.
+- **Mover a otro lote…** (tarjetas de Lotes, gestor y admin) cambia el
+  periodo de las facturas a otro lote del mismo cliente y tipo
+  ([src/lib/batchMove.ts](src/lib/batchMove.ts)): las que ya salieron en
+  un Excel se quedan, la original de una división va con sus hijas, con
+  un cierre activo en origen o destino no se mueve nada y cada factura
+  deja una entrada `lote` en la auditoría. El periodo contable no cambia:
+  las que ya se guardaron siguen el cierre de su periodo contable, que es
+  el del lote de origen (el Excel no cambia: A3 contabiliza por la fecha
+  de la factura). Juntar no se deshace por factura.
+- **Con Exportar a la vez:** mover no se lleva una factura que un export
+  tiene reservada (`exportBatchId: null` en la escritura), y el export
+  reserva con su cliente, periodo y tipo (`commitExportBatch` con
+  `exportPeriodWhere`): si el lote se movió mientras se generaba el
+  Excel, da conflicto (ERR-EXPORT-003) y se reintenta.
+
 ## Decisiones no obvias
 
 ### Por qué `@prisma/adapter-pg` y no el binario nativo

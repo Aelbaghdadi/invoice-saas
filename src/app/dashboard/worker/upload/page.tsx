@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { adminUploadClientsWhere } from "@/lib/uploadClients";
+import { loadOpenBatches } from "@/lib/batchGroups";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { WorkerUploadForm } from "./WorkerUploadForm";
 
@@ -32,15 +33,20 @@ export default async function WorkerUploadPage() {
     clients = assignments.map((a) => a.client);
   }
 
-  // Grupos de empresas de la firma (para el modo "clasificar entre varios").
+  // Grupos de empresas de la firma (para el modo "clasificar entre varios"),
+  // y los lotes abiertos de cada cliente para proponer el suyo al subir.
   const firmId = session.user.advisoryFirmId ?? undefined;
-  const groupsRaw = firmId
-    ? await prisma.clientGroup.findMany({
-        where: { advisoryFirmId: firmId },
-        orderBy: { name: "asc" },
-        include: { members: { select: { clientId: true } } },
-      })
-    : [];
+  const now = new Date();
+  const [groupsRaw, { openBatches, lastPeriodTypes, closedPeriods }] = await Promise.all([
+    firmId
+      ? prisma.clientGroup.findMany({
+          where: { advisoryFirmId: firmId },
+          orderBy: { name: "asc" },
+          include: { members: { select: { clientId: true } } },
+        })
+      : [],
+    loadOpenBatches(firmId, clients.map((c) => c.id), now),
+  ]);
   const groups = groupsRaw.map((g) => ({ id: g.id, name: g.name, clientIds: g.members.map((m) => m.clientId) }));
 
   if (clients.length === 0) {
@@ -84,7 +90,14 @@ export default async function WorkerUploadPage() {
         description="Sube facturas en nombre de un cliente."
       />
       <div className="max-w-2xl">
-        <WorkerUploadForm clients={clients} groups={groups} />
+        <WorkerUploadForm
+          clients={clients}
+          groups={groups}
+          openBatches={openBatches}
+          lastPeriodTypes={lastPeriodTypes}
+          closedPeriods={closedPeriods}
+          now={now.toISOString()}
+        />
       </div>
     </div>
   );

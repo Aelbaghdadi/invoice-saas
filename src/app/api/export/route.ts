@@ -291,6 +291,7 @@ export async function POST(req: NextRequest) {
         userId,
       },
       invoices,
+      exportPeriodWhere(request, firmId),
     );
   } catch (err) {
     if (err instanceof ExportConflictError) {

@@ -1,4 +1,5 @@
 /** Utilidades para manejar periodos mensuales y trimestrales. */
+import { yearMonthInMadrid } from "@/lib/dates";
 
 export type PeriodTypeName = "MONTHLY" | "QUARTERLY";
 
@@ -24,6 +25,20 @@ export function periodLabel(periodType: PeriodTypeName, periodMonth: number, per
     return `T${q} ${periodYear}`;
   }
   return `${MONTH_NAMES[periodMonth - 1] ?? periodMonth} ${periodYear}`;
+}
+
+/**
+ * El mes o el trimestre anterior a hoy (en Madrid), con su año. Aquí y no en
+ * exportPage, que lo reexporta: el formulario de subida lo usa en el navegador
+ * y exportPage arrastraría zod.
+ */
+export function previousPeriod(periodType: PeriodTypeName, now = new Date()): { month: number; year: number } {
+  const { year, month } = yearMonthInMadrid(now);
+  if (periodType === "QUARTERLY") {
+    const quarter = quarterFromMonth(month);
+    return quarter === 1 ? { month: 10, year: year - 1 } : { month: quarterStartMonth(quarter - 1), year };
+  }
+  return month === 1 ? { month: 12, year: year - 1 } : { month: month - 1, year };
 }
 
 /**
