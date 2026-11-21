@@ -21,6 +21,16 @@ export function formatRegisterNumber(series: { type: InvoiceType; year: number }
   return `${REGISTER_SERIES_LETTERS[series.type]}-${series.year}/${padNumber(number)}`;
 }
 
+/** El nº de la fila de archivo de una factura, o null si aún no tiene (no se
+ *  ha exportado). Para los listados. */
+export function registerLabel(
+  archive: { registerNumber: number | null; registerSeries: { type: InvoiceType; year: number } | null } | null | undefined,
+): string | null {
+  return archive?.registerSeries && archive.registerNumber != null
+    ? formatRegisterNumber(archive.registerSeries, archive.registerNumber)
+    : null;
+}
+
 /** «R-2026-0153»: el nº sin barra, para el nombre de un fichero. */
 export function registerFileStem(series: { type: InvoiceType; year: number }, number: number): string {
   return `${REGISTER_SERIES_LETTERS[series.type]}-${series.year}-${padNumber(number)}`;

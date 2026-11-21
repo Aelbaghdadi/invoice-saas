@@ -4,9 +4,11 @@ import { useState } from "react";
 import { Badge } from "@/components/ui/Badge";
 import { InvoiceStatusBadge } from "@/components/ui/InvoiceStatusBadge";
 import { formatEur } from "@/lib/format";
+import { formatDateEs } from "@/lib/dates";
 import { reviewHref } from "@/lib/reviewNavigation";
 import { FileText, ArrowUpDown, ArrowUp, ArrowDown, RefreshCw } from "lucide-react";
 import Link from "next/link";
+import type { InvoiceSortKey } from "@/lib/invoiceSort";
 
 type Invoice = {
   id: string;
@@ -16,6 +18,9 @@ type Invoice = {
   periodMonth: number;
   periodYear: number;
   createdAt: string;
+  invoiceDate: string | null;
+  /** Nº de registro del archivo («R-2026/0153»); null hasta que se exporta. */
+  registerNumber: string | null;
   totalAmount: number | null;
   client: { name: string; cif: string };
   hasDuplicateWarning: boolean;
@@ -30,7 +35,7 @@ type Invoice = {
   pendingReexport: boolean;
 };
 
-type SortKey = "fecha" | "factura" | "cliente" | "periodo" | "total";
+type SortKey = InvoiceSortKey;
 
 /** El tercero de la factura: el emisor en recibidas, el receptor en emitidas
  *  (la otra parte es el propio cliente). Es por donde la busca el gestor. */
@@ -98,6 +103,9 @@ export function InvoicesTable({
   const columns: { label: string; sortKey?: SortKey; hideMobile?: boolean }[] = [
     { label: "Cliente", sortKey: "cliente" },
     { label: "Factura", sortKey: "factura" },
+    { label: "Proveedor / cliente", sortKey: "proveedor" },
+    { label: "Fecha", sortKey: "fechafactura", hideMobile: true },
+    { label: "Nº registro", sortKey: "registro", hideMobile: true },
     { label: "Periodo", sortKey: "periodo", hideMobile: true },
     { label: "Tipo", hideMobile: true },
     { label: "Estado" },
@@ -161,22 +169,28 @@ export function InvoicesTable({
                   <td className="px-3 md:px-5 py-3.5">
                     <div className="flex items-center gap-2">
                       <FileText className="h-4 w-4 flex-shrink-0 text-slate-300" />
-                      <div className="min-w-0">
-                        <p className="max-w-[200px] truncate text-[13px] font-medium text-slate-700" title={inv.filename}>
-                          {inv.invoiceNumber ?? inv.filename}
-                        </p>
-                        {t.name && (
-                          <p className="max-w-[200px] truncate text-[11px] text-slate-400" title={t.cif ?? undefined}>
-                            {t.name}
-                          </p>
-                        )}
-                      </div>
+                      <p className="min-w-0 max-w-[200px] truncate text-[13px] font-medium text-slate-700" title={inv.filename}>
+                        {inv.invoiceNumber ?? inv.filename}
+                      </p>
                       {inv.hasDuplicateWarning && (
                         <span className="inline-flex items-center rounded-full bg-amber-50 border border-amber-200 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 whitespace-nowrap">
                           Posible duplicado
                         </span>
                       )}
                     </div>
+                  </td>
+                  <td className="px-3 md:px-5 py-3.5">
+                    {t.name ? (
+                      <p className="max-w-[200px] truncate text-[13px] text-slate-600" title={t.cif ?? undefined}>{t.name}</p>
+                    ) : (
+                      <span className="text-[13px] text-slate-300">—</span>
+                    )}
+                  </td>
+                  <td className="hidden md:table-cell px-3 md:px-5 py-3.5 text-[13px] text-slate-500 tabular-nums whitespace-nowrap">
+                    {formatDateEs(inv.invoiceDate)}
+                  </td>
+                  <td className="hidden md:table-cell px-3 md:px-5 py-3.5 text-[13px] text-slate-500 tabular-nums whitespace-nowrap">
+                    {inv.registerNumber ?? <span className="text-slate-300">—</span>}
                   </td>
                   <td className="hidden md:table-cell px-3 md:px-5 py-3.5 text-[13px] text-slate-500">
                     {new Date(0, inv.periodMonth - 1).toLocaleString("es", { month: "short" })} {inv.periodYear}

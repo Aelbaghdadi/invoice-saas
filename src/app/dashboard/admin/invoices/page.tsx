@@ -19,6 +19,8 @@ import {
   ocrErrorsToReprocessWhere,
   statusCountsWithin,
 } from "@/lib/invoiceListing";
+import { INVOICE_SORT_KEYS, nextSortDir, type InvoiceSortKey } from "@/lib/invoiceSort";
+import { registerLabel } from "@/lib/registerNumbers";
 import type { InvoiceStatus, InvoiceType, Prisma } from "@prisma/client";
 
 const STATUS_BADGE: Record<string, { label: string }> = {
@@ -63,7 +65,7 @@ export default async function InvoicesPage({
   const yearFilter = parseIntInRange(params.year, 2000, 2100);
   const q = (params.q ?? "").slice(0, 100);
   const page = parsePage(params.page);
-  const { orderBy, sort, dir } = invoiceOrderBy(params.sort, params.dir);
+  const { orderBy, memorySort, sort, dir } = invoiceOrderBy(params.sort, params.dir);
 
   // Clientes de la asesoria para el desplegable. El cliente de la URL solo se
   // acepta si es uno de estos: un id de otra asesoria no filtra, se ignora.
@@ -97,7 +99,7 @@ export default async function InvoicesPage({
 
   // Solo se cargan las facturas de la pagina que se ve. Antes venian todas
   // las de la asesoria y se paginaba en el navegador.
-  const { ids, window } = await invoicePageIds({ where: listWhere, textIds, orderBy, page });
+  const { ids, window } = await invoicePageIds({ where: listWhere, textIds, orderBy, memorySort, page });
   const invoices = ids.length === 0 ? [] : inIdOrder(
     await prisma.invoice.findMany({
       // Se repite el filtro de la asesoria aunque los ids ya salgan de el:
@@ -112,6 +114,7 @@ export default async function InvoicesPage({
         // corregir una factura ya exportada ese puntero se pone a null para
         // que vuelva a la cola, y la factura sigue estando en A3.
         exportBatchItems: { take: 1, select: { id: true } },
+        archive: { select: { registerNumber: true, registerSeries: { select: { type: true, year: true } } } },
       },
     }).catch(() => []),
     ids,
@@ -173,6 +176,8 @@ export default async function InvoicesPage({
     periodMonth: inv.periodMonth,
     periodYear: inv.periodYear,
     createdAt: inv.createdAt.toISOString(),
+    invoiceDate: inv.invoiceDate?.toISOString() ?? null,
+    registerNumber: registerLabel(inv.archive),
     totalAmount: inv.totalAmount !== null ? Number(inv.totalAmount) : null,
     client: { name: inv.client.name, cif: inv.client.cif },
     hasDuplicateWarning: inv.issues.length > 0 && showsDuplicateWarning(inv.status),
@@ -193,11 +198,11 @@ export default async function InvoicesPage({
   // Enlaces de ordenacion por columna: pulsar la columna activa invierte el
   // sentido. Van al servidor porque ordenar solo la pagina visible mentia.
   const sortHrefs = Object.fromEntries(
-    (["fecha", "factura", "cliente", "periodo", "total"] as const).map((key) => {
-      const nextDir = sort === key ? (dir === "desc" ? "asc" : "desc") : key === "fecha" || key === "total" ? "desc" : "asc";
+    INVOICE_SORT_KEYS.map((key) => {
+      const nextDir = nextSortDir(sort, dir, key);
       return [key, href({ status: statusFilter, sort: key === "fecha" && nextDir === "desc" ? undefined : key, dir: nextDir === "desc" ? undefined : nextDir })];
     }),
-  ) as Record<"fecha" | "factura" | "cliente" | "periodo" | "total", string>;
+  ) as Record<InvoiceSortKey, string>;
 
   const hayFiltros = !!(clientIdFilter || monthFilter || quarterFilter || yearFilter || typeFilter || q);
 

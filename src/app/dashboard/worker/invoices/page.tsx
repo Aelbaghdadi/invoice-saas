@@ -6,7 +6,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { Badge } from "@/components/ui/Badge";
 import { InvoiceStatusBadge } from "@/components/ui/InvoiceStatusBadge";
 import { MONTH_NAMES } from "@/lib/period";
-import { FileText, PenLine, AlertTriangle } from "lucide-react";
+import { FileText, PenLine, AlertTriangle, ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
 import Link from "next/link";
 import type { InvoiceType, Prisma } from "@prisma/client";
 import { DuplicateRowActions } from "./DuplicateRowActions";
@@ -16,7 +16,9 @@ import { Pagination } from "@/components/ui/Pagination";
 import { InvoiceFilters } from "@/components/invoices/InvoiceFilters";
 import { parsePage, parseIntInRange, periodMonthFilter } from "@/lib/listing";
 import { reviewHref } from "@/lib/reviewNavigation";
-import { countWithin, invoicePageIds, inIdOrder, matchingInvoiceIds } from "@/lib/invoiceListing";
+import { countWithin, invoiceOrderBy, invoicePageIds, inIdOrder, matchingInvoiceIds } from "@/lib/invoiceListing";
+import { nextSortDir, thirdPartyName, type InvoiceSortKey } from "@/lib/invoiceSort";
+import { registerLabel } from "@/lib/registerNumbers";
 import { REVIEWABLE, showsDuplicateWarning } from "@/lib/invoiceStatuses";
 
 const BASE_PATH = "/dashboard/worker/invoices";
@@ -74,6 +76,8 @@ export default async function WorkerInvoicesPage({
     bucket?: string;
     q?: string;
     page?: string;
+    sort?: string;
+    dir?: string;
   }>;
 }) {
   const session = await auth();
@@ -88,6 +92,8 @@ export default async function WorkerInvoicesPage({
   const bucket = parseBucket(params.bucket);
   const q = (params.q ?? "").slice(0, 100);
   const page = parsePage(params.page);
+  // Sin orden en la URL, lo ultimo subido primero, como siempre.
+  const { orderBy, memorySort, sort, dir } = invoiceOrderBy(params.sort, params.dir);
 
   // ADMIN ve todos los clientes de su firma; WORKER solo los asignados.
   const allowedClientIds = await getAccessibleClientIds(session).catch(() => [] as string[]);
@@ -120,7 +126,8 @@ export default async function WorkerInvoicesPage({
   const { ids, window } = await invoicePageIds({
     where: listWhere,
     textIds,
-    orderBy: [{ createdAt: "desc" }, { id: "asc" }],
+    orderBy,
+    memorySort,
     page,
   });
   const invoices = ids.length === 0 ? [] : inIdOrder(
@@ -137,6 +144,7 @@ export default async function WorkerInvoicesPage({
           },
           // Si salio alguna vez en un Excel (ver isBatchRejectable).
           exportBatchItems: { take: 1, select: { id: true } },
+          archive: { select: { registerNumber: true, registerSeries: { select: { type: true, year: true } } } },
         },
       })
       .catch(() => []),
@@ -167,6 +175,9 @@ export default async function WorkerInvoicesPage({
     year: yearFilter ? String(yearFilter) : undefined,
     type: typeFilter,
     q: q || undefined,
+    // El orden se conserva al cambiar de bandeja, de pagina o de filtro.
+    sort: sort === "fecha" ? undefined : sort,
+    dir: dir === "desc" ? undefined : dir,
   };
   const listHref = (extra: Record<string, string | undefined>) => {
     const sp = new URLSearchParams();
@@ -182,6 +193,30 @@ export default async function WorkerInvoicesPage({
   // filtros: "Volver" lleva aqui y no a la lista sin filtrar.
   const reviewBucket = bucket === "clean" || bucket === "attention" ? bucket : null;
   const thisListHref = listHref({ bucket: bucketParam, page: page > 1 ? String(page) : undefined });
+
+  // Pulsar la columna activa invierte el sentido; la vuelta a la pagina 1 es
+  // a proposito: en otro orden, la pagina 3 son otras facturas.
+  const sortHref = (key: InvoiceSortKey) => {
+    const nextDir = nextSortDir(sort, dir, key);
+    return listHref({
+      bucket: bucketParam,
+      sort: key === "fecha" && nextDir === "desc" ? undefined : key,
+      dir: nextDir === "desc" ? undefined : nextDir,
+    });
+  };
+  const columns: { label: string; sortKey?: InvoiceSortKey }[] = [
+    { label: "Factura", sortKey: "factura" },
+    { label: "Proveedor / cliente", sortKey: "proveedor" },
+    { label: "Cliente", sortKey: "cliente" },
+    { label: "Fecha", sortKey: "fechafactura" },
+    { label: "Nº registro", sortKey: "registro" },
+    { label: "Periodo", sortKey: "periodo" },
+    { label: "Tipo" },
+    { label: "Estado" },
+    // "Subida" y no "Fecha": es cuando se subio, no la fecha de la factura.
+    { label: "Subida", sortKey: "fecha" },
+    { label: "" },
+  ];
 
   const tabs: { key: Bucket; label: string; count: number; tone: string }[] = [
     { key: "attention", label: "Con incidencias", count: countAttention, tone: "amber" },
@@ -242,7 +277,7 @@ export default async function WorkerInvoicesPage({
           type: typeFilter ?? "",
           q,
         }}
-        keep={{ bucket: bucketParam }}
+        keep={{ bucket: bucketParam, sort: filterParams.sort, dir: filterParams.dir }}
       />
 
       <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -275,18 +310,32 @@ export default async function WorkerInvoicesPage({
             }
           />
         ) : (
+          <div className="overflow-x-auto">
           <table className="w-full">
             <thead>
               <tr className="border-b border-slate-100">
-                {/* "Subida" y no "Fecha": es cuando se subio, no la fecha de la factura. */}
-                {["Factura", "Cliente", "Periodo", "Tipo", "Estado", "Subida", ""].map((h) => (
-                  <th
-                    key={h}
-                    className="px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500"
-                  >
-                    {h}
-                  </th>
-                ))}
+                {columns.map((col) => {
+                  const active = col.sortKey === sort;
+                  const Icon = active ? (dir === "asc" ? ArrowUp : ArrowDown) : ArrowUpDown;
+                  return (
+                    <th
+                      key={col.label}
+                      className="px-5 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-500"
+                    >
+                      {col.sortKey ? (
+                        <Link
+                          href={sortHref(col.sortKey)}
+                          className={`inline-flex items-center gap-1 whitespace-nowrap hover:text-slate-700 ${active ? "text-slate-800" : ""}`}
+                        >
+                          {col.label}
+                          <Icon className={`h-3 w-3 ${active ? "text-blue-600" : "text-slate-300"}`} />
+                        </Link>
+                      ) : (
+                        col.label
+                      )}
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
@@ -298,6 +347,8 @@ export default async function WorkerInvoicesPage({
                   ? inv.issues.find((i) => i.type === "POSSIBLE_DUPLICATE")
                   : undefined;
                 const reviewable = REVIEWABLE.includes(inv.status);
+                const counterpart = thirdPartyName(inv);
+                const register = registerLabel(inv.archive);
                 return (
                   <tr key={inv.id} className="hover:bg-slate-50/60">
                     <td className="px-5 py-3">
@@ -311,11 +362,6 @@ export default async function WorkerInvoicesPage({
                           <span className="block max-w-[200px] truncate text-[13px] font-medium text-slate-700" title={inv.filename}>
                             {inv.invoiceNumber ?? inv.filename}
                           </span>
-                          {(inv.type === "SALE" ? inv.receiverName : inv.issuerName) && (
-                            <span className="block max-w-[200px] truncate text-[11px] text-slate-400">
-                              {inv.type === "SALE" ? inv.receiverName : inv.issuerName}
-                            </span>
-                          )}
                           {duplicateIssue && (
                             <span
                               className="mt-0.5 inline-flex items-center gap-1 text-[11px] font-medium text-amber-600"
@@ -328,7 +374,18 @@ export default async function WorkerInvoicesPage({
                         </div>
                       </div>
                     </td>
+                    <td className="px-5 py-3 text-[13px] text-slate-600">
+                      {counterpart ? (
+                        <span className="block max-w-[200px] truncate">{counterpart}</span>
+                      ) : (
+                        <span className="text-slate-300">—</span>
+                      )}
+                    </td>
                     <td className="px-5 py-3 text-[13px] text-slate-500">{inv.client.name}</td>
+                    <td className="px-5 py-3 text-[13px] text-slate-500 whitespace-nowrap">{formatDateEs(inv.invoiceDate)}</td>
+                    <td className="px-5 py-3 text-[13px] text-slate-500 tabular-nums whitespace-nowrap">
+                      {register ?? <span className="text-slate-300">—</span>}
+                    </td>
                     <td className="px-5 py-3 text-[13px] text-slate-500">
                       {monthName} {inv.periodYear}
                     </td>
@@ -379,6 +436,7 @@ export default async function WorkerInvoicesPage({
               })}
             </tbody>
           </table>
+          </div>
         )}
         <Pagination
           window={window}

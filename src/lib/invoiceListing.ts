@@ -2,6 +2,9 @@ import type { InvoiceStatus, Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { matchesSearch, normalizeSearch, pageWindow, type PageWindow } from "@/lib/listing";
 import { amountSearchVariants, countStatusesMatching, inMemoryIdFilter, pageOfMatching } from "@/lib/invoiceSearch";
+import { invoiceRowComparator, parseInvoiceSortKey, type InvoiceSortKey, type InvoiceSortRow } from "@/lib/invoiceSort";
+
+export type { InvoiceSortKey } from "@/lib/invoiceSort";
 
 /**
  * Ids de las facturas que casan con el texto buscado, sin tildes; null si no
@@ -90,17 +93,46 @@ export async function statusCountsWithin(
 }
 
 /** Ids de una pagina: count + skip/take con orden estable, en BD. Con
- *  demasiados ids de texto la BD ordena todo el where y aqui se corta. */
+ *  demasiados ids de texto la BD ordena todo el where y aqui se corta. Con
+ *  `memorySort` (un orden que la BD no sabe hacer) se ordena aqui todo el
+ *  where, con solo las columnas que hacen falta. */
 export async function invoicePageIds(opts: {
   where: Prisma.InvoiceWhereInput;
   /** Lo que devuelve matchingInvoiceIds: null si no hay texto. */
   textIds: string[] | null;
   orderBy: Prisma.InvoiceOrderByWithRelationInput[];
+  memorySort?: ((a: InvoiceSortRow, b: InvoiceSortRow) => number) | null;
   page: number;
   pageSize?: number;
 }): Promise<{ ids: string[]; window: PageWindow }> {
-  const { textIds, orderBy, page, pageSize } = opts;
+  const { textIds, orderBy, memorySort, page, pageSize } = opts;
   const inMemory = inMemoryIdFilter(textIds);
+  if (memorySort) {
+    const rows = await prisma.invoice.findMany({
+      where: inMemory ? opts.where : withinIds(opts.where, textIds),
+      select: {
+        id: true,
+        type: true,
+        issuerName: true,
+        receiverName: true,
+        archive: { select: { registerNumber: true, registerSeries: { select: { type: true, year: true } } } },
+      },
+    });
+    const sorted = rows
+      .filter((r) => !inMemory || inMemory.has(r.id))
+      .map((r): InvoiceSortRow => ({
+        id: r.id,
+        type: r.type,
+        issuerName: r.issuerName,
+        receiverName: r.receiverName,
+        register: r.archive?.registerSeries && r.archive.registerNumber != null
+          ? { ...r.archive.registerSeries, number: r.archive.registerNumber }
+          : null,
+      }))
+      .sort(memorySort);
+    const window = pageWindow(page, sorted.length, pageSize);
+    return { ids: sorted.slice(window.skip, window.skip + window.take).map((r) => r.id), window };
+  }
   if (inMemory) {
     const rows = await prisma.invoice.findMany({ where: opts.where, orderBy, select: { id: true } });
     return pageOfMatching(rows.map((r) => r.id), inMemory, page, pageSize);
@@ -131,27 +163,33 @@ export function inIdOrder<T extends { id: string }>(rows: T[], ids: string[]): T
   return [...rows].sort((a, b) => (pos.get(a.id) ?? 0) - (pos.get(b.id) ?? 0));
 }
 
-/** Columnas por las que se puede ordenar la lista de facturas. */
-export type InvoiceSortKey = "fecha" | "factura" | "cliente" | "periodo" | "total";
-
 /** Orden de Prisma para una columna. Siempre con el id al final: sin un
  *  desempate estable, dos facturas con la misma fecha pueden cambiar de
  *  pagina entre una peticion y la siguiente, y una se ve dos veces.
- *  Las que no tienen numero o importe van al final en los dos sentidos: en
- *  descendente, Postgres las ponia primero. */
+ *  Las que no tienen numero, fecha o importe van al final en los dos
+ *  sentidos: en descendente, Postgres las ponia primero. El tercero y el nº
+ *  de registro no los ordena la BD: van en `memorySort` (invoiceSort.ts). */
 export function invoiceOrderBy(
   sort: string | undefined,
   dir: string | undefined,
-): { orderBy: Prisma.InvoiceOrderByWithRelationInput[]; sort: InvoiceSortKey; dir: "asc" | "desc" } {
+): {
+  orderBy: Prisma.InvoiceOrderByWithRelationInput[];
+  memorySort: ((a: InvoiceSortRow, b: InvoiceSortRow) => number) | null;
+  sort: InvoiceSortKey;
+  dir: "asc" | "desc";
+} {
   const d: "asc" | "desc" = dir === "asc" ? "asc" : "desc";
-  const key: InvoiceSortKey =
-    sort === "factura" || sort === "cliente" || sort === "periodo" || sort === "total" ? sort : "fecha";
-  const byKey: Record<InvoiceSortKey, Prisma.InvoiceOrderByWithRelationInput[]> = {
+  const key = parseInvoiceSortKey(sort);
+  const byKey: Record<Exclude<InvoiceSortKey, "proveedor" | "registro">, Prisma.InvoiceOrderByWithRelationInput[]> = {
     fecha: [{ createdAt: d }],
     factura: [{ invoiceNumber: { sort: d, nulls: "last" } }],
     cliente: [{ client: { name: d } }],
     periodo: [{ periodYear: d }, { periodMonth: d }],
     total: [{ totalAmount: { sort: d, nulls: "last" } }],
+    fechafactura: [{ invoiceDate: { sort: d, nulls: "last" } }],
   };
-  return { orderBy: [...byKey[key], { id: "asc" }], sort: key, dir: d };
+  if (key === "proveedor" || key === "registro") {
+    return { orderBy: [{ id: "asc" }], memorySort: invoiceRowComparator(key, d), sort: key, dir: d };
+  }
+  return { orderBy: [...byKey[key], { id: "asc" }], memorySort: null, sort: key, dir: d };
 }

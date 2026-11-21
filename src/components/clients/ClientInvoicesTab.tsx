@@ -13,6 +13,8 @@ import { periodLabel } from "@/lib/period";
 import { parsePage, parseIntInRange, periodMonthFilter } from "@/lib/listing";
 import { PENDING_WORK, STATUS_LABELS } from "@/lib/invoiceStatuses";
 import { inIdOrder, invoiceOrderBy, invoicePageIds, matchingInvoiceIds, statusCountsWithin, type InvoiceSortKey } from "@/lib/invoiceListing";
+import { nextSortDir, thirdPartyName } from "@/lib/invoiceSort";
+import { registerLabel } from "@/lib/registerNumbers";
 import { clientSheetHref } from "@/lib/clientSheet";
 import { invoiceHref, type ClientSheetRole } from "./links";
 
@@ -39,9 +41,12 @@ const STATUS_TABS: { label: string; value: string; statuses: InvoiceStatus[] | n
   { label: "Rechazadas", value: "REJECTED", statuses: ["REJECTED"] },
 ];
 
+// «Fecha» es la de la factura (la que se ve), no la de subida.
 const SORTABLE: { key: InvoiceSortKey; label: string; align: "left" | "right" }[] = [
   { key: "factura", label: "Factura", align: "left" },
-  { key: "fecha", label: "Fecha", align: "left" },
+  { key: "proveedor", label: "Proveedor / cliente", align: "left" },
+  { key: "fechafactura", label: "Fecha", align: "left" },
+  { key: "registro", label: "Nº registro", align: "left" },
   { key: "periodo", label: "Periodo", align: "left" },
   { key: "total", label: "Total", align: "right" },
 ];
@@ -69,7 +74,7 @@ export async function ClientInvoicesTab({
   const yearFilter = parseIntInRange(params.year, 2000, 2100);
   const q = (params.q ?? "").slice(0, 100);
   const page = parsePage(params.page);
-  const { orderBy, sort, dir } = invoiceOrderBy(params.sort, params.dir);
+  const { orderBy, memorySort, sort, dir } = invoiceOrderBy(params.sort, params.dir);
 
   const periodMonth = periodMonthFilter(monthFilter, quarterFilter);
   const baseWhere: Prisma.InvoiceWhereInput = {
@@ -84,7 +89,7 @@ export async function ClientInvoicesTab({
     : baseWhere;
 
   const textIds = await matchingInvoiceIds(baseWhere, q);
-  const { ids, window } = await invoicePageIds({ where: listWhere, textIds, orderBy, page });
+  const { ids, window } = await invoicePageIds({ where: listWhere, textIds, orderBy, memorySort, page });
   const [invoices, countMap, yearRows] = await Promise.all([
     ids.length === 0 ? [] : prisma.invoice.findMany({
       where: { AND: [listWhere, { id: { in: ids } }] },
@@ -92,6 +97,7 @@ export async function ClientInvoicesTab({
         id: true, filename: true, invoiceNumber: true, type: true, status: true, issuerName: true, receiverName: true,
         invoiceDate: true, periodType: true, periodMonth: true, periodYear: true, totalAmount: true, createdAt: true,
         exportBatchId: true, exportBatchItems: { take: 1, select: { id: true } },
+        archive: { select: { registerNumber: true, registerSeries: { select: { type: true, year: true } } } },
       },
     }).then((rows) => inIdOrder(rows, ids)),
     statusCountsWithin(baseWhere, textIds).catch((): Partial<Record<InvoiceStatus, number>> => ({})),
@@ -116,7 +122,7 @@ export async function ClientInvoicesTab({
   const href = (extra: Record<string, string | undefined>) => clientSheetHref(basePath, { ...filterParams, estado: statusTab.value || undefined, ...sortParams, ...extra });
   const thisHref = href({ page: window.page > 1 ? String(window.page) : undefined });
   const sortHref = (key: InvoiceSortKey) => {
-    const nextDir = sort === key ? (dir === "desc" ? "asc" : "desc") : key === "fecha" || key === "total" ? "desc" : "asc";
+    const nextDir = nextSortDir(sort, dir, key);
     return href({ sort: key === "fecha" && nextDir === "desc" ? undefined : key, dir: nextDir === "desc" ? undefined : nextDir });
   };
   const hayFiltros = !!(monthFilter || quarterFilter || yearFilter || typeFilter || q);
@@ -191,14 +197,18 @@ export async function ClientInvoicesTab({
                 <tbody className="divide-y divide-slate-50">
                   {invoices.map((inv) => {
                     const exported = inv.exportBatchItems.length > 0;
-                    const counterpart = inv.type === "SALE" ? inv.receiverName : inv.issuerName;
+                    const counterpart = thirdPartyName(inv);
+                    const register = registerLabel(inv.archive);
                     return (
                       <tr key={inv.id} className="hover:bg-slate-50/60">
                         <td className="px-5 py-3">
-                          <p className="max-w-[260px] truncate font-semibold text-slate-800" title={inv.filename}>{inv.invoiceNumber ?? inv.filename}</p>
-                          {counterpart && <p className="max-w-[260px] truncate text-[11px] text-slate-400">{counterpart}</p>}
+                          <p className="max-w-[200px] truncate font-semibold text-slate-800" title={inv.filename}>{inv.invoiceNumber ?? inv.filename}</p>
+                        </td>
+                        <td className="px-5 py-3">
+                          {counterpart ? <p className="max-w-[220px] truncate text-slate-600">{counterpart}</p> : <span className="text-slate-300">—</span>}
                         </td>
                         <td className="whitespace-nowrap px-5 py-3 text-slate-600">{formatDateEs(inv.invoiceDate)}</td>
+                        <td className="whitespace-nowrap px-5 py-3 tabular-nums text-slate-500">{register ?? <span className="text-slate-300">—</span>}</td>
                         <td className="whitespace-nowrap px-5 py-3 text-slate-500">{periodLabel(inv.periodType, inv.periodMonth, inv.periodYear)}</td>
                         <td className="whitespace-nowrap px-5 py-3 text-right tabular-nums text-slate-700">
                           {inv.totalAmount !== null ? formatEur(Number(inv.totalAmount)) : <span className="text-slate-300">—</span>}
