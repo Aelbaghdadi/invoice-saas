@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { parseTaxId } from "@/lib/validators";
 import {
-  accountsAgainstDirection, missingDataProblems, thirdPartyTaxIdRequired, usesSimplifiedAccount, validationProblems, type RuleInvoice,
+  accountsAgainstDirection, missingDataProblems, thirdPartyTaxIdRequired, usesSimplifiedAccount, validationProblems, vatBreakdownMismatches,
+  type RuleInvoice,
 } from "@/lib/invoiceRules";
+import { vatLineFix, vatLineMismatches } from "@/lib/vatLineChecks";
 
 const ok: RuleInvoice = {
   type: "PURCHASE",
@@ -10,7 +12,7 @@ const ok: RuleInvoice = {
   invoiceDate: "2026-09-10",
   totalAmount: 121,
   irpfAmount: null,
-  lines: [{ taxBase: 100, vatAmount: 21 }],
+  lines: [{ taxBase: 100, vatRate: 21, vatAmount: 21 }],
   isRectificative: false,
   thirdPartyTaxId: "B12345674",
   thirdPartyCountry: null,
@@ -38,14 +40,14 @@ describe("validationProblems (F-009, F-014)", () => {
 
   it("al menos una línea con base distinta de 0", () => {
     expect(rules({ lines: [], totalAmount: 0 })).toEqual(["sin_lineas"]);
-    expect(rules({ lines: [{ taxBase: 0, vatAmount: 0 }], totalAmount: 0 })).toEqual(["sin_lineas"]);
-    expect(rules({ lines: [{ taxBase: 0, vatAmount: 0 }, { taxBase: 100, vatAmount: 21 }] })).toEqual([]);
+    expect(rules({ lines: [{ taxBase: 0, vatRate: 21, vatAmount: 0 }], totalAmount: 0 })).toEqual(["sin_lineas"]);
+    expect(rules({ lines: [{ taxBase: 0, vatRate: 21, vatAmount: 0 }, { taxBase: 100, vatRate: 21, vatAmount: 21 }] })).toEqual([]);
     // Abono: base negativa también vale.
-    expect(rules({ lines: [{ taxBase: -100, vatAmount: -21 }], totalAmount: -121 })).toEqual([]);
+    expect(rules({ lines: [{ taxBase: -100, vatRate: 21, vatAmount: -21 }], totalAmount: -121 })).toEqual([]);
   });
 
   it("una rectificativa a cero no se bloquea si tiene su línea", () => {
-    expect(rules({ isRectificative: true, lines: [{ taxBase: 0, vatAmount: 0 }], totalAmount: 0 })).toEqual([]);
+    expect(rules({ isRectificative: true, lines: [{ taxBase: 0, vatRate: 21, vatAmount: 0 }], totalAmount: 0 })).toEqual([]);
     expect(rules({ isRectificative: true, lines: [], totalAmount: 0 })).toEqual(["sin_lineas"]);
     expect(validationProblems({ ...ok, isRectificative: true, lines: [], totalAmount: 0 })[0].message)
       .toBe("Falta al menos una línea de IVA (en una rectificativa puede ir a 0).");
@@ -55,8 +57,10 @@ describe("validationProblems (F-009, F-014)", () => {
     expect(rules({ totalAmount: 121.01 })).toEqual(["descuadre"]);
     expect(validationProblems({ ...ok, totalAmount: 120 })[0].message)
       .toBe("El importe no cuadra: las líneas suman 121,00 € y el total es 120,00 €.");
-    expect(rules({ lines: [{ taxBase: 100, vatAmount: 21, equivalenceSurchargeAmount: 5.2 }], irpfAmount: 15, totalAmount: 111.2 }))
-      .toEqual([]);
+    expect(rules({
+      lines: [{ taxBase: 100, vatRate: 21, vatAmount: 21, equivalenceSurchargeRate: 5.2, equivalenceSurchargeAmount: 5.2 }],
+      irpfAmount: 15, totalAmount: 111.2,
+    })).toEqual([]);
   });
 
   it("en otra moneda sin convertir (F-025)", () => {
@@ -190,7 +194,7 @@ describe("cuadre de las adquisiciones intracomunitarias (IVA autorrepercutido)",
     operationType: "INTRACOM_SERVICIOS",
     thirdPartyTaxId: "515160873",
     thirdPartyCountry: "PT",
-    lines: [{ taxBase: 94.46, vatAmount: 19.84 }],
+    lines: [{ taxBase: 94.46, vatRate: 21, vatAmount: 19.84 }],
   };
 
   it("la cuota no suma al total, en bienes (3) y en servicios (8)", () => {
@@ -207,6 +211,112 @@ describe("cuadre de las adquisiciones intracomunitarias (IVA autorrepercutido)",
     const venta = { type: "SALE" as const, supplierAccount: "43000001", expenseAccount: "70000001" };
     expect(rules({ ...compra, ...venta, operationType: "INTRACOM", totalAmount: 94.46 })).toEqual(["descuadre"]);
     expect(rules({ ...compra, ...venta, operationType: "INTRACOM", totalAmount: 114.3 })).toEqual([]);
+  });
+});
+
+describe("desglose por tipo (F-022): no deja validar aunque el total cuadre", () => {
+  // El caso real que mandó el asesor, como lo guardó el OCR: los tipos de las
+  // líneas 2 y 3 cruzados. En el documento, 1.312,18 va al 21 % y 2.538,10 al
+  // 10 %. El total (5.721,14) cuadra igual.
+  const casoReal: Partial<RuleInvoice> = {
+    totalAmount: 5721.14,
+    lines: [
+      { taxBase: 1289.89, vatRate: 4, vatAmount: 51.6 },
+      { taxBase: 1312.18, vatRate: 10, vatAmount: 275.56 },
+      { taxBase: 2538.1, vatRate: 21, vatAmount: 253.81 },
+    ],
+  };
+
+  it("el caso real: no se valida, y el mensaje dice qué líneas", () => {
+    expect(validationProblems({ ...ok, ...casoReal })).toEqual([{
+      rule: "desglose",
+      message: "El desglose por tipo no cuadra (Línea 2: la cuota de IVA es 275,56 € y la base × 10 % da 131,22 €; "
+        + "Línea 3: la cuota de IVA es 253,81 € y la base × 21 % da 533,00 €). Corrige el tipo, la base o la cuota antes de validar.",
+    }]);
+  });
+
+  it("con los dos arreglos en un clic (vatLineFix) sí se valida", () => {
+    const lines = casoReal.lines!.map((line) => ({ ...line }));
+    for (const m of vatLineMismatches(lines)) {
+      const fix = vatLineFix(lines[m.index].taxBase, m);
+      Object.assign(lines[m.index], { [fix.field]: Number(fix.value) });
+    }
+    expect(lines.map((l) => l.vatRate)).toEqual([4, 21, 10]);
+    expect(lines.map((l) => l.vatAmount)).toEqual([51.6, 275.56, 253.81]);
+    expect(validationProblems({ ...ok, ...casoReal, lines })).toEqual([]);
+  });
+
+  it("los redondeos dentro de la tolerancia siguen dejando validar", () => {
+    // 7 artículos de 1,15 € al 21 %: 0,24 de cuota cada uno (1,68), y la base
+    // entera da 1,69.
+    expect(rules({ lines: [{ taxBase: 8.05, vatRate: 21, vatAmount: 1.68 }], totalAmount: 9.73 })).toEqual([]);
+    // El 0,5 % de 210 € son 1,05 €.
+    expect(rules({ lines: [{ taxBase: 1000, vatRate: 21, vatAmount: 211.05 }], totalAmount: 1211.05 })).toEqual([]);
+    expect(rules({ lines: [{ taxBase: 1000, vatRate: 21, vatAmount: 211.06 }], totalAmount: 1211.06 })).toEqual(["desglose"]);
+    // Por debajo, 2 céntimos.
+    expect(rules({ lines: [{ taxBase: 10, vatRate: 21, vatAmount: 2.12 }], totalAmount: 12.12 })).toEqual([]);
+    expect(rules({ lines: [{ taxBase: 10, vatRate: 21, vatAmount: 2.13 }], totalAmount: 12.13 })).toEqual(["desglose"]);
+  });
+
+  it("en inversión del sujeto pasivo y en las ventas intracomunitarias no hay cuota que mirar", () => {
+    const sinCuota = { lines: [{ taxBase: 100, vatRate: 21, vatAmount: 0 }], totalAmount: 100 };
+    expect(rules({ ...sinCuota, operationType: "INVERSION_SP" })).toEqual([]);
+    const venta = { type: "SALE" as const, supplierAccount: "43000001", expenseAccount: "70000001", thirdPartyTaxId: "515160873", thirdPartyCountry: "PT" };
+    expect(rules({ ...sinCuota, ...venta, operationType: "INTRACOM" })).toEqual([]);
+    // En una operación interior sí.
+    expect(rules(sinCuota)).toEqual(["desglose"]);
+  });
+
+  it("la cuota autorrepercutida de una adquisición intracomunitaria sí se mira", () => {
+    const compra = { operationType: "INTRACOM_SERVICIOS", thirdPartyTaxId: "515160873", thirdPartyCountry: "PT", totalAmount: 94.46 };
+    expect(rules({ ...compra, lines: [{ taxBase: 94.46, vatRate: 21, vatAmount: 19.84 }] })).toEqual([]);
+    expect(validationProblems({ ...ok, ...compra, lines: [{ taxBase: 94.46, vatRate: 21, vatAmount: 1.98 }] })).toEqual([{
+      rule: "desglose",
+      message: "El desglose por tipo no cuadra (Línea 1: la cuota de IVA es 1,98 € y la base × 21 % da 19,84 €). "
+        + "Corrige el tipo, la base o la cuota antes de validar.",
+    }]);
+  });
+
+  it("una adquisición intracomunitaria con el 21 % y cuota 0 se valida, como con el 0 %: a A3 le llega la autorrepercutida", () => {
+    // Las validadas antes del 2026-10-09 están así; el export les pone el 21 %
+    // y su cuota (a3Vat) y no avisa de nada. Corregirlas no puede quedarse
+    // bloqueado por eso.
+    const compra = { operationType: "INTRACOM_SERVICIOS", thirdPartyTaxId: "515160873", thirdPartyCountry: "PT", totalAmount: 94.46 };
+    expect(rules({ ...compra, lines: [{ taxBase: 94.46, vatRate: 21, vatAmount: 0 }] })).toEqual([]);
+    expect(rules({ ...compra, lines: [{ taxBase: 94.46, vatRate: 0, vatAmount: 0 }] })).toEqual([]);
+  });
+
+  it("una rectificativa que solo corrige la cuota (base 0) se valida", () => {
+    // Se facturó al 10 % y era el 21 %: la base no cambia y la cuota sube 110 €.
+    // La base × % siempre daría 0.
+    const soloCuota = { lines: [{ taxBase: 0, vatRate: 21, vatAmount: 110 }], totalAmount: 110 };
+    expect(rules({ ...soloCuota, isRectificative: true })).toEqual([]);
+    // Sin la casilla no es una rectificativa, y la línea no tiene base.
+    expect(rules(soloCuota)).toEqual(["sin_lineas", "desglose"]);
+    // Una línea con base sí se mira, también en una rectificativa.
+    expect(rules({ isRectificative: true, lines: [{ taxBase: -100, vatRate: 21, vatAmount: -10 }], totalAmount: -110 }))
+      .toEqual(["desglose"]);
+    // Las que marca la pantalla, con su posición.
+    expect(vatBreakdownMismatches({
+      ...ok, isRectificative: true,
+      lines: [{ taxBase: 0, vatRate: 21, vatAmount: 110 }, { taxBase: -100, vatRate: 21, vatAmount: -10 }],
+    })).toEqual([{ index: 1, kind: "iva", rate: 21, expected: -21, actual: -10 }]);
+  });
+
+  it("también el recargo de equivalencia", () => {
+    const recargo = (amount: number) => ({
+      lines: [{ taxBase: 100, vatRate: 21, vatAmount: 21, equivalenceSurchargeRate: 5.2, equivalenceSurchargeAmount: amount }],
+      totalAmount: 121 + amount,
+    });
+    expect(rules(recargo(5.2))).toEqual([]);
+    expect(validationProblems({ ...ok, ...recargo(1.4) })[0].message).toBe(
+      "El desglose por tipo no cuadra (Línea 1: el recargo de equivalencia es 1,40 € y la base × 5,2 % da 5,20 €). "
+        + "Corrige el tipo, la base o la cuota antes de validar.",
+    );
+  });
+
+  it("con el total descuadrado también, primero el descuadre", () => {
+    expect(rules({ ...casoReal, totalAmount: 5721.15 })).toEqual(["descuadre", "desglose"]);
   });
 });
 

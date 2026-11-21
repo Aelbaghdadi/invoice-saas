@@ -14,8 +14,9 @@ import { describeVatLineMismatch, vatLineMismatches, type CheckedLine } from "@/
 export type MathIssue = { type: IssueType; description: string; field?: string };
 
 /** `field` de la incidencia de desglose por tipo: sin migracion (el tipo
- *  sigue siendo MATH_MISMATCH), pero la lista de incidencias la ensena como
- *  aviso y no como el error matematico del total. */
+ *  sigue siendo MATH_MISMATCH), pero la lista de incidencias la llama
+ *  «Desglose por tipo» y no «Error matemático», que es el descuadre del
+ *  total. */
 export const VAT_LINES_ISSUE_FIELD = "vatLines";
 
 /** ¿Es el aviso de desglose por tipo (y no el descuadre del total)? */
@@ -65,7 +66,8 @@ export function mathIssues(input: {
   }
 
   // Cuota por linea: el total puede cuadrar con las cuotas cruzadas entre
-  // tipos. Es un aviso: la factura va a «Requiere atención».
+  // tipos. Aqui es un aviso (la factura va a «Requiere atención»); validarla
+  // no deja hasta que se corrija (invoiceRules).
   const lineMismatches = vatLineMismatches(lines, input.operationType);
   if (lineMismatches.length > 0) {
     issues.push({

@@ -173,8 +173,9 @@ export default async function WorkerIssuesPage({
           {issues.map((issue) => (
             <div key={issue.id} className="flex items-center justify-between px-5 py-3.5">
               <div className="flex items-start gap-3 min-w-0">
-                {/* El desglose por tipo es un aviso (F-022), no el descuadre del total. */}
-                <Badge variant={isVatLinesIssue(issue) ? "yellow" : TYPE_VARIANT[issue.type] ?? "slate"}>
+                {/* El desglose por tipo (F-022) no es el descuadre del total, pero
+                    desde noviembre de 2026 tambien impide validar: en rojo igual. */}
+                <Badge variant={TYPE_VARIANT[issue.type] ?? "slate"}>
                   {isVatLinesIssue(issue) ? "Desglose por tipo" : TYPE_LABELS[issue.type] ?? issue.type}
                 </Badge>
                 <div className="min-w-0">

@@ -51,10 +51,10 @@ import {
   applySelfAssessedRate, isSelfAssessedVat, isUntouchedSelfAssessedProposal, removeSelfAssessedRate, SELF_ASSESSED_VAT_RATE,
 } from "@/lib/selfAssessedVat";
 import { amountFieldsProblem, parseVatLineInputs, vatLinesProblem } from "@/lib/vatLineInput";
-import { accountsAgainstDirection, validationProblems } from "@/lib/invoiceRules";
+import { accountsAgainstDirection, validationProblems, vatBreakdownMessage, vatBreakdownMismatches } from "@/lib/invoiceRules";
 import { anyNegativeAmount } from "@/lib/rectificative";
 import { percentOf } from "@/lib/money";
-import { describeVatLineMismatch, vatLineMismatches, type VatLineMismatch } from "@/lib/vatLineChecks";
+import { describeVatLineMismatch, vatLineFix, type VatLineFix, type VatLineMismatch } from "@/lib/vatLineChecks";
 import { sanitizeAccountingAccountInput, padAccountingAccount } from "@/lib/accountingAccount";
 import {
   isIntracomOperation,
@@ -781,6 +781,21 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
     });
   };
 
+  // Arreglo en un clic de una linea que no cuadra (vatLineFix): cambia solo
+  // ese campo. Con updateVatLine, cambiar el % recalcularia tambien la cuota,
+  // que con los tipos cruzados es la buena (la del documento).
+  const applyVatLineFix = (idx: number, fix: VatLineFix) => {
+    if (fix.field === "vatRate" || fix.field === "vatAmount") setSelfAssessedProposed(false);
+    else setShowSurchargePanel(true);
+    setVatLines((prev) => prev.map((line, i) => (i === idx ? { ...line, [fix.field]: fix.value } : line)));
+    // La linea deja de estar marcada y el boton desaparece con el foco
+    // dentro: se lleva al campo cambiado. En el body, otro Enter validaba la
+    // factura (useReviewShortcuts) sin haber visto el cambio.
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLInputElement>(`[data-vat-line="${idx}"][data-vat-field="${fix.field}"]`)?.focus();
+    });
+  };
+
   const [saveState, setSaveState]         = useState<ReviewState>(null);
   const [validateState, setValidateState] = useState<ReviewState>(null);
   const [rejectState, setRejectState]     = useState<ReviewState>(null);
@@ -875,11 +890,13 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       totalAmount,
       ...(retentionType ? { retentionBase, retentionRate } : {}),
     });
-  // Cuota que no es base × % en alguna linea (F-022): marca la linea, no
-  // bloquea. Las lineas a medio rellenar ya las dice vatLineIssue.
+  const balanced = hasValues ? isInvoiceBalanced(balanceInput) : null;
+  // Cuota que no es base × % en alguna linea (F-022): marca la linea con su
+  // arreglo en un clic y no deja validar (invoiceRules, con las mismas
+  // lineas). Las lineas a medio rellenar ya las dice vatLineIssue.
   const lineMismatches = useMemo(() => {
     const num = (v: string) => (v.trim() === "" ? NaN : Number(v.replace(",", ".")));
-    const found: VatLineMismatch[] = [];
+    const found: (VatLineMismatch & { fix: VatLineFix })[] = [];
     vatLines.forEach((l, index) => {
       const [taxBase, vatRate, vatAmount] = [num(l.taxBase), num(l.vatRate), num(l.vatAmount)];
       if ([taxBase, vatRate, vatAmount].some(Number.isNaN)) return;
@@ -890,11 +907,15 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
         equivalenceSurchargeRate: Number.isNaN(surchargeRate) ? null : surchargeRate,
         equivalenceSurchargeAmount: Number.isNaN(surchargeAmount) ? null : surchargeAmount,
       };
-      for (const m of vatLineMismatches([line], operationType, type)) found.push({ ...m, index });
+      for (const m of vatBreakdownMismatches({ lines: [line], operationType, type, isRectificative })) {
+        found.push({ ...m, index, fix: vatLineFix(taxBase, m, balanced !== false) });
+      }
     });
     return found;
-  }, [vatLines, operationType, type]);
-  const mathOk = vatLineIssue ? false : hasValues ? isInvoiceBalanced(balanceInput) : null;
+  }, [vatLines, operationType, type, isRectificative, balanced]);
+  // Con los tipos cruzados entre lineas el total cuadra igual: el semaforo
+  // no puede salir en verde con una linea marcada.
+  const mathOk = vatLineIssue ? false : balanced === null ? null : balanced && lineMismatches.length === 0;
   // Lo que suman las lineas, para ensenarlo junto al total cuando no cuadra.
   const calculado = invoiceBalanceExpected(balanceInput);
 
@@ -1550,7 +1571,13 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       currency: markedEuro ? "EUR" : invoice.currency,
     });
     if (problem) {
-      if (problem.rule === "descuadre") triggerShake("math");
+      if (problem.rule === "descuadre" || problem.rule === "desglose") triggerShake("math");
+      // Con los numeros de linea de la pantalla, los de los avisos: una fila
+      // vacia en medio no se envia y cambiaria los de detras.
+      if (problem.rule === "desglose" && lineMismatches.length > 0) {
+        error(vatBreakdownMessage(lineMismatches));
+        return false;
+      }
       if (problem.rule === "sin_cuentas") {
         // Las cuentas suelen quedar fuera de la pantalla: temblar no bastaba
         // (F-107). Se lleva al gestor a la primera vacía y se dice cuál falta.
@@ -2798,6 +2825,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                           min="0"
                           max="100"
                           id={idx === 0 ? "vatRate" : undefined}
+                          data-vat-line={idx}
+                          data-vat-field="vatRate"
                           className={inputClass}
                           value={line.vatRate}
                           onChange={(e) => updateVatLine(idx, "vatRate", e.target.value)}
@@ -2830,6 +2859,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                         step="0.01"
                         min={minVal}
                         id={idx === 0 ? "vatAmount" : undefined}
+                        data-vat-line={idx}
+                        data-vat-field="vatAmount"
                         className={vatMismatch ? inputClass.replace("border-slate-200 bg-white", "border-amber-400 bg-amber-50") : inputClass}
                         value={line.vatAmount}
                         onChange={(e) => updateVatLine(idx, "vatAmount", e.target.value)}
@@ -2846,10 +2877,23 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                       </button>
                     </div>
                     {mismatches.map((m) => (
-                      <p key={m.kind} className="flex items-center gap-1.5 px-1 text-[11px] text-amber-700">
-                        <AlertTriangle className="h-3 w-3 flex-shrink-0" />
-                        {describeVatLineMismatch(m)}. Revisa el tipo o la cuota.
-                      </p>
+                      <div key={m.kind} className="flex flex-wrap items-center gap-x-2 gap-y-1 px-1 text-[11px] text-amber-700">
+                        <span className="flex items-center gap-1.5">
+                          <AlertTriangle className="h-3 w-3 flex-shrink-0" />
+                          {describeVatLineMismatch(m)}. Revisa el tipo o la cuota.
+                          {/* Una subcontrata con inversion del sujeto pasivo que sigue como
+                              Interior tambien sale asi: el 0 % la validaria con el codigo 1. */}
+                          {type === "PURCHASE" && operationType === "INTERIOR" && m.fix.field === "vatRate" && m.fix.value === "0"
+                            && " Si es una inversión del sujeto pasivo, cambia el tipo de operación en vez del %."}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => applyVatLineFix(idx, m.fix)}
+                          className="rounded-md border border-amber-300 bg-white px-2 py-0.5 font-medium text-amber-800 transition hover:bg-amber-100"
+                        >
+                          {m.fix.label}
+                        </button>
+                      </div>
                     ))}
                     </div>
                   );
@@ -3039,6 +3083,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                                 <input
                                   type="number"
                                   step="0.01"
+                                  data-vat-line={idx}
+                                  data-vat-field="equivalenceSurchargeRate"
                                   className={inputClass}
                                   value={line.equivalenceSurchargeRate}
                                   onChange={(e) => updateVatLine(idx, "equivalenceSurchargeRate", e.target.value)}
@@ -3049,6 +3095,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                                 <input
                                   type="number"
                                   step="0.01"
+                                  data-vat-line={idx}
+                                  data-vat-field="equivalenceSurchargeAmount"
                                   className={inputClass}
                                   value={line.equivalenceSurchargeAmount}
                                   onChange={(e) => updateVatLine(idx, "equivalenceSurchargeAmount", e.target.value)}
@@ -3122,6 +3170,8 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                     ? vatLineIssue
                     : mathOk
                     ? `Validación matemática correcta — Σ Bases${selfAssessed ? "" : " + Σ Cuotas"}${vatTotals.sumSurcharge !== 0 ? " + Σ Recargo" : ""}${retentionAmount > 0 ? " − Retención" : ""} = Total${selfAssessed ? " (la cuota autorrepercutida no suma)" : ""}`
+                    : balanced
+                    ? "El total cuadra, pero el desglose por tipo no: revisa las líneas marcadas."
                     : `No cuadra: ${selfAssessed ? "sin la cuota autorrepercutida, " : ""}las líneas suman ${formatEur(calculado)} y el total es ${formatEur(totalNum)} (diferencia: ${formatEur(Math.abs(balanceDiffCents) / 100)})`
                   }
                 </span>
@@ -3357,7 +3407,9 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
                         : vatLineIssue
                           ? vatLineIssue
                         : mathOk === false
-                          ? "El importe no cuadra: corrígelo antes de validar"
+                          ? (balanced
+                            ? "El desglose por tipo no cuadra: corrige las líneas marcadas antes de validar"
+                            : "El importe no cuadra: corrígelo antes de validar")
                           : accountsIncomplete
                             ? "Faltan cuentas contables: rellénalas antes de validar"
                             : isValidated

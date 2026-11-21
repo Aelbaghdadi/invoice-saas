@@ -513,7 +513,9 @@ async function parseAndSave(
   // Lo minimo para validar, tambien al guardar la correccion de una ya
   // validada (F-009, F-014). La pantalla lo avisa antes, con la misma funcion.
   // Tambien al guardar una VALIDATED o una EXPORTED (enforceRules): una
-  // llamada directa dejaria una validada sin total o descuadrada.
+  // llamada directa dejaria una validada sin total, descuadrada o con el
+  // desglose por tipo mal. Con las lineas que se van a guardar (recargo
+  // plegado y signo de la rectificativa), que son las que llegan a A3.
   if (enforceRules) {
     const [problem] = validationProblems({
       type: effectiveType,

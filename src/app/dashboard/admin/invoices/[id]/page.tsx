@@ -11,6 +11,8 @@ import { auditFieldLabelShort, formatAuditValue, STATUS_LABELS, auditActor } fro
 import { formatDateEs, formatDateTimeEs } from "@/lib/dates";
 import { formatEur } from "@/lib/format";
 import { periodLabel } from "@/lib/period";
+import { vatBreakdownMismatches } from "@/lib/invoiceRules";
+import { describeVatLineMismatch } from "@/lib/vatLineChecks";
 
 function Field({ label, value, icon: Icon }: { label: string; value?: string | null; icon?: any }) {
   return (
@@ -36,12 +38,29 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
     where: { id },
     include: {
       client: true,
+      vatLines: { orderBy: { position: "asc" } },
       auditLogs: { include: { user: true }, orderBy: { createdAt: "desc" } },
       statusHistory: { orderBy: { createdAt: "desc" } },
     },
   });
   if (!invoice) notFound();
   if (invoice.client.advisoryFirmId !== firmId) notFound();
+
+  // isValid solo mira el total, que cuadra igual con los tipos cruzados entre
+  // lineas: «correcta» solo con el desglose bien, como en la revision.
+  const breakdown = vatBreakdownMismatches({
+    lines: invoice.vatLines.map((l) => ({
+      taxBase: Number(l.taxBase),
+      vatRate: Number(l.vatRate),
+      vatAmount: Number(l.vatAmount),
+      equivalenceSurchargeRate: l.equivalenceSurchargeRate == null ? null : Number(l.equivalenceSurchargeRate),
+      equivalenceSurchargeAmount: l.equivalenceSurchargeAmount == null ? null : Number(l.equivalenceSurchargeAmount),
+    })),
+    operationType: invoice.operationType,
+    type: invoice.type,
+    isRectificative: invoice.isRectificative,
+  });
+  const mathOk = invoice.isValid === true && breakdown.length === 0;
 
   return (
     <div>
@@ -185,9 +204,13 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
             </div>
 
             {invoice.isValid !== null && (
-              <div className={`mt-4 flex items-center gap-2 rounded-lg px-3 py-2 text-[13px] font-medium ${invoice.isValid ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
-                <div className={`h-2 w-2 rounded-full ${invoice.isValid ? "bg-green-500" : "bg-red-500"}`} />
-                {invoice.isValid ? "Validación matemática correcta" : "Validación matemática incorrecta"}
+              <div className={`mt-4 flex items-center gap-2 rounded-lg px-3 py-2 text-[13px] font-medium ${mathOk ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
+                <div className={`h-2 w-2 flex-shrink-0 rounded-full ${mathOk ? "bg-green-500" : "bg-red-500"}`} />
+                {mathOk
+                  ? "Validación matemática correcta"
+                  : invoice.isValid
+                    ? `El total cuadra, pero el desglose por tipo no (${breakdown.map(describeVatLineMismatch).join("; ")})`
+                    : "Validación matemática incorrecta"}
               </div>
             )}
           </div>

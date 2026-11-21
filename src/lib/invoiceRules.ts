@@ -11,12 +11,12 @@ import { isSelfAssessedVat } from "@/lib/selfAssessedVat";
 import { formatEur } from "@/lib/format";
 import { isForeignCurrency } from "@/lib/currency";
 import { normalizePlanAccount, padAccountingAccount, partyAccountMatchesType, resultAccountMatchesType } from "@/lib/accountingAccount";
+import { toCents } from "@/lib/money";
+import { describeVatLineMismatch, vatLineMismatches, type CheckedLine, type VatLineMismatch } from "@/lib/vatLineChecks";
 
-export type RuleLine = {
-  taxBase: number;
-  vatAmount: number;
-  equivalenceSurchargeAmount?: number | null;
-};
+/** Con el % de IVA y el de recargo: el desglose por tipo los compara con
+ *  cada cuota. */
+export type RuleLine = CheckedLine;
 
 export type RuleInvoice = {
   type: "PURCHASE" | "SALE";
@@ -51,7 +51,8 @@ export type RuleCode =
   | "sin_nif_iva"
   | "moneda"
   | "cuenta_sentido"
-  | "descuadre";
+  | "descuadre"
+  | "desglose";
 
 export type RuleProblem = { rule: RuleCode; message: string };
 
@@ -241,6 +242,43 @@ export function balanceProblem(
   };
 }
 
+/** «El desglose por tipo no cuadra (Línea 2: …; Línea 3: …). Corrige…». La
+ *  pantalla lo monta con sus propias lineas: una fila vacia en medio no se
+ *  envia y cambiaria el numero de las de detras. */
+export function vatBreakdownMessage(mismatches: VatLineMismatch[]): string {
+  return `El desglose por tipo no cuadra (${mismatches.map(describeVatLineMismatch).join("; ")}). `
+    + "Corrige el tipo, la base o la cuota antes de validar.";
+}
+
+/**
+ * Las cuotas (de IVA o de recargo) que no son su base × % (vatLineMismatches,
+ * con su tolerancia). Inversion del sujeto pasivo e intracomunitarias sin
+ * cuota no se miran; la autorrepercutida de las adquisiciones
+ * intracomunitarias si. En una rectificativa, una linea con base 0 tampoco:
+ * corrige solo la cuota (se facturo al 10 % y era el 21 %: base 0 y cuota
+ * 110), y la base × % siempre daria 0. La pantalla marca estas mismas lineas.
+ */
+export function vatBreakdownMismatches(
+  inv: Pick<RuleInvoice, "lines" | "operationType" | "type" | "isRectificative">,
+): VatLineMismatch[] {
+  return vatLineMismatches(inv.lines, inv.operationType, inv.type)
+    .filter((m) => !(inv.isRectificative && toCents(inv.lines[m.index].taxBase) === 0));
+}
+
+/**
+ * Alguna linea con el desglose mal (vatBreakdownMismatches). El total
+ * cuadraba igual con los tipos cruzados entre lineas (el caso que mando el
+ * asesor: el 10 % y el 21 % cambiados) y se validaba; desde noviembre de 2026
+ * no, a peticion suya.
+ */
+export function vatBreakdownProblem(
+  inv: Pick<RuleInvoice, "lines" | "operationType" | "type" | "isRectificative">,
+): RuleProblem | null {
+  const mismatches = vatBreakdownMismatches(inv);
+  if (mismatches.length === 0) return null;
+  return { rule: "desglose", message: vatBreakdownMessage(mismatches) };
+}
+
 /** Todo lo que impide validar, en orden. Vacio si se puede. */
 export function validationProblems(inv: RuleInvoice): RuleProblem[] {
   const problems = missingDataProblems(inv);
@@ -250,5 +288,7 @@ export function validationProblems(inv: RuleInvoice): RuleProblem[] {
   if (direction) problems.push(direction);
   const balance = balanceProblem(inv);
   if (balance) problems.push(balance);
+  const breakdown = vatBreakdownProblem(inv);
+  if (breakdown) problems.push(breakdown);
   return problems;
 }

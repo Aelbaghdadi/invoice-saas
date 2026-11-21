@@ -324,16 +324,77 @@ describe("cuota = base × % por línea (F-022)", () => {
     expect(inv.status).toBe("PENDING_REVIEW");
   });
 
-  it("es un aviso: se puede validar igual", async () => {
+  // El caso real que mandó el asesor, como lo guardó el OCR: los tipos de las
+  // líneas 2 y 3 cruzados. El total (5.721,14) cuadra igual. Hasta noviembre
+  // de 2026 era un aviso y se validaba.
+  const lineasCasoReal = (rates: [string, string, string]) => JSON.stringify([
+    { taxBase: "1289.89", vatRate: rates[0], vatAmount: "51.60" },
+    { taxBase: "1312.18", vatRate: rates[1], vatAmount: "275.56" },
+    { taxBase: "2538.1", vatRate: rates[2], vatAmount: "253.81" },
+  ]);
+  const cruzada = { vatLines: lineasCasoReal(["4", "10", "21"]), totalAmount: "5721.14" };
+  const corregida = { vatLines: lineasCasoReal(["4", "21", "10"]), totalAmount: "5721.14" };
+  const desgloseMal = "El desglose por tipo no cuadra (Línea 2: la cuota de IVA es 275,56 € y la base × 10 % da 131,22 €; "
+    + "Línea 3: la cuota de IVA es 253,81 € y la base × 21 % da 533,00 €). Corrige el tipo, la base o la cuota antes de validar.";
+  const lineas = async () => (await row()).vatLines
+    .sort((a, b) => a.position - b.position)
+    .map((l) => [Number(l.taxBase), Number(l.vatRate), Number(l.vatAmount)]);
+
+  it("con los tipos cruzados no se valida aunque el total cuadre; corregidos, sí", async () => {
+    const antes = await row();
+    expect((await validate(await form(cruzada))).error).toBe(desgloseMal);
+    expect(await row()).toEqual(antes);
+    expect(await prisma.invoiceStatusHistory.count({ where: { invoiceId: id } })).toBe(0);
+
+    expect((await validate(await form(corregida))).error).toBeNull();
+    expect((await row()).status).toBe("VALIDATED");
+    expect(await lineas()).toEqual([[1289.89, 4, 51.6], [1312.18, 21, 275.56], [2538.1, 10, 253.81]]);
+  });
+
+  it("el borrador sí se guarda con el desglose mal", async () => {
+    expect((await save(cruzada)).error).toBeNull();
+    expect((await row()).status).toBe("PENDING_REVIEW");
+    expect(await lineas()).toEqual([[1289.89, 4, 51.6], [1312.18, 10, 275.56], [2538.1, 21, 253.81]]);
+  });
+
+  it.each(["VALIDATED", "EXPORTED"] as const)("tampoco se guarda así la corrección de una %s", async (status) => {
+    await prisma.invoice.update({ where: { id }, data: { status } });
+    const antes = await row();
+    expect((await validate(await form(cruzada))).error).toBe(desgloseMal);
+    expect((await save(cruzada)).error).toBe(desgloseMal);
+    expect(await row()).toEqual(antes);
+  });
+
+  it("una inversión del sujeto pasivo sin cuota se valida", async () => {
     const r = await validate(await form({
-      vatLines: JSON.stringify([
-        { taxBase: "100", vatRate: "21", vatAmount: "20" },
-        { taxBase: "200", vatRate: "10", vatAmount: "21" },
-      ]),
-      totalAmount: "341",
+      operationType: "INVERSION_SP", vatLines: JSON.stringify([{ taxBase: "100", vatRate: "21", vatAmount: "0" }]), totalAmount: "100",
     }));
     expect(r.error).toBeNull();
     expect((await row()).status).toBe("VALIDATED");
+  });
+
+  it("una rectificativa que solo corrige la cuota (base 0) se valida", async () => {
+    // Se facturó al 10 % y era el 21 %: la base no cambia y la cuota, 110 €.
+    const r = await validate(await form({
+      isRectificative: "1", rectifiedInvoiceNumber: "F-0",
+      vatLines: JSON.stringify([{ taxBase: "0", vatRate: "21", vatAmount: "110" }]), totalAmount: "110",
+    }));
+    expect(r.error).toBeNull();
+    expect((await row()).status).toBe("VALIDATED");
+  });
+
+  it("una adquisición intracomunitaria validada al 21 % con cuota 0 se puede corregir: a A3 le llega la autorrepercutida igual", async () => {
+    // Como las validadas antes del 2026-10-09: la pantalla no les propone el
+    // 21 % al abrirlas, y el export se lo pone (a3Vat).
+    await prisma.invoice.update({ where: { id }, data: { status: "VALIDATED" } });
+    const intracom = {
+      operationType: "INTRACOM_SERVICIOS", issuerCif: "PT515160873",
+      vatLines: JSON.stringify([{ taxBase: "94.46", vatRate: "21", vatAmount: "0" }]), totalAmount: "94.46",
+    };
+    expect((await save({ ...intracom, expenseAccount: "62300001" })).error).toBeNull();
+    const after = await row();
+    expect([after.status, after.expenseAccount]).toEqual(["VALIDATED", "62300001"]);
+    expect(await lineas()).toEqual([[94.46, 21, 0]]);
   });
 });
 

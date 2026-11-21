@@ -379,7 +379,10 @@ function ruleInvoice(inv: InvoiceWithClient): RuleInvoice {
     invoiceDate: inv.invoiceDate,
     totalAmount: inv.totalAmount == null ? null : Number(inv.totalAmount),
     irpfAmount: inv.irpfAmount == null ? null : Number(inv.irpfAmount),
-    lines: getExportLines(inv),
+    // Con el recargo como esta (null si la linea no lo lleva), como en la
+    // revision: getExportLines lo pasa a 0 y, para el desglose por tipo, una
+    // cuota de recargo sin % saldria como «la base × 0 %».
+    lines: checkedLines(inv),
     isRectificative: Boolean(inv.isRectificative),
     thirdPartyTaxId: isPurchase ? inv.issuerCif : inv.receiverCif,
     thirdPartyCountry: (isPurchase ? inv.issuerCountry : inv.receiverCountry) ?? null,
@@ -400,7 +403,8 @@ function ruleInvoice(inv: InvoiceWithClient): RuleInvoice {
  * El descuadre NO bloquea a proposito: las validadas antes del PR #7 se
  * validaron con una tolerancia de 2 centimos, y A3 no recibe el total
  * (calcula el asiento con base, cuota y retencion), asi que el fichero sale
- * bien. Se queda como aviso.
+ * bien. Se queda como aviso. El desglose por tipo tampoco: validar lo exige
+ * desde noviembre de 2026, y las validadas antes salen con su aviso.
  *
  * El NIF usa el mismo texto que validar (con la pista de la cuenta generica),
  * para no confundirlo con el aviso «Sin NIF: en esta operación no es
