@@ -7,6 +7,7 @@ import { OcrHttpError, OcrNotConfiguredError } from "./ocrErrors";
 import { parseRetryAfter, retryDelayFromGoogleBody } from "./retryBackoff";
 import { cleanPdfInfoText, type PdfReading } from "./originalMedium";
 import { parsePageReadings, type PageReading } from "./pdfSegmentation";
+import { ocrText } from "./ocrText";
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL ?? "gemini-2.5-flash-lite";
 
@@ -539,8 +540,7 @@ function parseGeminiResponse(raw: string): GeminiResult {
     const n = typeof v === "number" ? v : parseFloat(String(v).replace(",", "."));
     return isNaN(n) ? null : n;
   };
-  const str = (v: any): string | null =>
-    v != null && String(v).trim() ? String(v).trim() : null;
+  const str = ocrText;
 
   const ALL_FIELDS = [
     "issuerName", "issuerCif", "receiverName", "receiverCif",

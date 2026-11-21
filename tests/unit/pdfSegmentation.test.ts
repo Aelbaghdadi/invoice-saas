@@ -83,6 +83,17 @@ describe("parsePageReadings", () => {
     ]);
   });
 
+  it("la palabra «null» de Gemini es un dato vacío: no separa una factura en dos", () => {
+    const readings = parsePageReadings({
+      pages: [
+        { page: 1, kind: "FACTURA", startsInvoice: true, invoiceNumber: "F-1", issuerCif: "B12345674" },
+        { page: 2, kind: "FACTURA", startsInvoice: false, invoiceNumber: "null", issuerCif: "null" },
+      ],
+    });
+    expect(readings?.[1]).toMatchObject({ invoiceNumber: null, issuerCif: null });
+    expect(segmentPages(readings!, 2)?.invoices).toEqual([[1, 2]]);
+  });
+
   it("null si la forma no es la esperada", () => {
     expect(parsePageReadings(null)).toBeNull();
     expect(parsePageReadings({ pages: "x" })).toBeNull();

@@ -14,6 +14,7 @@ import { formatDateEs } from "@/lib/dates";
 import PdfViewer from "@/components/ui/PdfViewerDynamic";
 import ImageViewer from "@/components/ui/ImageViewer";
 import { thirdPartyName } from "@/lib/invoiceSort";
+import { nextPendingId } from "@/lib/pendingCarousel";
 import { classifyInvoice, discardUnclassified } from "./actions";
 
 type Candidate = { id: string; name: string };
@@ -67,34 +68,32 @@ export function ClasificarTable({ rows }: { rows: Row[] }) {
   // cuentan: un Enter clasificaba la factura detrás del diálogo.
   const [confirming, setConfirming] = useState(false);
   const [done, setDone] = useState<Set<string>>(new Set());
-  const [chainIdx, setChainIdx] = useState<number | null>(null);
+  // La factura abierta, por su id: tras clasificar, la acción recarga la lista
+  // y la clasificada sale de ella, así que una posición apuntaba a otra (se
+  // saltaba la siguiente pendiente, o el carrusel se cerraba al final).
+  const [currentId, setCurrentId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<Record<string, { url: string | null; type: string }>>({});
   const [previewLoading, setPreviewLoading] = useState(false);
 
-  const cur = chainIdx != null ? rows[chainIdx] : null;
+  const curIdx = currentId ? rows.findIndex((r) => r.id === currentId) : -1;
+  const cur = curIdx >= 0 ? rows[curIdx] : null;
   const pendingCount = rows.filter((r) => !done.has(r.id)).length;
-  const firstPending = rows.findIndex((r) => !done.has(r.id));
+  const firstPending = rows.find((r) => !done.has(r.id));
 
   const close = useCallback(() => {
-    setChainIdx(null);
+    setCurrentId(null);
     router.refresh(); // sincroniza la lista (quita las ya clasificadas)
   }, [router]);
 
   // Avanza a la siguiente pendiente tras marcar `doneId` como hecha.
+  // Avanza a la siguiente pendiente tras marcar `doneId` como hecha.
   const advance = useCallback((doneId: string) => {
-    setDone((prev) => {
-      const nd = new Set(prev);
-      nd.add(doneId);
-      let next = -1;
-      const from = chainIdx ?? 0;
-      for (let i = from + 1; i < rows.length; i++) if (!nd.has(rows[i].id)) { next = i; break; }
-      if (next < 0) for (let i = 0; i <= from; i++) if (!nd.has(rows[i].id)) { next = i; break; }
-      if (next < 0) { setChainIdx(null); router.refresh(); }
-      else setChainIdx(next);
-      return nd;
-    });
-  }, [chainIdx, rows, router]);
+    const next = nextPendingId(rows, done, doneId);
+    setDone(new Set(done).add(doneId));
+    if (next) setCurrentId(next);
+    else { setCurrentId(null); router.refresh(); }
+  }, [done, rows, router]);
 
   const doClassify = useCallback((clientId: string) => {
     if (!cur || busy || !clientId) return;
@@ -134,13 +133,15 @@ export function ClasificarTable({ rows }: { rows: Row[] }) {
 
   // Solo por las pendientes: una ya clasificada no se puede volver a abrir.
   const goPrev = useCallback(() => {
-    if (chainIdx == null) return;
-    for (let i = chainIdx - 1; i >= 0; i--) if (!done.has(rows[i].id)) { setChainIdx(i); return; }
-  }, [chainIdx, done, rows]);
+    if (curIdx < 0) return;
+    const prev = rows.slice(0, curIdx).reverse().find((r) => !done.has(r.id));
+    if (prev) setCurrentId(prev.id);
+  }, [curIdx, done, rows]);
   const goNext = useCallback(() => {
-    if (chainIdx == null) return;
-    for (let i = chainIdx + 1; i < rows.length; i++) if (!done.has(rows[i].id)) { setChainIdx(i); return; }
-  }, [chainIdx, done, rows]);
+    if (curIdx < 0) return;
+    const next = rows.slice(curIdx + 1).find((r) => !done.has(r.id));
+    if (next) setCurrentId(next.id);
+  }, [curIdx, done, rows]);
 
   // Cargar vista previa del documento actual.
   useEffect(() => {
@@ -156,7 +157,7 @@ export function ClasificarTable({ rows }: { rows: Row[] }) {
   // Atajos de teclado en el carrusel: 1-9 = empresa, Enter = sugerida,
   // D = descartar, ←/→ = navegar, Esc = cerrar.
   useEffect(() => {
-    if (chainIdx == null || !cur) return;
+    if (!cur) return;
     const onKey = (e: KeyboardEvent) => {
       if (busy || confirming) return;
       if (e.key === "Escape") { e.preventDefault(); close(); return; }
@@ -178,7 +179,7 @@ export function ClasificarTable({ rows }: { rows: Row[] }) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [chainIdx, cur, busy, confirming, close, goPrev, goNext, doClassify, doDiscard]);
+  }, [cur, busy, confirming, close, goPrev, goNext, doClassify, doDiscard]);
 
   const nameById = new Map(rows.flatMap((r) => r.candidates.map((c) => [c.id, c.name] as const)));
 
@@ -188,8 +189,8 @@ export function ClasificarTable({ rows }: { rows: Row[] }) {
         <p className="text-[13px] text-slate-500">{pendingCount} factura{pendingCount !== 1 ? "s" : ""} por clasificar</p>
         <button
           type="button"
-          onClick={() => firstPending >= 0 && setChainIdx(firstPending)}
-          disabled={firstPending < 0}
+          onClick={() => firstPending && setCurrentId(firstPending.id)}
+          disabled={!firstPending}
           className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-[13px] font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
         >
           <Zap className="h-4 w-4" /> Clasificar de una en una
@@ -212,7 +213,7 @@ export function ClasificarTable({ rows }: { rows: Row[] }) {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-50">
-            {rows.map((row, i) => {
+            {rows.map((row) => {
               const sideCif = row.type === "PURCHASE" ? row.receiverCif : row.issuerCif;
               const other = counterpart(row);
               const isDone = done.has(row.id);
@@ -221,7 +222,7 @@ export function ClasificarTable({ rows }: { rows: Row[] }) {
                   <td className="px-4 py-3 max-w-[220px]">
                     <button
                       type="button"
-                      onClick={() => setChainIdx(i)}
+                      onClick={() => setCurrentId(row.id)}
                       className="flex items-center gap-1.5 truncate text-left text-blue-600 hover:underline disabled:text-slate-300"
                       disabled={isDone}
                     >
@@ -251,7 +252,7 @@ export function ClasificarTable({ rows }: { rows: Row[] }) {
                   <td className="px-4 py-3 text-right">
                     <button
                       type="button"
-                      onClick={() => setChainIdx(i)}
+                      onClick={() => setCurrentId(row.id)}
                       disabled={isDone}
                       className="rounded-lg border border-slate-200 px-3 py-1.5 text-[12px] font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40"
                     >
@@ -269,7 +270,7 @@ export function ClasificarTable({ rows }: { rows: Row[] }) {
       {cur && (
         <ChainOverlay
           row={cur}
-          index={rows.slice(0, chainIdx!).filter((r) => !done.has(r.id)).length}
+          index={rows.slice(0, curIdx).filter((r) => !done.has(r.id)).length}
           total={pendingCount}
           preview={preview[cur.id]}
           previewLoading={previewLoading && !preview[cur.id]}

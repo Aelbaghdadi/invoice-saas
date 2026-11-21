@@ -1,4 +1,5 @@
 import { parseTaxId } from "@/lib/validators";
+import { ocrText } from "@/lib/ocrText";
 
 /**
  * Separacion automatica de un PDF con varias facturas (un taco escaneado tal
@@ -109,7 +110,6 @@ export function segmentationSummary(segmentation: PdfSegmentation): string {
 export function parsePageReadings(parsed: unknown): PageReading[] | null {
   const pages = (parsed as { pages?: unknown } | null)?.pages;
   if (!Array.isArray(pages)) return null;
-  const str = (v: unknown) => (v != null && String(v).trim() ? String(v).trim() : null);
   const readings: PageReading[] = [];
   for (const raw of pages) {
     const r = raw as Record<string, unknown>;
@@ -120,8 +120,8 @@ export function parsePageReadings(parsed: unknown): PageReading[] | null {
       page,
       kind: kind as PageKind,
       startsInvoice: r.startsInvoice === true,
-      invoiceNumber: str(r.invoiceNumber),
-      issuerCif: str(r.issuerCif)?.replace(/\s/g, "") ?? null,
+      invoiceNumber: ocrText(r.invoiceNumber),
+      issuerCif: ocrText(r.issuerCif)?.replace(/\s/g, "") ?? null,
     });
   }
   return readings;
