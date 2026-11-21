@@ -5,6 +5,8 @@
  * extension (es texto libre). Leemos los primeros bytes del fichero y
  * comparamos con las firmas conocidas. Si no matchea, se rechaza.
  */
+import { strFromU8, unzipSync } from "fflate";
+import * as XLSX from "xlsx";
 
 export type AllowedFileKind = "pdf" | "jpeg" | "png" | "webp" | "xml" | "heic";
 
@@ -98,4 +100,175 @@ export function canonicalMime(kind: AllowedFileKind): string {
     case "heic": return "image/heic";
     case "xml":  return "application/xml";
   }
+}
+
+// ── Originales en otros formatos (R19) ──────────────────────────────────────
+// Solo como original adjunto a una factura ya subida: la app lee su PDF. Nunca
+// van al OCR ni al visor; se sirven como descarga.
+
+export type OriginalAttachmentKind = "doc" | "xls" | "docx" | "xlsx" | "odt" | "ods" | "rtf";
+
+/** Tope de un original adjunto, como el de una subida. */
+export const ORIGINAL_ATTACHMENT_MAX_BYTES = 20 * 1024 * 1024;
+
+export const ORIGINAL_ATTACHMENT_MIME: Record<OriginalAttachmentKind, string> = {
+  doc: "application/msword",
+  xls: "application/vnd.ms-excel",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  odt: "application/vnd.oasis.opendocument.text",
+  ods: "application/vnd.oasis.opendocument.spreadsheet",
+  rtf: "application/rtf",
+};
+
+const OLE2_SIGNATURE = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
+const ZIP_SIGNATURE = [0x50, 0x4b, 0x03, 0x04];
+const RTF_SIGNATURE = [0x7b, 0x5c, 0x72, 0x74, 0x66]; // {\rtf
+
+/** Lo que se descomprime de un ZIP para mirarlo, como mucho: el resto ni se toca. */
+const ZIP_PEEK_MAX_BYTES = 1024 * 1024;
+
+const OOXML_MAIN_TYPES: Partial<Record<OriginalAttachmentKind, string>> = {
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml",
+};
+
+const ODF_MIMETYPES: Partial<Record<OriginalAttachmentKind, string>> = {
+  odt: "application/vnd.oasis.opendocument.text",
+  ods: "application/vnd.oasis.opendocument.spreadsheet",
+};
+
+const startsWith = (b: Uint8Array, signature: number[]) => signature.every((byte, i) => b[i] === byte);
+
+const MACROS_REASON = "Lleva macros, y los documentos con macros no se admiten.";
+
+/** Entradas de un OLE2 que solo lleva un documento con macros VBA: Macros y
+ *  _VBA_PROJECT_CUR (las carpetas de Word y de Excel), VBA y _VBA_PROJECT. */
+const OLE2_MACRO_ENTRIES = new Set(["MACROS", "_VBA_PROJECT_CUR", "VBA", "_VBA_PROJECT"]);
+const CFB_STREAM = 2;
+
+/** Lo que se usa del directorio que devuelve XLSX.CFB.read (xlsx no lo tipa). */
+type CfbContainer = {
+  FullPaths: string[];
+  FileIndex: { name: string; type: number; content?: ArrayLike<number> | null }[];
+};
+
+/**
+ * ¿Lleva el libro una hoja de macros de Excel 4.0 (XLM) o un módulo de VBA?
+ * Se mira el tipo de cada hoja (registro BoundSheet, 0x0085: posición, 4
+ * bytes; visibilidad, 1; tipo, 1) en la parte global del libro, que acaba en
+ * el primer EOF (0x000A).
+ */
+function hasMacroSheet(workbook: ArrayLike<number>): boolean {
+  for (let at = 0; at + 4 <= workbook.length; ) {
+    const type = workbook[at] | (workbook[at + 1] << 8);
+    const size = workbook[at + 2] | (workbook[at + 3] << 8);
+    if (type === 0x000a) return false;
+    if (type === 0x0085 && size >= 6 && (workbook[at + 9] === 0x01 || workbook[at + 9] === 0x06)) return true;
+    at += 4 + size;
+  }
+  return false;
+}
+
+/**
+ * Qué es un documento OLE2 por su directorio (no por bytes sueltos): Word
+ * (.doc) si tiene el flujo WordDocument, Excel (.xls) si tiene Workbook o
+ * Book. Los nombres se comparan sin mayúsculas, como hace Office (MS-CFB
+ * 2.6.4). Con macros no se admite, como un .docm; tampoco otro OLE2 (un .msi
+ * renombrado, por ejemplo).
+ */
+function ole2Kind(b: Uint8Array): { kind: OriginalAttachmentKind } | { reason: string } {
+  let container: CfbContainer;
+  try {
+    container = XLSX.CFB.read(b, { type: "array" }) as CfbContainer;
+  } catch {
+    return { reason: "El fichero está dañado o no es un documento." };
+  }
+  const entries = container.FileIndex;
+  if (entries.some((entry) => OLE2_MACRO_ENTRIES.has(entry.name.toUpperCase()))) return { reason: MACROS_REASON };
+  // Los flujos del primer nivel, por su nombre en mayúsculas.
+  const root = container.FullPaths[0];
+  const streams = new Map(entries.flatMap((entry, i) =>
+    entry.type === CFB_STREAM && container.FullPaths[i] === root + entry.name ? [[entry.name.toUpperCase(), entry] as const] : []));
+  if (streams.has("WORDDOCUMENT")) return { kind: "doc" };
+  const workbook = streams.get("WORKBOOK") ?? streams.get("BOOK");
+  if (workbook) return hasMacroSheet(workbook.content ?? []) ? { reason: MACROS_REASON } : { kind: "xls" };
+  return { reason: "Es un documento de Office antiguo que no es ni Word ni Excel." };
+}
+
+/** Macros de OpenDocument: Basic y scripts (Python, JavaScript…). Los índices
+ *  de las bibliotecas (script-lc.xml, script-lb.xml) no llevan código. */
+const ODF_MACRO_ENTRY = /^(basic|scripts)\//i;
+const ODF_LIBRARY_INDEX = /(^|\/)script-l[bc]\.xml$/i;
+
+/** Qué es un ZIP de Office u OpenDocument, mirando solo su índice y, como
+ *  mucho, [Content_Types].xml o la entrada mimetype. */
+function zipKind(b: Uint8Array): { kind: OriginalAttachmentKind } | { reason: string } {
+  const names: string[] = [];
+  let entries: Record<string, Uint8Array>;
+  try {
+    entries = unzipSync(b, {
+      filter: (file) => {
+        names.push(file.name);
+        return (file.name === "[Content_Types].xml" || file.name === "mimetype")
+          && file.size <= ZIP_PEEK_MAX_BYTES && file.originalSize <= ZIP_PEEK_MAX_BYTES;
+      },
+    });
+  } catch {
+    return { reason: "El fichero está dañado o no es un documento." };
+  }
+  if (names.some((name) => /(^|\/)vbaProject\.bin$/i.test(name))) return { reason: MACROS_REASON };
+  const contentTypes = entries["[Content_Types].xml"];
+  if (contentTypes) {
+    // Las partes que lleva de verdad (Override); los Default son por extensión
+    // y van en cualquier fichero (Excel declara el .bin de las macros siempre).
+    const parts = [...strFromU8(contentTypes).matchAll(/<Override\b[^>]*\bContentType="([^"]+)"/g)].map((m) => m[1]);
+    if (parts.some((type) => /macroEnabled/i.test(type))) {
+      return { reason: "Lleva macros (.docm o .xlsm), y los documentos con macros no se admiten." };
+    }
+    for (const [kind, type] of Object.entries(OOXML_MAIN_TYPES)) {
+      if (parts.includes(type)) return { kind: kind as OriginalAttachmentKind };
+    }
+    return { reason: "Es un documento de Office que no es ni Word ni Excel." };
+  }
+  // En OpenDocument, «mimetype» es la primera entrada y va sin comprimir.
+  const mimetype = names[0] === "mimetype" && entries.mimetype ? strFromU8(entries.mimetype).trim() : null;
+  for (const [kind, type] of Object.entries(ODF_MIMETYPES)) {
+    if (mimetype !== type) continue;
+    const macros = names.some((name) => ODF_MACRO_ENTRY.test(name) && !name.endsWith("/") && !ODF_LIBRARY_INDEX.test(name));
+    return macros ? { reason: MACROS_REASON } : { kind: kind as OriginalAttachmentKind };
+  }
+  return { reason: "Es un ZIP, no un documento de Word, Excel u OpenDocument." };
+}
+
+/**
+ * ¿Vale como original adjunto (R19)? Por el contenido y no por el nombre: OLE2
+ * (.doc y .xls, sin macros VBA ni XLM), ZIP con [Content_Types].xml (.docx y
+ * .xlsx; nunca .docm ni .xlsm), ZIP con la entrada mimetype de OpenDocument
+ * (.odt y .ods, sin macros Basic ni scripts) o «{\rtf» (.rtf). La extensión tiene que ser la del contenido. Hasta 20 MB.
+ * validateUploadedFile sigue sin admitir nada de esto como fichero de una
+ * factura.
+ */
+export function validateOriginalAttachment(
+  buffer: ArrayBuffer | Uint8Array,
+  filename: string,
+): { ok: true; kind: OriginalAttachmentKind; mime: string } | { ok: false; reason: string } {
+  const b = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  if (b.length === 0) return { ok: false, reason: "El fichero está vacío." };
+  if (b.length > ORIGINAL_ATTACHMENT_MAX_BYTES) return { ok: false, reason: "Pasa de 20 MB." };
+  const ext = /\.([^.\\/]+)$/.exec(filename.trim())?.[1]?.toLowerCase() ?? "";
+  if (ext === "docm" || ext === "xlsm") return { ok: false, reason: "Los documentos con macros (.docm, .xlsm) no se admiten." };
+
+  const detected = startsWith(b, OLE2_SIGNATURE)
+    ? ole2Kind(b)
+    : startsWith(b, ZIP_SIGNATURE)
+      ? zipKind(b)
+      : startsWith(b, RTF_SIGNATURE)
+        ? { kind: "rtf" as const }
+        : { reason: "El contenido no es el de un documento de Word, Excel, OpenDocument o RTF." };
+  if ("reason" in detected) return { ok: false, reason: detected.reason };
+  if (ext !== detected.kind) {
+    return { ok: false, reason: `La extensión ${ext ? `.${ext}` : "(ninguna)"} no es la de su contenido (.${detected.kind}).` };
+  }
+  return { ok: true, kind: detected.kind, mime: ORIGINAL_ATTACHMENT_MIME[detected.kind] };
 }

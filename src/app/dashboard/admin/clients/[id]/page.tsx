@@ -1,18 +1,19 @@
 import { auth } from "@/lib/auth";
 import { notFound, redirect } from "next/navigation";
-import { ADMIN_CLIENT_TABS, parseClientTab } from "@/lib/clientSheet";
+import { ADMIN_CLIENT_TABS, parseClientTab, type ArchiveTabParams } from "@/lib/clientSheet";
 import { loadClientSheet } from "@/lib/clientSheetData";
 import { ClientSheetShell } from "@/components/clients/ClientSheetShell";
 import { ClientSummaryTab } from "@/components/clients/ClientSummaryTab";
 import { ClientInvoicesTab, type InvoicesTabParams } from "@/components/clients/ClientInvoicesTab";
 import { ClientPeriodsTab } from "@/components/clients/ClientPeriodsTab";
+import { ClientArchiveTab } from "@/components/clients/ClientArchiveTab";
 import { ClientExportsTab } from "@/components/clients/ClientExportsTab";
 import { ClientActivityTab } from "@/components/clients/ClientActivityTab";
 import { ClientSettingsTab } from "@/components/clients/ClientSettingsTab";
 
 type Props = {
   params: Promise<{ id: string }>;
-  searchParams: Promise<InvoicesTabParams & { tab?: string }>;
+  searchParams: Promise<InvoicesTabParams & ArchiveTabParams & { tab?: string }>;
 };
 
 /** Ficha completa de un cliente para el administrador. */
@@ -45,6 +46,7 @@ export default async function ClientDetailPage({ params, searchParams }: Props) 
       {tab === "resumen" && <ClientSummaryTab data={data} role="ADMIN" basePath={basePath} />}
       {tab === "facturas" && <ClientInvoicesTab clientId={id} role="ADMIN" basePath={basePath} params={sp} />}
       {tab === "periodos" && <ClientPeriodsTab clientId={id} periods={data.periods} role="ADMIN" basePath={basePath} />}
+      {tab === "archivo" && <ClientArchiveTab clientId={id} firmId={firmId} basePath={basePath} params={sp} canDownloadZip />}
       {tab === "exportaciones" && <ClientExportsTab clientId={id} firmId={firmId} basePath={basePath} page={sp.page} />}
       {tab === "actividad" && <ClientActivityTab clientId={id} role="ADMIN" basePath={basePath} page={sp.page} />}
       {tab === "ajustes" && <ClientSettingsTab data={data} firmId={firmId} />}

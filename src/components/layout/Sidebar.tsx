@@ -23,6 +23,7 @@ import {
   BarChart3,
   LifeBuoy,
   Headset,
+  Archive,
 } from "lucide-react";
 import { BRAND } from "@/lib/brand";
 
@@ -61,6 +62,7 @@ const NAV_SECTIONS: Record<Role, NavSection[]> = {
         { href: "/dashboard/worker/clasificar", label: "Por clasificar", icon: Inbox },
         { href: "/dashboard/admin/batch",   label: "Lotes",           icon: Layers },
         { href: "/dashboard/admin/export",  label: "Exportar",        icon: Download },
+        { href: "/dashboard/archivo",       label: "Archivo",         icon: Archive },
       ],
     },
     {
@@ -90,6 +92,7 @@ const NAV_SECTIONS: Record<Role, NavSection[]> = {
         { href: "/dashboard/worker/clasificar", label: "Por clasificar", icon: Inbox },
         { href: "/dashboard/worker/groups",   label: "Grupos",         icon: Boxes },
         { href: "/dashboard/worker/batch",    label: "Lotes",          icon: Layers },
+        { href: "/dashboard/archivo",         label: "Archivo",        icon: Archive },
         { href: "/dashboard/support",         label: "Soporte",        icon: LifeBuoy },
       ],
     },

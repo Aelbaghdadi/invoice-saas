@@ -207,7 +207,11 @@ describe("límites de la extracción (revisión 1 del PR #9, punto 2)", () => {
 
   it("si se pasa del tiempo, texto vacío (y va por la imagen)", async () => {
     const pdf = readFileSync("scripts/demo-pdfs/amazon-oficina.pdf").toString("base64");
-    expect(await extractPdfTextAndItems(pdf, -1)).toEqual({ text: "", items: [], timedOut: true });
+    // El productor se lee antes que las páginas: electrónico o papel lo usa aunque no haya texto.
+    expect(await extractPdfTextAndItems(pdf, -1)).toEqual({
+      text: "", items: [], timedOut: true,
+      info: { producer: "ReportLab PDF Library - (opensource)", creator: "(unspecified)" },
+    });
   });
 
   it("a Gemini le llegan como mucho 40.000 caracteres, con el principio y el final", async () => {

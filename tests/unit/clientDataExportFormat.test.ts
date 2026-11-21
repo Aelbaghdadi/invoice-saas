@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { CSV_BOM, csvAmount, csvCell, csvDate, csvRow, formatBytes, originalFileName, originalPath, readmeText, safeZipName } from "@/lib/clientDataExportFormat";
+import { BRAND } from "@/lib/brand";
+import { CSV_BOM, csvAmount, csvCell, csvDate, csvRow, fileExtension, formatBytes, originalFileName, originalPath, readmeText, safeZipName } from "@/lib/clientDataExportFormat";
 
 describe("CSV de la descarga de datos (F-044)", () => {
   it("entre comillas solo lo que lleva separador, comillas o saltos", () => {
@@ -57,6 +58,17 @@ describe("nombres dentro del ZIP", () => {
     expect(originalFileName("raro.pdf", "application/octet-stream")).toBe("raro.bin");
   });
 
+  it("los originales en otro formato llevan la extensión de su tipo real (.doc, .docx, .odt…)", () => {
+    expect(originalFileName("factura.pdf", "application/msword")).toBe("factura.doc");
+    expect(originalFileName("Factura enero", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")).toBe("Factura enero.docx");
+    expect(originalFileName("f.ODT", "application/vnd.oasis.opendocument.text")).toBe("f.odt");
+    expect(fileExtension("application/vnd.ms-excel")).toBe("xls");
+    expect(fileExtension("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")).toBe("xlsx");
+    expect(fileExtension("application/vnd.oasis.opendocument.spreadsheet")).toBe("ods");
+    expect(fileExtension("application/rtf")).toBe("rtf");
+    expect(fileExtension("application/x-otra-cosa")).toBe("bin");
+  });
+
   it("sin controles bidi ni puntos o espacios al final", () => {
     expect(originalFileName("factura\u202Efdp.cmd", "application/pdf")).toBe("facturafdp.pdf");
     expect(originalFileName("factura. . .pdf", "application/pdf")).toBe("factura.pdf");
@@ -78,6 +90,16 @@ describe("LEEME.txt", () => {
     }
     expect(text).not.toContain("ERRORES.txt");
     expect(text).toContain("no borra nada");
+    // Con el nombre del producto que ve el cliente, no con el interno.
+    expect(text).toContain(`los datos siguen en ${BRAND}.`);
+    expect(text).not.toMatch(/FacturOCR/i);
+  });
+  it("habla de los originales en otro formato y de las columnas del archivo (anexo C10)", () => {
+    const text = readmeText(base);
+    expect(text).toContain("Word, Excel, OpenDocument o RTF");
+    expect(text).toContain("«Original en");
+    expect(text).toContain("«Original electrónico o en papel»");
+    expect(text).toContain("«Nº de registro»");
   });
   it("con originales que faltan, habla de ERRORES.txt", () => {
     expect(readmeText({ ...base, missingOriginals: 2 })).toContain("2 originales no se pudieron descargar");

@@ -5,6 +5,7 @@ import { normalizeGoodsType } from "./intracomGoods";
 import { isValidNIF } from "./validators";
 import { OcrHttpError, OcrNotConfiguredError } from "./ocrErrors";
 import { parseRetryAfter, retryDelayFromGoogleBody } from "./retryBackoff";
+import { cleanPdfInfoText, type PdfReading } from "./originalMedium";
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL ?? "gemini-2.5-flash-lite";
 
@@ -58,7 +59,7 @@ export function isUsefulPdfText(text: string): boolean {
 /** Error de la via de texto que manda el PDF a la multimodal: no hay texto util. */
 export const PDF_ESCANEADO = "PDF_ESCANEADO";
 
-type PdfTextItem = {
+export type PdfTextItem = {
   str: string;
   pageNum: number; // 0-indexed
   x: number;      // normalizado 0-1 desde la izquierda
@@ -94,18 +95,54 @@ export function pagesToRead(numPages: number): number[] {
   return pages;
 }
 
+/** Producer y Creator del PDF: dicen si lo hizo un escáner (electrónico o
+ *  papel, originalMedium.ts). Limpios con cleanPdfInfoText: sin caracteres
+ *  de control y recortados a PDF_PRODUCER_MAX_LENGTH. */
+export type PdfInfo = { producer: string | null; creator: string | null };
+
+/** Lo que se lee de un PDF. `failed`: no se pudo abrir ni leer (no es un PDF,
+ *  esta cifrado o dañado); `timedOut`: se paso del tiempo y va sin texto. */
+export type PdfTextExtraction = {
+  text: string;
+  items: PdfTextItem[];
+  timedOut?: boolean;
+  failed?: boolean;
+  info: PdfInfo;
+};
+
+function infoText(value: unknown): string | null {
+  return typeof value === "string" ? cleanPdfInfoText(value) : null;
+}
+
+/** Sin metadatos (o ilegibles) no es un fallo del PDF: se lee igual. */
+async function readPdfInfo(pdf: { getMetadata(): Promise<{ info?: unknown }> }): Promise<PdfInfo> {
+  try {
+    const { info } = await pdf.getMetadata();
+    const fields = (info ?? {}) as { Producer?: unknown; Creator?: unknown };
+    return { producer: infoText(fields.Producer), creator: infoText(fields.Creator) };
+  } catch {
+    return { producer: null, creator: null };
+  }
+}
+
+/** Lo leido, en la forma que espera proposeOriginalMedium. */
+export function pdfReadingForMedium(read: PdfTextExtraction): PdfReading {
+  return { text: read.text, producer: read.info.producer, creator: read.info.creator, failed: read.failed, timedOut: read.timedOut };
+}
+
 /**
  * Extrae texto e items con posición de las páginas que se leen del PDF
- * (pagesToRead). Exportada para los tests.
+ * (pagesToRead), y su productor. No lanza. Exportada para los tests.
  * La posición está normalizada a 0-1 (y desde arriba, al contrario que PDF space).
  */
 export async function extractPdfTextAndItems(
   base64: string,
   budgetMs: number = TEXT_BUDGET_MS,
-): Promise<{ text: string; items: PdfTextItem[]; timedOut?: boolean }> {
+): Promise<PdfTextExtraction> {
   // Se destruye siempre, tambien si falla o se pasa del tiempo: libera el
   // documento y el worker de ese PDF.
   let loadingTask: { promise: Promise<any>; destroy(): Promise<void> } | null = null;
+  let info: PdfInfo = { producer: null, creator: null };
   try {
     // En Node pdfjs usa un «fake worker» que carga pdf.worker.mjs. Antes se
     // ponia GlobalWorkerOptions.workerSrc = "", que pisa su valor por defecto:
@@ -121,13 +158,14 @@ export async function extractPdfTextAndItems(
     // avisa en cada PDF, y para sacar el texto no hacen falta.
     loadingTask = (pdfjsLib as any).getDocument({ data: new Uint8Array(buffer), verbosity: 0 });
     const pdf = await loadingTask!.promise;
+    info = await readPdfInfo(pdf);
 
     let text = "";
     const items: PdfTextItem[] = [];
     const startedAt = Date.now();
 
     for (const pageNum of pagesToRead(pdf.numPages)) {
-      if (Date.now() - startedAt > budgetMs) return { text: "", items: [], timedOut: true };
+      if (Date.now() - startedAt > budgetMs) return { text: "", items: [], timedOut: true, info };
       // Las paginas que no se leen se marcan, para que Gemini devuelva null
       // en lo que no ve en vez de inventarlo.
       if (pageNum === pdf.numPages && pdf.numPages > MAX_FIRST_PAGES + 1) {
@@ -173,12 +211,12 @@ export async function extractPdfTextAndItems(
       }
       text += "\n";
     }
-    return { text: text.trim(), items };
+    return { text: text.trim(), items, info };
   } catch (err) {
     // Sin texto el PDF va por la via multimodal como si fuera escaneado: que
     // quede en el log, antes fallaba siempre sin que nadie lo viera.
     console.error("extractPdfTextAndItems: no se pudo leer el texto del PDF", err);
-    return { text: "", items: [] };
+    return { text: "", items: [], failed: true, info };
   } finally {
     await loadingTask?.destroy().catch(() => {});
   }
@@ -597,9 +635,13 @@ function hasBasics(extracted: ExtractedInvoice): boolean {
  * por si la imagen tambien falla.
  * Las bounding boxes se obtienen buscando los valores extraídos en los items de pdfjs,
  * que sí conocen la posición exacta de cada fragmento de texto en la página.
+ * Con `read` (lo ya leído del PDF) no lo vuelve a leer.
  */
-export async function extractFromPdfTextWithGemini(base64: string): Promise<{ result: OcrResult; complete: boolean }> {
-  const { text, items, timedOut } = await extractPdfTextAndItems(base64);
+export async function extractFromPdfTextWithGemini(
+  base64: string,
+  read?: PdfTextExtraction,
+): Promise<{ result: OcrResult; complete: boolean }> {
+  const { text, items, timedOut } = read ?? await extractPdfTextAndItems(base64);
   if (timedOut) console.warn("extractFromPdfTextWithGemini: el texto tardaba demasiado, va por la imagen");
   if (!isUsefulPdfText(text)) {
     throw new Error(PDF_ESCANEADO);
@@ -654,12 +696,16 @@ export async function extractFromDocumentWithGemini(
  * El resultado del texto no se tira: si la imagen falla (un 400 por tamaño,
  * un 5xx) o tampoco saca el total, se devuelve el del texto, con datos
  * parciales para revisar en vez de Error OCR. Si se usa la imagen, se
- * conserva el texto del PDF (rawText) para las heuristicas.
+ * conserva el texto del PDF (rawText) para las heuristicas. Con `read` (lo
+ * ya leído del PDF) no lo vuelve a leer.
  */
-export async function extractPdfWithGemini(base64: string): Promise<{ source: "gemini_text" | "gemini_multimodal"; result: OcrResult }> {
+export async function extractPdfWithGemini(
+  base64: string,
+  read?: PdfTextExtraction,
+): Promise<{ source: "gemini_text" | "gemini_multimodal"; result: OcrResult }> {
   let fromText: { result: OcrResult; complete: boolean } | null = null;
   try {
-    fromText = await extractFromPdfTextWithGemini(base64);
+    fromText = await extractFromPdfTextWithGemini(base64, read);
   } catch (e) {
     if (!(e instanceof Error && e.message === PDF_ESCANEADO)) throw e;
   }

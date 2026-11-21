@@ -7,6 +7,13 @@
 export const PAGE_SIZE = 25;
 
 /** Numero de pagina de la URL. Cualquier cosa rara es la primera. */
+/** Un parámetro de la URL tal como lo da Next: un array si se repite
+ *  (?q=a&q=b). Vale el primero; lo que no es texto, como si no estuviera. */
+export function firstSearchParam(value: string | string[] | null | undefined): string | undefined {
+  const first = Array.isArray(value) ? value[0] : value;
+  return typeof first === "string" ? first : undefined;
+}
+
 export function parsePage(raw: string | null | undefined): number {
   const n = parseInt(raw ?? "", 10);
   return Number.isFinite(n) && n >= 1 ? n : 1;

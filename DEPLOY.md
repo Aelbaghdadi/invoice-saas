@@ -58,7 +58,8 @@ Postgres, son 20 por réplica: súbelo o baja el `max`.
 
 Automáticas: el contenedor ejecuta `prisma migrate deploy` en el arranque
 ([`docker-entrypoint.sh`](docker-entrypoint.sh)) antes de levantar Next. Es
-idempotente; en una BD nueva crea todo el esquema. No hay pasos manuales.
+idempotente; en una BD nueva crea todo el esquema. No hay pasos manuales,
+salvo en la 12 (archivo), que los tiene antes y después del Redeploy (§10).
 
 El historial se **regeneró a un baseline limpio** (`00000000000000_init` =
 esquema completo + `00000000000001_audit_immutability` = triggers de auditoría),
@@ -66,6 +67,9 @@ porque el historial antiguo tenía deriva (4 tablas creadas con `db push` que no
 estaban en ninguna migración → fallaba al aplicar desde cero con 42P01/P3009).
 
 ### Si la BD quedó en estado fallido (P3009 / P3018)
+
+> Esto es solo para una BD **sin datos reales**. Con datos (producción, y dev
+> hoy) nunca `migrate reset`: borra todo. Ver §10.3.
 
 Le pasó al primer deploy: aplicó migraciones a medias y dejó una marcada como
 fallida. Como la BD **no tiene datos reales**, resetéala y vuelve a desplegar.
@@ -111,6 +115,11 @@ con una **Scheduled Task** de Coolify (o cron externo) con la cabecera
 
 Los dos aceptan GET y POST con la misma comprobación del secreto: usa el que
 permita la Scheduled Task.
+
+Uno más, con el mismo secreto, que no es periódico: `GET` o `POST
+/api/cron/archivo-detectar` mira si los PDF de antes del archivo son
+electrónicos o escaneos. Se lanza tras desplegar la migración 12 hasta que no
+quede ninguno (§10.6).
 
 Si no configuras los crons, la app funciona; solo no se ejecutan esas tareas
 periódicas. Pero `retry-stuck` es **lo único** que recoge lo que un redeploy
@@ -299,3 +308,309 @@ una migración nueva.
 
 El botón «Verificar la cadena» de Auditoría (admin) recorre la de su asesoría
 y dice qué eslabón falla, bifurcaciones incluidas.
+
+## 10. Archivo (migración 12)
+
+La `00000000000012_archivo` crea las tablas del archivo (`InvoiceArchive`,
+`UploadBatch`, `InvoiceRegisterSeries`) y dos columnas
+(`Client.fiscalYearStartMonth`, `AdvisoryFirm.isDemo`), rellena lo que ya
+existía (el bloque entre `-- archivo:backfill:inicio` y
+`-- archivo:backfill:fin` de su `migration.sql`, idempotente: se puede volver a
+lanzar tal cual) y añade diez triggers: el que crea la fila de archivo de cada
+factura nueva y los que impiden borrar facturas y documentos, cambiar un fichero
+o tocar un nº de registro ya puesto (ARCHITECTURE.md → Archivo de facturas).
+
+**Producción está en la 9 y aplicará la 10, la 11 y la 12 en el mismo
+arranque.** La 10 y la 11 (soporte, ficha del cliente y tickets automáticos)
+solo crean tablas y columnas, sin datos; lo que piden son las variables
+`SUPPORT_USERNAMES`, `SUPPORT_EMAIL` y `SUPPORT_WEBHOOK_URL` en Coolify
+(ARCHITECTURE.md → Soporte). Todo lo que hay que hacer a mano es de la 12, en
+este orden: §10.1 a §10.6. Las consultas son de solo lectura salvo las que lo
+dicen.
+
+### 10.1 Primero en dev
+
+Dev ya tiene la 10 y la 11: allí solo entra la 12. Se hace entero en dev
+(§10.2 a §10.6) y se miran las pantallas del archivo (Archivo en la barra
+lateral, la pestaña Archivo de un cliente, la ficha de archivo de una factura y
+el ZIP de un ejercicio) antes de tocar producción.
+
+**Ensayo con una copia de producción (recomendado).** Se restaura la copia de
+producción de §10.2 en un Postgres local vacío (`pg_restore --no-owner
+--no-privileges -d <bd local> antes-de-la-12.dump`), se aplica `npx prisma
+migrate deploy` con `DATABASE_URL` apuntando a esa BD (entran la 10, la 11 y la
+12, como en producción) y se lanzan la segunda pasada y las consultas de §10.4.
+Así se ven, antes de tocar producción, las cifras con los datos reales: cuántas
+exportadas se quedan sin número y cómo queda el reparto. Lo que numera el
+relleno ya no cambia (los triggers lo impiden), así que lo que haya que decidir
+sobre las exportadas sin número conviene decidirlo con estas cifras delante. La
+copia lleva datos de los clientes: en un disco cifrado, y se borra al acabar.
+
+### 10.2 Copia fuera del servidor, antes del Redeploy
+
+En cada entorno, justo antes de pulsar Redeploy: un `pg_dump` completo, que se
+pueda leer, y **copiado fuera del servidor**. Una copia en el mismo disco no
+sirve si cae el servidor, y ese disco lo comparten las BD de dev y producción y
+Garage (mira antes que hay sitio con `df -h /`). Desde el servidor:
+
+```sh
+docker exec <contenedor de Postgres> pg_dump -U <usuario> -d <base> -Fc > /root/antes-de-la-12.dump
+docker exec -i <contenedor de Postgres> pg_restore --list < /root/antes-de-la-12.dump | head
+```
+
+La segunda orden solo lee el índice de la copia: si sale una lista de tablas,
+se puede leer. Después, desde tu ordenador, `scp` de ese fichero, y comprueba
+que ha llegado entero (mismo tamaño). Es la vuelta atrás de todo lo demás.
+
+### 10.3 Redeploy y segunda pasada del relleno
+
+El Redeploy aplica la migración al arrancar el contenedor nuevo (§3).
+
+**Si `migrate deploy` falla con la 12**, el contenedor nuevo no arranca
+(`set -e` en `docker-entrypoint.sh`) y el viejo sigue sirviendo. **No uses
+`migrate reset`** (lo de §3 era para una BD sin datos: borra todo). El error está
+en el log del despliegue; no se toca nada a mano sin entenderlo antes, y la
+vuelta segura es la copia de §10.2.
+
+**Segunda pasada, con el contenedor viejo ya parado.** Con el health check, el
+Redeploy es un relevo: el contenedor viejo sigue sirviendo mientras el nuevo
+aplica la migración y arranca. Lo que suba, divida o exporte el código viejo en
+ese rato se queda sin medio, sin nº de parte o sin nº de registro, y ninguna
+exportación posterior lo numera. Por eso, **cuando el contenedor viejo ya esté
+parado**, se copia el bloque entre las marcas del `migration.sql` y se ejecuta
+tal cual en `psql`, dentro de `BEGIN; … COMMIT;`: solo completa lo que falta y lo
+demás no cambia. Mejor en un rato sin exportaciones: si se cruza con una y da
+una clave duplicada (23505), se deshace entero y basta con volver a lanzarlo. Lo
+mismo tras cualquier vuelta atrás del código. **Solo después**, las
+comprobaciones de §10.4.
+
+### 10.4 Comprobaciones
+
+**Filas, partes y series.** Tiene que salir `facturas` = `filas_de_archivo` y 0
+en las otras tres columnas. `series_descuadradas` cuenta las series en las que no
+se cumple COUNT = MAX = `lastNumber` (tantas facturas numeradas como el mayor
+número, que es el contador: sin huecos ni números de más).
+
+```sql
+SELECT
+  (SELECT count(*) FROM "Invoice") AS facturas,
+  (SELECT count(*) FROM "InvoiceArchive") AS filas_de_archivo,
+  (SELECT count(*) FROM "Invoice" i JOIN "InvoiceArchive" a ON a."invoiceId" = i.id
+     WHERE i."splitFromId" IS NOT NULL AND a."splitPart" = 0) AS partes_sin_numero,
+  (SELECT count(*) FROM "Invoice" i JOIN "InvoiceArchive" a ON a."invoiceId" = i.id
+     WHERE i.status IN ('VALIDATED', 'EXPORTED') AND a."registerNumber" IS NULL
+       AND EXISTS (SELECT 1 FROM "ExportBatchItem" e WHERE e."invoiceId" = i.id)) AS exportadas_sin_numero,
+  (SELECT count(*) FROM "InvoiceRegisterSeries" s
+     WHERE s."lastNumber" <> (SELECT count(*) FROM "InvoiceArchive" a WHERE a."registerSeriesId" = s.id)
+        OR s."lastNumber" <> (SELECT coalesce(max(a."registerNumber"), 0) FROM "InvoiceArchive" a WHERE a."registerSeriesId" = s.id)
+  ) AS series_descuadradas;
+```
+
+Si `series_descuadradas` no es 0, esta dice cuáles:
+
+```sql
+SELECT s."clientId", s.type, s.year, s."lastNumber",
+       count(a."invoiceId") AS numeradas, max(a."registerNumber") AS mayor
+FROM "InvoiceRegisterSeries" s
+LEFT JOIN "InvoiceArchive" a ON a."registerSeriesId" = s.id
+GROUP BY s.id
+HAVING s."lastNumber" <> count(a."invoiceId") OR s."lastNumber" <> coalesce(max(a."registerNumber"), 0)
+ORDER BY s."clientId", s.type, s.year;
+```
+
+**Exportadas sin nº de registro, en cualquier estado.** El relleno numera solo
+las facturas `VALIDATED` o `EXPORTED` con algún `ExportBatchItem`. Antes de las
+guardas de hoy pudo exportarse una factura que ahora está rechazada o dividida:
+está en los libros de A3 y se queda sin número. Esta consulta las cuenta por
+estado. `VALIDATED` y `EXPORTED` tienen que dar 0; el resto se decide con el
+usuario (numerarlas o dejarlas como excepción conocida):
+
+```sql
+SELECT i.status, count(*) AS facturas
+FROM "Invoice" i
+JOIN "InvoiceArchive" a ON a."invoiceId" = i.id
+WHERE a."registerNumber" IS NULL
+  AND EXISTS (SELECT 1 FROM "ExportBatchItem" e WHERE e."invoiceId" = i.id)
+GROUP BY i.status
+ORDER BY i.status;
+```
+
+**Exportadas sin ningún `ExportBatchItem`.** Una factura que salió en un lote
+(`exportBatchId`) antes de que existieran los items, y a la que
+`scripts/backfill-hardening.ts` no se lo creó, tampoco se numera, y la consulta
+de arriba no la ve. Esta las cuenta por estado; si da algo, se decide con el
+usuario como las de arriba:
+
+```sql
+SELECT i.status, count(*) AS facturas
+FROM "Invoice" i
+WHERE i."exportBatchId" IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM "ExportBatchItem" e WHERE e."invoiceId" = i.id)
+GROUP BY i.status
+ORDER BY i.status;
+```
+
+El relleno numera cada serie por la fecha del lote en el que la factura salió
+por primera vez (`ExportBatch.createdAt`, que es también su `registeredAt`), no
+por la de sus items: los que creó `backfill-hardening.ts` llevan la fecha del
+script.
+
+**Reparto del medio.** Justo después del relleno, cada XML sale `ELECTRONIC`
+con motivo `xml`; cada imagen, vacío («Por confirmar») con `image_unconfirmed`;
+cada PDF, vacío con `backfill_pending`; y las partes de una división, lo de su
+raíz con motivo `split`. Todo con origen `AUTO`. Tras la detección (§10.6) no
+queda ningún `backfill_pending`: los PDF pasan a `ELECTRONIC`/`pdf_text` o a
+«Por confirmar» con `scan_unconfirmed` o `pdf_unreadable`. Ninguna sale `PAPER`:
+la app no la pone por su cuenta fuera de un taco.
+
+```sql
+SELECT a."originalMedium", a."originalMediumSource", a."originalMediumReason", count(*) AS facturas
+FROM "InvoiceArchive" a
+GROUP BY 1, 2, 3
+ORDER BY 4 DESC;
+```
+
+### 10.5 Marcar a mano la asesoría de demo (solo en dev)
+
+El reset de la demo (`POST /api/admin/reset-demo`) solo borra en una asesoría
+con `isDemo`; sin la marca responde 409 «Esta asesoría no es de demostración: el
+reset no está permitido.» y no toca nada. **Se marca solo la asesoría de
+demostración de dev, y nunca una con datos reales**: con la marca, el reset
+borra todas sus facturas, documentos y originales del almacenamiento. En
+producción no se marca ninguna.
+
+El reset borra del almacenamiento por el prefijo de cada cliente de la demo, y
+dev y producción comparten Garage: antes, comprueba en Coolify que el
+`S3_BUCKET` de dev no es el de producción.
+
+Primero se identifica (la de demo es la que tiene los gestores `@demo.com`):
+
+```sql
+SELECT f.id, f.name, f.cif, f."isDemo",
+       count(u.id) FILTER (WHERE u.email LIKE '%@demo.com') AS usuarios_de_la_demo
+FROM "AdvisoryFirm" f
+LEFT JOIN "User" u ON u."advisoryFirmId" = f.id
+GROUP BY f.id
+ORDER BY f."createdAt";
+```
+
+Y se marca por su id (esta sí escribe):
+
+```sql
+UPDATE "AdvisoryFirm"
+SET "isDemo" = true, "updatedAt" = now() AT TIME ZONE 'UTC'
+WHERE id = '<id de la asesoría de demo>';
+```
+
+Comprobación: `SELECT count(*) FROM "AdvisoryFirm" WHERE "isDemo";` da 1 en dev
+y **0 en producción**. Después, un reset de la demo en dev tiene que salir bien.
+
+Para lanzar ese reset:
+
+- La ruta solo existe con `ALLOW_DEMO_RESET=true` en las variables del entorno
+  de dev (en Coolify), **nunca en producción**. Sin ella responde 404 «No
+  encontrado» aunque la asesoría esté marcada; el 409 de arriba solo sale con la
+  variable puesta. Si se añade, hace falta un Redeploy para que la coja.
+- Ya no hay botón en Ajustes: es un `POST` con la sesión de un ADMIN de la demo y
+  el cuerpo `{"confirm":"RESET"}` (sin él, 400). Lo más sencillo es entrar en la
+  app de dev como ese administrador y ejecutar en la consola del navegador:
+
+  ```js
+  fetch("/api/admin/reset-demo", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ confirm: "RESET" }),
+  }).then(async (r) => console.log(r.status, await r.json()));
+  ```
+
+  Tiene que dar 200 con los recuentos. 409: la asesoría de esa sesión no está
+  marcada (y no se ha tocado nada); 403: la sesión no es de un ADMIN.
+
+### 10.6 Electrónico o papel de los PDF de antes del archivo
+
+El relleno deja cada PDF «Por confirmar» con motivo `backfill_pending`
+(«Pendiente de detectar»): la capa de texto y el productor solo se leen del
+fichero, y Garage solo se alcanza desde la red de Coolify. Lo hace la propia
+app, después de la segunda pasada, con la URL pública y la cabecera
+`Authorization: Bearer <CRON_SECRET>` (como los crons de §5):
+
+1. `GET /api/cron/archivo-detectar?dryRun=1` responde `{ "dryRun": true,
+   "quedan": N }`, sin descargar ni escribir nada.
+2. `GET /api/cron/archivo-detectar` repasa 50 por llamada (`?limit=` hasta 200);
+   se repite, por tandas, hasta que `quedan` sea 0. Cada respuesta dice cuántas
+   ha revisado y cómo han quedado (`electronicas`, `porConfirmar`, `ilegibles`),
+   y cuántas se han quedado como estaban por un fallo (`errores`), que la
+   siguiente llamada vuelve a mirar: el almacenamiento no responde, otra
+   escritura retiene la factura más de 5 s (un export grande, una división) o un
+   error que se repite. Una factura que falla no para a las demás. Si `quedan`
+   deja de bajar y `errores` sigue igual, son siempre las mismas: el log del
+   contenedor dice cuáles y por qué (líneas `[archivo-detectar]`).
+
+Solo escribe en las filas que siguen en automático y pendientes: lo que la app
+haya analizado mientras tanto, o lo que haya decidido una persona, no se toca.
+La propuesta llega a las partes de una factura dividida. No deja auditoría (es
+la primera propuesta). Un PDF que ya no está en el almacenamiento queda «No se
+pudo leer el PDF», y también uno cuyo productor no se puede guardar en la BD. Al
+acabar, el reparto de §10.4 ya no tiene ningún `backfill_pending`.
+
+### 10.7 Restaurar una copia
+
+Una restauración completa (`pg_restore` de un `pg_dump` sobre una BD vacía)
+funciona: los triggers se crean después de cargar los datos. Una restauración
+**solo de datos** sobre una BD que ya tiene la 12 se hace con `pg_restore
+--data-only --disable-triggers`. Sin esa opción, el trigger que crea la fila de
+archivo de cada factura salta al cargar `Invoice` y choca con las filas de
+`InvoiceArchive` del volcado (23505 en `InvoiceArchive_pkey`); y como
+`pg_restore` deja vacío el `search_path`, el error que se ve es `relation
+"InvoiceArchive" does not exist` (42P01), que parece una migración que falta y
+no lo es. `--disable-triggers` necesita superusuario y apaga también las claves
+foráneas mientras carga: solo sobre una BD con la 12 aplicada y vacía.
+
+### 10.8 Reversión de emergencia: quitar los triggers
+
+Solo si un trigger del archivo impide algo que la app tiene que poder hacer (el
+error empieza por «Archivo:» y es un `check_violation`, 23514) y no se puede
+esperar a una corrección. Antes, la copia de §10.2 y avisar. Las tablas, las
+columnas y las funciones se quedan (`DROP TRIGGER` no borra la función), y el
+código de antes de la 12 las ignora.
+
+**Las guardas** (nueve: borrar, cambiar el fichero, el nº de registro, la serie
+o el taco), en `psql` (escribe):
+
+```sql
+BEGIN;
+DROP TRIGGER IF EXISTS archive_no_delete_by_client ON "Invoice";
+DROP TRIGGER IF EXISTS archive_no_delete_by_client ON "Document";
+DROP TRIGGER IF EXISTS archive_row_no_delete ON "InvoiceArchive";
+DROP TRIGGER IF EXISTS archive_file_guard ON "Invoice";
+DROP TRIGGER IF EXISTS archive_file_guard ON "Document";
+DROP TRIGGER IF EXISTS invoice_registered_client_guard ON "Invoice";
+DROP TRIGGER IF EXISTS archive_row_guard ON "InvoiceArchive";
+DROP TRIGGER IF EXISTS register_series_guard ON "InvoiceRegisterSeries";
+DROP TRIGGER IF EXISTS taco_number_guard ON "UploadBatch";
+COMMIT;
+```
+
+Sin ellas nada impide borrar facturas y originales ni cambiar un nº de registro:
+es para salir del paso, no para quedarse así.
+
+**El décimo, `invoice_archive_row`** (el que crea la fila de archivo), **no se
+quita mientras corra esta versión de la app**: la subida de un XML o una imagen,
+la del portal, la resubida, la división y el reset de la demo actualizan esa
+fila en la misma transacción y, sin ella, fallan. Solo si se vuelve a la imagen de antes de la 12
+y el problema es justo ese trigger:
+
+```sql
+DROP TRIGGER IF EXISTS invoice_archive_row ON "Invoice";
+```
+
+**Volver a ponerlos.** `prisma migrate deploy` no los vuelve a crear (la 12 ya
+consta como aplicada) y una migración aplicada no se edita. Se ejecutan en
+`psql`, dentro de `BEGIN; … COMMIT;`, los `CREATE TRIGGER` del final del
+`migration.sql` de la 12 que se quitaron (las funciones siguen en la BD). Si se
+quitó `invoice_archive_row`, eso va **antes** de volver a desplegar esta
+versión. Después, la segunda pasada del relleno (§10.3), que crea las filas de
+las facturas que se subieron sin el trigger, y las comprobaciones de §10.4.
+
+**Deshacer la 12 entera** es restaurar la copia de §10.2 en una BD vacía y
+volver a la imagen anterior; se pierde todo lo que se hizo después de la copia.

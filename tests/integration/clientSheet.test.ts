@@ -103,6 +103,41 @@ describe("updateClient", () => {
   });
 });
 
+describe("updateClient: «El ejercicio empieza en» (archivo, R3)", () => {
+  const fiscalMonth = async () => (await prisma.client.findUniqueOrThrow({ where: { id: a.client.id } })).fiscalYearStartMonth;
+
+  it("guarda el mes de inicio, la ficha lo lee, y sin el campo no se toca", async () => {
+    signInAs(a.admin);
+    expect(await fiscalMonth()).toBe(1);
+    expect(await updateClient(a.client.id, null, form({ ...FULL, fiscalYearStartMonth: "7" }))).toEqual({ success: true });
+    expect(await fiscalMonth()).toBe(7);
+    expect((await loadClientSheet(a.client.id))!.client.fiscalYearStartMonth).toBe(7);
+    // Otro formulario que no lo manda (o un dato antiguo): se queda como está.
+    expect(await updateClient(a.client.id, null, form(FULL))).toEqual({ success: true });
+    expect(await fiscalMonth()).toBe(7);
+    expect(await updateClient(a.client.id, null, form({ ...FULL, fiscalYearStartMonth: "1" }))).toEqual({ success: true });
+    expect(await fiscalMonth()).toBe(1);
+  });
+
+  it("con 0, 13, 6.5 o un texto devuelve el error del campo y no cambia nada", async () => {
+    signInAs(a.admin);
+    const before = await prisma.client.findUniqueOrThrow({ where: { id: a.client.id } });
+    for (const value of ["0", "13", "6.5", "julio"]) {
+      const res = await updateClient(a.client.id, null, form({ ...FULL, fiscalYearStartMonth: value }));
+      expect(res?.errors?.fiscalYearStartMonth).toEqual(["Elige un mes de enero a diciembre."]);
+    }
+    expect(await prisma.client.findUniqueOrThrow({ where: { id: a.client.id } })).toEqual(before);
+  });
+
+  it("otra asesoría o un gestor: no lo cambian", async () => {
+    signInAs(b.admin);
+    expect(await updateClient(a.client.id, null, form({ ...FULL, fiscalYearStartMonth: "7" }))).toEqual({ error: "Cliente no encontrado" });
+    signInAs(a.worker);
+    expect(await updateClient(a.client.id, null, form({ ...FULL, fiscalYearStartMonth: "7" }))).toEqual({ error: "No autorizado" });
+    expect(await fiscalMonth()).toBe(1);
+  });
+});
+
 describe("loadClientSheet", () => {
   it("las cifras y los periodos salen de las facturas del cliente, con el cierre y lo exportado", async () => {
     // makeFirm deja una por revisar y una validada en septiembre de 2026.

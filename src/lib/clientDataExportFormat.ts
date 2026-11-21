@@ -2,6 +2,7 @@
  * Formato de los ficheros de la descarga de datos de un cliente (F-044), sin
  * BD ni almacenamiento: lo que se puede probar en unitarios.
  */
+import { BRAND } from "@/lib/brand";
 
 /**
  * Una celda CSV: entre comillas si lleva separador, comillas o saltos.
@@ -57,7 +58,8 @@ export function safeZipName(name: string, maxLength = 150): string {
   return cleaned || "fichero";
 }
 
-/** Extension por el tipo real del fichero, no por el nombre con que se subio. */
+/** Extension por el tipo real del fichero, no por el nombre con que se subio.
+ *  Tambien los originales en otro formato adjuntos a una factura (R19). */
 const EXTENSIONS: Record<string, string> = {
   "application/pdf": "pdf",
   "image/jpeg": "jpg",
@@ -66,7 +68,19 @@ const EXTENSIONS: Record<string, string> = {
   "image/heic": "heic",
   "application/xml": "xml",
   "text/xml": "xml",
+  "application/msword": "doc",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+  "application/vnd.ms-excel": "xls",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+  "application/vnd.oasis.opendocument.text": "odt",
+  "application/vnd.oasis.opendocument.spreadsheet": "ods",
+  "application/rtf": "rtf",
 };
+
+/** La extensión del tipo real («pdf», «docx»…); «bin» si no se conoce. */
+export function fileExtension(fileType: string): string {
+  return EXTENSIONS[fileType] ?? "bin";
+}
 
 /**
  * Nombre del original: la raiz del nombre subido (como mucho 80 caracteres)
@@ -75,7 +89,7 @@ const EXTENSIONS: Record<string, string> = {
  */
 export function originalFileName(filename: string, fileType: string): string {
   const root = filename.replace(/\.[^.]*$/, "") || filename;
-  return `${safeZipName(root, 80)}.${EXTENSIONS[fileType] ?? "bin"}`;
+  return `${safeZipName(root, 80)}.${fileExtension(fileType)}`;
 }
 
 /** Ruta del original: por periodo y con el id delante (dos pueden llamarse igual). */
@@ -119,19 +133,25 @@ export function readmeText(r: ReadmeInput): string {
     "",
     `facturas.json`,
     `  Las ${r.invoiceCount} facturas del cliente con todos sus datos y sus líneas de IVA`,
-    `  (campo vatLines). Importes con punto decimal y fechas en ISO 8601 (UTC).`,
+    `  (campo vatLines), y su ficha del archivo (campo archive). Importes con`,
+    `  punto decimal y fechas en ISO 8601 (UTC).`,
     "",
     `facturas.csv`,
     `  Las mismas facturas, una por fila, con los datos principales. La columna`,
-    `  «Original» dice dónde está su fichero dentro de este ZIP.`,
+    `  «Original» dice dónde está su fichero dentro de este ZIP y «Original en`,
+    `  otro formato», dónde está el Word, Excel, OpenDocument o RTF si se adjuntó.`,
+    `  «Original electrónico o en papel» dice si el original es electrónico, un`,
+    `  papel o aún está por confirmar. «Nº de registro» es el del archivo de`,
+    `  facturas (R-AAAA/NNNN las recibidas, E-AAAA/NNNN las emitidas), no el de A3.`,
     "",
     `lineas_iva.csv`,
     `  Las líneas de IVA de cada factura (base, tipo, cuota y recargo de`,
     `  equivalencia), enlazadas por el id de la factura.`,
     "",
     `originales/`,
-    `  Los ${r.originalCount} ficheros originales (PDF, imágenes o XML) tal como se`,
-    `  subieron, por periodo (AAAA-MM). El nombre empieza por el id de la factura.`,
+    `  Los ${r.originalCount} ficheros originales (PDF, imágenes, XML y, si se adjuntaron,`,
+    `  Word, Excel, OpenDocument o RTF) tal como se subieron, por periodo`,
+    `  (AAAA-MM). El nombre empieza por el id de la factura.`,
     "",
     `auditoria.csv`,
     `  Los ${r.auditCount} registros de auditoría de estas facturas: quién cambió qué`,
@@ -167,7 +187,7 @@ export function readmeText(r: ReadmeInput): string {
     "con «Antes» y «Después» vacíos si no hay valor. «Hash del anterior» es el",
     "«Hash» del registro que dice «Anterior» (GENESIS en el primero).",
     "",
-    "Esta descarga no borra nada: los datos siguen en FacturOCR.",
+    `Esta descarga no borra nada: los datos siguen en ${BRAND}.`,
     "",
   );
   return lines.join("\r\n");

@@ -3,21 +3,12 @@
  * rechazar, dividir). Sin imports de Next: las usan las server actions de la
  * revision y el nucleo de rechazar (invoiceRejection).
  */
-import type { Invoice } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { appError, type AppError } from "@/lib/errorCodes";
 import { reviewActionBlockReason, reviewTargetBlockReason, type ReviewAction } from "@/lib/invoiceStatuses";
 
-/** Periodo en el que cuenta la factura: el contable si lo tiene, si no el del
- *  lote. Mismo criterio que la pagina de revision y que parseAndSave. */
-export function invoicePeriod(
-  invoice: Pick<Invoice, "periodMonth" | "periodYear" | "accountingPeriodMonth" | "accountingPeriodYear">,
-): { month: number; year: number } {
-  return {
-    month: invoice.accountingPeriodMonth ?? invoice.periodMonth,
-    year: invoice.accountingPeriodYear ?? invoice.periodYear,
-  };
-}
+// Vive en period.ts, que es puro: lo usan tambien las reglas del archivo.
+export { invoicePeriod } from "@/lib/period";
 
 /** Rechazar y dividir cambian la factura igual que guardar: con el periodo
  *  cerrado no se tocan (mismo criterio que rejectBatch). La pagina ya oculta

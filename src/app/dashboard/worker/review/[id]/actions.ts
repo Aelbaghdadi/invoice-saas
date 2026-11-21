@@ -3,6 +3,7 @@
 import { after } from "next/server";
 import { createHash } from "crypto";
 import { splitStorageKey } from "@/lib/splitStorageKey";
+import { planSplitArchive, splitPartArchiveData } from "@/lib/archiveSplit";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { redirect, RedirectType } from "next/navigation";
@@ -1250,6 +1251,9 @@ async function reserveAndCreateSplit(
         data: { status: "SPLIT_SOURCE" },
       });
       if (reserved.count === 0) return null;
+      // Las hijas heredan la fila de archivo de la original (llegada, tanda,
+      // medio…) con su nº de parte; bloquea la de la raíz de la familia.
+      const archive = await planSplitArchive(tx, invoice.id);
 
       const ids: string[] = [];
       for (const piece of pieces) {
@@ -1287,6 +1291,7 @@ async function reserveAndCreateSplit(
             currency: invoice.currency,
           },
         });
+        await tx.invoiceArchive.update({ where: { invoiceId: child.id }, data: splitPartArchiveData(archive, ids.length) });
         ids.push(child.id);
       }
 

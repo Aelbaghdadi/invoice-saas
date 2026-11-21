@@ -9,7 +9,10 @@ import { appError } from "@/lib/errorCodes";
 import { validateUploadedFile, canonicalMime } from "@/lib/fileValidation";
 import { assertUploadClientAccess, assertUploadPeriodOpen } from "@/lib/uploadAccess";
 import { getOrCreateUnclassifiedClient } from "@/lib/unclassifiedClient";
-import { putObject, sanitizeFilenameForStorage, isStorageConfigured } from "@/lib/storage";
+import { deleteObject, putObject, sanitizeFilenameForStorage, isStorageConfigured } from "@/lib/storage";
+import { uploadStorageKey } from "@/lib/uploadStorageKey";
+import { archiveIntakeFields } from "@/lib/archiveIntake";
+import { recordAutoTicket } from "@/lib/autoTickets";
 import { formatDateEs } from "@/lib/dates";
 import { periodLabel } from "@/lib/period";
 import { CLIENT_STATUS_BADGE, STATUS_LABELS } from "@/lib/invoiceStatuses";
@@ -20,7 +23,8 @@ import type { InvoiceType, PeriodType } from "@prisma/client";
  * binario aquí y la app lo sube a Garage (red interna) — antes la subida iba
  * directa del navegador a Supabase con URL firmada, pero Garage no es público,
  * así que la app hace de proxy. Valida auth/tenancy/periodo + magic-bytes +
- * dedupe, sube a Garage y crea Invoice + Document, igual que hacían sign+register.
+ * dedupe, sube a Garage y crea Document, Invoice y su fila de archivo en una
+ * sola transacción.
  *
  * Campos del form: file, type, periodType, periodMonth, periodYear, y o bien
  * clientId (un cliente) o candidateClientIds (JSON, modo "clasificar").
@@ -158,12 +162,12 @@ export async function POST(req: Request) {
     }
   }
 
-  // Subir a Garage. La key la construye el SERVIDOR (sin confiar en el cliente).
-  const safeName = sanitizeFilenameForStorage(file.name);
-  const periodSegment = periodType === "QUARTERLY"
-    ? `${periodYear}-T${Math.ceil(periodMonth / 3)}`
-    : `${periodYear}-${String(periodMonth).padStart(2, "0")}`;
-  const storageKey = `${effectiveClientId}/${periodSegment}/${Date.now()}-${safeName}`;
+  // Subir a Garage. La key la construye el SERVIDOR (sin confiar en el cliente)
+  // y es única: nunca sobrescribe el original de otra subida.
+  const storageKey = uploadStorageKey(
+    { clientId: effectiveClientId, periodType: periodType as PeriodType, periodMonth, periodYear },
+    sanitizeFilenameForStorage(file.name),
+  );
   try {
     await putObject(storageKey, buffer, realMime);
   } catch (e) {
@@ -176,35 +180,65 @@ export async function POST(req: Request) {
   // Tipo "UNKNOWN" = subido como "Detectar automáticamente": placeholder + flag.
   const typeUnconfirmed = type === "UNKNOWN";
   const storedType: InvoiceType = type === "SALE" ? "SALE" : "PURCHASE";
+  const archive = archiveIntakeFields({ fileType: realMime, uploadedByClient: session.user.role === "CLIENT" });
 
-  const document = await prisma.document.create({
-    data: {
-      filename: file.name,
-      storageKey,
-      fileType: realMime,
-      fileHash,
-      sizeBytes: file.size,
-      uploadedBy: session.user.id,
-      clientId: effectiveClientId,
-    },
-  });
-
-  const invoice = await prisma.invoice.create({
-    data: {
-      filename: file.name,
-      storageKey,
-      fileType: realMime,
-      fileHash,
-      type: storedType,
-      typeUnconfirmed,
-      periodType: periodType as PeriodType,
-      periodMonth,
-      periodYear,
-      clientId: effectiveClientId,
-      routingCandidateIds,
-      documentId: document.id,
-    },
-  });
+  let invoice: { id: string };
+  try {
+    invoice = await prisma.$transaction(async (tx) => {
+      const document = await tx.document.create({
+        data: {
+          filename: file.name,
+          storageKey,
+          fileType: realMime,
+          fileHash,
+          sizeBytes: file.size,
+          uploadedBy: session.user.id,
+          clientId: effectiveClientId,
+        },
+      });
+      const created = await tx.invoice.create({
+        data: {
+          filename: file.name,
+          storageKey,
+          fileType: realMime,
+          fileHash,
+          type: storedType,
+          typeUnconfirmed,
+          periodType: periodType as PeriodType,
+          periodMonth,
+          periodYear,
+          clientId: effectiveClientId,
+          routingCandidateIds,
+          documentId: document.id,
+        },
+        select: { id: true },
+      });
+      // La fila la ha creado el trigger (llegada = alta de la factura).
+      if (archive) await tx.invoiceArchive.update({ where: { invoiceId: created.id }, data: archive });
+      return created;
+    });
+  } catch (e) {
+    // No queda ni Document ni Invoice: el fichero recién subido sobra, y su
+    // clave es única, así que no es el de nadie más.
+    await deleteObject(storageKey);
+    const error = e instanceof Error ? e : new Error(String(e));
+    console.error(`[uploads] no se pudo registrar ${storageKey}:`, error);
+    // Antes este fallo salía como excepción y abría el ticket automático
+    // (instrumentation.ts); al capturarlo se abre aquí.
+    await recordAutoTicket({
+      kind: "server",
+      name: error.name,
+      message: error.message,
+      path: "/api/uploads",
+      routePath: "/api/uploads",
+      routeType: "route",
+      method: "POST",
+      stack: error.stack ?? null,
+      userId: session.user.id,
+      firmId: session.user.advisoryFirmId ?? null,
+    });
+    return NextResponse.json({ error: appError("ERR-SYS-001", "no se pudo registrar la factura") }, { status: 500 });
+  }
 
   const userId = session.user.id;
   after(async () => {

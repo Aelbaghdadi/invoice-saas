@@ -10,6 +10,8 @@ import {
   isTransactionConflictError,
   type ExportInvoice,
 } from "@/lib/exportBatch";
+import { isLockWaitError, postgresErrorCode } from "@/lib/exportConflict";
+import { archiveEditConflict, ARCHIVE_EDIT_CONFLICT_ERROR } from "@/lib/archiveEdits";
 
 function mkInvoice(overrides: Partial<ExportInvoice> = {}): ExportInvoice {
   return {
@@ -168,5 +170,49 @@ describe("isTransactionConflictError", () => {
     expect(isTransactionConflictError(new Error("conexión cortada"))).toBe(false);
     expect(isTransactionConflictError(null)).toBe(false);
     expect(isTransactionConflictError("40P01")).toBe(false);
+  });
+
+  it("un deadlock en SQL en crudo (P2010, como la numeración del archivo) también es un conflicto", () => {
+    expect(isTransactionConflictError(rawQueryError("40P01"))).toBe(true);
+    expect(isTransactionConflictError(rawQueryError("23505"))).toBe(false);
+  });
+});
+
+/** Forma de un fallo en $queryRaw/$executeRaw con adapter-pg: P2010 con el
+ *  DriverAdapterError en meta. */
+function rawQueryError(originalCode: string) {
+  return new Prisma.PrismaClientKnownRequestError(`Raw query failed. Code: \`${originalCode}\``, {
+    code: "P2010",
+    clientVersion: "7.5.0",
+    meta: { driverAdapterError: { name: "DriverAdapterError", cause: { originalCode, kind: "postgres" } } },
+  });
+}
+
+describe("esperas de bloqueo (anexo C11)", () => {
+  function driverAdapterError(originalCode: string) {
+    const err = new Error("canceling statement") as Error & { cause: unknown };
+    err.name = "DriverAdapterError";
+    err.cause = { originalCode, kind: "postgres", code: originalCode };
+    return err;
+  }
+
+  it("lock_timeout (55P03) y statement_timeout (57014) son esperas, en Prisma y en SQL en crudo", () => {
+    for (const code of ["55P03", "57014"]) {
+      expect(isLockWaitError(driverAdapterError(code)), code).toBe(true);
+      expect(isLockWaitError(rawQueryError(code)), code).toBe(true);
+      expect(isTransactionConflictError(driverAdapterError(code)), code).toBe(false);
+    }
+    expect(isLockWaitError(driverAdapterError("40P01"))).toBe(false);
+    expect(isLockWaitError(new Error("otra cosa"))).toBe(false);
+    expect(postgresErrorCode(rawQueryError("55P03"))).toBe("55P03");
+    expect(postgresErrorCode({})).toBeNull();
+  });
+
+  it("las ediciones del archivo dan { error } con un conflicto o una espera, y dejan pasar lo demás", () => {
+    expect(archiveEditConflict(driverAdapterError("40P01"))).toEqual({ error: ARCHIVE_EDIT_CONFLICT_ERROR });
+    expect(archiveEditConflict(rawQueryError("55P03"))).toEqual({ error: ARCHIVE_EDIT_CONFLICT_ERROR });
+    expect(archiveEditConflict(driverAdapterError("57014"))).toEqual({ error: ARCHIVE_EDIT_CONFLICT_ERROR });
+    expect(archiveEditConflict(driverAdapterError("23503"))).toBeNull();
+    expect(ARCHIVE_EDIT_CONFLICT_ERROR).toBe("Otra persona estaba cambiando estas facturas; vuelve a intentarlo.");
   });
 });

@@ -1,5 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { madridDayBounds, startOfDayInMadrid, startOfTodayInMadrid } from "@/lib/dates";
+import { formatDayEs, madridDayBounds, startOfDayInMadrid, startOfTodayInMadrid } from "@/lib/dates";
+
+describe("formatDayEs", () => {
+  it("el día de un momento en Madrid, sin la hora", () => {
+    // 00:30 en Madrid: ya es el día 25, aunque en UTC sea el 24.
+    expect(formatDayEs(new Date("2026-09-24T22:30:00Z"))).toBe("25/09/2026");
+    expect(formatDayEs("2026-01-15T22:59:00Z")).toBe("15/01/2026");
+    expect(formatDayEs(null)).toBe("—");
+    expect(formatDayEs("no es una fecha")).toBe("—");
+  });
+});
 
 const HORA = 3600_000;
 

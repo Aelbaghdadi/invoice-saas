@@ -18,6 +18,8 @@ export type ClientSheetClient = {
   contactName: string | null;
   phone: string | null;
   notes: string | null;
+  /** Mes (1-12) en que empieza su ejercicio; 1 = año natural. */
+  fiscalYearStartMonth: number;
   createdAt: Date;
   advisoryFirmId: string;
 };
@@ -37,7 +39,7 @@ export async function loadClientSheet(clientId: string): Promise<ClientSheetData
     select: {
       id: true, name: true, cif: true, email: true, accountingProgram: true,
       equivalenceSurchargeCustomer: true, simplifiedSupplierAccount: true, simplifiedExpenseAccount: true,
-      contactName: true, phone: true, notes: true, createdAt: true, advisoryFirmId: true, isUnclassifiedBucket: true,
+      contactName: true, phone: true, notes: true, fiscalYearStartMonth: true, createdAt: true, advisoryFirmId: true, isUnclassifiedBucket: true,
       assignedWorkers: { select: { worker: { select: { id: true, name: true } } }, orderBy: { worker: { name: "asc" } } },
       groupMemberships: { select: { group: { select: { id: true, name: true } } } },
     },

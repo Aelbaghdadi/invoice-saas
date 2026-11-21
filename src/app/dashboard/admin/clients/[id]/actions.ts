@@ -9,6 +9,8 @@ import { duplicateFieldMessage } from "@/lib/clientDuplicateMessage";
 
 export type EditClientState = { success?: boolean; error?: string; errors?: Record<string, string[]> } | null;
 
+const FISCAL_MONTH_ERROR = "Elige un mes de enero a diciembre.";
+
 const schema = z.object({
   name: z.string().trim().min(2, "Mínimo 2 caracteres").max(160, "Máximo 160 caracteres"),
   cif: z.string().trim().min(9, "El CIF debe tener 9 caracteres").max(9, "El CIF debe tener 9 caracteres")
@@ -18,6 +20,11 @@ const schema = z.object({
   contactName: z.string().trim().max(120, "Máximo 120 caracteres"),
   phone: z.string().trim().max(40, "Máximo 40 caracteres").regex(/^[+0-9 ().\-/]*$/, "Solo números, espacios y + ( ) . -"),
   notes: z.string().max(5000, "Máximo 5.000 caracteres"),
+  // Sin el campo (otro formulario), no se toca.
+  fiscalYearStartMonth: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z.coerce.number({ error: FISCAL_MONTH_ERROR }).int(FISCAL_MONTH_ERROR).min(1, FISCAL_MONTH_ERROR).max(12, FISCAL_MONTH_ERROR).optional(),
+  ),
 });
 
 function field(formData: FormData, name: string): string {
@@ -27,7 +34,8 @@ function field(formData: FormData, name: string): string {
 
 /**
  * Edita la ficha del cliente (F-046, la parte que no es el acceso al portal):
- * razon social, CIF, software, contacto, telefono y notas internas. El CIF es
+ * razon social, CIF, software, contacto, telefono, notas internas y el mes en
+ * que empieza su ejercicio (agrupa el archivo y su «conservar hasta»). El CIF es
  * unico en toda la plataforma: si choca, se dice cual es el campo.
  */
 export async function updateClient(clientId: string, _prev: EditClientState, formData: FormData): Promise<EditClientState> {
@@ -43,6 +51,7 @@ export async function updateClient(clientId: string, _prev: EditClientState, for
     contactName: field(formData, "contactName"),
     phone: field(formData, "phone"),
     notes: field(formData, "notes"),
+    fiscalYearStartMonth: field(formData, "fiscalYearStartMonth"),
   });
   if (!parsed.success) return { errors: parsed.error.flatten().fieldErrors as Record<string, string[]> };
 
@@ -64,6 +73,7 @@ export async function updateClient(clientId: string, _prev: EditClientState, for
         contactName: d.contactName || null,
         phone: d.phone || null,
         notes: d.notes.trim() || null,
+        ...(d.fiscalYearStartMonth !== undefined ? { fiscalYearStartMonth: d.fiscalYearStartMonth } : {}),
       },
     });
   } catch (err) {

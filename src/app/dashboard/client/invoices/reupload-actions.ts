@@ -6,6 +6,8 @@ import { revalidatePath } from "next/cache";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { deleteObject, putObject, sanitizeFilenameForStorage, isStorageConfigured } from "@/lib/storage";
+import { uploadStorageKey } from "@/lib/uploadStorageKey";
+import { archiveIntakeFields } from "@/lib/archiveIntake";
 import { processInvoice } from "@/lib/processInvoice";
 
 export type ReuploadState = {
@@ -69,8 +71,13 @@ export async function reuploadInvoiceAction(
   }
 
   if (!isStorageConfigured()) return { error: "Almacenamiento no configurado." };
-  const safeName = sanitizeFilenameForStorage(file.name);
-  const storageKey = `${client.id}/${rejected.periodYear}-${String(rejected.periodMonth).padStart(2, "0")}/reupload-${Date.now()}-${safeName}`;
+  const storageKey = uploadStorageKey(
+    { clientId: client.id, periodType: rejected.periodType, periodMonth: rejected.periodMonth, periodYear: rejected.periodYear },
+    sanitizeFilenameForStorage(file.name),
+    { tag: "reupload" },
+  );
+  // La sube el cliente: el papel, si lo hay, lo guarda él.
+  const archive = archiveIntakeFields({ fileType: realMime, uploadedByClient: true });
 
   try {
     await putObject(storageKey, Buffer.from(bytes), realMime);
@@ -117,6 +124,7 @@ export async function reuploadInvoiceAction(
           replacesId: rejected.id,
         },
       });
+      if (archive) await tx.invoiceArchive.update({ where: { invoiceId: newInvoice.id }, data: archive });
       return newInvoice.id;
     });
   } catch (e) {

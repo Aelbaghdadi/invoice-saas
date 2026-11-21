@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { prisma } from "./helpers/db";
 import { fakeS3 } from "./helpers/fakeS3";
 import { makeFirm, makeInvoice, type FirmWorld } from "./helpers/factories";
-import { blankPdf, utcMinutesAgoSql } from "./helpers/fixtures";
+import { blankPdf, PNG_DATA_URL, utcMinutesAgoSql } from "./helpers/fixtures";
 import { holdLock, sessionsWaitingForLock } from "./helpers/locks";
 import { inFlight } from "./helpers/inflight";
 import { signInAs } from "./helpers/session";
@@ -73,5 +73,46 @@ describe("resubida del cliente contra «Reabrir y validar»", () => {
     expect((await reuploadInvoiceAction(null, fd))?.error).toBe("Factura no encontrada.");
     expect(await prisma.invoice.count({ where: { replacesId: id } })).toBe(0);
     expect(reuploadKeys()).toHaveLength(0);
+  });
+});
+
+describe("la resubida en el archivo (paso 5)", () => {
+  const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+  const replacement = () => prisma.invoice.findFirstOrThrow({ where: { replacesId: id }, include: { archive: true, document: true } });
+
+  it("tiene su fila: la guarda el cliente, la llegada es su alta y el PDF espera al análisis", async () => {
+    expect(await reupload()).toEqual({ success: true });
+    const r = await replacement();
+    expect(r.archive).toMatchObject({
+      paperHeldByClient: true,
+      receivedAt: r.createdAt,
+      originalMedium: null,
+      originalMediumSource: null,
+      uploadBatchId: null,
+      splitPart: 0,
+    });
+  });
+
+  it("una foto queda «Por confirmar», y la guarda el cliente", async () => {
+    signInAs(w.clientUser);
+    const png = Buffer.from(PNG_DATA_URL.split(",")[1], "base64");
+    const fd = new FormData();
+    fd.set("rejectedId", id);
+    fd.set("file", new File([new Uint8Array(png)], "foto.png", { type: "image/png" }));
+    expect(await reuploadInvoiceAction(null, fd)).toEqual({ success: true });
+    expect((await replacement()).archive).toMatchObject({
+      paperHeldByClient: true,
+      originalMedium: null,
+      originalMediumSource: "AUTO",
+      originalMediumReason: "image_unconfirmed",
+    });
+  });
+
+  it("la clave es única: cliente, periodo, instante, UUID y la etiqueta reupload", async () => {
+    expect(await reupload()).toEqual({ success: true });
+    const r = await replacement();
+    expect(r.storageKey).toMatch(new RegExp(`^${w.client.id}/2026-09/\\d+-${UUID}-reupload-corregida\\.pdf$`));
+    expect(r.document?.storageKey).toBe(r.storageKey);
+    expect(reuploadKeys()).toEqual([r.storageKey]);
   });
 });

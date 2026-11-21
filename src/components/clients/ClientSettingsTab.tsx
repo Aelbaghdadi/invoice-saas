@@ -40,7 +40,9 @@ export async function ClientSettingsTab({ data, firmId }: { data: ClientSheetDat
               contactName: client.contactName,
               phone: client.phone,
               notes: client.notes,
+              fiscalYearStartMonth: client.fiscalYearStartMonth,
             }}
+            hasInvoices={data.stats.total > 0}
           />
         </Section>
 

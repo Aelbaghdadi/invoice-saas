@@ -141,6 +141,50 @@ enum IssueStatus {
   DISMISSED
 }
 
+// ─── Archivo de facturas ─────────────────────────────────────────────────────
+
+/// Original de la factura (RD 1619/2012, arts. 19 y 21).
+/// ELECTRONIC: llegó en electrónico (PDF nacido digital, XML, Word…). Ese
+/// fichero es el original y se conserva en su formato.
+/// PAPER: el original es un papel. En la app hay su escaneo o su foto, que no
+/// es una digitalización certificada: el papel hay que guardarlo.
+/// null («Por confirmar»): un escaneo o una foto que llegó fuera de un taco.
+/// Puede ser el original electrónico (un PDF escaneado que manda el proveedor
+/// por correo, RD 1619/2012, art. 9) o la copia de un papel: la app no lo sabe.
+enum OriginalMedium {
+  ELECTRONIC
+  PAPER
+}
+
+/// Quién decidió el medio.
+/// - AUTO: la app (tipo de fichero, capa de texto del PDF, la migración o la
+///   herencia de una división cuyo medio era automático).
+/// - TACO: la factura se subió en una tanda de papel, o la tanda se convirtió en taco.
+/// - MANUAL: una persona, o se adjuntó un original en otro formato.
+/// El análisis solo escribe cuando está vacío o es AUTO.
+enum OriginalMediumSource {
+  AUTO
+  TACO
+  MANUAL
+}
+
+/// Por qué se conserva más del mínimo (6 años desde el cierre del ejercicio):
+/// inmovilizado, bases negativas o deducciones pendientes (LGT 66 bis y 70.3),
+/// inspección o pleito, u otro motivo.
+enum RetentionHoldReason {
+  FIXED_ASSET
+  TAX_CREDITS
+  INSPECTION
+  OTHER
+}
+
+/// UPLOAD: un «Subir» del gestor.
+/// ARCHIVE: papel que ya existía y se ubica a mano desde el archivo (taco sin páginas).
+enum UploadBatchOrigin {
+  UPLOAD
+  ARCHIVE
+}
+
 model AdvisoryFirm {
   id        String   @id @default(cuid())
   name      String
@@ -149,6 +193,11 @@ model AdvisoryFirm {
   /// ~320px para que pese poco). Se muestra arriba a la izquierda en la barra
   /// lateral. null = se usa la marca por defecto (Faktury).
   logoDataUrl String? @db.Text
+  /// Asesoría de demostración. Solo se marca a mano en la BD, nunca desde la
+  /// app ni desde un script. Los triggers de la migración 12 solo dejan borrar
+  /// facturas y documentos de estas asesorías, y reseedDemo lo comprueba antes
+  /// de tocar nada.
+  isDemo    Boolean  @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -157,6 +206,7 @@ model AdvisoryFirm {
   clientGroups ClientGroup[]
   providerRoutingRules ProviderRoutingRule[]
   supportTickets SupportTicket[]
+  uploadBatches UploadBatch[]
 }
 
 model User {
@@ -213,6 +263,10 @@ model Client {
   contactName String?
   phone       String?
   notes       String? @db.Text
+  /// Mes (1-12) en que empieza su ejercicio; 1 = año natural. Agrupa el
+  /// archivo y fija «conservar hasta». No cambia los números de registro, que
+  /// van por año natural (el del IVA). El rango se valida con zod en Ajustes.
+  fiscalYearStartMonth Int @default(1)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -229,6 +283,8 @@ model Client {
   accountEntries  AccountEntry[]
   groupMemberships ClientGroupMember[]
   providerRoutingRules ProviderRoutingRule[]
+  uploadBatches   UploadBatch[]
+  registerSeries  InvoiceRegisterSeries[]
 }
 
 /// Aprendizaje de ruteo por proveedor. Cuando el gestor clasifica a mano una
@@ -309,6 +365,8 @@ model Document {
   client   Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
 
   invoices Invoice[]
+  /// Filas de archivo cuyo original es este documento (un Word adjunto).
+  archiveOriginals InvoiceArchive[]
 }
 
 model Invoice {
@@ -446,9 +504,14 @@ model Invoice {
   exportBatchId String?
   exportBatch   ExportBatch? @relation(fields: [exportBatchId], references: [id])
 
+  /// Su fila del archivo. La crea el trigger invoice_archive_row al insertar
+  /// la factura: no uséis archive: { create }.
+  archive InvoiceArchive?
+
   @@index([clientId, status])
   @@index([issuerCif])
   @@index([periodMonth, periodYear])
+  @@index([splitFromId]) // familia de una división
 }
 
 /// Desglose de bases/cuotas de IVA. Una factura puede tener varias lineas
@@ -668,6 +731,149 @@ model AccountEntry {
   // tipo de operacion y retencion, que no dependen del sentido.
   @@unique([clientId, nif])
   @@index([clientId])
+}
+
+// ─── Archivo de facturas ─────────────────────────────────────────────────────
+// Sin índices parciales, de expresión ni CHECK: Prisma propondría borrarlos.
+// Las funciones y los triggers del archivo están al final de la migración
+// 00000000000012_archivo.
+
+/// Archivo de una factura (una fila por factura).
+/// Va en una tabla aparte a propósito:
+/// - lo que se cambia aquí no toca Invoice.updatedAt, que es el testigo de
+///   guardar, validar, rechazar, dividir y exportar;
+/// - se puede cambiar con el periodo cerrado o con la factura ya exportada.
+/// La fila la crea el trigger invoice_archive_row al insertar la factura (también
+/// con createMany). No uséis archive: { create } anidado: la fila se rellena con
+/// update en la misma transacción. Un trigger impide borrarla mientras exista su
+/// factura, y otro, cambiar el nº de registro o la tanda de llegada.
+model InvoiceArchive {
+  invoiceId String  @id
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  /// Llegada a la asesoría:
+  /// - en una tanda, la fecha de creación de la tanda;
+  /// - sin tanda, la de la factura;
+  /// - las partes de una división, la de su original.
+  /// Con el RD 238 será la fecha de recepción en la plataforma.
+  receivedAt DateTime @default(now())
+
+  /// Tanda de LLEGADA y posición en su lista (1..fileCount). Se fijan en el alta
+  /// y no cambian. En un taco, la posición es la página. Las partes de una
+  /// división comparten tanda y posición.
+  uploadBatchId  String?
+  uploadBatch    UploadBatch? @relation("ArrivalBatch", fields: [uploadBatchId], references: [id], onDelete: Restrict)
+  uploadPosition Int?
+  /// 0 = el documento subido; 1..n = partes de una división (mismo papel),
+  /// numeradas por la raíz de la división.
+  splitPart      Int          @default(0)
+  /// Taco donde se guarda el papel cuando no es el de llegada (papel anterior al
+  /// archivo o de una tanda digital). La ubicación es la de paperBatch si la hay;
+  /// si no, la de uploadBatch cuando es un taco. Puesto, no vuelve a vacío.
+  paperBatchId   String?
+  paperBatch     UploadBatch? @relation("PaperBatch", fields: [paperBatchId], references: [id], onDelete: Restrict)
+  /// El papel lo tiene el cliente. La app solo lo marca en lo que sube un
+  /// usuario CLIENT (portal) y en su resubida; lo demás, a mano.
+  paperHeldByClient Boolean @default(false)
+
+  /// null = «Por confirmar» (ver OriginalMedium).
+  originalMedium       OriginalMedium?
+  originalMediumSource OriginalMediumSource?
+  /// Código del motivo: xml, pdf_text, scan_unconfirmed, image_unconfirmed,
+  /// pdf_unreadable, backfill_pending (PDF anterior al archivo, pendiente de
+  /// detectar), split, taco, other_format o manual. Las etiquetas están en
+  /// src/lib/originalMedium.ts.
+  originalMediumReason String?
+  /// Producer o Creator del PDF, para afinar la lista de escáneres.
+  pdfProducer          String?
+
+  /// Original en otro formato (.doc, .docx, .xls…) cuando la app lee su PDF.
+  /// Se puede quitar (vuelve a null, con auditoría); el Document se queda.
+  originalDocumentId String?
+  originalDocument   Document? @relation(fields: [originalDocumentId], references: [id], onDelete: Restrict)
+
+  /// Nº de registro del archivo: serie (cliente, tipo y año) y número. Se pone la
+  /// primera vez que la factura sale en un Excel de A3 y no cambia (lo impide un trigger).
+  registerSeriesId String?
+  registerSeries   InvoiceRegisterSeries? @relation(fields: [registerSeriesId], references: [id], onDelete: Restrict)
+  registerNumber   Int?
+  registeredAt     DateTime?
+
+  /// «Conservar más»: sin fecha de fin hasta que alguien lo desmarque.
+  retentionHold       Boolean              @default(false)
+  retentionHoldReason RetentionHoldReason?
+  retentionHoldNote   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([registerSeriesId, registerNumber])
+  @@unique([uploadBatchId, uploadPosition, splitPart])
+  @@index([paperBatchId])
+  @@index([originalDocumentId])
+}
+
+/// Tanda: cada «Subir» del gestor, o el papel antiguo que se ubica a mano.
+/// Fija la llegada y el orden de sus facturas.
+/// Si tiene tacoNumber es un TACO (papel escaneado en la asesoría): se numera por
+/// asesoría al crearlo, y la caja es una etiqueta que se pone al guardarlo.
+/// Cuelga de la asesoría (multitenancy).
+model UploadBatch {
+  id             String            @id @default(cuid())
+  advisoryFirmId String
+  advisoryFirm   AdvisoryFirm      @relation(fields: [advisoryFirmId], references: [id], onDelete: Cascade)
+  /// null = «Clasificar entre varios»: puede mezclar empresas.
+  clientId       String?
+  client         Client?           @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  origin         UploadBatchOrigin @default(UPLOAD)
+  /// Quién la creó. Sin clave foránea, como ExportBatch.userId.
+  createdById    String
+  /// Ficheros de la lista al pulsar «Subir»: posiciones 1..fileCount.
+  fileCount      Int
+  /// Lote declarado; /api/uploads lo exige en cada fichero. En ARCHIVE solo se guarda el año.
+  periodType     PeriodType?
+  periodMonth    Int?
+  periodYear     Int
+  /// PURCHASE, SALE o UNKNOWN, como en el formulario; null en ARCHIVE.
+  invoiceType    String?
+  /// Nº de taco, correlativo por asesoría («Taco 37»); null = tanda digital.
+  /// Puesto, no cambia (lo impide un trigger).
+  tacoNumber     Int?
+  /// Destino del papel al guardarlo: una caja (etiqueta) o devuelto al cliente.
+  boxLabel       String?
+  returnedAt     DateTime?
+  filedAt        DateTime?
+  filedById      String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  /// Facturas que llegaron en esta tanda.
+  archives      InvoiceArchive[] @relation("ArrivalBatch")
+  /// Papel guardado en este taco sin haber llegado en él.
+  paperArchives InvoiceArchive[] @relation("PaperBatch")
+
+  @@unique([advisoryFirmId, tacoNumber])
+  @@index([advisoryFirmId, filedAt])
+  @@index([advisoryFirmId, boxLabel])
+  @@index([clientId, createdAt])
+}
+
+/// Último nº de registro por cliente, tipo (PURCHASE = serie R, SALE = serie E)
+/// y año natural del periodo de deducción. Solo sube.
+/// Se reserva con INSERT … ON CONFLICT DO UPDATE … RETURNING, que bloquea la
+/// fila hasta el COMMIT. Lo ya exportado se numera en la migración.
+model InvoiceRegisterSeries {
+  id         String      @id @default(cuid())
+  clientId   String
+  client     Client      @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  type       InvoiceType
+  year       Int
+  lastNumber Int         @default(0)
+  updatedAt  DateTime    @updatedAt
+
+  archives InvoiceArchive[]
+
+  @@unique([clientId, type, year])
 }
 
 // ─── Soporte ─────────────────────────────────────────────────────────────────

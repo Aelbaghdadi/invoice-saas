@@ -1,9 +1,12 @@
-import { Zip, ZipDeflate, ZipPassThrough, strToU8 } from "fflate";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { appendAuditLogs, AUDIT_TRANSACTION_OPTIONS } from "@/lib/auditLog";
-import { getObjectChunks, isStorageNotFound, StorageIdleError } from "@/lib/storage";
+import { getObjectChunks } from "@/lib/storage";
 import { formatDateTimeEs } from "@/lib/dates";
 import { CSV_BOM, csvAmount, csvDate, csvRow, formatBytes, originalPath, readmeText } from "@/lib/clientDataExportFormat";
+import { mediumLabel } from "@/lib/originalMedium";
+import { formatRegisterNumber } from "@/lib/registerNumbers";
+import { counted, storageFailure, zipWriter } from "@/lib/zipStream";
 
 /**
  * Descarga de todos los datos de un cliente en un ZIP (F-044): facturas con
@@ -33,7 +36,7 @@ export const CLIENT_EXPORT_LIMITS = {
 const PAGE_SIZE = 2_000;
 
 /** Un original sin tamaño guardado cuenta como el maximo de subida (20 MB). */
-const UNKNOWN_FILE_BYTES = 20 * 1024 * 1024;
+export const UNKNOWN_FILE_BYTES = 20 * 1024 * 1024;
 
 export type ClientExportCheck =
   | { ok: true; client: { id: string; name: string; cif: string } }
@@ -47,20 +50,27 @@ export async function checkClientExport(clientId: string, firmId: string): Promi
   });
   if (!client) return { ok: false, status: 404, error: "Cliente no encontrado." };
   // Por las facturas del cliente: un documento subido en modo «clasificar»
-  // sigue con el clientId del buzon despues de rutearlo. Lo que no tiene
-  // tamaño guardado cuenta como una subida del maximo.
+  // sigue con el clientId del buzon despues de rutearlo. Tambien los
+  // originales en otro formato (Word, Excel…) adjuntos a sus facturas, que no
+  // son el documento de ninguna (anexo C8); cada documento, una vez. Lo que no
+  // tiene tamaño guardado cuenta como una subida del maximo.
+  const documents: Prisma.DocumentWhereInput = {
+    OR: [{ invoices: { some: { clientId } } }, { archiveOriginals: { some: { invoice: { clientId } } } }],
+  };
   const [invoiceCount, sizes, unsized, withoutDocument] = await Promise.all([
     prisma.invoice.count({ where: { clientId } }),
-    prisma.document.aggregate({ where: { invoices: { some: { clientId } } }, _sum: { sizeBytes: true } }),
-    prisma.document.count({ where: { invoices: { some: { clientId } }, sizeBytes: null } }),
+    prisma.document.aggregate({ where: documents, _sum: { sizeBytes: true } }),
+    prisma.document.count({ where: { ...documents, sizeBytes: null } }),
     prisma.invoice.count({ where: { clientId, documentId: null } }),
   ]);
   const { maxInvoices, maxBytes } = CLIENT_EXPORT_LIMITS;
+  // Para la entrega o una inspección suele bastar el archivo de un ejercicio.
+  const alternative = "Descarga el archivo de cada ejercicio (ficha del cliente → Archivo) o pide la exportación completa a soporte.";
   if (invoiceCount > maxInvoices) {
     return {
       ok: false,
       status: 413,
-      error: `El cliente tiene ${invoiceCount.toLocaleString("es-ES")} facturas y se pueden descargar como mucho ${maxInvoices.toLocaleString("es-ES")} de una vez. Pide la exportación a soporte.`,
+      error: `El cliente tiene ${invoiceCount.toLocaleString("es-ES")} facturas y se pueden descargar como mucho ${maxInvoices.toLocaleString("es-ES")} de una vez. ${alternative}`,
     };
   }
   const bytes = (sizes._sum.sizeBytes ?? 0) + (unsized + withoutDocument) * UNKNOWN_FILE_BYTES;
@@ -68,7 +78,7 @@ export async function checkClientExport(clientId: string, firmId: string): Promi
     return {
       ok: false,
       status: 413,
-      error: `Los originales del cliente ocupan ${formatBytes(bytes)} y se pueden descargar como mucho ${formatBytes(maxBytes)} de una vez. Pide la exportación a soporte.`,
+      error: `Los originales del cliente ocupan ${formatBytes(bytes)} y se pueden descargar como mucho ${formatBytes(maxBytes)} de una vez. ${alternative}`,
     };
   }
   return { ok: true, client };
@@ -100,31 +110,49 @@ export async function writeClientDataZip(
   sink: (chunk: Uint8Array) => Promise<void>,
   openObject: OpenObject = (key) => getObjectChunks(key, { idleMs: CLIENT_EXPORT_LIMITS.storageIdleMs }),
 ): Promise<void> {
-  const out = zipWriter(sink);
+  const out = zipWriter(sink, CLIENT_EXPORT_LIMITS.maxZipBytes);
   const invoices = await prisma.invoice.findMany({
     where: { clientId: client.id },
     orderBy: [{ periodYear: "asc" }, { periodMonth: "asc" }, { createdAt: "asc" }, { id: "asc" }],
-    include: { vatLines: { orderBy: { position: "asc" } } },
+    include: {
+      vatLines: { orderBy: { position: "asc" } },
+      // Su fila del archivo: nº de registro, electrónico o papel y el original
+      // en otro formato (Word, Excel…) si lo tiene.
+      archive: {
+        include: {
+          registerSeries: { select: { type: true, year: true } },
+          originalDocument: { select: { storageKey: true, filename: true, fileType: true, createdAt: true } },
+        },
+      },
+    },
   });
 
   // Originales primero: los que fallen salen en ERRORES.txt y en el LEEME.
+  // Cada objeto, una vez; un Word adjunto va junto al PDF de su factura.
   const paths = new Map<string, string>();
   const missing: string[] = [];
-  for (const inv of invoices) {
-    if (paths.has(inv.storageKey)) continue;
-    const path = originalPath(inv);
-    paths.set(inv.storageKey, path);
+  const files = invoices.flatMap((inv) => {
+    const own = { storageKey: inv.storageKey, path: originalPath(inv), createdAt: inv.createdAt };
+    const document = inv.archive?.originalDocument;
+    return document
+      ? [own, { storageKey: document.storageKey, path: originalPath({ ...inv, filename: document.filename, fileType: document.fileType }), createdAt: document.createdAt }]
+      : [own];
+  });
+  for (const file of files) {
+    if (paths.has(file.storageKey)) continue;
+    const { path } = file;
+    paths.set(file.storageKey, path);
     let received = 0;
     try {
       // Se abre antes de añadir la entrada: un original que no está no deja
       // una entrada vacía en el ZIP.
-      const chunks = await openObject(inv.storageKey);
-      await out.binary(path, counted(chunks, (n) => (received += n)), inv.createdAt);
+      const chunks = await openObject(file.storageKey);
+      await out.binary(path, counted(chunks, (n) => (received += n)), file.createdAt);
     } catch (err) {
       if (out.closed) throw err;
-      console.error(`[clientDataExport] ${client.id}: no se pudo descargar ${inv.storageKey}:`, err);
+      console.error(`[clientDataExport] ${client.id}: no se pudo descargar ${file.storageKey}:`, err);
       missing.push(`${path}\t${storageFailure(err, received)}`);
-      paths.set(inv.storageKey, `${path} (incompleto o ausente, ver ERRORES.txt)`);
+      paths.set(file.storageKey, `${path} (incompleto o ausente, ver ERRORES.txt)`);
     }
   }
 
@@ -137,19 +165,27 @@ export async function writeClientDataZip(
   })());
 
   await out.text("facturas.csv", (async function* () {
+    // «Original» es la ruta del fichero en este ZIP; si es electrónico o papel
+    // va en otra columna, con otro nombre (anexo C10).
     yield CSV_BOM + csvRow([
-      "Id", "Estado", "Tipo", "Periodo", "Nº factura", "Fecha", "Emisor", "CIF emisor", "Receptor", "CIF receptor",
+      "Id", "Estado", "Tipo", "Periodo", "Nº de registro", "Nº factura", "Fecha", "Emisor", "CIF emisor", "Receptor", "CIF receptor",
       "Base imponible", "% IVA", "Cuota IVA", "% IRPF", "Cuota IRPF", "Total", "Moneda",
-      "Cuenta de proveedor o cliente", "Cuenta de gasto o ingreso", "Motivo del rechazo", "Original", "Subida el",
+      "Cuenta de proveedor o cliente", "Cuenta de gasto o ingreso", "Motivo del rechazo", "Original", "Original en otro formato",
+      "Original electrónico o en papel", "Subida el",
     ]);
     for (const inv of invoices) {
+      const archive = inv.archive;
       yield csvRow([
         inv.id, inv.status, inv.type === "SALE" ? "Emitida" : "Recibida",
         inv.periodType === "QUARTERLY" ? `${inv.periodYear}-T${Math.ceil(inv.periodMonth / 3)}` : `${inv.periodYear}-${String(inv.periodMonth).padStart(2, "0")}`,
+        archive?.registerSeries && archive.registerNumber != null ? formatRegisterNumber(archive.registerSeries, archive.registerNumber) : null,
         inv.invoiceNumber, csvDate(inv.invoiceDate), inv.issuerName, inv.issuerCif, inv.receiverName, inv.receiverCif,
         csvAmount(inv.taxBase), csvAmount(inv.vatRate), csvAmount(inv.vatAmount), csvAmount(inv.irpfRate), csvAmount(inv.irpfAmount),
         csvAmount(inv.totalAmount), inv.currency, inv.supplierAccount, inv.expenseAccount, inv.rejectionReason,
-        paths.get(inv.storageKey), formatDateTimeEs(inv.createdAt),
+        paths.get(inv.storageKey),
+        archive?.originalDocument ? paths.get(archive.originalDocument.storageKey) : null,
+        mediumLabel(archive?.originalMedium),
+        formatDateTimeEs(inv.createdAt),
       ]);
     }
   })());
@@ -254,22 +290,6 @@ function auditPage(clientId: string, after: { createdAt: Date; id: string } | nu
   });
 }
 
-/** Motivo de ERRORES.txt, para quien abra el ZIP. */
-function storageFailure(err: unknown, received: number): string {
-  const partial = received > 0 ? `; el fichero del ZIP está incompleto (${formatBytes(received)})` : "";
-  if (isStorageNotFound(err)) return "no está en el almacenamiento";
-  if (err instanceof StorageIdleError) return `el almacenamiento dejó de responder${partial}`;
-  return `no se pudo descargar del almacenamiento${partial}`;
-}
-
-/** Los mismos trozos, contando los bytes. */
-async function* counted(chunks: AsyncIterable<Uint8Array>, add: (n: number) => void): AsyncIterable<Uint8Array> {
-  for await (const chunk of chunks) {
-    add(chunk.length);
-    yield chunk;
-  }
-}
-
 /** El snapshot como objeto; si no se puede leer, el texto tal cual. */
 function parseSnapshot(snapshot: string): unknown {
   try {
@@ -277,77 +297,4 @@ function parseSnapshot(snapshot: string): unknown {
   } catch {
     return snapshot;
   }
-}
-
-/**
- * fflate por encima, con contrapresion: Zip entrega los trozos por callback
- * (sin esperar); aqui se guardan y se vacian por `sink` antes de seguir.
- */
-function zipWriter(sink: (chunk: Uint8Array) => Promise<void>) {
-  const pending: Uint8Array[] = [];
-  let failure: unknown = null;
-  let written = 0;
-  const zip = new Zip((err, chunk) => {
-    if (err) failure = err;
-    else pending.push(chunk);
-  });
-  const flush = async () => {
-    if (failure) throw failure;
-    while (pending.length > 0) {
-      const chunk = pending.shift()!;
-      written += chunk.length;
-      if (written > CLIENT_EXPORT_LIMITS.maxZipBytes) {
-        // Cortar antes que mandar un ZIP que pasa de 4 GiB sin ZIP64.
-        failure = new Error(`El ZIP pasaría de ${formatBytes(CLIENT_EXPORT_LIMITS.maxZipBytes)}: descarga cortada`);
-        pending.length = 0;
-        throw failure;
-      }
-      try {
-        await sink(chunk);
-      } catch (err) {
-        // El navegador ha cortado la descarga: lo que falle a partir de aqui
-        // no es de un original, y no se piden mas a Garage.
-        failure = err;
-        pending.length = 0;
-        throw err;
-      }
-    }
-  };
-  return {
-    /** Ya no se puede seguir escribiendo: lo que falle ya no es de un original. */
-    get closed() {
-      return failure !== null;
-    },
-    async binary(name: string, chunks: AsyncIterable<Uint8Array>, mtime: Date) {
-      // Sin comprimir: PDF e imagenes ya lo estan.
-      const entry = new ZipPassThrough(name);
-      entry.mtime = mtime;
-      zip.add(entry);
-      try {
-        for await (const chunk of chunks) {
-          entry.push(chunk);
-          await flush();
-        }
-      } finally {
-        // Cortado a mitad, la entrada se cierra igual (queda incompleta y va
-        // a ERRORES.txt): una abierta dejaria el ZIP esperando para siempre.
-        entry.push(new Uint8Array(0), true);
-        await flush();
-      }
-    },
-    async text(name: string, parts: AsyncIterable<string>) {
-      const entry = new ZipDeflate(name, { level: 6 });
-      zip.add(entry);
-      for await (const part of parts) {
-        entry.push(strToU8(part));
-        await flush();
-      }
-      entry.push(new Uint8Array(0), true);
-      await flush();
-    },
-    async end() {
-      zip.end();
-      await flush();
-    },
-  };
 }

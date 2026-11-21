@@ -43,6 +43,25 @@ export function formatDateTimeEs(value: Date | string | null | undefined): strin
   return FECHA_HORA.format(d).replace(",", "");
 }
 
+const DIA_MADRID = new Intl.DateTimeFormat("es-ES", {
+  timeZone: "Europe/Madrid",
+  day: "2-digit",
+  month: "2-digit",
+  year: "numeric",
+});
+
+/**
+ * El dia de un momento concreto, sin la hora: "25/09/2026" en hora de Madrid
+ * (la llegada de una factura al archivo o su registro). Como
+ * formatDateTimeEs, no como formatDateEs.
+ */
+export function formatDayEs(value: Date | string | null | undefined): string {
+  if (!value) return "—";
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return "—";
+  return DIA_MADRID.format(d);
+}
+
 const PARTES_MADRID = new Intl.DateTimeFormat("en-GB", {
   timeZone: "Europe/Madrid",
   year: "numeric",

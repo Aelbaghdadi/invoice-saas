@@ -1,5 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { buildPeriodRows, clientStatsFrom, type PeriodCountRow } from "@/lib/clientSheet";
+import {
+  ADMIN_CLIENT_TABS,
+  archiveTabHref,
+  buildPeriodRows,
+  clientSheetPath,
+  clientStatsFrom,
+  parseArchiveTabParams,
+  parseClientTab,
+  WORKER_CLIENT_TABS,
+  type PeriodCountRow,
+} from "@/lib/clientSheet";
 
 describe("clientStatsFrom", () => {
   it("suma los estados y deja fuera el buzón y las originales divididas", () => {
@@ -77,5 +87,53 @@ describe("buildPeriodRows", () => {
       closures: [],
     });
     expect(rows).toEqual([]);
+  });
+});
+
+describe("pestaña Archivo de la ficha", () => {
+  it("está en la ficha del administrador y en la del gestor, detrás de «Periodos», y parseClientTab la acepta", () => {
+    expect(ADMIN_CLIENT_TABS.slice(2, 4)).toEqual(["periodos", "archivo"]);
+    expect(WORKER_CLIENT_TABS.slice(2, 4)).toEqual(["periodos", "archivo"]);
+    expect(parseClientTab("archivo", ADMIN_CLIENT_TABS)).toBe("archivo");
+    expect(parseClientTab("archivo", WORKER_CLIENT_TABS)).toBe("archivo");
+    // El gestor sigue sin exportaciones ni ajustes.
+    expect(parseClientTab("ajustes", WORKER_CLIENT_TABS)).toBe("resumen");
+  });
+
+  it("la ficha de cada rol", () => {
+    expect(clientSheetPath("ADMIN", "c1")).toBe("/dashboard/admin/clients/c1");
+    expect(clientSheetPath("WORKER", "c1")).toBe("/dashboard/worker/clients/c1");
+  });
+
+  it("lee los filtros de la URL; lo que no entiende es «todas» o «todos»", () => {
+    expect(parseArchiveTabParams({})).toEqual({
+      fiscalYear: null, type: "todas", medium: "todos", includeRejected: false, q: "", page: 1,
+    });
+    expect(parseArchiveTabParams({
+      ejercicio: "2025", tipo: "emitidas", original: "por-confirmar", rechazadas: "1", q: "  F-12  ", page: "3",
+    })).toEqual({ fiscalYear: 2025, type: "emitidas", medium: "por-confirmar", includeRejected: true, q: "F-12", page: 3 });
+    expect(parseArchiveTabParams({ ejercicio: "1999", tipo: "PURCHASE", original: "PAPER", rechazadas: "si", page: "-1" }))
+      .toMatchObject({ fiscalYear: null, type: "todas", medium: "todos", includeRejected: false, page: 1 });
+    expect(parseArchiveTabParams({ q: "x".repeat(300) }).q).toHaveLength(100);
+  });
+
+  it("un parámetro repetido en la URL (?q=a&q=b llega como array) no la tumba: vale el primero", () => {
+    expect(parseArchiveTabParams({
+      ejercicio: ["2025", "2026"], tipo: ["emitidas", "recibidas"], original: ["papel"], rechazadas: ["1", "0"], q: [" a ", "b"], page: ["2", "9"],
+    })).toEqual({ fiscalYear: 2025, type: "emitidas", medium: "papel", includeRejected: true, q: "a", page: 2 });
+    expect(parseArchiveTabParams({ q: [] })).toMatchObject({ q: "" });
+  });
+
+  it("el enlace lleva la pestaña y solo los filtros que no son los de por defecto, y se lee igual", () => {
+    const base = "/dashboard/admin/clients/c1";
+    expect(archiveTabHref(base, {})).toBe(`${base}?tab=archivo`);
+    expect(archiveTabHref(base, { fiscalYear: 2026, type: "todas", medium: "todos", includeRejected: false, page: 1 }))
+      .toBe(`${base}?tab=archivo&ejercicio=2026`);
+    const href = archiveTabHref(base, { fiscalYear: 2025, type: "recibidas", medium: "papel", includeRejected: true, q: "R-2026/1", page: 2 });
+    expect(href).toBe(`${base}?tab=archivo&ejercicio=2025&tipo=recibidas&original=papel&rechazadas=1&q=R-2026%2F1&page=2`);
+    const params = Object.fromEntries(new URL(href, "http://x").searchParams);
+    expect(parseArchiveTabParams(params)).toEqual({
+      fiscalYear: 2025, type: "recibidas", medium: "papel", includeRejected: true, q: "R-2026/1", page: 2,
+    });
   });
 });

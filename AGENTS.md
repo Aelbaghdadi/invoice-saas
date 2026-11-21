@@ -43,6 +43,21 @@ commits). Mantenedlo así; no traduzcáis a inglés cosas existentes.
 - **No instales paquetes nuevos sin razón clara**. Si el stack ya
   resuelve algo, úsalo. Si añadís uno, justificadlo en el commit.
 - **No mockéis Prisma en tests**. Usad la DB de test real.
+- **La fila de archivo (`InvoiceArchive`) la crea un trigger** al insertar
+  la factura: nunca `archive: { create }`. Para rellenarla, un `update` en
+  la misma transacción que crea la factura.
+- **No se borran facturas, documentos ni filas de archivo**: lo impiden
+  triggers de la migración 12. Solo el reset de una asesoría con `isDemo`.
+  Tampoco se cambia el fichero (`storageKey`, una huella ya puesta) ni un
+  nº de registro ya dado. Si algo «tiene que» borrar, se diseña con su
+  propio camino y su rastro; no se esquiva el trigger.
+- **`isDemo` solo se pone a mano en la BD** (DEPLOY.md §10.5), y solo en la
+  asesoría de demostración de dev: nunca desde la app, un script, una
+  migración ni un seed. Los tests lo ponen con `makeFirm(tag, { demo: true })`.
+- **Lo que se edita en el archivo va a `InvoiceArchive`, nunca a `Invoice`**:
+  `Invoice.updatedAt` es el testigo de concurrencia de la revisión y del
+  export. Y un SQL en crudo sobre una tabla con `@updatedAt` pone
+  `"updatedAt" = now() AT TIME ZONE 'UTC'`.
 - **`tests/unit` corre en el build de Docker sin `.env` ni BD**: si falla, no
   hay imagen. Los tests contra Postgres van en otra carpeta (p. ej.
   `tests/integration`), fuera de esa barrera. Ver ARCHITECTURE.md → Testing.
@@ -72,9 +87,20 @@ linter no lo detecta — está en vuestra responsabilidad.
 - ¿Cómo se valida una factura? → [src/app/dashboard/worker/review/[id]/actions.ts](src/app/dashboard/worker/review/[id]/actions.ts)
 - ¿Cola "siguiente factura"? → [src/lib/reviewQueue.ts](src/lib/reviewQueue.ts)
 - ¿Exportar a A3? → [src/lib/exportFormats.ts](src/lib/exportFormats.ts)
+- ¿Archivo o nº de registro? → [ARCHITECTURE.md → Archivo de facturas](ARCHITECTURE.md#archivo-de-facturas);
+  [src/lib/archiveRules.ts](src/lib/archiveRules.ts) (ejercicio, «conservar hasta» y orden),
+  [src/lib/archiveRegister.ts](src/lib/archiveRegister.ts) (el nº, al exportar),
+  [src/lib/archiveEdits.ts](src/lib/archiveEdits.ts) (lo que se escribe en `InvoiceArchive`),
+  [src/lib/originalMedium.ts](src/lib/originalMedium.ts) (electrónico o papel) y
+  [src/lib/archiveData.ts](src/lib/archiveData.ts) (lectura y buscador). Los triggers y el
+  relleno, al final de `prisma/migrations/00000000000012_archivo/migration.sql`
+- ¿ZIP del ejercicio o descarga de datos del cliente? → [src/lib/archiveExport.ts](src/lib/archiveExport.ts),
+  [src/lib/clientDataExport.ts](src/lib/clientDataExport.ts) y el ZIP en streaming de los dos,
+  [src/lib/zipStream.ts](src/lib/zipStream.ts)
 - ¿Auditoría inmutable? → [src/lib/auditLog.ts](src/lib/auditLog.ts) +
   `prisma/migrations/00000000000001_audit_immutability/`
 - ¿Reset demo? → [src/lib/demoSeed.ts](src/lib/demoSeed.ts) +
   `src/app/api/admin/reset-demo/` (el bypass de auditoría está en la
-  misma migración de inmutabilidad)
+  misma migración de inmutabilidad; para borrar facturas y documentos,
+  además, la asesoría tiene que estar marcada `isDemo`: migración 12)
 - ¿Glosario fiscal? → [ARCHITECTURE.md#glosario-fiscal-m%C3%ADnimo-para-devs-no-espa%C3%B1oles](ARCHITECTURE.md)

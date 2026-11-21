@@ -187,6 +187,11 @@ export async function rejectBatch(
     // factura ya exportada el puntero se pone a null para que vuelva a la cola
     // de exportacion, y esa factura SI esta en A3.
     exportBatchItems: { none: {} },
+    // Y además el puntero (como en batchMove): si un export tiene la factura
+    // reservada, el UPDATE la espera y, tras su COMMIT, Postgres vuelve a mirar
+    // la fila (y ve el puntero), pero la subconsulta de ExportBatchItem sigue
+    // con la foto del principio y no ve el item nuevo.
+    exportBatchId: null,
     status: { notIn: BATCH_REJECT_EXCLUDED_STATUSES },
   };
 

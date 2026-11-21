@@ -1,12 +1,16 @@
 "use client";
 
 import { useActionState, useEffect, useState } from "react";
-import { AlertCircle, Loader2, Save } from "lucide-react";
+import { AlertCircle, AlertTriangle, Loader2, Save } from "lucide-react";
 import { updateClient, type EditClientState } from "./actions";
 import { useToast } from "@/components/ui/Toast";
 import { Select } from "@/components/ui/Select";
+import { MONTH_NAMES } from "@/lib/period";
 
 const PROGRAMS = ["A3 Asesor", "Otro"];
+
+// Enero es el año natural: el ejercicio de casi todos los clientes.
+const FISCAL_MONTHS = MONTH_NAMES.map((name, i) => ({ value: String(i + 1), label: i === 0 ? `${name} (año natural)` : name }));
 
 type Props = {
   clientId: string;
@@ -17,7 +21,10 @@ type Props = {
     contactName: string | null;
     phone: string | null;
     notes: string | null;
+    fiscalYearStartMonth: number;
   };
+  /** Ya tiene facturas: cambiar el ejercicio reagrupa su archivo. */
+  hasInvoices: boolean;
 };
 
 function FieldError({ errors, name }: { errors?: Record<string, string[]>; name: string }) {
@@ -25,8 +32,9 @@ function FieldError({ errors, name }: { errors?: Record<string, string[]>; name:
   return msg ? <p className="mt-1 text-[12px] text-red-500">{msg}</p> : null;
 }
 
-/** Razon social, CIF, software, contacto, telefono y notas internas. */
-export function EditClientForm({ clientId, initial }: Props) {
+/** Razon social, CIF, software, contacto, telefono, notas internas y el mes
+ *  en que empieza el ejercicio. */
+export function EditClientForm({ clientId, initial, hasInvoices }: Props) {
   const action = updateClient.bind(null, clientId);
   const [state, formAction, pending] = useActionState<EditClientState, FormData>(action, null);
   const { success, error: toastError } = useToast();
@@ -35,6 +43,8 @@ export function EditClientForm({ clientId, initial }: Props) {
     ? [initial.accountingProgram, ...PROGRAMS]
     : PROGRAMS;
   const [program, setProgram] = useState(initial.accountingProgram ?? "");
+  const [fiscalMonth, setFiscalMonth] = useState(String(initial.fiscalYearStartMonth));
+  const regroups = hasInvoices && fiscalMonth !== String(initial.fiscalYearStartMonth);
 
   useEffect(() => {
     if (!state) return;
@@ -79,6 +89,29 @@ export function EditClientForm({ clientId, initial }: Props) {
             searchable={false}
           />
           <FieldError errors={state?.errors} name="accountingProgram" />
+        </div>
+
+        <div className="sm:col-span-2">
+          <label htmlFor="client-fiscal-month" className="block text-[13px] font-medium text-slate-700">El ejercicio empieza en</label>
+          <Select
+            id="client-fiscal-month"
+            name="fiscalYearStartMonth"
+            value={fiscalMonth}
+            onChange={setFiscalMonth}
+            className="mt-1.5 sm:max-w-[260px]"
+            options={FISCAL_MONTHS}
+            searchable={false}
+          />
+          <FieldError errors={state?.errors} name="fiscalYearStartMonth" />
+          <p className="mt-1 text-[11px] text-slate-400">
+            Agrupa el archivo y marca hasta cuándo hay que conservar las facturas; no cambia los números de registro.
+          </p>
+          {regroups && (
+            <p role="status" className="mt-2 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+              Cambiarlo reagrupa todo el archivo de este cliente y su «conservar hasta». No cambia los números de registro.
+            </p>
+          )}
         </div>
 
         <div>

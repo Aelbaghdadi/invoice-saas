@@ -14,9 +14,10 @@
  * util para mostrar "ya exportada" en la UI sin perder el estado real.
  */
 
-import type { InvoiceStatus } from "@prisma/client";
+import type { InvoiceStatus, RetentionHoldReason } from "@prisma/client";
 import { OPERATION_TYPE_LABEL, INTRACOM_GOODS_TYPE_LABEL, RETENTION_TYPE_LABEL } from "@/lib/validators";
 import { formatAmountEs } from "@/lib/format";
+import { mediumLabel, RETENTION_HOLD_LABELS } from "@/lib/originalMedium";
 
 /** Pte. de que el gestor haga algo (revisar, re-procesar o subir). */
 export const PENDING_WORK: InvoiceStatus[] = [
@@ -191,6 +192,13 @@ export const AUDIT_FIELD_LABELS: Record<string, string> = {
   // Los borra «Reabrir y validar».
   rejectionReason: "Motivo del rechazo",
   rejectionCategory: "Categoría del rechazo",
+  // Archivo de facturas (InvoiceArchive).
+  registerNumber: "Nº de registro",
+  originalMedium: "Electrónico o papel",
+  "auto:originalMedium": "Electrónico o papel (automático)",
+  retentionHold: "Conservar más",
+  originalDocument: "Original en otro formato",
+  archiveExport: "Descarga del archivo del ejercicio",
 };
 
 /** Categorias de rechazo: el desplegable del rechazo, el aviso de una factura
@@ -261,6 +269,7 @@ const RECTIFICATIVE_TYPE_LABEL: Record<string, string> = {
 };
 
 const AMOUNT_FIELDS = new Set(["taxBase", "vatAmount", "irpfAmount", "totalAmount", "retentionBase"]);
+const MEDIUM_AUDIT_FIELDS = new Set(["originalMedium", "auto:originalMedium"]);
 // Varios numeros en un texto («15 % · 15.04», «21%: 5.2% 5.2»).
 const COMPOSITE_NUMBER_FIELDS = new Set(["auto:irpf", "auto:signo", "auto:recargo", "equivalenceSurcharge"]);
 
@@ -286,6 +295,14 @@ export const OPERATION_LABELS: Record<string, string> = {
  * valores libres (importes, nombres, CIFs...) se devuelven tal cual.
  */
 export function formatAuditValue(value: string | null | undefined, field?: string): string {
+  // El medio vacío no es «—»: es «Por confirmar» (un escaneo o una foto que
+  // aún no se sabe si tienen papel detrás).
+  if (field && MEDIUM_AUDIT_FIELDS.has(field)) return mediumLabel(value === "ELECTRONIC" || value === "PAPER" ? value : null);
+  // «Conservar más» guarda el motivo, o «false» si no se conserva de más.
+  if (field === "retentionHold") {
+    const reason = RETENTION_HOLD_LABELS[value as RetentionHoldReason];
+    return reason ? `Conservar más: ${reason}` : value === "true" ? "Conservar más" : "No";
+  }
   if (value == null || value === "") return "—";
   // Valores que solo tienen sentido en su campo («MANUAL» o «IA» sueltos
   // podrian ser un nombre).

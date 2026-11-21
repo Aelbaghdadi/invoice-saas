@@ -13,6 +13,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import bcrypt from "bcryptjs";
+import type { Prisma } from "@prisma/client";
 import { putObject, deletePrefix, isStorageConfigured } from "@/lib/storage";
 import { exportStoragePrefix } from "@/lib/exportBatch";
 import { prisma } from "@/lib/prisma";
@@ -46,7 +47,11 @@ export type ReseedResult = {
 } | {
   ok: false;
   error: string;
+  /** not_demo: la asesoría no está marcada isDemo y no se ha tocado nada. */
+  reason: "not_demo" | "missing_pdf";
 };
+
+export const DEMO_RESET_NOT_ALLOWED = "Esta asesoría no es de demostración: el reset no está permitido.";
 
 /**
  * Reseed la demo. El admin se preserva (no se borra ni se modifica
@@ -55,6 +60,9 @@ export type ReseedResult = {
  *  - Todos los Client de la firma con su cascade (invoices, issues, etc)
  *  - Storage del bucket "invoices" para esos clientes
  *
+ * Solo en una asesoría marcada isDemo a mano en la BD: los triggers del
+ * archivo (migración 12) no dejan borrar facturas ni documentos de las demás.
+ *
  * @param firmId  ID de la AdvisoryFirm a resetear
  * @param triggeredBy  userId del admin que dispara la accion (para audit)
  */
@@ -62,6 +70,12 @@ export async function reseedDemo(
   firmId: string,
   triggeredBy: string,
 ): Promise<ReseedResult> {
+  // ── 0. Solo la demo, antes de tocar filas ni almacenamiento ──────────
+  const firm = await prisma.advisoryFirm.findUnique({ where: { id: firmId }, select: { isDemo: true } });
+  if (!firm?.isDemo) {
+    return { ok: false, error: DEMO_RESET_NOT_ALLOWED, reason: "not_demo" };
+  }
+
   // ── 1. Verificar PDFs disponibles antes de tocar nada ────────────────
   for (const def of SEED_INVOICE_DEFS) {
     const p = seedPdfPath(def.filename);
@@ -69,6 +83,7 @@ export async function reseedDemo(
       return {
         ok: false,
         error: `Falta el PDF pre-construido: ${def.filename}. Ejecuta 'npx tsx scripts/build-seed-pdfs.ts' y commitea scripts/seed-pdfs/.`,
+        reason: "missing_pdf",
       };
     }
   }
@@ -85,7 +100,9 @@ export async function reseedDemo(
   // legitimo activamos el bypass de sesion (`SET LOCAL`) dentro de una
   // transaccion. Solo aplica a esta transaccion, no contamina otras
   // conexiones ni queda persistido. El reset es la UNICA llamada en
-  // toda la app que activa esta variable.
+  // toda la app que activa esta variable. Con ella, los triggers del archivo
+  // dejan borrar facturas y documentos, y solo de una asesoria con isDemo:
+  // las filas de archivo se van en cascada con sus facturas.
   await prisma.$transaction(async (tx) => {
     await tx.$executeRawUnsafe(`SET LOCAL app.allow_audit_mutation = 'true'`);
     await tx.auditLog.deleteMany({ where: { invoice: { clientId: { in: clientIds } } } });
@@ -98,6 +115,7 @@ export async function reseedDemo(
     await tx.exportBatch.deleteMany({ where: { userId: triggeredBy } });
     await tx.invoice.deleteMany({ where: { clientId: { in: clientIds } } });
     await tx.document.deleteMany({ where: { clientId: { in: clientIds } } });
+    await tx.uploadBatch.deleteMany({ where: { advisoryFirmId: firmId } });
     await tx.periodClosure.deleteMany({ where: { clientId: { in: clientIds } } });
     await tx.accountEntry.deleteMany({ where: { clientId: { in: clientIds } } });
     await tx.workerClientAssignment.deleteMany({ where: { clientId: { in: clientIds } } });
@@ -111,13 +129,15 @@ export async function reseedDemo(
   ).map((c) => c.userId!);
 
   await prisma.client.deleteMany({ where: { advisoryFirmId: firmId } });
-  await prisma.user.deleteMany({
-    where: {
-      OR: [{ advisoryFirmId: firmId, role: "WORKER" }, { id: { in: linkedUserIds } }],
-      NOT: { id: triggeredBy }, // no borrar nunca el admin que dispara
-    },
-  });
-  await prisma.passwordResetToken.deleteMany({});
+  const removedUsers: Prisma.UserWhereInput = {
+    OR: [{ advisoryFirmId: firmId, role: "WORKER" }, { id: { in: linkedUserIds } }],
+    NOT: { id: triggeredBy }, // no borrar nunca el admin que dispara
+  };
+  const removedEmails = (await prisma.user.findMany({ where: removedUsers, select: { email: true } })).map((u) => u.email);
+  await prisma.user.deleteMany({ where: removedUsers });
+  // Solo los enlaces de recuperación de los usuarios borrados (el token guarda
+  // el email del usuario tal cual): los de las demás asesorías siguen valiendo.
+  await prisma.passwordResetToken.deleteMany({ where: { email: { in: removedEmails } } });
 
   // ── 3. Limpiar storage de los clientIds antiguos ─────────────────────
   const storageReady = isStorageConfigured();
@@ -210,29 +230,39 @@ export async function reseedDemo(
       finalKey = `pending/${def.filename}`;
     }
 
-    const inv = await prisma.invoice.create({
-      data: {
-        clientId: c.id,
-        type: def.type,
-        status: def.status,
-        periodMonth: def.month,
-        periodYear: def.year,
-        filename: def.filename,
-        storageKey: finalKey,
-        fileType: "application/pdf",
-        issuerName:    def.pdf.emisor.nombre,
-        issuerCif:     def.pdf.emisor.cif,
-        receiverName:  def.pdf.receptor.nombre,
-        receiverCif:   def.pdf.receptor.cif,
-        invoiceNumber: def.pdf.numero,
-        invoiceDate:   parseDmy(def.pdf.fecha_emision),
-        taxBase:       def.pdf.base as unknown as never,
-        vatRate:       def.pdf.iva_rate as unknown as never,
-        vatAmount:     def.pdf.iva as unknown as never,
-        totalAmount:   def.pdf.total as unknown as never,
-        isValid: def.status === "VALIDATED" ? true : null,
-        ...seedInvoiceAccounts(def),
-      },
+    const inv = await prisma.$transaction(async (tx) => {
+      const created = await tx.invoice.create({
+        data: {
+          clientId: c.id,
+          type: def.type,
+          status: def.status,
+          periodMonth: def.month,
+          periodYear: def.year,
+          filename: def.filename,
+          storageKey: finalKey,
+          fileType: "application/pdf",
+          issuerName:    def.pdf.emisor.nombre,
+          issuerCif:     def.pdf.emisor.cif,
+          receiverName:  def.pdf.receptor.nombre,
+          receiverCif:   def.pdf.receptor.cif,
+          invoiceNumber: def.pdf.numero,
+          invoiceDate:   parseDmy(def.pdf.fecha_emision),
+          taxBase:       def.pdf.base as unknown as never,
+          vatRate:       def.pdf.iva_rate as unknown as never,
+          vatAmount:     def.pdf.iva as unknown as never,
+          totalAmount:   def.pdf.total as unknown as never,
+          isValid: def.status === "VALIDATED" ? true : null,
+          ...seedInvoiceAccounts(def),
+        },
+      });
+      // Se siembran ya analizadas y no pasan por el análisis, que es el que
+      // decide si son electrónicas o papel: quedan «Por confirmar», pendientes
+      // de la detección de los PDF antiguos, como lo que había antes del archivo.
+      await tx.invoiceArchive.update({
+        where: { invoiceId: created.id },
+        data: { originalMediumSource: "AUTO", originalMediumReason: "backfill_pending" },
+      });
+      return created;
     });
 
     // Una linea de IVA por factura sembrada (todas son single-rate).

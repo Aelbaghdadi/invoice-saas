@@ -78,8 +78,12 @@ export async function makeInvoice(
   });
 }
 
-export async function makeFirm(tag: string): Promise<FirmWorld> {
-  const firm = await prisma.advisoryFirm.create({ data: { name: `Asesoría ${tag}`, cif: fakeCif("A") } });
+/** `demo`: asesoría marcada isDemo, la única cuyo reset pueden borrar los
+ *  triggers del archivo. En la app solo se marca a mano en la BD. */
+export async function makeFirm(tag: string, options: { demo?: boolean } = {}): Promise<FirmWorld> {
+  const firm = await prisma.advisoryFirm.create({
+    data: { name: `Asesoría ${tag}`, cif: fakeCif("A"), isDemo: options.demo ?? false },
+  });
   const admin = await makeUser(firm.id, "ADMIN", `admin${tag.toLowerCase()}`);
   const worker = await makeUser(firm.id, "WORKER", `gestor${tag.toLowerCase()}`);
   const clientUser = await makeUser(null, "CLIENT", `cliente${tag.toLowerCase()}`);

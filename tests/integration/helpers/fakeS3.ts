@@ -30,6 +30,12 @@ export type FakeS3 = {
   close: () => Promise<void>;
 };
 
+const S3_XMLNS = "http://s3.amazonaws.com/doc/2006-03-01/";
+const XML_ENTITIES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" };
+const xmlEscape = (text: string) => text.replace(/[&<>"']/g, (c) => XML_ENTITIES[c]);
+const xmlUnescape = (text: string) =>
+  text.replace(/&(amp|lt|gt|quot|apos);/g, (entity) => Object.keys(XML_ENTITIES).find((c) => XML_ENTITIES[c] === entity)!);
+
 export async function startFakeS3(bucket: string): Promise<FakeS3> {
   const store = new Map<string, Buffer>();
   let mode = "ok";
@@ -59,6 +65,27 @@ export async function startFakeS3(bucket: string): Promise<FakeS3> {
       const chunks: Buffer[] = [];
       req.on("data", (c: Buffer) => chunks.push(c));
       req.on("end", () => {
+        // ListObjectsV2 y DeleteObjects, los de deletePrefix (reset de la demo).
+        const isBucket = key === `/${bucket}` || key === `/${bucket}/`;
+        const query = new URLSearchParams((req.url ?? "").split("?")[1] ?? "");
+        if (isBucket && req.method === "GET" && query.get("list-type") === "2") {
+          const wanted = `/${bucket}/${query.get("prefix") ?? ""}`;
+          const found = [...store.keys()].filter((k) => k.startsWith(wanted));
+          const contents = found
+            .map((k) => `<Contents><Key>${xmlEscape(k.slice(bucket.length + 2))}</Key><Size>${store.get(k)!.length}</Size></Contents>`)
+            .join("");
+          res.writeHead(200, { "Content-Type": "application/xml" });
+          res.end(`<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="${S3_XMLNS}"><Name>${bucket}</Name><KeyCount>${found.length}</KeyCount><IsTruncated>false</IsTruncated>${contents}</ListBucketResult>`);
+          return;
+        }
+        if (isBucket && req.method === "POST" && query.has("delete")) {
+          const body = Buffer.concat(chunks).toString("utf8");
+          const deleted = [...body.matchAll(/<Key>([\s\S]*?)<\/Key>/g)].map((m) => xmlUnescape(m[1]));
+          for (const k of deleted) store.delete(`/${bucket}/${k}`);
+          res.writeHead(200, { "Content-Type": "application/xml" });
+          res.end(`<?xml version="1.0" encoding="UTF-8"?><DeleteResult xmlns="${S3_XMLNS}">${deleted.map((k) => `<Deleted><Key>${xmlEscape(k)}</Key></Deleted>`).join("")}</DeleteResult>`);
+          return;
+        }
         if (req.method === "PUT") {
           store.set(key, Buffer.concat(chunks));
           res.writeHead(200, { ETag: '"x"' });

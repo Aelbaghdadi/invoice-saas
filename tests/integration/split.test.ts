@@ -156,3 +156,86 @@ describe("dividir reserva antes la original", () => {
     expect(splitKeys()).toHaveLength(0);
   });
 });
+
+describe("la fila de archivo de las partes (archivo, paso 5)", () => {
+  const kids = (parentId: string) => prisma.invoice.findMany({
+    where: { splitFromId: parentId },
+    include: { archive: true },
+    orderBy: { archive: { splitPart: "asc" } },
+  });
+
+  /** splitPart de todas las partes de la familia de la raíz, en orden. */
+  async function familyParts(rootId: string): Promise<number[]> {
+    const rows = await prisma.$queryRaw<{ splitPart: number }[]>`
+      WITH RECURSIVE fam AS (
+        SELECT "id" FROM "Invoice" WHERE "splitFromId" = ${rootId}
+        UNION ALL
+        SELECT c."id" FROM "Invoice" c JOIN fam ON c."splitFromId" = fam."id"
+      )
+      SELECT a."splitPart" FROM "InvoiceArchive" a JOIN fam ON fam."id" = a."invoiceId" ORDER BY 1`;
+    return rows.map((r) => r.splitPart);
+  }
+
+  it("las hijas heredan llegada, tanda, posición, papel y medio, con splitPart 1..n y motivo split", async () => {
+    const batch = await prisma.uploadBatch.create({
+      data: { advisoryFirmId: w.firm.id, clientId: w.client.id, createdById: w.worker.id, fileCount: 9, periodYear: 2026, tacoNumber: 37 },
+    });
+    const receivedAt = new Date("2026-09-15T08:00:00.000Z");
+    await prisma.invoiceArchive.update({
+      where: { invoiceId: id },
+      data: {
+        receivedAt, uploadBatchId: batch.id, uploadPosition: 7, paperHeldByClient: true,
+        originalMedium: "PAPER", originalMediumSource: "TACO", originalMediumReason: "taco", pdfProducer: "Canon iR-ADV C5535",
+      },
+    });
+    expect(await run()).toEqual({ error: null });
+    const parts = await kids(id);
+    expect(parts.map((p) => [p.filename, p.archive?.splitPart])).toEqual([["a.pdf", 1], ["b.pdf", 2]]);
+    for (const part of parts) {
+      expect(part.archive).toMatchObject({
+        receivedAt, uploadBatchId: batch.id, uploadPosition: 7, paperHeldByClient: true,
+        originalMedium: "PAPER", originalMediumSource: "TACO", originalMediumReason: "split", pdfProducer: "Canon iR-ADV C5535",
+      });
+    }
+    // La original se queda como estaba.
+    expect(await prisma.invoiceArchive.findUniqueOrThrow({ where: { invoiceId: id } }))
+      .toMatchObject({ splitPart: 0, uploadPosition: 7, originalMediumReason: "taco" });
+  });
+
+  it("una parte que se vuelve a dividir no choca con sus hermanas: sigue desde el mayor de la familia", async () => {
+    fakeS3().put("k-pdf", await blankPdf(4));
+    const original = await prisma.invoiceArchive.findUniqueOrThrow({ where: { invoiceId: id } });
+    const halves = [{ name: "a", startPage: 1, endPage: 2 }, { name: "b", startPage: 3, endPage: 4 }];
+    expect((await settle(splitPdfInvoice(id, halves, "all"))).error).toBeNull();
+    const [a, b] = await kids(id);
+    expect([a.archive?.splitPart, b.archive?.splitPart]).toEqual([1, 2]);
+
+    await prisma.invoice.update({ where: { id: a.id }, data: { status: "PENDING_REVIEW" } });
+    const pages = [{ name: "a1", startPage: 1, endPage: 1 }, { name: "a2", startPage: 2, endPage: 2 }];
+    expect((await settle(splitPdfInvoice(a.id, pages, "all"))).error).toBeNull();
+    const grandchildren = await kids(a.id);
+    expect(grandchildren.map((g) => [g.filename, g.archive?.splitPart])).toEqual([["a1.pdf", 3], ["a2.pdf", 4]]);
+    // La llegada sigue siendo la de la raíz.
+    for (const g of grandchildren) expect(g.archive?.receivedAt).toEqual(original.receivedAt);
+    expect(await familyParts(id)).toEqual([1, 2, 3, 4]);
+  });
+
+  it("dos hermanas que se dividen a la vez no repiten nº de parte (bloqueo de la fila de la raíz)", async () => {
+    await prisma.invoice.update({ where: { id }, data: { status: "SPLIT_SOURCE" } });
+    const sisters = [];
+    for (const part of [1, 2]) {
+      const sister = await makeInvoice(w.client, { storageKey: "k-pdf", splitFromId: id, status: "PENDING_REVIEW" });
+      await prisma.invoiceArchive.update({ where: { invoiceId: sister.id }, data: { splitPart: part } });
+      sisters.push(sister);
+    }
+    // Las dos divisiones se paran al crear el primer Document, ya dentro de su
+    // transacción. Sin el bloqueo de la raíz, las dos habrían leído ya el mismo
+    // máximo (2) y las dos darían 3 y 4.
+    const lock = await holdLock(`LOCK TABLE "Document" IN ACCESS EXCLUSIVE MODE`);
+    const pending = sisters.map((s) => inFlight(settle(splitPdfInvoice(s.id, parts, "all"))));
+    await vi.waitFor(async () => expect(await sessionsWaitingForLock()).toBe(2), { timeout: 20_000 });
+    await lock.release();
+    expect(await Promise.all(pending)).toEqual([{ error: null }, { error: null }]);
+    expect(await familyParts(id)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+});

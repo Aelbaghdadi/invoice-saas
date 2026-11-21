@@ -4,7 +4,9 @@
  * en las paginas (admin y gestor comparten estas funciones).
  */
 import type { InvoiceStatus, InvoiceType, PeriodType } from "@prisma/client";
+import type { ArchiveMediumFilter, ArchiveTypeFilter } from "@/lib/archiveData";
 import { PENDING_WORK, completionPercent } from "@/lib/invoiceStatuses";
+import { firstSearchParam, parseIntInRange, parsePage } from "@/lib/listing";
 import { periodLabel } from "@/lib/period";
 
 export type StatusCountRow = { status: InvoiceStatus; count: number };
@@ -158,23 +160,81 @@ export const SUMMARY_PERIODS = 12;
 
 // ─── Pestañas ────────────────────────────────────────────────────────────────
 
-export type ClientTab = "resumen" | "facturas" | "periodos" | "exportaciones" | "actividad" | "ajustes";
+export type ClientTab = "resumen" | "facturas" | "periodos" | "archivo" | "exportaciones" | "actividad" | "ajustes";
 
 export const CLIENT_TAB_LABELS: Record<ClientTab, string> = {
   resumen: "Resumen",
   facturas: "Facturas",
   periodos: "Periodos",
+  archivo: "Archivo",
   exportaciones: "Exportaciones",
   actividad: "Actividad",
   ajustes: "Ajustes",
 };
 
 /** Las del administrador; el gestor no exporta ni cambia la ficha. */
-export const ADMIN_CLIENT_TABS: ClientTab[] = ["resumen", "facturas", "periodos", "exportaciones", "actividad", "ajustes"];
-export const WORKER_CLIENT_TABS: ClientTab[] = ["resumen", "facturas", "periodos", "actividad"];
+export const ADMIN_CLIENT_TABS: ClientTab[] = ["resumen", "facturas", "periodos", "archivo", "exportaciones", "actividad", "ajustes"];
+export const WORKER_CLIENT_TABS: ClientTab[] = ["resumen", "facturas", "periodos", "archivo", "actividad"];
 
 export function parseClientTab(raw: string | undefined, allowed: ClientTab[]): ClientTab {
   return allowed.includes(raw as ClientTab) ? (raw as ClientTab) : "resumen";
+}
+
+/** Ficha del cliente de cada rol: el gestor tiene la suya. */
+export function clientSheetPath(role: "ADMIN" | "WORKER", clientId: string): string {
+  return role === "ADMIN" ? `/dashboard/admin/clients/${clientId}` : `/dashboard/worker/clients/${clientId}`;
+}
+
+// ─── Pestaña Archivo ─────────────────────────────────────────────────────────
+
+/** Los parametros de la pestaña tal como llegan en la URL (repetidos, en un array). */
+export type ArchiveTabParams = {
+  ejercicio?: string | string[];
+  tipo?: string | string[];
+  original?: string | string[];
+  rechazadas?: string | string[];
+  q?: string | string[];
+  page?: string | string[];
+};
+
+export type ArchiveTabQuery = {
+  /** Año en que empieza el ejercicio; null = el más reciente con facturas. */
+  fiscalYear: number | null;
+  type: ArchiveTypeFilter;
+  medium: ArchiveMediumFilter;
+  includeRejected: boolean;
+  q: string;
+  page: number;
+};
+
+const ARCHIVE_TYPES: readonly ArchiveTypeFilter[] = ["todas", "recibidas", "emitidas"];
+const ARCHIVE_MEDIUMS: readonly ArchiveMediumFilter[] = ["todos", "electronico", "papel", "por-confirmar"];
+
+/** Lo que piden los parametros; lo que no se entiende es «todas» o «todos». */
+export function parseArchiveTabParams(params: ArchiveTabParams): ArchiveTabQuery {
+  const tipo = firstSearchParam(params.tipo);
+  const original = firstSearchParam(params.original);
+  return {
+    fiscalYear: parseIntInRange(firstSearchParam(params.ejercicio), 2000, 2100) ?? null,
+    type: ARCHIVE_TYPES.includes(tipo as ArchiveTypeFilter) ? (tipo as ArchiveTypeFilter) : "todas",
+    medium: ARCHIVE_MEDIUMS.includes(original as ArchiveMediumFilter) ? (original as ArchiveMediumFilter) : "todos",
+    includeRejected: firstSearchParam(params.rechazadas) === "1",
+    q: (firstSearchParam(params.q) ?? "").trim().slice(0, 100),
+    page: parsePage(firstSearchParam(params.page)),
+  };
+}
+
+/** Enlace a la pestaña Archivo con esos filtros; los que valen por defecto no van en la URL. */
+export function archiveTabHref(basePath: string, query: Partial<ArchiveTabQuery>): string {
+  return clientSheetHref(basePath, {
+    tab: "archivo",
+    ejercicio: query.fiscalYear ?? undefined,
+    tipo: query.type && query.type !== "todas" ? query.type : undefined,
+    original: query.medium && query.medium !== "todos" ? query.medium : undefined,
+    rechazadas: query.includeRejected ? "1" : undefined,
+    q: query.q || undefined,
+    page: query.page && query.page > 1 ? query.page : undefined,
+  });
 }
 
 /** Enlace dentro de la ficha: la pestaña y sus parametros, sin los vacios. */

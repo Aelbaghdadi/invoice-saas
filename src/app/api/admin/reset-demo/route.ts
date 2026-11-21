@@ -41,7 +41,8 @@ export async function POST(req: NextRequest) {
   try {
     const result = await reseedDemo(session.user.advisoryFirmId, session.user.id);
     if (!result.ok) {
-      return NextResponse.json({ error: result.error }, { status: 500 });
+      // Una asesoría que no está marcada como demo no es un fallo del servidor.
+      return NextResponse.json({ error: result.error }, { status: result.reason === "not_demo" ? 409 : 500 });
     }
     return NextResponse.json(result);
   } catch (e) {

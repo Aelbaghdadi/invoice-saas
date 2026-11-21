@@ -19,6 +19,8 @@ beforeEach(async () => {
   for (const inv of Object.values(w.invoices)) fakeS3().put(inv.storageKey, `%PDF de ${inv.id}`);
 });
 
+const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
 const limits = { ...CLIENT_EXPORT_LIMITS };
 afterEach(() => Object.assign(CLIENT_EXPORT_LIMITS, limits));
 
@@ -243,6 +245,73 @@ describe("descargar los datos de un cliente (F-044)", () => {
       return big();
     })).rejects.toThrow(/El ZIP pasaría de 100 KB/);
     expect(opened).toBe(1);
+  });
+
+  it("trae los originales en otro formato y las columnas del archivo, con «Original» todavía como ruta (anexo C10)", async () => {
+    const inv = await makeInvoice(w.client, { storageKey: "k-con-word", filename: "Factura word.pdf", status: "EXPORTED", periodMonth: 1, periodYear: 2026 });
+    fakeS3().put("k-con-word", "%PDF copia");
+    const document = await prisma.document.create({
+      data: { clientId: w.client.id, filename: "Factura word.docx", storageKey: `${w.client.id}/originales/w.docx`, fileType: DOCX, sizeBytes: 9 },
+    });
+    fakeS3().put(document.storageKey, "word real");
+    const series = await prisma.invoiceRegisterSeries.create({ data: { clientId: w.client.id, type: "PURCHASE", year: 2026, lastNumber: 1 } });
+    await prisma.invoiceArchive.update({
+      where: { invoiceId: inv.id },
+      data: {
+        originalDocumentId: document.id, originalMedium: "ELECTRONIC", originalMediumSource: "MANUAL", originalMediumReason: "other_format",
+        registerSeriesId: series.id, registerNumber: 1, registeredAt: new Date("2026-02-03T10:00:00Z"),
+      },
+    });
+
+    signInAs(w.admin);
+    const zip = await unzip(await call(w.client.id));
+    const pdfPath = `originales/2026-01/${inv.id}_Factura word.pdf`;
+    const wordPath = `originales/2026-01/${inv.id}_Factura word.docx`;
+    expect(zip.text(wordPath)).toBe("word real");
+    expect(zip.text(pdfPath)).toBe("%PDF copia");
+
+    const lines = zip.text("facturas.csv").replace(CSV_BOM, "").split("\r\n");
+    const header = lines[0].split(";");
+    expect(header.filter((h) => h.startsWith("Original"))).toEqual(["Original", "Original en otro formato", "Original electrónico o en papel"]);
+    expect(header).toContain("Nº de registro");
+    expect(header.at(-1)).toBe("Subida el");
+    const row = lines.find((line) => line.startsWith(inv.id))!.split(";");
+    const at = (name: string) => row[header.indexOf(name)];
+    expect(at("Nº de registro")).toBe("R-2026/0001");
+    expect(at("Original")).toBe(pdfPath);
+    expect(at("Original en otro formato")).toBe(wordPath);
+    expect(at("Original electrónico o en papel")).toBe("Electrónico");
+    // Las de la factoría: «Por confirmar» y sin nº ni adjunto.
+    const other = lines.find((line) => line.startsWith(w.invoices.pending.id))!.split(";");
+    expect([other[header.indexOf("Nº de registro")], other[header.indexOf("Original en otro formato")], other[header.indexOf("Original electrónico o en papel")]])
+      .toEqual(["", "", "Por confirmar"]);
+
+    const json = JSON.parse(zip.text("facturas.json")).find((i: { id: string }) => i.id === inv.id);
+    expect(json.archive).toMatchObject({ registerNumber: 1, originalMedium: "ELECTRONIC", originalDocumentId: document.id });
+    expect(zip.text("LEEME.txt")).toContain("Word, Excel, OpenDocument o RTF");
+  });
+
+  it("el tope de bytes suma también los originales en otro formato de sus facturas, una vez (anexo C8)", async () => {
+    const doc = (clientId: string, name: string, sizeBytes: number) => prisma.document.create({
+      data: { clientId, filename: name, storageKey: `${clientId}/${name}`, fileType: "application/pdf", sizeBytes },
+    });
+    await prisma.invoice.update({ where: { id: w.invoices.pending.id }, data: { documentId: (await doc(w.client.id, "p.pdf", 2)).id } });
+    await prisma.invoice.update({ where: { id: w.invoices.validated.id }, data: { documentId: (await doc(w.client.id, "v.pdf", 3)).id } });
+    const word = await doc(w.client.id, "w.docx", 6);
+    await prisma.invoiceArchive.update({ where: { invoiceId: w.invoices.pending.id }, data: { originalDocumentId: word.id } });
+    // El de otro cliente no cuenta.
+    const b = await makeFirm("B");
+    await prisma.invoiceArchive.update({ where: { invoiceId: b.invoices.pending.id }, data: { originalDocumentId: (await doc(b.client.id, "x.docx", 1_000)).id } });
+
+    CLIENT_EXPORT_LIMITS.maxBytes = 10;
+    signInAs(w.admin);
+    const res = await call(w.client.id, "?check=1");
+    expect(res.status).toBe(413);
+    expect((await res.json()).error).toBe(
+      "Los originales del cliente ocupan 11 bytes y se pueden descargar como mucho 10 bytes de una vez. Descarga el archivo de cada ejercicio (ficha del cliente → Archivo) o pide la exportación completa a soporte.",
+    );
+    CLIENT_EXPORT_LIMITS.maxBytes = 11;
+    expect((await call(w.client.id, "?check=1")).status).toBe(200);
   });
 
   it("con ?check=1 solo comprueba: ni ZIP ni rastro", async () => {

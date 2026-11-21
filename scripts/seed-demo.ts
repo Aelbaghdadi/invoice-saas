@@ -11,7 +11,7 @@
  *   SEED_CONFIRM=yes npx tsx scripts/seed-demo.ts
  */
 
-import { PrismaClient, type InvoiceStatus, type InvoiceType } from "@prisma/client";
+import { PrismaClient, type InvoiceStatus, type InvoiceType, type Prisma } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { S3Client, PutObjectCommand, ListObjectsV2Command, DeleteObjectsCommand } from "@aws-sdk/client-s3";
 import bcrypt from "bcryptjs";
@@ -79,6 +79,12 @@ async function main() {
     throw new Error(`Admin ${ADMIN_EMAIL} no encontrado o sin advisoryFirm`);
   }
   const firmId = admin.advisoryFirmId;
+  // Solo una asesoría de demostración (isDemo, marcado a mano en la BD): los
+  // triggers del archivo no dejan borrar facturas ni documentos de las demás.
+  const firm = await prisma.advisoryFirm.findUnique({ where: { id: firmId }, select: { isDemo: true } });
+  if (!firm?.isDemo) {
+    throw new Error("Esta asesoría no es de demostración: el reset no está permitido.");
+  }
   console.log(`✓ Admin ${admin.name} (firm ${firmId})`);
 
   // ── LIMPIEZA ───────────────────────────────────────────────────────────
@@ -98,10 +104,12 @@ async function main() {
     await tx.exportBatchItem.deleteMany({ where: { invoice: { clientId: { in: clientIds } } } });
     await tx.invoiceExtraction.deleteMany({ where: { invoice: { clientId: { in: clientIds } } } });
     await tx.invoice.updateMany({ where: { clientId: { in: clientIds } }, data: { exportBatchId: null } });
-    await tx.exportBatch.deleteMany({});
+    await tx.exportBatch.deleteMany({ where: { userId: admin.id } });
     await tx.invoice.deleteMany({ where: { clientId: { in: clientIds } } });
+    // Con el bypass, como las facturas: fuera de la transaccion lo para el trigger.
+    await tx.document.deleteMany({ where: { clientId: { in: clientIds } } });
+    await tx.uploadBatch.deleteMany({ where: { advisoryFirmId: firmId } });
   });
-  await prisma.document.deleteMany({ where: { clientId: { in: clientIds } } });
   await prisma.periodClosure.deleteMany({ where: { clientId: { in: clientIds } } });
   await prisma.accountEntry.deleteMany({ where: { clientId: { in: clientIds } } });
   await prisma.workerClientAssignment.deleteMany({ where: { clientId: { in: clientIds } } });
@@ -114,13 +122,15 @@ async function main() {
   ).map((c) => c.userId!);
 
   await prisma.client.deleteMany({ where: { advisoryFirmId: firmId } });
-  await prisma.user.deleteMany({
-    where: {
-      OR: [{ advisoryFirmId: firmId, role: "WORKER" }, { id: { in: linkedUserIds } }],
-      NOT: { id: admin.id },
-    },
-  });
-  await prisma.passwordResetToken.deleteMany({});
+  const removedUsers: Prisma.UserWhereInput = {
+    OR: [{ advisoryFirmId: firmId, role: "WORKER" }, { id: { in: linkedUserIds } }],
+    NOT: { id: admin.id },
+  };
+  const removedEmails = (await prisma.user.findMany({ where: removedUsers, select: { email: true } })).map((u) => u.email);
+  await prisma.user.deleteMany({ where: removedUsers });
+  // Solo los enlaces de recuperación de los usuarios borrados: los de las demás
+  // asesorías siguen valiendo.
+  await prisma.passwordResetToken.deleteMany({ where: { email: { in: removedEmails } } });
   console.log("✓ Limpieza completada");
 
   // ── Almacenamiento (Garage / S3) ──────────────────────────────────────
@@ -375,29 +385,38 @@ async function main() {
       finalKey = `pending/${d.filename}`;
     }
 
-    const inv = await prisma.invoice.create({
-      data: {
-        clientId: d.client.id,
-        type: d.type,
-        status: d.status,
-        periodMonth: d.month,
-        periodYear: d.year,
-        filename: d.filename,
-        storageKey: finalKey,
-        fileType: "application/pdf",
-        issuerName: d.pdf.emisor.nombre,
-        issuerCif: d.pdf.emisor.cif,
-        receiverName: d.pdf.receptor.nombre,
-        receiverCif: d.pdf.receptor.cif,
-        invoiceNumber: d.pdf.numero,
-        invoiceDate: parseDmy(d.pdf.fecha_emision),
-        taxBase: d.pdf.base as any,
-        vatRate: d.pdf.iva_rate as any,
-        vatAmount: d.pdf.iva as any,
-        totalAmount: d.pdf.total as any,
-        rejectionReason: d.rejectionReason ?? null,
-        isValid: d.status === "VALIDATED" ? true : null,
-      },
+    const inv = await prisma.$transaction(async (tx) => {
+      const created = await tx.invoice.create({
+        data: {
+          clientId: d.client.id,
+          type: d.type,
+          status: d.status,
+          periodMonth: d.month,
+          periodYear: d.year,
+          filename: d.filename,
+          storageKey: finalKey,
+          fileType: "application/pdf",
+          issuerName: d.pdf.emisor.nombre,
+          issuerCif: d.pdf.emisor.cif,
+          receiverName: d.pdf.receptor.nombre,
+          receiverCif: d.pdf.receptor.cif,
+          invoiceNumber: d.pdf.numero,
+          invoiceDate: parseDmy(d.pdf.fecha_emision),
+          taxBase: d.pdf.base as any,
+          vatRate: d.pdf.iva_rate as any,
+          vatAmount: d.pdf.iva as any,
+          totalAmount: d.pdf.total as any,
+          rejectionReason: d.rejectionReason ?? null,
+          isValid: d.status === "VALIDATED" ? true : null,
+        },
+      });
+      // Como en src/lib/demoSeed.ts: no pasan por el análisis, así que quedan
+      // «Por confirmar», pendientes de la detección de los PDF antiguos.
+      await tx.invoiceArchive.update({
+        where: { invoiceId: created.id },
+        data: { originalMediumSource: "AUTO", originalMediumReason: "backfill_pending" },
+      });
+      return created;
     });
 
     if (d.issues?.length) {

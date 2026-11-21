@@ -69,6 +69,14 @@ const nextConfig: NextConfig = {
           { key: "X-Content-Type-Options", value: "nosniff" },
         ],
       },
+      // El original del archivo (también un Word o un Excel adjunto): lo mismo.
+      {
+        source: "/api/archive/invoices/:id/original",
+        headers: [
+          { key: "Content-Security-Policy", value: rawFileCsp },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+        ],
+      },
       // Los adjuntos de soporte tambien los sube un usuario: misma politica.
       {
         source: "/api/support/attachments/:id",

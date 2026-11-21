@@ -61,6 +61,49 @@ export function dateMatchesPeriod(
   return dateMonth >= periodMonth && dateMonth <= periodMonth + 2;
 }
 
+/** Los campos de una factura que fijan su periodo. */
+export type InvoicePeriodFields = {
+  periodMonth: number;
+  periodYear: number;
+  accountingPeriodMonth: number | null;
+  accountingPeriodYear: number | null;
+};
+
+/** Periodo en el que cuenta la factura: el contable si lo tiene, si no el del
+ *  lote. Mismo criterio que la pagina de revision y que parseAndSave. */
+export function invoicePeriod(invoice: InvoicePeriodFields): { month: number; year: number } {
+  return {
+    month: invoice.accountingPeriodMonth ?? invoice.periodMonth,
+    year: invoice.accountingPeriodYear ?? invoice.periodYear,
+  };
+}
+
+/** Meses desde el año 0: dos periodos se comparan restando, y un rango de
+ *  meses (un ejercicio) es un intervalo. */
+export function periodIndex(year: number, month: number): number {
+  return year * 12 + month - 1;
+}
+
+/** ¿Lleva la factura un periodo contable distinto del de su lote? La revisión
+ *  guarda siempre el periodo contable, y por defecto es el del lote: igual que
+ *  el lote no cuenta como propio (el mismo criterio que la revisión y su
+ *  auditoría). */
+export function hasOwnAccountingPeriod(invoice: InvoicePeriodFields): boolean {
+  const { month, year } = invoicePeriod(invoice);
+  return month !== invoice.periodMonth || year !== invoice.periodYear;
+}
+
+/** Último mes del periodo en el que cuenta la factura. Un lote trimestral sin
+ *  periodo contable propio abarca sus tres meses: para ordenar y agrupar cuenta
+ *  el primero (invoicePeriod) y para conservar, el último. */
+export function periodEndMonth(
+  invoice: InvoicePeriodFields & { periodType: PeriodTypeName },
+): { month: number; year: number } {
+  const start = invoicePeriod(invoice);
+  if (invoice.periodType !== "QUARTERLY" || hasOwnAccountingPeriod(invoice)) return start;
+  return { month: quarterFromMonth(start.month) * 3, year: start.year };
+}
+
 /** Opciones del selector de trimestre para formularios. */
 export const QUARTER_OPTIONS = [
   { value: 1, label: "T1 (Enero – Marzo)" },

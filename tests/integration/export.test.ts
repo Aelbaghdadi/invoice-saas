@@ -112,15 +112,23 @@ describe("commitExportBatch contra Postgres real", () => {
     expect(await prisma.exportBatch.count()).toBe(0);
   });
 
-  it("3.000 facturas en un lote, dentro del timeout", async () => {
+  it("3.000 facturas en un lote, dentro del timeout y numeradas 1..3000 sin huecos", async () => {
     await seedValidated(3000);
     const t0 = performance.now();
     await commitExportBatch(batchData("batch-big"), await readCandidates());
     // Pasar del timeout ya lo hace fallar (la transaccion aborta). Esto avisa
     // antes: en local, sin latencia de red, tiene que ir muy por debajo, o en
-    // produccion (Supabase) no hay margen.
+    // produccion (Supabase) no hay margen. Con el nº de registro del archivo.
     expect(performance.now() - t0).toBeLessThan(EXPORT_TRANSACTION_OPTIONS.timeout / 3);
     expect(await prisma.invoice.count({ where: { exportBatchId: "batch-big" } })).toBe(3000);
+    const numbers = (await prisma.invoiceArchive.findMany({
+      where: { invoice: { exportBatchId: "batch-big" } },
+      select: { registerNumber: true },
+      orderBy: { registerNumber: "asc" },
+    })).map((r) => r.registerNumber);
+    expect(numbers).toEqual(Array.from({ length: 3000 }, (_, i) => i + 1));
+    expect((await prisma.invoiceRegisterSeries.findFirstOrThrow({ where: { clientId: w.client.id } })).lastNumber).toBe(3000);
+    expect(await prisma.auditLog.count({ where: { field: "registerNumber" } })).toBe(3000);
     expect((await verifyFirmAuditChains(w.firm.id)).brokenChains).toBe(0);
   });
 });

@@ -73,11 +73,11 @@ describe("invoiceFileHeaders", () => {
   });
 });
 
-describe("cabeceras de /api/invoices/[id]/raw en next.config", () => {
-  it("aplica CSP sandbox y nosniff después de la entrada general", async () => {
+describe("cabeceras de los originales en next.config", () => {
+  it.each(["/api/invoices/:id/raw", "/api/archive/invoices/:id/original"])("%s: CSP sandbox y nosniff después de la entrada general", async (source) => {
     const entries = await nextConfig.headers!();
     const generalIndex = entries.findIndex((e) => e.source === "/(.*)");
-    const rawIndex = entries.findIndex((e) => e.source === "/api/invoices/:id/raw");
+    const rawIndex = entries.findIndex((e) => e.source === source);
     expect(generalIndex).toBeGreaterThanOrEqual(0);
     // Con la misma clave gana la última entrada: la de /raw tiene que ir detrás.
     expect(rawIndex).toBeGreaterThan(generalIndex);

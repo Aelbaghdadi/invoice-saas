@@ -199,3 +199,49 @@ describe("presentación de la auditoría (revisión 1 del PR #11, punto 14)", ()
     expect(formatAuditValue("v1.2", "issuerName")).toBe("v1.2");
   });
 });
+
+describe("auditoría del archivo de facturas", () => {
+  it("etiquetas de los campos del archivo", () => {
+    expect(auditFieldLabel("registerNumber")).toBe("Nº de registro");
+    expect(auditFieldLabel("originalMedium")).toBe("Electrónico o papel");
+    expect(auditFieldLabel("auto:originalMedium")).toBe("Electrónico o papel (automático)");
+    expect(auditFieldLabelShort("auto:originalMedium")).toBe("Electrónico o papel");
+    expect(auditFieldLabel("retentionHold")).toBe("Conservar más");
+    expect(auditFieldLabel("originalDocument")).toBe("Original en otro formato");
+    expect(auditFieldLabel("archiveExport")).toBe("Descarga del archivo del ejercicio");
+  });
+
+  it("el cambio automático de electrónico o papel es de la app, no de quien lo lanzó", () => {
+    expect(auditActor("auto:originalMedium", "Ana", "ELECTRONIC", null)).toBe("Automático (lanzado por Ana)");
+    expect(auditActor("originalMedium", "Ana", "ELECTRONIC", "PAPER")).toBe("Ana");
+    expect(auditActor("registerNumber", "Admin", null, "R-2026/0153")).toBe("Admin");
+  });
+
+  it("ELECTRONIC y PAPER en castellano; el medio vacío es «Por confirmar»", () => {
+    for (const field of ["originalMedium", "auto:originalMedium"]) {
+      expect(formatAuditValue("ELECTRONIC", field)).toBe("Electrónico");
+      expect(formatAuditValue("PAPER", field)).toBe("Papel");
+      expect(formatAuditValue(null, field)).toBe("Por confirmar");
+      expect(formatAuditValue("", field)).toBe("Por confirmar");
+    }
+    // Fuera del medio, un texto que se llame así no se traduce.
+    expect(formatAuditValue("PAPER", "issuerName")).toBe("PAPER");
+    expect(formatAuditValue(null, "issuerName")).toBe("—");
+  });
+
+  it("el nº de registro se ve tal cual", () => {
+    expect(formatAuditValue(null, "registerNumber")).toBe("—");
+    expect(formatAuditValue("R-2026/0153", "registerNumber")).toBe("R-2026/0153");
+  });
+
+  it("«conservar más» con su motivo, o «No»", () => {
+    expect(formatAuditValue("FIXED_ASSET", "retentionHold")).toBe("Conservar más: Inmovilizado");
+    expect(formatAuditValue("TAX_CREDITS", "retentionHold")).toBe("Conservar más: Bases negativas o deducciones pendientes");
+    expect(formatAuditValue("INSPECTION", "retentionHold")).toBe("Conservar más: Inspección o pleito");
+    expect(formatAuditValue("OTHER", "retentionHold")).toBe("Conservar más: Otro motivo");
+    expect(formatAuditValue("false", "retentionHold")).toBe("No");
+    expect(formatAuditValue(null, "retentionHold")).toBe("No");
+    // Fuera de su campo, el motivo no se traduce.
+    expect(formatAuditValue("FIXED_ASSET", "issuerName")).toBe("FIXED_ASSET");
+  });
+});

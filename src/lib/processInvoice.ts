@@ -3,9 +3,14 @@ import { getObjectBytes, isStorageConfigured, isStorageNotFound } from "@/lib/st
 import type { InvoiceStatus, Prisma } from "@prisma/client";
 import { extractInvoiceFromXml } from "@/lib/ocr";
 import {
+  extractPdfTextAndItems,
   extractPdfWithGemini,
   extractFromDocumentWithGemini,
+  pdfReadingForMedium,
+  type PdfTextExtraction,
 } from "@/lib/ocrLlm";
+import { applyAutoMedium } from "@/lib/archiveEdits";
+import { archiveFileKind } from "@/lib/originalMedium";
 import { detectIssues } from "@/lib/issueDetector";
 import { appendAuditLogs } from "@/lib/auditLog";
 import { clientPartyAudit, irpfAuditValue, partyAuditValue } from "@/lib/auditValue";
@@ -114,6 +119,34 @@ async function analyzeInvoice(invoiceId: string, triggeredByUserId: string) {
 
   const ocrStartedAt = new Date();
 
+  // Lo leido del PDF (texto y productor), una sola vez: con la primera
+  // descarga y fuera de los reintentos. Lo usan Gemini y electronico o papel.
+  let pdfRead: PdfTextExtraction | null = null;
+  // Electronico o papel (R10, R11), dentro de cada transaccion vallada: la del
+  // resultado y la de OCR_ERROR. Un PDF que no se llego a leer (fallo la
+  // descarga) no propone nada. Va en un SAVEPOINT: si el archivo falla (un
+  // bloqueo que no se suelta, una guarda), se deshace solo lo suyo y el
+  // resultado del OCR se guarda igual; el medio queda sin proponer y el
+  // gestor lo puede poner a mano.
+  const applyMedium = async (tx: Prisma.TransactionClient) => {
+    if (archiveFileKind(invoice.fileType) === "pdf" && !pdfRead) return [];
+    await tx.$executeRaw`SAVEPOINT archivo_medio`;
+    try {
+      const audit = await applyAutoMedium(tx, {
+        invoiceId,
+        fileType: invoice.fileType,
+        pdf: pdfRead && pdfReadingForMedium(pdfRead),
+        userId: triggeredByUserId,
+      });
+      await tx.$executeRaw`RELEASE SAVEPOINT archivo_medio`;
+      return audit;
+    } catch (err) {
+      await tx.$executeRaw`ROLLBACK TO SAVEPOINT archivo_medio`;
+      console.error(`[processInvoice] ${invoiceId}: no se pudo proponer electronico o papel:`, err);
+      return [];
+    }
+  };
+
   try {
     if (!isStorageConfigured()) throw new Error("Almacenamiento (S3) no configurado");
 
@@ -136,12 +169,13 @@ async function analyzeInvoice(invoiceId: string, triggeredByUserId: string) {
           const base64 = (await downloadOriginal(invoice.storageKey)).toString("base64");
 
           if (ft === "application/pdf" || invoice.filename.endsWith(".pdf")) {
+            pdfRead ??= await extractPdfTextAndItems(base64);
             // Solo lanza si falla la llamada que no tiene alternativa: la
             // del texto, o la de la imagen cuando el texto no valia. Si el
             // texto ya salio (aunque incompleto) y la imagen falla, devuelve
             // el del texto: el reintento no repite una llamada que ya fue
             // bien (temperatura 0, saldria lo mismo).
-            ({ source, result: ocrResult } = await extractPdfWithGemini(base64));
+            ({ source, result: ocrResult } = await extractPdfWithGemini(base64, pdfRead));
           } else {
             source = "gemini_multimodal";
             ocrResult = await extractFromDocumentWithGemini(base64, ft || "image/jpeg");
@@ -818,13 +852,14 @@ async function analyzeInvoice(invoiceId: string, triggeredByUserId: string) {
       await tx.invoiceStatusHistory.create({
         data: { invoiceId, fromStatus: "ANALYZING", toStatus: targetStatus, changedBy: triggeredByUserId },
       });
+      const mediumAudit = await applyMedium(tx);
       await appendAuditLogs([{
         invoiceId,
         userId: triggeredByUserId,
         field: "status",
         oldValue: "UPLOADED",
         newValue: targetStatus,
-      }, ...autoAudit.map((e) => ({ invoiceId, userId: triggeredByUserId, ...e }))], tx);
+      }, ...autoAudit.map((e) => ({ invoiceId, userId: triggeredByUserId, ...e })), ...mediumAudit], tx);
       return true;
     }, OCR_WRITE_TRANSACTION_OPTIONS);
     if (!written) {
@@ -851,6 +886,7 @@ async function analyzeInvoice(invoiceId: string, triggeredByUserId: string) {
         await tx.invoiceStatusHistory.create({
           data: { invoiceId, fromStatus: "ANALYZING", toStatus: "OCR_ERROR", changedBy: triggeredByUserId, reason: userMsg },
         });
+        await appendAuditLogs(await applyMedium(tx), tx);
       });
     } catch (writeErr) {
       console.error(`[processInvoice] ${invoiceId}: no se pudo guardar el OCR_ERROR:`, writeErr);

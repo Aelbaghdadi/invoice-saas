@@ -1,9 +1,13 @@
-import { Prisma, type InvoiceVatLine } from "@prisma/client";
+import type { Prisma, InvoiceVatLine } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { appendAuditLogs } from "@/lib/auditLog";
+import { assignRegisterNumbers } from "@/lib/archiveRegister";
+import { ExportConflictError, isLockWaitError, isTransactionConflictError } from "@/lib/exportConflict";
 import { exportFingerprint, type FingerprintInvoice } from "@/lib/exportFingerprint";
 import { exportExtension, type ExportFormat, type InvoiceWithClient } from "@/lib/exportFormats";
 import { a3Identity, reexportChanges, type Reexport } from "@/lib/reexportChanges";
+
+export { ExportConflictError, isTransactionConflictError } from "@/lib/exportConflict";
 
 /**
  * Registro de una exportacion a A3: lote, items con snapshot, puntero
@@ -16,18 +20,19 @@ import { a3Identity, reexportChanges, type Reexport } from "@/lib/reexportChange
  *  muy lejos de 30 s. Los 5 s por defecto de Prisma se quedaban cortos. */
 export const EXPORT_TRANSACTION_OPTIONS = { timeout: 30_000, maxWait: 5_000 } as const;
 
+/**
+ * Espera máxima de un bloqueo dentro del export (lock_timeout), por debajo del
+ * statement_timeout de 15 s (F-080): otra exportación de la misma serie de
+ * registro, una corrección o una edición del archivo que no acaba. Se pasa a
+ * ExportConflictError, que se puede reintentar. Un objeto para que los tests
+ * la puedan acortar.
+ */
+export const EXPORT_WAITS = { lockTimeoutMs: 10_000 };
+
 // Postgres admite 65.535 parametros por consulta.
 const ITEM_INSERT_CHUNK = 1000;
 
 export type ExportInvoice = InvoiceWithClient & { vatLines: InvoiceVatLine[] };
-
-/** Otra exportacion o una correccion se ha cruzado con esta: no se escribe nada. */
-export class ExportConflictError extends Error {
-  constructor(readonly invoiceIds: string[], reason: string) {
-    super(reason);
-    this.name = "ExportConflictError";
-  }
-}
 
 /**
  * Snapshot de ExportBatchItem: lo que se mando a A3. El formato (claves y
@@ -155,7 +160,8 @@ export type ExportBatchData = {
  * Deja constancia de un fichero ya generado con `invoices`. Reserva las
  * facturas con `exportBatchId: null` y `status: VALIDATED`: si otra
  * exportacion simultanea se ha llevado alguna, el recuento no cuadra y se
- * aborta la transaccion entera (F-049).
+ * aborta la transaccion entera (F-049). Las que salen en un Excel por primera
+ * vez reciben aqui su nº de registro del archivo (R6), con la fecha del lote.
  *
  * `scope` es el cliente, el periodo y el tipo de la peticion
  * (exportPeriodWhere): si mientras se generaba el fichero alguien ha movido
@@ -169,8 +175,13 @@ export async function commitExportBatch(
   const invoiceIds = invoices.map((i) => i.id);
   try {
     await prisma.$transaction(async (tx) => {
+      // SET LOCAL lock_timeout (EXPORT_WAITS); set_config admite el valor como parametro.
+      await tx.$executeRaw`SELECT set_config('lock_timeout', ${`${EXPORT_WAITS.lockTimeoutMs}ms`}, true)`;
       // El lote va primero: exportBatchId es una FK a ExportBatch.
-      await tx.exportBatch.create({ data: { ...batch, invoiceCount: invoices.length } });
+      const created = await tx.exportBatch.create({
+        data: { ...batch, invoiceCount: invoices.length },
+        select: { createdAt: true },
+      });
 
       const reserved = await tx.invoice.updateMany({
         where: { AND: [{ id: { in: invoiceIds }, exportBatchId: null, status: "VALIDATED" }, scope] },
@@ -203,43 +214,31 @@ export async function commitExportBatch(
         await tx.exportBatchItem.createMany({ data: items.slice(i, i + ITEM_INSERT_CHUNK) });
       }
 
+      const registered = await assignRegisterNumbers(tx, invoiceIds, created.createdAt, batch.userId);
+
       await appendAuditLogs(
-        invoiceIds.map((invoiceId) => ({
-          invoiceId,
-          userId: batch.userId,
-          field: "export",
-          oldValue: null,
-          newValue: `Exportada (batch: ${batch.id}, formato: ${batch.format})`,
-        })),
+        [
+          ...invoiceIds.map((invoiceId) => ({
+            invoiceId,
+            userId: batch.userId,
+            field: "export",
+            oldValue: null,
+            newValue: `Exportada (batch: ${batch.id}, formato: ${batch.format})`,
+          })),
+          ...registered,
+        ],
         tx,
       );
     }, EXPORT_TRANSACTION_OPTIONS);
   } catch (err) {
-    // Postgres ha abortado esta transaccion por cruzarse con otra: es la
-    // misma carrera de F-049, no un fallo del export.
-    if (isTransactionConflictError(err)) {
+    // Postgres ha abortado esta transaccion por cruzarse con otra, o se ha
+    // cansado de esperar a otra: es la misma carrera de F-049, no un fallo
+    // del export.
+    if (isTransactionConflictError(err) || isLockWaitError(err)) {
       throw new ExportConflictError(invoiceIds, `conflicto de transaccion: ${err instanceof Error ? err.message : String(err)}`);
     }
     throw err;
   }
-}
-
-// 40P01 deadlock; 40001 fallo de serializacion.
-const CONFLICT_SQLSTATES = new Set(["40P01", "40001"]);
-
-/**
- * ¿Postgres ha abortado la transaccion por cruzarse con otra?
- *
- * La transaccion va en READ COMMITTED, asi que lo habitual entre dos exports
- * es un deadlock 40P01 (bloquean las mismas facturas en distinto orden), no
- * un 40001. Con adapter-pg el 40P01 no se traduce: llega como
- * DriverAdapterError con `code` undefined y el SQLSTATE en
- * `cause.originalCode`. El 40001 si se traduce a P2034.
- */
-export function isTransactionConflictError(err: unknown): boolean {
-  if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2034") return true;
-  const cause = (err as { cause?: { originalCode?: unknown } } | null)?.cause;
-  return typeof cause?.originalCode === "string" && CONFLICT_SQLSTATES.has(cause.originalCode);
 }
 
 /**

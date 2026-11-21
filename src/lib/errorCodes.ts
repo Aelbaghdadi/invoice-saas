@@ -46,6 +46,8 @@ export type AppErrorCode =
   | "ERR-EXPORT-006"  // Error al registrar el lote y no se sabe si llego a confirmarse
   | "ERR-EXPORT-007"  // Lote inexistente o de otra asesoria
   | "ERR-EXPORT-008"  // Hay reexportadas sin confirmar (F-018)
+  // ── Archivo ──────────────────────────────────────────────
+  | "ERR-ARCHIVE-001" // Original en otro formato no admitido (R19)
   // ── Auth / Permisos ──────────────────────────────────────
   | "ERR-AUTH-001"    // No autenticado
   | "ERR-AUTH-002"    // Rol insuficiente
@@ -82,6 +84,8 @@ export const ERROR_MESSAGES: Record<AppErrorCode, string> = {
   "ERR-EXPORT-006": "No se ha podido confirmar si la exportación se ha registrado. Antes de repetirla, recarga la página y mira el historial: si aparece, descárgala desde allí con «Volver a descargar».",
   "ERR-EXPORT-007": "No se encuentra esta exportación.",
   "ERR-EXPORT-008": "Hay facturas que ya se exportaron en otro Excel y no has confirmado que vuelvan a salir. No se ha exportado nada: revisa la vista previa y vuelve a descargar.",
+
+  "ERR-ARCHIVE-001": "El original no es válido: se admiten .doc, .docx, .xls, .xlsx, .odt, .ods y .rtf de hasta 20 MB.",
 
   "ERR-AUTH-001": "Tu sesión ha caducado. Vuelve a iniciar sesión.",
   "ERR-AUTH-002": "No tienes permisos para esta acción.",

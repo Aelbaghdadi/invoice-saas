@@ -54,6 +54,13 @@ importante:
 | `AccountEntry` | Plan de cuentas aprendido por NIF. Acelera la siguiente factura del mismo proveedor. |
 | `ExportBatch` | Lote exportado. Las facturas se marcan vía `Invoice.exportBatchId`. |
 | `SupportTicket` / `SupportMessage` | Soporte: un aviso de la asesoría al equipo del producto y su hilo. Cuelga de la asesoría; el equipo (`SUPPORT_USERNAMES`) ve los de todas. |
+| `InvoiceArchive` | Archivo de una factura, una fila por factura (la crea un trigger): llegada, electrónico o papel, original en otro formato, nº de registro y «conservar más». Ver [Archivo de facturas](#archivo-de-facturas). |
+| `UploadBatch` | Tanda de subida o taco de papel. Cuelga de la asesoría. Es de la entrega B del archivo: hoy no se crea ninguna. |
+| `InvoiceRegisterSeries` | Último nº de registro del archivo por cliente, tipo (R recibidas, E emitidas) y año. |
+
+Columnas del archivo en entidades de antes: `Client.fiscalYearStartMonth`
+(inicio del ejercicio del cliente) y `AdvisoryFirm.isDemo` (asesoría de
+demostración, que solo se marca a mano).
 
 ### Estados de Invoice
 
@@ -86,7 +93,11 @@ export para mostrar "ya exportada" en la UI sin perder el estado.
 ### 1. Subida y procesado
 
 1. Cliente sube PDF → `POST /api/uploads` (un fichero por petición).
-2. El fichero va al almacenamiento. Se crea `Invoice` con `status=UPLOADED`.
+2. El fichero va al almacenamiento, con una clave única
+   (`src/lib/uploadStorageKey.ts`). Se crean `Document`, `Invoice` con
+   `status=UPLOADED` y su fila de archivo en una sola transacción; si falla,
+   se borra el fichero recién subido (ver [Archivo de facturas](#archivo-de-facturas)
+   → «Altas, partes y lectura»).
 3. En un `after()` de esa misma petición, `processInvoice()` pide turno en
    la cola del OCR (`ocrQueue.ts`: `OCR_CONCURRENCY` a la vez, 4 por
    defecto). Mientras espera, la factura sigue en `UPLOADED`. Con hueco, el
@@ -239,6 +250,14 @@ el trigger no bloquea. `demoSeed.ts` lo activa **dentro de una
 transacción** (`SET LOCAL`), así solo aplica a esa transacción y
 no fuga a otras.
 
+Desde la migración 12 (archivo) esa llave sola ya no basta para borrar
+facturas ni documentos: hace falta además que la asesoría esté marcada
+`AdvisoryFirm.isDemo`, cosa que solo se hace a mano en la BD (nunca desde la
+app ni desde un script). `reseedDemo` y `scripts/seed-demo.ts` lo comprueban
+antes de tocar nada; sin la marca, el reset devuelve «Esta asesoría no es de
+demostración: el reset no está permitido.» (409 en `/api/admin/reset-demo`).
+Ver [Archivo de facturas](#archivo-de-facturas) → «Triggers».
+
 ### Por qué `revalidatePath` antes del redirect en validate/reject
 
 Next.js prefetch la página de la siguiente factura mientras el
@@ -326,6 +345,397 @@ trivial. Una query rota aquí es un leak entre asesorías.
   juntan en [src/lib/clientSheet.ts](src/lib/clientSheet.ts). El acceso al
   portal de un cliente ya creado sigue sin poder cambiarse (aparcado).
 
+## Archivo de facturas
+
+Un archivo por cliente y ejercicio, en el orden del libro: por periodo de
+deducción y, dentro de cada periodo, por llegada. Lo forman la migración
+`00000000000012_archivo` (tablas, relleno de lo que ya existía y triggers) y los
+módulos `src/lib/archive*.ts`, `originalMedium.ts` y `registerNumbers.ts`. La
+fase 1 va en dos entregas:
+
+- **Entrega A (esta):** el archivo digital. Nº de registro del archivo al
+  exportar a A3; electrónico o papel, que propone la app y se puede cambiar;
+  «conservar hasta» y «conservar más»; buscador y original a un clic; originales
+  en Word, Excel, OpenDocument o RTF adjuntos a su factura; ZIP del ejercicio con
+  índice Excel; y cifras por cliente y ejercicio.
+- **Entrega B (pendiente):** el papel. Tandas y tacos al subir, cajas, hoja del
+  taco con QR, «Era papel» y «Poner ubicación». Espera a saber cómo escanea y
+  cómo guarda el papel la asesoría. El esquema de la 12 ya lo trae todo, así que
+  no hará falta otra migración. Mientras, nadie crea tandas y ninguna pantalla
+  habla de tacos, cajas ni ubicación.
+
+### Modelo, y por qué va en una tabla aparte
+
+| Qué | Para qué |
+|-----|----------|
+| `InvoiceArchive` | Una fila por factura (clave `invoiceId`): llegada (`receivedAt`), nº de parte de una división (`splitPart`), electrónico o papel (`originalMedium`, con su origen, su motivo y `pdfProducer`), original en otro formato (`originalDocumentId` → `Document`), nº de registro (serie, número y fecha) y «conservar más» (motivo y nota). |
+| `UploadBatch` | Tanda de subida o taco de papel. Cuelga de la asesoría. `InvoiceArchive` la apunta dos veces: la tanda de llegada (`uploadBatchId` y `uploadPosition`, que fijan el orden y no cambian) y el taco donde se guarda el papel (`paperBatchId`, que se puede poner después sin tocar la llegada). Es de la entrega B: hoy no se crea ninguna. |
+| `InvoiceRegisterSeries` | Último nº de registro por cliente, tipo (R recibidas, E emitidas) y año. |
+| `Client.fiscalYearStartMonth` | Mes en que empieza el ejercicio del cliente (1 = año natural). |
+| `AdvisoryFirm.isDemo` | Asesoría de demostración: la única en la que el reset puede borrar facturas y documentos. Solo se marca a mano en la BD. |
+
+La 12 también crea el índice `Invoice(splitFromId)`, el de la familia de una
+división. `Invoice` no gana ninguna columna, a propósito: `Invoice.updatedAt` es
+el testigo de concurrencia de guardar, validar, rechazar, dividir y exportar. Si
+el medio, «conservar más» o el original adjunto vivieran en `Invoice`,
+cambiarlos haría fallar una revisión abierta (ERR-VALIDATE-003) y dependería de
+que el periodo no estuviera cerrado. En `InvoiceArchive` se cambian con el
+periodo cerrado o con la factura ya exportada, y la revisión no se entera.
+
+- **La fila la crea el trigger `invoice_archive_row`** al insertar la factura,
+  también con `createMany` y en los tests, con la llegada = `Invoice.createdAt`.
+  Nunca uséis `archive: { create }` anidado: choca con la fila del trigger.
+  Quien crea una factura y tiene que rellenar su fila lo hace con un `update` en
+  la misma transacción (`/api/uploads`, la resubida del portal, la división, el
+  reset de la demo).
+- **Las ediciones del archivo no escriben en `Invoice`**: solo en
+  `InvoiceArchive` (más `Document` al adjuntar un original y `AuditLog`).
+- **SQL en crudo** sobre estas tablas pone `"updatedAt" = now() AT TIME ZONE
+  'UTC'`: Prisma solo rellena `@updatedAt` en sus propias escrituras, la columna
+  no tiene DEFAULT y `now()` a secas daría la hora de Madrid en un Postgres local.
+
+### Orden del archivo
+
+`compareArchiveOrder` (`src/lib/archiveRules.ts`) da un solo orden para la
+pestaña Archivo, el índice y los originales del ZIP, la numeración al exportar y
+el relleno de la 12, que lo repite en SQL (con `COLLATE "C"`, para comparar los
+textos como JS):
+
+1. el **periodo de deducción**: el contable o, si no lo tiene, el del lote
+   (`invoicePeriod`, `src/lib/period.ts`). Un lote trimestral sin periodo
+   contable propio cuenta su primer mes para ordenar y agrupar, y el último para
+   conservar;
+2. las recibidas antes que las emitidas;
+3. las recibidas, por llegada, posición en la tanda, parte de la división y
+   alta; las emitidas, por fecha de factura, nº de factura en orden natural
+   («F-2» antes que «F-10», con el corte de `parseInvoiceNumber`) y llegada;
+4. el id, para que el orden sea estable.
+
+La **llegada** (`receivedAt`) es la creación de la factura (en una tanda, la de
+la tanda: entrega B); las partes de una división heredan la de su original. No
+cambia nunca. El Excel de A3 conserva su propio orden (ver abajo).
+
+### Nº de registro al exportar
+
+El «Nº de registro del archivo» (R-2026/0153 las recibidas, E-2026/0007 las
+emitidas) se pone la primera vez que la factura sale en un Excel de A3, dentro
+de la transacción de `commitExportBatch` (`src/lib/archiveRegister.ts`), con la
+fecha del lote. Es el número del libro: el RIVA (arts. 64.1 y 69.3) pide
+numerar las recibidas de forma correlativa, por periodo de deducción y por orden
+de recepción. Numerar al subir daría número a rechazadas y duplicadas, y en orden
+de subida; al validar dejaría huecos, porque una validada aún se puede rechazar.
+Una exportada ya no se rechaza, no se divide ni se reprocesa: nunca queda un
+número suelto.
+
+- Una serie por cliente, tipo y año natural del periodo de deducción (el del
+  IVA; el ejercicio del cliente no lo cambia). Dentro del lote, en el orden del
+  archivo. El contador (`InvoiceRegisterSeries.lastNumber`) se reserva con
+  `INSERT … ON CONFLICT DO UPDATE … RETURNING`, que bloquea la fila de la serie
+  hasta el COMMIT: otro export de la misma serie espera y sigue desde ahí.
+- Si el export se deshace (un conflicto, un fallo de la auditoría), no se gasta
+  ningún número. Reexportar no lo cambia. Las que no entran en el Excel (total
+  0, originales divididas, bloqueantes) no lo llevan, ni las rechazadas ni las
+  del buzón. Si a una factura le falta la fila de archivo (los triggers
+  quitados a mano), la numeración la crea antes, en vez de dar un conflicto.
+- Orden de bloqueo: facturas (la reserva del export) → sus filas de archivo, en
+  orden de factura (como las ediciones del archivo) → series, en orden de clave
+  → cadenas de auditoría. El export lleva `lock_timeout` de 10 s, por debajo del
+  `statement_timeout`: una espera larga, un deadlock o un 57014 son
+  `ExportConflictError` (ERR-EXPORT-003, se puede reintentar).
+- **No se renumera nunca.** Una factura que llega tarde toma el siguiente número
+  de su serie y sale «Registrada tarde» (`flagLateRegistrations`: tiene un
+  número mayor que alguna de un periodo posterior). Si después se corrige su
+  tipo o su periodo, el número se queda y se avisa («Numerada como recibida»,
+  «Nº de otro año»). Los triggers impiden cambiarlo (ver «Triggers»).
+- **Lo exportado antes del archivo** lo numera el relleno de la 12: las
+  `VALIDATED` o `EXPORTED` con algún `ExportBatchItem`, por la fecha del primer
+  lote en el que salieron y después en el orden del archivo, y deja cada
+  contador en el mayor número de su serie (2026 no empieza en 1 a mitad de año).
+  Las exportadas en otro estado (rechazadas o divididas después) se quedan sin
+  número: DEPLOY.md §10.4 las cuenta para decidirlo.
+- **No es el nº que pone A3 al importar** y puede no coincidir: el Excel de A3 no
+  cambia (ni su orden ni su contenido) y no lo lleva. En pantalla se llama «Nº de
+  registro del archivo» y el LEEME del ZIP lo explica.
+
+### Ejercicio y «conservar hasta»
+
+- **Ejercicio:** el que contiene el primer mes del periodo de deducción, según
+  `Client.fiscalYearStartMonth` (Ajustes del cliente, «El ejercicio empieza en»;
+  enero = año natural). Se rotula «2026» o, si no empieza en enero, «2025-26».
+  Agrupa la pestaña Archivo, el ZIP y las cifras. No cambia los números de
+  registro.
+- **«Conservar hasta»** (`retainUntil`): el último día del ejercicio que
+  contiene lo más tardío entre el final del periodo de deducción y la fecha de la
+  factura, más 6 años (`RETENTION_MIN_YEARS`, Código de Comercio, art. 30),
+  siempre a fin de mes. Una de 2025 → 31/12/2031; del ejercicio julio-junio
+  2025-26 → 30/06/2032. Se calcula al leer, no se guarda.
+- **«Conservar más»** (`retentionHold`, con motivo y nota): sin fecha hasta que
+  alguien lo quite. Es para el inmovilizado, las bases negativas o deducciones
+  pendientes (LGT, arts. 66 bis y 70.3), una inspección o un pleito. En una
+  compra con cuenta del grupo 2 se sugiere «Inmovilizado», pero no se marca solo.
+  Vale para todas las facturas, también las rechazadas.
+- En la fase 1 es informativo: no hay purga. El ejercicio no guarda desde
+  cuándo vale: cambiarlo reagrupa hacia atrás (limitación 6).
+
+### Electrónico o papel, y «Por confirmar»
+
+Un PDF escaneado que llega por correo puede ser el original electrónico (RD
+1619/2012, art. 9) o la copia de un papel que guarda alguien, y la app no lo
+sabe. Por eso la app nunca pone «Papel» por su cuenta fuera de un taco: lo que no
+sabe queda «Por confirmar» (`originalMedium` vacío), con su motivo, y no cuenta
+como papel en las cifras. `proposeOriginalMedium` (`src/lib/originalMedium.ts`)
+decide así (gana la primera fila que casa):
+
+| Caso | Queda | Motivo (`originalMediumReason`) |
+|------|-------|---------------------------------|
+| XML | Electrónico | `xml` |
+| Con un original en otro formato adjunto | Electrónico, a mano | `other_format` |
+| Subida en un taco (entrega B) | Papel, del taco | `taco` |
+| Imagen | Por confirmar | `image_unconfirmed`: «Foto: falta confirmar si hay papel» |
+| PDF hecho por un escáner (aunque traiga texto) | Por confirmar | `scan_unconfirmed`: «Escaneo: falta confirmar si hay papel» |
+| Lectura del PDF fallida o cortada | Por confirmar | `pdf_unreadable`: «No se pudo leer el PDF» |
+| PDF con capa de texto | Electrónico | `pdf_text` |
+| PDF sin capa de texto | Por confirmar | `scan_unconfirmed` |
+
+Capa de texto = más de 100 caracteres sin contar espacios y como mucho un 2 % de
+caracteres rotos (los umbrales de `isUsefulPdfText`, que es otro criterio: un PDF
+digital sin NIF también es electrónico). Escáner = Producer o Creator que casa
+con `SCANNER_PRODUCER_RE`. Además, el relleno de la 12 deja los PDF de antes del
+archivo en `backfill_pending` («Pendiente de detectar», ver abajo), las partes
+de una división llevan `split` y lo que pone una persona, `manual`. «Lo guarda el
+cliente» (`paperHeldByClient`) solo lo pone la subida de un usuario CLIENT y su
+resubida, nunca la detección.
+
+- **Dónde se escribe:** `applyAutoMedium` (`src/lib/archiveEdits.ts`) dentro de
+  las dos transacciones valladas del análisis (la del resultado y la de
+  OCR_ERROR), así que una ejecución que ya no es la dueña no escribe nada. El
+  texto del PDF se lee una sola vez por análisis, con la primera descarga, y
+  sirve también a Gemini.
+- **Quién manda:** el análisis solo escribe si el medio está vacío o es AUTO,
+  nunca sobre TACO ni MANUAL, y nunca en una parte de una división: las partes
+  heredan de su original, y la propuesta de la original les llega si toda la
+  familia está vacía o en AUTO.
+- `auto:originalMedium` solo queda en la auditoría cuando un reproceso le da la
+  vuelta a un medio que ya había propuesto la app. Un reproceso que no consigue
+  leer el PDF (roto o cortado por tiempo) no pisa una propuesta que sí lo leyó.
+- Producer y Creator se guardan sin caracteres de control (`cleanPdfInfoText`):
+  pdf.js los devuelve tal cual y Postgres no admite un NUL en un texto.
+- **Bloqueos de una familia:** primero la fila de archivo de la raíz (el mismo
+  bloqueo que toma una división) y después el resto por `invoiceId`. Así la
+  familia se lee con las partes que acaba de crear una división a la vez, y nadie
+  se espera en cruz con el export, que nunca bloquea una raíz.
+- A mano, desde el archivo: ver «Pantallas y ediciones a mano».
+
+### Detección de los PDF de antes del archivo
+
+El relleno de la 12 no lee ningún PDF: los deja «Pendiente de detectar». La capa
+de texto y el productor solo salen del fichero, y Garage solo se alcanza desde la
+red interna de Coolify. Lo hace la propia app en `/api/cron/archivo-detectar`
+(`src/lib/archiveMediumBackfill.ts`):
+
+- `GET` o `POST` con `CRON_SECRET`, como los demás crons, pero **no es
+  periódico**: se lanza tras desplegar la 12 hasta que no quede ninguno
+  (DEPLOY.md §10.6). `?dryRun=1` solo cuenta lo pendiente, sin descargar ni
+  escribir; `?limit=`, cuántas por llamada (50 por defecto, 200 como mucho).
+- Toma las facturas en AUTO y `backfill_pending` de todas las asesorías, como
+  `retry-stuck` (las partes de una división no: les llega lo de su raíz). Descarga el PDF, aplica `extractPdfTextAndItems`
+  y `proposeOriginalMedium` y solo escribe si la fila sigue en AUTO y pendiente:
+  lo que haya analizado la app o decidido una persona mientras tanto no se toca.
+  Lleva la propuesta a las partes. Sin auditoría: es la primera propuesta.
+- Cada factura va en su propia transacción, con `lock_timeout` de 5 s. Una que
+  falla (el almacenamiento, una espera larga, un error que se repite) va a
+  `errores` y no para a las demás; la siguiente llamada la vuelve a mirar. Un PDF
+  que ya no está, o cuyo productor no se puede guardar, queda «No se pudo leer el
+  PDF». Responde `{ revisadas, electronicas, porConfirmar, ilegibles, errores,
+  quedan }`.
+
+### Triggers: nada se borra, y el bypass solo para la demo
+
+Al final del `migration.sql` de la 12, después del relleno. Todos dan
+`check_violation` (23514) con un mensaje que empieza por «Archivo:».
+
+| Trigger | Dónde | Qué impide (o hace) |
+|---------|-------|---------------------|
+| `invoice_archive_row` | AFTER INSERT en `Invoice` | Crea la fila de archivo de la factura. |
+| `archive_no_delete_by_client` | BEFORE DELETE en `Invoice` y en `Document` | Borrar facturas y documentos, salvo el reset de una asesoría `isDemo` con la llave. |
+| `archive_row_no_delete` | BEFORE DELETE en `InvoiceArchive` | Borrar la fila con su factura viva: solo se va en cascada con ella. Sin llave. |
+| `archive_file_guard` | BEFORE UPDATE OF `storageKey`, `fileHash` en `Invoice` y en `Document` | Cambiar el fichero o una huella ya puesta (rellenar una vacía sí se puede). |
+| `invoice_registered_client_guard` | BEFORE UPDATE OF `clientId` en `Invoice` | Que una factura con nº de registro cambie de cliente. |
+| `archive_row_guard` | BEFORE UPDATE en `InvoiceArchive` | Un nº de registro a medias (sin serie o sin fecha), en la serie de otro cliente, tipo o año, o que cambie una vez puesto; que cambien la tanda de llegada o la posición ya puestas; que el papel vuelva a quedarse sin taco. El original adjunto sí se puede quitar: queda en la auditoría y el `Document` no se borra. |
+| `register_series_guard` | BEFORE UPDATE en `InvoiceRegisterSeries` | Que una serie cambie de cliente, tipo o año, o que su contador baje (la siguiente reserva repetiría números). |
+| `taco_number_guard` | BEFORE UPDATE OF `tacoNumber` en `UploadBatch` | Que cambie el nº de un taco ya puesto. |
+
+- **La llave es la de la auditoría** (`SET LOCAL app.allow_audit_mutation`,
+  dentro de una transacción), pero para borrar facturas y documentos hace falta
+  además que la asesoría esté marcada `isDemo`. Solo se marca a mano en la BD
+  (DEPLOY.md §10.5), nunca desde la app, un script ni una migración: así el único
+  camino que borra, el reset de la demo, no puede tocar una asesoría real.
+  `reseedDemo` y `scripts/seed-demo.ts` lo comprueban antes de tocar nada; sin la
+  marca, el reset no borra nada y responde «Esta asesoría no es de demostración:
+  el reset no está permitido.» (409 en `/api/admin/reset-demo`).
+- **Un cliente con facturas o documentos no se puede borrar**, ni en la demo con
+  la llave: la cascada llega a esos triggers con el cliente ya borrado y no
+  encuentra su asesoría. El reset borra primero facturas y documentos, después los
+  clientes. La baja de un cliente exporta, entrega y bloquea; no borra
+  ([docs/baja-de-cliente.md](docs/baja-de-cliente.md)).
+- Las guardas de UPDATE no tienen llave: ningún camino de la app las necesita.
+- `TRUNCATE` (el harness de tests) no dispara triggers de fila. Una restauración
+  solo de datos necesita `--disable-triggers` (DEPLOY.md §10.7). El SQL que los
+  quita en una emergencia está en DEPLOY.md §10.8.
+
+### Altas, partes y lectura
+
+- **Claves únicas.** `/api/uploads` y la resubida del portal guardan el fichero
+  en `{cliente}/{periodo}/{instante}-{UUID}-{nombre}` (`uploadStorageKey`, como
+  `splitStorageKey`): con solo el instante, dos subidas del mismo nombre en el
+  mismo milisegundo compartían objeto y una sobrescribía el original de la otra.
+- **La fila al subir** (`archiveIntakeFields`): un XML es electrónico, una
+  imagen queda «Por confirmar» y un PDF espera al análisis. Lo que sube un
+  usuario CLIENT (y su resubida) lo guarda el cliente; la app no lo marca así en
+  ningún otro caso. `Document`, `Invoice` y la fila van en una transacción; si
+  falla, se borra el objeto (su clave es única) y se responde ERR-SYS-001 con
+  ticket automático.
+- **Partes de una división** (`src/lib/archiveSplit.ts`, desde
+  `reserveAndCreateSplit`): heredan de la factura que se divide la llegada, la
+  tanda y la posición, el taco del papel, «lo guarda el cliente» y el medio con
+  su origen (motivo `split`). El nº de parte es el mayor de toda la familia de
+  la raíz + 1, + 2…, como el relleno de la 12; antes de leerlo se bloquea la
+  fila de archivo de la raíz, así que dos hermanas que se dividen a la vez no
+  repiten número.
+- **Acceso** (`src/lib/archiveAccess.ts`): las rutas y páginas del archivo
+  comprueban la asesoría también para el ADMIN (no usan `canReadInvoice`). El
+  WORKER entra en sus clientes y, en el buzón, si tiene asignado un candidato.
+  Sin acceso, 404.
+- **Lectura** (`src/lib/archiveData.ts`): el archivo de un cliente se saca por
+  ejercicio con el periodo de deducción y se ordena, filtra y pagina en memoria
+  (como el listado de facturas), con un subtítulo por periodo de deducción (su
+  primer mes; si un lote trimestral lo abarca, «T3 2026»); el buscador suma
+  siempre el texto a la interpretación (nº de registro, importe) y pone primero
+  lo exacto; las cifras (`archiveMetrics.ts`) no cuentan el buzón, lo que está
+  por clasificar ni las originales divididas (sí sus partes), y llevan aparte las
+  rechazadas.
+- **Original a un clic**: `/api/archive/invoices/[id]/original` sirve el adjunto
+  en otro formato si lo hay (siempre como descarga; en una parte, el de su raíz,
+  que es el de toda la familia), si no el documento entero de una división, si no
+  el de la factura; `?copia=1`, el fichero que lee la app. CSP sandbox y nosniff
+  en `next.config.ts`, como `/raw`.
+
+### Pantallas y ediciones a mano
+
+- **Pantallas.** `/dashboard/archivo` (buscador «¿Dónde está?» y resumen por
+  cliente y ejercicio), la pestaña «Archivo» de la ficha del cliente (la del
+  administrador y la del gestor) y la ficha de archivo de una factura
+  (`/dashboard/archivo/facturas/[id]`). Cada página comprueba el rol y el
+  acceso ella misma (el proxy deja entrar en `/dashboard` a cualquiera); sin
+  acceso, 404. Lo de papel (tacos, cajas, ubicación) llega con la entrega B.
+- **Ediciones** (`setOriginalMedium` y `setRetentionHold` en
+  `src/lib/archiveEdits.ts`, acciones en `src/app/dashboard/archivo/actions.ts`):
+  solo escriben en `InvoiceArchive`, así que no cambian `Invoice.updatedAt` (una
+  revisión abierta sigue validando) y valen con el periodo cerrado o la factura
+  exportada. Una o varias facturas, siempre del mismo cliente; auditoría por
+  factura (`originalMedium`, `retentionHold`) en la misma transacción.
+- **Electrónico o papel a mano** («Electrónico», «Papel» o «Por confirmar»)
+  cambia toda la familia de cada división (es el mismo papel), con origen MANUAL
+  y motivo `manual`, que el análisis ya no pisa; «Por confirmar» a mano es el
+  medio vacío con origen MANUAL. No se puede mientras alguna de la familia se
+  analiza (UPLOADED o ANALYZING). Bloquea como la división: primero las raíces,
+  después el resto por `invoiceId`. En la ficha, lo que propuso la app se fija
+  con «Confirmar «Electrónico»» (mismo medio, origen MANUAL); en la tabla, desde
+  «todas las de esta página» se pueden elegir todas las de lo filtrado, hasta
+  las 200 que admiten las acciones.
+- **Las partes de una división** con motivo `split` enseñan el motivo de su raíz
+  («Foto: falta confirmar si hay papel (todo el documento dividido)») mientras
+  la raíz tenga el mismo medio.
+- **La llegada** se llama «Recibida el» en una recibida y «Subida el» en una
+  emitida (ficha, cabecera de la tabla e índice del ZIP); con las dos mezcladas,
+  «Recibida o subida el».
+- **Las acciones nunca lanzan**: la comprobación de acceso va dentro del mismo
+  `try` que la edición, así que un fallo de la BD ahí también acaba en «No se ha
+  podido guardar».
+- **Esperas**: `lock_timeout` de 5 s (`ARCHIVE_EDIT_WAITS`); un conflicto o una
+  espera larga (40P01, 40001, 55P03, 57014) no lanza: la acción devuelve «Otra
+  persona estaba cambiando estas facturas; vuelve a intentarlo.».
+- **Ejercicio del cliente**: «El ejercicio empieza en» (Ajustes, de enero a
+  diciembre; enero = año natural). Si el cliente ya tiene facturas, el
+  formulario avisa antes de guardar de que reagrupa todo su archivo y su
+  «conservar hasta» (limitación 6).
+
+### Originales en otros formatos y ZIP del ejercicio
+
+- **Original en Word, Excel, OpenDocument o RTF.** No se sube como factura
+  (`validateUploadedFile` sigue sin admitirlo): se adjunta desde la ficha de
+  archivo a una factura cuyo PDF ya está subido, y la app sigue leyendo el PDF.
+  `validateOriginalAttachment` (`fileValidation.ts`) mira el contenido y no el
+  nombre: OLE2 con el flujo `WordDocument` (.doc) o `Workbook`/`Book` (.xls) en
+  su directorio (leído con `XLSX.CFB`, sin distinguir mayúsculas, como Office;
+  con macros —`Macros`, `_VBA_PROJECT_CUR`, `VBA`, `_VBA_PROJECT`, o una hoja de
+  macros de Excel 4.0— no), ZIP con `[Content_Types].xml` (.docx, .xlsx; con
+  macros —`macroEnabled` o `vbaProject.bin`— no), ZIP con la entrada `mimetype`
+  de OpenDocument (.odt, .ods; con `Basic/` o `Scripts/`, salvo los índices
+  vacíos de las bibliotecas, no) o `{\rtf` (.rtf); la extensión tiene que ser
+  la del contenido. Del ZIP solo se lee el índice y como mucho 1 MB de esas dos
+  entradas.
+- `attachOriginalDocument` (`archiveEdits.ts`) sube el fichero a
+  `{cliente}/originales/{instante}-{UUID}-{nombre}` (bajo el prefijo del
+  cliente, que es lo que borra el reset de la demo), crea un `Document` del
+  cliente y apunta la fila a él; el medio pasa a electrónico (MANUAL, motivo
+  `other_format`). En una división va a la raíz y el medio, a toda la familia.
+  Si la transacción falla, se borra el objeto. Un adjunto anterior se queda
+  (Document, objeto y auditoría). «Quitar el original adjunto» solo pone
+  `originalDocumentId` a NULL, con la auditoría «nombre → —»: no borra nada y el
+  medio no cambia.
+- **ZIP del ejercicio** (`/api/archive/clients/[id]/zip`; solo ADMIN de la
+  asesoría): `archiveExport.ts` decide una vez qué lleva (`checkArchiveExport`,
+  con `loadArchiveYearRows` y `planArchiveZip`) y la comprobación (`?check=1`),
+  el rastro `archiveExport` (antes del primer byte) y la escritura usan lo mismo.
+  Carpetas `recibidas/`, `emitidas/` (por la serie del nº de registro),
+  `sin-registrar/` y, si se piden, `rechazadas/`, y dentro el periodo de
+  deducción (AAAA-MM). Cada objeto del almacenamiento va una vez: un Word con
+  su «(copia).pdf»; de una división, el documento entero donde cae su primera
+  parte. El SHA-256 se calcula al pasar y se compara, factura por factura, con
+  el `fileHash` que se guardó para ESA factura (`checkArchiveFiles`); si no
+  coincide, o el original falta, va a ERRORES.txt y el ZIP sigue. Dos facturas
+  antiguas con la misma clave (subidas antes de `uploadStorageKey`) comparten un
+  objeto: las dos llevan el aviso y ERRORES.txt dice cuáles son. `indice.xlsx`
+  (`archiveIndexXlsx.ts`) va en el orden del archivo, con los importes como
+  número, las fechas como fecha y los textos siempre como texto (sin fórmulas).
+  Tiene los límites de la descarga de datos (`CLIENT_EXPORT_LIMITS`), sumando
+  cada fichero una vez; si no cabe, 413 y «por trimestres» (del ejercicio). Sin
+  auditoría, notas internas ni nombres o correos del personal: es lo que se
+  entrega al cliente que lo pide o se da de baja.
+- `zipStream.ts` es el ZIP en streaming de las dos descargas (contrapresión,
+  corte antes de 4 GiB sin ZIP64, entrada cortada que se cierra). La descarga de
+  datos del cliente lleva también los adjuntos en `originales/` y en
+  `facturas.csv` las columnas «Nº de registro», «Original en otro formato» y
+  «Original electrónico o en papel» («Original» sigue siendo la ruta del
+  fichero).
+
+### Pendiente (fuera de la fase 1)
+
+- **La entrega B** (papel: tandas, tacos, cajas y ubicación), arriba.
+- **Clientes que no se exportan desde la app.** El nº de registro solo se pone en
+  `commitExportBatch`: un cliente que la asesoría lleva en otro programa, o que
+  mete a mano en A3, no tendrá nunca número y todo su archivo saldrá «sin
+  registrar». Hará falta otro disparador con la misma función
+  (`assignRegisterNumbers`): al cerrar el periodo o con un «Registrar el periodo»
+  explícito.
+- **Tabla de eventos por cliente.** `AuditLog` exige factura, así que no queda
+  rastro de un cambio de `fiscalYearStartMonth`, de un ZIP de un ejercicio sin
+  facturas ni, con la entrega B, de guardar en caja un taco sin facturas. Necesita
+  migración.
+- **Rendimiento con muchos años.** La pestaña, el ZIP y el buscador trabajan en
+  memoria por cliente y ejercicio (el buscador, con todo el ámbito por
+  `matchingInvoiceIds`), como el listado de facturas. Si crece: ordenar y paginar
+  sobre una consulta ligera y llevar el texto a `unaccent` o `pg_trgm`.
+- **Alinear el nº de registro con el de A3.** Hoy pueden no coincidir. Si el
+  asesor lo necesita: fijar el primer número de cada serie
+  (`InvoiceRegisterSeries.lastNumber`) o sacar las filas del Excel en el orden del
+  archivo.
+- **«Anular lote»** (aparcado): si algún día existe, no debe liberar números de
+  registro. Un número dado no vuelve: los triggers no dejan quitarlo.
+- Limitaciones conocidas 5, 6 y 7 (borrados futuros, ejercicio sin vigencias y
+  adjuntos sustituidos), abajo.
+
 ## Cron jobs
 
 Se disparan con una Scheduled Task de Coolify (DEPLOY.md §5):
@@ -336,8 +746,12 @@ Se disparan con una Scheduled Task de Coolify (DEPLOY.md §5):
   reintentos.
 - `/api/cron/closure-reminders` — recuerda cerrar el periodo el
   día 1 de cada mes.
+- `/api/cron/archivo-detectar` — no es periódico: mira si los PDF de antes
+  del archivo son electrónicos o escaneos. Se lanza a mano tras desplegar la
+  migración 12 hasta que no quede ninguno (ver [Archivo de
+  facturas](#archivo-de-facturas) y DEPLOY.md §10.6).
 
-Ambos requieren header `Authorization: Bearer $CRON_SECRET`.
+Los tres requieren header `Authorization: Bearer $CRON_SECRET`.
 
 ## Testing
 
@@ -402,7 +816,9 @@ Windows con un Postgres local. Lo que más pesa es el lote de 3.000 facturas.
   `TEST_DATABASE_URL` (las mismas que en producción; nunca `reset`).
 - Antes de cada test se vacían (TRUNCATE) solo las tablas de los modelos de
   Prisma (`Prisma.ModelName`), tras comprobar otra vez el marcador. Los
-  ficheros corren uno detrás de otro: comparten la BD.
+  ficheros corren uno detrás de otro: comparten la BD. Un test no puede borrar
+  facturas, documentos ni filas de archivo (triggers de la migración 12) salvo
+  en una asesoría `isDemo` con la llave del reset; para vaciar una tabla, TRUNCATE.
 - Solo se simulan la sesión (`@/lib/auth`, con `signInAs`), `next/cache`,
   `next/navigation`, `after()` (se encola; el test lo ejecuta con
   `runAfterCallbacks`), el OCR (Gemini, con `stubOcr`; el
@@ -410,8 +826,10 @@ Windows con un Postgres local. Lo que más pesa es el lote de 3.000 facturas.
   puede ir lento o caerse con `fakeS3().setMode(...)`). Prisma y Postgres son
   los reales. Sin `RESEND_API_KEY`, el correo no sale.
 - Factorías (`helpers/factories.ts`): `makeFirm("A")` crea una asesoría con
-  admin, gestor asignado, cliente con portal y facturas; `makeTwoFirms()`,
-  dos, para los tests de aislamiento entre asesorías.
+  admin, gestor asignado, cliente con portal y facturas (`makeFirm("A", {
+  demo: true })`, marcada `isDemo`, la única que el reset de la demo puede
+  borrar); `makeTwoFirms()`, dos, para los tests de aislamiento entre
+  asesorías.
 - Carreras: `holdLock(sql)` (`helpers/locks.ts`) abre una transacción que
   bloquea (`LOCK TABLE`, `SELECT … FOR UPDATE`) y la mantiene hasta
   `release()`, para parar una acción a mitad y cruzarle otra. Para parar una
@@ -442,7 +860,23 @@ Windows con un Postgres local. Lo que más pesa es el lote de 3.000 facturas.
    copia local. Consolidar.
 4. **Reset demo + auditoría**: el bypass via `SET LOCAL` funciona,
    pero es un cuchillo: si alguien lo usa fuera de `demoSeed.ts`,
-   se carga la inmutabilidad. Hay que mantenerlo restringido.
+   se carga la inmutabilidad. Hay que mantenerlo restringido. Para
+   facturas y documentos, además, solo vale en una asesoría `isDemo`.
+5. **Borrados legítimos futuros** (baja con borrado, purga tras el plazo
+   de conservación): los triggers del archivo los impiden. Tendrán su
+   propio camino, con su rastro, cuando se diseñen.
+6. **Ejercicio del cliente sin vigencias**: `Client.fiscalYearStartMonth`
+   es un solo mes, sin fecha desde la que vale. Cambiarlo en Ajustes
+   reagrupa hacia atrás todo el archivo del cliente (pestaña, cifras, ZIP)
+   y su «conservar hasta», y no queda en la auditoría (`AuditLog` exige
+   factura). El formulario avisa si el cliente ya tiene facturas. Hoy es
+   informativo; la purga futura tendrá que guardar la vigencia (un
+   ejercicio corto de transición, por ejemplo) antes de apoyarse en él.
+7. **Adjuntos sustituidos o quitados**: el Word anterior sigue en el
+   almacenamiento y en `Document`, pero ya no lo apunta ninguna factura, así
+   que no sale en el ZIP del ejercicio ni en la descarga de datos del
+   cliente (los dos van por las facturas). Se encuentra por la auditoría
+   `originalDocument`.
 
 ## Glosario fiscal mínimo (para devs no españoles)
 
