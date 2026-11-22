@@ -46,8 +46,8 @@ export function ArchiveSearchBox({
           aria-label="¿Dónde está?"
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Nº de factura, proveedor, NIF, importe o R-2026/153"
-          className="w-full rounded-lg border border-slate-200 bg-white py-2.5 pl-9 pr-9 text-[14px] placeholder-slate-400 outline-none transition focus:border-accent-500 focus:ring-2 focus:ring-accent-100"
+          placeholder="Nº de factura, proveedor, NIF, importe, R-2026/153, T37 o caja 3"
+          className="w-full rounded-lg border border-slate-200 bg-white py-2.5 pl-9 pr-9 text-[14px] placeholder-slate-400 outline-none transition focus:border-accent-500 focus:ring-2 focus:ring-accent-100 [&::-webkit-search-cancel-button]:hidden"
         />
         {q && !pending && (
           <button

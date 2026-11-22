@@ -48,6 +48,37 @@ export async function updateFirm(_prev: ActionState, fd: FormData): Promise<Acti
   return { success: true };
 }
 
+// ─── papel escaneado y cajas ────────────────────────────────────────────────
+
+const paperSchema = z.object({
+  paperScanMode: z.enum(["PER_INVOICE", "WHOLE_PDF"], { error: "Elige cómo escaneáis el papel." }),
+  paperBoxMode: z.enum(["PER_CLIENT_YEAR", "SHARED"], { error: "Elige cómo guardáis las cajas." }),
+});
+
+/** Los dos ajustes del papel (B-R1). Solo cambian lo que se propone: los
+ *  tacos hechos y sus cajas se quedan como están. */
+export async function updatePaperSettings(_prev: ActionState, fd: FormData): Promise<ActionState> {
+  try {
+    const session = await auth();
+    const firmId = session?.user?.advisoryFirmId;
+    if (!session?.user || session.user.role !== "ADMIN" || !firmId) return { error: "No autorizado" };
+
+    const parsed = paperSchema.safeParse({
+      paperScanMode: fd.get("paperScanMode"),
+      paperBoxMode: fd.get("paperBoxMode"),
+    });
+    if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "Datos no válidos." };
+
+    await prisma.advisoryFirm.update({ where: { id: firmId }, data: parsed.data });
+    revalidatePath("/dashboard/admin/settings");
+    revalidatePath("/dashboard/worker/upload");
+    return { success: true };
+  } catch (err) {
+    console.error("[ajustes] no se han podido guardar los ajustes del papel:", err);
+    return { error: "No se han podido guardar los ajustes. Inténtalo de nuevo." };
+  }
+}
+
 // ─── logo de la asesoría ──────────────────────────────────────────────────────
 
 // El logo se guarda como data URL ya redimensionado en cliente (~320px). Tope

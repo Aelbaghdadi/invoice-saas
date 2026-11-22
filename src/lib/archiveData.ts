@@ -16,6 +16,7 @@ import type { ArchiveScope } from "@/lib/archiveAccess";
 import {
   archiveWarnings,
   compareArchiveOrder,
+  fiscalYearLabel,
   fiscalYearOf,
   fiscalYearRange,
   flagLateRegistrations,
@@ -37,16 +38,42 @@ import {
 } from "@/lib/archiveMetrics";
 import { parseArchiveQuery, type ArchiveQuery } from "@/lib/archiveSearchQuery";
 import { formatRegisterNumber, type RegisterQuery } from "@/lib/registerNumbers";
+import { IN_ANALYSIS } from "@/lib/invoiceStatuses";
 import { splitPartReasonLabel } from "@/lib/originalMedium";
 import { hasOwnAccountingPeriod, invoicePeriod, periodIndex, periodLabel, type PeriodTypeName } from "@/lib/period";
 import { matchesSearch, normalizeSearch, pageWindow, PAGE_SIZE, type PageWindow } from "@/lib/listing";
 import { amountSearchVariants, MAX_IDS_IN_QUERY } from "@/lib/invoiceSearch";
 import { inIdOrder, invoicePageIds, matchingInvoiceIds } from "@/lib/invoiceListing";
+import { boxLabelKey, boxLabelPrefix, boxNumberOf } from "@/lib/boxProposal";
+import { tacoFiscalStartYear } from "@/lib/tacos";
+import {
+  boxLabelMatchesWords,
+  isPaperWithoutLocation,
+  isUnconfirmedWithoutLocation,
+  paperLocationOf,
+  type PaperLocation,
+  type PaperLocationInput,
+} from "@/lib/paperLocation";
 
 /** Tope de niveles al recorrer una división: en la práctica son uno o dos. */
 const MAX_SPLIT_DEPTH = 100;
 
 // ── Lo que se lee de cada factura ───────────────────────────────────────────
+
+/** De la tanda de llegada y del taco del papel: lo que decide la ubicación
+ *  (paperLocationOf) y, de una tanda digital, el «Ver la subida del…». */
+const ARCHIVE_TACO_SELECT = {
+  id: true,
+  tacoNumber: true,
+  origin: true,
+  wholePdf: true,
+  boxLabel: true,
+  returnedAt: true,
+  filedAt: true,
+  voidedAt: true,
+  createdAt: true,
+  fileCount: true,
+} satisfies Prisma.UploadBatchSelect;
 
 const ARCHIVE_ROW_SELECT = {
   id: true,
@@ -87,6 +114,10 @@ const ARCHIVE_ROW_SELECT = {
       registerSeries: { select: { type: true, year: true } },
       retentionHold: true,
       retentionHoldReason: true,
+      uploadBatchId: true,
+      paperBatchId: true,
+      uploadBatch: { select: ARCHIVE_TACO_SELECT },
+      paperBatch: { select: ARCHIVE_TACO_SELECT },
     },
   },
 } satisfies Prisma.InvoiceSelect;
@@ -112,7 +143,30 @@ function archiveOf(record: ArchiveRecord): ArchiveRowData {
     registerSeries: null,
     retentionHold: false,
     retentionHoldReason: null,
+    uploadBatchId: null,
+    paperBatchId: null,
+    uploadBatch: null,
+    paperBatch: null,
   };
+}
+
+function locationInputOf(archive: ArchiveRowData): PaperLocationInput {
+  return {
+    medium: archive.originalMedium,
+    paperHeldByClient: archive.paperHeldByClient,
+    uploadPosition: archive.uploadPosition,
+    arrival: archive.uploadBatch,
+    paper: archive.paperBatch,
+  };
+}
+
+/** La subida (tanda digital) en la que llegó una factura: «Ver la subida del 21/11/2026». */
+export type ArrivalBatch = { id: string; createdAt: Date; fileCount: number };
+
+function arrivalDigitalBatchOf(archive: ArchiveRowData, location: PaperLocation): ArrivalBatch | null {
+  const batch = archive.uploadBatch;
+  if (!batch || location.arrivalDigitalBatchId !== batch.id) return null;
+  return { id: batch.id, createdAt: batch.createdAt, fileCount: batch.fileCount };
 }
 
 /** Una factura del archivo con lo que se calcula una sola vez. */
@@ -126,6 +180,7 @@ type ArchiveEntry = {
   periodLabel: string;
   total: number | null;
   registerLabel: string | null;
+  location: PaperLocation;
 };
 
 /** ¿Va en un lote trimestral sin periodo contable propio? Abarca el trimestre. */
@@ -182,6 +237,7 @@ function toEntry(record: ArchiveRecord): ArchiveEntry {
     registerLabel: archive.registerNumber != null && archive.registerSeries
       ? formatRegisterNumber(archive.registerSeries, archive.registerNumber)
       : null,
+    location: paperLocationOf(locationInputOf(archive)),
   };
 }
 
@@ -201,6 +257,9 @@ function metricsRowOf(entry: ArchiveEntry): ArchiveMetricsRow {
     retentionHold: archive.retentionHold,
     lastInvoiceDate: record.invoiceDate,
     count: 1,
+    // Lo que no se puede ubicar (electrónica, en un taco, lo guarda el
+    // cliente) cuenta como ubicado: B-R13 solo mira PAPER y «Por confirmar».
+    located: !entry.location.withoutLocation,
   };
 }
 
@@ -338,6 +397,8 @@ export type ClientArchiveFilters = {
   type?: ArchiveTypeFilter;
   medium?: ArchiveMediumFilter;
   includeRejected?: boolean;
+  /** «Solo sin ubicación»: el papel y lo «Por confirmar» sin ubicación (B-R13), lo que se puede ubicar. */
+  withoutLocation?: boolean;
   q?: string;
 };
 
@@ -377,6 +438,10 @@ export type ClientArchiveRow = {
   /** Si es una parte de una división. */
   split: SplitFamilyPosition | null;
   warnings: ArchiveRowWarning[];
+  /** Dónde está el papel (B-R12). */
+  location: PaperLocation;
+  /** Si llegó en una subida digital: para «Ver la subida del…» (donde está «Era papel: crear taco»). */
+  arrivalBatch: ArrivalBatch | null;
 };
 
 export type ArchivePeriodGroup = { key: string; label: string; count: number };
@@ -411,6 +476,13 @@ function matchesMedium(archive: ArchiveRowData, filter: ArchiveMediumFilter | un
   return true;
 }
 
+/** B-R13: lo que se puede ubicar (papel o «Por confirmar», sin taco, no rechazada y sin «lo guarda el cliente»). */
+function isWithoutLocation(entry: ArchiveEntry): boolean {
+  const { status } = entry.record;
+  const input = { ...locationInputOf(entry.archive), rejected: status === "REJECTED", analyzing: IN_ANALYSIS.includes(status) };
+  return isPaperWithoutLocation(input) || isUnconfirmedWithoutLocation(input);
+}
+
 function matchesRegister(archive: ArchiveRowData, register: RegisterQuery): boolean {
   return archive.registerNumber === register.number
     && archive.registerSeries?.year === register.year
@@ -420,12 +492,23 @@ function matchesRegister(archive: ArchiveRowData, register: RegisterQuery): bool
 const sameAmount = (a: number | null, b: number | null) =>
   a != null && b != null && Math.round(a * 100) === Math.round(b * 100);
 
+/** Lo que el filtro de la pestaña necesita además de la fila: las facturas del
+ *  taco de la consulta (las mismas que el buscador, invoicesInTaco) y el
+ *  prefijo de B-R11 del cliente y ejercicio de la pestaña. */
+type TabPaperQuery = { tacoIds: ReadonlySet<string> | null; boxPrefix: string };
+
 /** El texto del filtro de la pestaña: lo que busca el listado de facturas,
- *  más el nº de registro y el importe tal como sale impreso. */
-function matchesArchiveQuery(entry: ArchiveEntry, query: ArchiveQuery): boolean {
+ *  más el nº de registro y el importe tal como sale impreso, y como el
+ *  buscador, el taco, la caja y las palabras de su etiqueta. */
+function matchesArchiveQuery(entry: ArchiveEntry, query: ArchiveQuery, paper: TabPaperQuery): boolean {
   if (query.kind === "registro" && matchesRegister(entry.archive, query.register)) return true;
   if (sameAmount(entry.total, query.amount)) return true;
-  const { record } = entry;
+  const { location, record } = entry;
+  if (paper.tacoIds?.has(record.id)) return true;
+  if (query.box && location.boxLabel && boxNumberOf(location.boxLabel) === query.box.number) return true;
+  if (!query.taco && !query.box && location.boxLabel && boxLabelMatchesWords(location.boxLabel, paper.boxPrefix, query.text)) {
+    return true;
+  }
   return matchesSearch(
     [
       record.invoiceNumber, record.filename, record.issuerName, record.issuerCif, record.receiverName, record.receiverCif,
@@ -434,6 +517,9 @@ function matchesArchiveQuery(entry: ArchiveEntry, query: ArchiveQuery): boolean 
     query.text,
   );
 }
+
+/** Tope de facturas de un taco en el filtro de la pestaña: un taco entero tiene como mucho 500 páginas. */
+const TAB_TACO_LIMIT = 5000;
 
 /**
  * Las facturas del archivo de un cliente cuyo periodo de deducción (el
@@ -518,12 +604,19 @@ export async function loadClientArchive(input: {
 
   const filters = input.filters ?? {};
   const query = parseArchiveQuery(filters.q);
+  const paper: TabPaperQuery = {
+    tacoIds: query.taco
+      ? new Set(await invoicesInTaco({ firmId: input.firmId, clientIds: [client.id] }, query.taco, TAB_TACO_LIMIT))
+      : null,
+    boxPrefix: boxLabelPrefix({ mode: "PER_CLIENT_YEAR", clientName: client.name, fiscalYearLabel: fiscalYear.label }),
+  };
   const visible = entries
     .filter((entry) =>
       (filters.includeRejected || entry.record.status !== "REJECTED")
       && matchesType(entry.record, filters.type)
       && matchesMedium(entry.archive, filters.medium)
-      && (!normalizeSearch(query.text) || matchesArchiveQuery(entry, query)))
+      && (!filters.withoutLocation || isWithoutLocation(entry))
+      && (!normalizeSearch(query.text) || matchesArchiveQuery(entry, query, paper)))
     .sort((a, b) => compareArchiveOrder(a.order, b.order));
 
   const groups = new Map<string, ArchivePeriodGroup>();
@@ -654,6 +747,8 @@ async function archiveRows(
       originalDocument: document ? { filename: document.filename, fileType: document.fileType } : null,
       split,
       warnings,
+      location: entry.location,
+      arrivalBatch: arrivalDigitalBatchOf(archive, entry.location),
     };
   });
 }
@@ -689,7 +784,38 @@ export type ArchiveInvoiceDetail = {
   /** El documento entero, si es una parte de una división. */
   splitRoot: { id: string; filename: string; fileType: string } | null;
   history: { id: string; field: string; oldValue: string | null; newValue: string | null; createdAt: Date; userName: string }[];
+  /** Si llegó en un taco entero: sus páginas del PDF y su orden en el taco («12.ª»). */
+  wholeTacoRange: WholeTacoRange | null;
+  /** «Ver el PDF del taco entero», si llegó en uno. */
+  tacoPdfUrl: string | null;
 };
+
+export type WholeTacoRange = { tacoId: string; tacoNumber: number; start: number; end: number; order: number };
+
+/**
+ * Las páginas del PDF de una factura que llegó en un taco entero: desde la
+ * suya (donde empieza) hasta la anterior a la siguiente que empieza una
+ * factura, o la última; y su orden entre las que empiezan una (como tacoSlots).
+ */
+async function wholeTacoRangeOf(archive: ArchiveRowData, firmId: string): Promise<WholeTacoRange | null> {
+  const batch = archive.uploadBatch;
+  const start = archive.uploadPosition;
+  if (!batch || !batch.wholePdf || batch.tacoNumber == null || start == null) return null;
+  const [taco, starts] = await Promise.all([
+    prisma.uploadBatch.findFirst({ where: { id: batch.id, advisoryFirmId: firmId }, select: { pdfPageCount: true } }),
+    prisma.invoiceArchive.findMany({
+      where: { uploadBatchId: batch.id, uploadPosition: { not: null } },
+      select: { uploadPosition: true },
+      distinct: ["uploadPosition"],
+    }),
+  ]);
+  if (!taco) return null;
+  const pages = starts.map((row) => row.uploadPosition as number).sort((x, y) => x - y);
+  const index = pages.indexOf(start);
+  if (index < 0) return null;
+  const end = index + 1 < pages.length ? pages[index + 1] - 1 : Math.max(taco.pdfPageCount ?? start, start);
+  return { tacoId: batch.id, tacoNumber: batch.tacoNumber, start, end, order: index + 1 };
+}
 
 /** Todo lo de una factura en el archivo, o null si no es de la asesoría. */
 export async function loadArchiveInvoice(invoiceId: string, firmId: string): Promise<ArchiveInvoiceDetail | null> {
@@ -705,7 +831,7 @@ export async function loadArchiveInvoice(invoiceId: string, firmId: string): Pro
   if (!found) return null;
   const { client, fileType, expenseAccount, ...record } = found;
   const entry = toEntry(record);
-  const [[row], extra, rootId, history] = await Promise.all([
+  const [[row], extra, rootId, history, wholeTacoRange] = await Promise.all([
     archiveRows([entry], client.fiscalYearStartMonth, firmId),
     prisma.invoiceArchive.findUnique({
       where: { invoiceId },
@@ -717,6 +843,7 @@ export async function loadArchiveInvoice(invoiceId: string, firmId: string): Pro
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       select: { id: true, field: true, oldValue: true, newValue: true, createdAt: true, user: { select: { name: true } } },
     }),
+    wholeTacoRangeOf(entry.archive, firmId),
   ]);
   const [splitRoot, rootDocument] = rootId
     ? await Promise.all([
@@ -751,6 +878,8 @@ export async function loadArchiveInvoice(invoiceId: string, firmId: string): Pro
       createdAt: h.createdAt,
       userName: h.user.name,
     })),
+    wholeTacoRange,
+    tacoPdfUrl: wholeTacoRange ? `/api/archive/tacos/${wholeTacoRange.tacoId}/pdf` : null,
   };
 }
 
@@ -813,14 +942,16 @@ export async function archiveOriginalFile(
 
 // ── Buscador «¿Dónde está?» ─────────────────────────────────────────────────
 
-/** Por qué sale un resultado. Las cuatro primeras son coincidencias exactas. */
-export type ArchiveMatch = "registro" | "importe" | "numero" | "nif" | "texto";
+/** Por qué sale un resultado. Todas salvo «texto» son coincidencias exactas. */
+export type ArchiveMatch = "registro" | "importe" | "numero" | "nif" | "taco" | "caja" | "texto";
 
 export const ARCHIVE_MATCH_LABELS: Record<ArchiveMatch, string> = {
   registro: "Nº de registro",
   importe: "Importe",
   numero: "Nº de factura",
   nif: "NIF",
+  taco: "Taco",
+  caja: "Caja",
   texto: "Texto",
 };
 
@@ -844,14 +975,92 @@ export type ArchiveSearchResult = {
   mediumReasonLabel: string | null;
   paperHeldByClient: boolean;
   retainUntil: Date | null;
+  /** Dónde está el papel (B-R12). */
+  location: PaperLocation;
   matchedBy: ArchiveMatch[];
-  /** Casa de forma exacta (nº de registro, importe, nº de factura o NIF):
-   *  estas van primero. */
+  /** Casa de forma exacta (nº de registro, importe, nº de factura, NIF, taco
+   *  o «caja 3»): estas van primero. Las palabras de una etiqueta, no. */
   exact: boolean;
 };
 
 /** Sin espacios ni separadores y en mayúsculas, para comparar un nº o un NIF. */
 const compactUpper = (value: string, separators: RegExp) => value.replace(separators, "").toUpperCase();
+
+/** Tope de facturas que trae cada forma de buscar antes de ordenar (como el nº de registro). */
+const SEARCH_CANDIDATES = 200;
+
+/**
+ * Las facturas del ámbito que llegaron en el Taco N o cuyo papel se puso en él
+ * (B-R19). Con página, la de esa página; en un taco entero, la que la cubre
+ * (la de mayor inicio que no pasa de ella). Las que se sacaron del taco
+ * también salen: su ubicación dice dónde están ahora.
+ */
+async function invoicesInTaco(
+  scope: ArchiveScope,
+  taco: { number: number; page: number | null },
+  limit = SEARCH_CANDIDATES,
+): Promise<string[]> {
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT a."invoiceId" AS id
+    FROM "InvoiceArchive" a
+    JOIN "Invoice" i ON i."id" = a."invoiceId"
+    JOIN "Client" c ON c."id" = i."clientId"
+    LEFT JOIN "UploadBatch" ub ON ub."id" = a."uploadBatchId" AND ub."advisoryFirmId" = ${scope.firmId}
+    LEFT JOIN "UploadBatch" pb ON pb."id" = a."paperBatchId" AND pb."advisoryFirmId" = ${scope.firmId}
+    WHERE c."advisoryFirmId" = ${scope.firmId}
+      AND c."isUnclassifiedBucket" = false
+      AND i."clientId" = ANY(${scope.clientIds}::text[])
+      AND i."status"::text NOT IN (${Prisma.join(ARCHIVE_EXCLUDED_STATUSES)})
+      AND (${taco.page == null
+        ? Prisma.sql`ub."tacoNumber" = ${taco.number} OR pb."tacoNumber" = ${taco.number}`
+        : Prisma.sql`ub."tacoNumber" = ${taco.number} AND a."uploadPosition" = CASE WHEN ub."wholePdf"
+            THEN (SELECT MAX(s."uploadPosition") FROM "InvoiceArchive" s
+                  WHERE s."uploadBatchId" = ub."id" AND s."uploadPosition" <= ${taco.page})
+            ELSE ${taco.page} END`})
+    LIMIT ${limit}`;
+  return rows.map((row) => row.id);
+}
+
+/**
+ * Las facturas del ámbito cuyo papel está en un taco con una de esas cajas:
+ * el taco del papel (paperBatch) o, si no lo hay, el de llegada; sin las
+ * electrónicas ni las que guarda el cliente, que no están en la caja. `matches`
+ * recibe la etiqueta y el prefijo de B-R11 del cliente y ejercicio del taco.
+ */
+async function invoicesInBoxes(scope: ArchiveScope, matches: (label: string, boxPrefix: string) => boolean): Promise<string[]> {
+  const tacos = await prisma.uploadBatch.findMany({
+    where: { advisoryFirmId: scope.firmId, tacoNumber: { not: null }, boxLabel: { not: null } },
+    select: {
+      id: true,
+      boxLabel: true,
+      origin: true,
+      periodMonth: true,
+      periodYear: true,
+      client: { select: { name: true, fiscalYearStartMonth: true } },
+    },
+  });
+  const prefixOf = (taco: (typeof tacos)[number]) => {
+    const startMonth = taco.client?.fiscalYearStartMonth ?? 1;
+    const fiscalYear = fiscalYearLabel(tacoFiscalStartYear(taco, startMonth), startMonth);
+    return boxLabelPrefix({ mode: "PER_CLIENT_YEAR", clientName: taco.client?.name ?? null, fiscalYearLabel: fiscalYear });
+  };
+  const ids = tacos.filter((taco) => taco.boxLabel && matches(taco.boxLabel, prefixOf(taco))).map((taco) => taco.id);
+  if (ids.length === 0) return [];
+  const rows = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT a."invoiceId" AS id
+    FROM "InvoiceArchive" a
+    JOIN "Invoice" i ON i."id" = a."invoiceId"
+    JOIN "Client" c ON c."id" = i."clientId"
+    WHERE c."advisoryFirmId" = ${scope.firmId}
+      AND c."isUnclassifiedBucket" = false
+      AND i."clientId" = ANY(${scope.clientIds}::text[])
+      AND i."status"::text NOT IN (${Prisma.join(ARCHIVE_EXCLUDED_STATUSES)})
+      AND a."originalMedium" IS DISTINCT FROM 'ELECTRONIC'
+      AND a."paperHeldByClient" = false
+      AND (a."paperBatchId" = ANY(${ids}::text[]) OR (a."paperBatchId" IS NULL AND a."uploadBatchId" = ANY(${ids}::text[])))
+    LIMIT ${SEARCH_CANDIDATES}`;
+  return rows.map((row) => row.id);
+}
 
 /**
  * Busca en el archivo de la asesoría (o en los clientes del gestor). La
@@ -859,7 +1068,9 @@ const compactUpper = (value: string, separators: RegExp) => value.replace(separa
  * siempre además: «2026/153» también es un nº de factura de proveedor, y
  * «R-2026/153» existe en cada cliente. Van primero las coincidencias exactas
  * y después las de texto, de la más reciente a la más antigua; como mucho
- * ARCHIVE_SEARCH_LIMIT.
+ * ARCHIVE_SEARCH_LIMIT. Las palabras dentro de la etiqueta de una caja
+ * (boxLabelMatchesWords) cuentan como texto: traen todo el papel de la caja y
+ * no deben tapar un nº de factura, un NIF o un importe.
  */
 export async function searchArchive(scope: ArchiveScope, rawQuery: string): Promise<ArchiveSearchResult[]> {
   const query = parseArchiveQuery(rawQuery);
@@ -874,8 +1085,11 @@ export async function searchArchive(scope: ArchiveScope, rawQuery: string): Prom
   // Sin ninguna letra ni cifra («-», «.») el NIF compactado queda vacío y
   // casaba, exacto, con toda factura sin NIF: no es ni un nº ni un NIF.
   const looksLikeNumberOrTaxId = /[\p{L}\p{N}]/u.test(query.text);
+  // «caja 3» por su nº (no «Caja 13»); otro texto, dentro de las etiquetas.
+  const boxNumber = query.box?.number ?? null;
+  const searchBoxWords = !query.taco && boxNumber == null && boxLabelKey(query.text).length >= 3;
 
-  const [byRegister, byAmount, byNumberOrTaxId, textIds] = await Promise.all([
+  const [byRegister, byAmount, byNumberOrTaxId, textIds, byTaco, byBox, byBoxWords] = await Promise.all([
     query.kind === "registro"
       ? prisma.invoiceArchive.findMany({
         where: {
@@ -908,14 +1122,21 @@ export async function searchArchive(scope: ArchiveScope, rawQuery: string): Prom
       LIMIT 500`
       : Promise.resolve([]),
     matchingInvoiceIds(where, query.text),
+    query.taco ? invoicesInTaco(scope, query.taco) : Promise.resolve([]),
+    boxNumber != null ? invoicesInBoxes(scope, (label) => boxNumberOf(label) === boxNumber) : Promise.resolve([]),
+    searchBoxWords
+      ? invoicesInBoxes(scope, (label, boxPrefix) => boxLabelMatchesWords(label, boxPrefix, query.text))
+      : Promise.resolve([]),
   ]);
 
   const registerSet = new Set(byRegister.map((r) => r.invoiceId));
   const amountSet = new Set(byAmount.map((r) => r.id));
   const numberSet = new Set(byNumberOrTaxId.filter((r) => r.numero).map((r) => r.id));
   const taxIdSet = new Set(byNumberOrTaxId.filter((r) => r.nif).map((r) => r.id));
+  const tacoSet = new Set(byTaco);
+  const boxSet = new Set([...byBox, ...byBoxWords]);
   const textSet = new Set(textIds ?? []);
-  const exactSet = new Set([...registerSet, ...amountSet, ...numberSet, ...taxIdSet]);
+  const exactSet = new Set([...registerSet, ...amountSet, ...numberSet, ...taxIdSet, ...tacoSet, ...byBox]);
 
   const orderBy: Prisma.InvoiceOrderByWithRelationInput[] = [{ createdAt: "desc" }, { id: "asc" }];
   const exactIds = exactSet.size > 0
@@ -928,7 +1149,7 @@ export async function searchArchive(scope: ArchiveScope, rawQuery: string): Prom
     : [];
   const textPage = await invoicePageIds({
     where,
-    textIds: textIds ?? [],
+    textIds: [...new Set([...(textIds ?? []), ...byBoxWords])],
     orderBy,
     page: 1,
     pageSize: ARCHIVE_SEARCH_LIMIT + exactIds.length,
@@ -950,6 +1171,8 @@ export async function searchArchive(scope: ArchiveScope, rawQuery: string): Prom
     if (amountSet.has(record.id)) matchedBy.push("importe");
     if (numberSet.has(record.id)) matchedBy.push("numero");
     if (taxIdSet.has(record.id)) matchedBy.push("nif");
+    if (tacoSet.has(record.id)) matchedBy.push("taco");
+    if (boxSet.has(record.id)) matchedBy.push("caja");
     if (textSet.has(record.id)) matchedBy.push("texto");
     return {
       invoiceId: record.id,
@@ -969,6 +1192,7 @@ export async function searchArchive(scope: ArchiveScope, rawQuery: string): Prom
       mediumReasonLabel: mediumReasonLabelOf(entry.archive, roots.get(families.get(record.id)?.rootId ?? "")),
       paperHeldByClient: entry.archive.paperHeldByClient,
       retainUntil: retainUntil({ ...entry.order, retentionHold: entry.archive.retentionHold }, client.fiscalYearStartMonth),
+      location: entry.location,
       matchedBy,
       exact: exactSet.has(record.id),
     };
@@ -991,13 +1215,16 @@ type MetricsRawRow = {
   retentionHold: boolean;
   lastInvoiceDate: Date | null;
   count: number;
+  located: boolean;
 };
 
 /**
  * Las facturas del archivo agrupadas por cliente, periodo, tipo, estado,
- * medio, registro y «conservar más», para buildArchiveMetrics. Siempre dentro
- * de la asesoría y de los clientes del ámbito, sin el buzón, las facturas por
- * clasificar ni las originales divididas.
+ * medio, registro, «conservar más» y si tienen ubicación (B-R13: en un taco
+ * —el del papel o uno de llegada con nº— o la guarda el cliente; lo mismo que
+ * paperLocationOf), para buildArchiveMetrics. Siempre dentro de la asesoría y
+ * de los clientes del ámbito, sin el buzón, las facturas por clasificar ni
+ * las originales divididas.
  */
 export async function loadArchiveMetricsRows(scope: ArchiveScope): Promise<ArchiveMetricsRow[]> {
   if (scope.clientIds.length === 0) return [];
@@ -1014,18 +1241,23 @@ export async function loadArchiveMetricsRows(scope: ArchiveScope): Promise<Archi
       (a."registerNumber" IS NOT NULL) AS "registered",
       COALESCE(a."retentionHold", false) AS "retentionHold",
       MAX(i."invoiceDate") AS "lastInvoiceDate",
-      COUNT(*)::int AS "count"
+      COUNT(*)::int AS "count",
+      ${LOCATED_SQL} AS "located"
     FROM "Invoice" i
     JOIN "Client" c ON c."id" = i."clientId"
     LEFT JOIN "InvoiceArchive" a ON a."invoiceId" = i."id"
+    LEFT JOIN "UploadBatch" ub ON ub."id" = a."uploadBatchId"
     WHERE c."advisoryFirmId" = ${scope.firmId}
       AND c."isUnclassifiedBucket" = false
       AND i."clientId" = ANY(${scope.clientIds}::text[])
       AND i."status"::text NOT IN (${Prisma.join(ARCHIVE_EXCLUDED_STATUSES)})
     GROUP BY i."clientId", i."type", i."status", i."periodType", i."periodMonth", i."periodYear",
       i."accountingPeriodMonth", i."accountingPeriodYear", a."originalMedium",
-      (a."registerNumber" IS NOT NULL), COALESCE(a."retentionHold", false)`;
+      (a."registerNumber" IS NOT NULL), COALESCE(a."retentionHold", false), ${LOCATED_SQL}`;
 }
+
+/** ¿Tiene ubicación? (B-R13; las guardas de la 13 solo dejan poner el papel en un taco con nº). */
+const LOCATED_SQL = Prisma.sql`(COALESCE(a."paperHeldByClient", false) OR a."paperBatchId" IS NOT NULL OR ub."tacoNumber" IS NOT NULL)`;
 
 /** Matriz cliente × ejercicio de la asesoría o de los clientes del gestor. */
 export async function loadArchiveMetrics(scope: ArchiveScope): Promise<ArchiveMetrics> {

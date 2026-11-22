@@ -33,27 +33,38 @@ export type UploadMeta = {
   type: "PURCHASE" | "SALE" | "UNKNOWN";
 };
 
-export type UploadResult =
-  | { status: "ok"; invoiceId: string }
-  | { status: "duplicate"; of: string }
-  | { status: "error"; message: string };
+/** La tanda de un fichero del gestor: su posición en la lista (en un taco, la
+ *  página) o el PDF de un taco entero, que crea el taco al subirlo. */
+export type UploadBatchRef = { uploadBatchId: string; uploadPosition: number } | { wholeTaco: true };
 
-async function readErrorMessage(res: Response, fallback: string): Promise<string> {
+export type UploadResult =
+  /** alreadyUploaded: un reintento de una página que ya había llegado. */
+  | { status: "ok"; invoiceId: string; alreadyUploaded?: boolean }
+  // `message` nunca viene: está para que los formularios que leen
+  // `result.message` en lo que no es «ok» ni «duplicate» sigan compilando.
+  | { status: "taco-pdf"; batchId: string; tacoNumber: number; pageCount: number; alreadyUploaded?: boolean; message?: undefined }
+  | { status: "duplicate"; of: string }
+  | { status: "error"; message: string; code?: string };
+
+async function readError(res: Response, fallback: string): Promise<{ message: string; code?: string }> {
   try {
     const body = await res.json();
     const err = body?.error;
-    if (typeof err === "string") return err;
-    if (err && typeof err === "object" && typeof err.message === "string") return err.message;
+    if (typeof err === "string") return { message: err };
+    if (err && typeof err === "object" && typeof err.message === "string") {
+      return { message: err.message, code: typeof err.code === "string" ? err.code : undefined };
+    }
   } catch {
     /* respuesta sin json */
   }
-  return fallback;
+  return { message: fallback };
 }
 
 export async function uploadFileDirect(
   file: File,
   meta: UploadMeta,
   onStatus: (s: UploadStatus) => void,
+  batch?: UploadBatchRef,
 ): Promise<UploadResult> {
   try {
     onStatus("uploading");
@@ -68,17 +79,32 @@ export async function uploadFileDirect(
     form.set("periodMonth", String(meta.periodMonth));
     form.set("periodYear", String(meta.periodYear));
     form.set("type", meta.type);
+    if (batch && "wholeTaco" in batch) {
+      form.set("wholeTaco", "1");
+    } else if (batch) {
+      form.set("uploadBatchId", batch.uploadBatchId);
+      form.set("uploadPosition", String(batch.uploadPosition));
+    }
 
     const res = await fetch("/api/uploads", { method: "POST", body: form });
     if (!res.ok) {
-      const msg = await readErrorMessage(res, `Error al subir (${res.status})`);
-      return { status: "error", message: msg };
+      const { message, code } = await readError(res, `Error al subir (${res.status})`);
+      return { status: "error", message, code };
     }
     const data = await res.json();
     if (data.duplicate) {
       return { status: "duplicate", of: data.of };
     }
-    return { status: "ok", invoiceId: data.invoiceId };
+    if (data.tacoPdf) {
+      return {
+        status: "taco-pdf",
+        batchId: data.batchId,
+        tacoNumber: data.tacoNumber,
+        pageCount: data.pageCount,
+        ...(data.alreadyUploaded ? { alreadyUploaded: true } : {}),
+      };
+    }
+    return { status: "ok", invoiceId: data.invoiceId, ...(data.alreadyUploaded ? { alreadyUploaded: true } : {}) };
   } catch (e) {
     return { status: "error", message: (e as Error)?.message ?? "Error desconocido" };
   }
@@ -88,6 +114,7 @@ export async function uploadFileDirect(
  * Procesa N archivos con concurrencia limitada (pool de workers).
  *  - 3 archivos a la vez balancea velocidad sin saturar al servidor ni el
  *    ancho de banda del cliente.
+ *  - `batchFor(i)`: la tanda del fichero i (sin ella, sube sin tanda, como el portal).
  */
 export async function uploadFilesDirect(
   files: File[],
@@ -95,6 +122,7 @@ export async function uploadFilesDirect(
   concurrency: number,
   onItemStatus: (idx: number, status: UploadStatus) => void,
   onItemDone: (idx: number, result: UploadResult) => void,
+  batchFor?: (idx: number) => UploadBatchRef | undefined,
 ): Promise<UploadResult[]> {
   const results: UploadResult[] = new Array(files.length);
   let nextIdx = 0;
@@ -103,7 +131,7 @@ export async function uploadFilesDirect(
     while (true) {
       const i = nextIdx++;
       if (i >= files.length) return;
-      const r = await uploadFileDirect(files[i], meta, (s) => onItemStatus(i, s));
+      const r = await uploadFileDirect(files[i], meta, (s) => onItemStatus(i, s), batchFor?.(i));
       results[i] = r;
       onItemDone(i, r);
     }

@@ -2,14 +2,15 @@
  * Cifras del archivo por cliente y ejercicio (las del anexo de la entrega A,
  * que sustituyen a R21 en la interfaz): Facturas · Recibidas · Emitidas ·
  * Electrónico · Papel · Por confirmar · Registradas · Sin registrar ·
- * Conservar más · Conservar hasta, y aparte las rechazadas.
+ * Conservar más · Conservar hasta, y aparte las rechazadas. Con la entrega
+ * del papel, también el papel y lo «Por confirmar» sin ubicación (B-R13).
  * Módulo puro: las filas las agrupa la BD (loadArchiveMetricsRows) y la
  * pestaña Archivo de un cliente suma aquí las suyas, para que las dos pantallas
  * digan lo mismo.
  */
 import type { InvoiceStatus, InvoiceType, OriginalMedium } from "@prisma/client";
 import { fiscalYearLabel, fiscalYearOf, retainUntil, type ArchivePeriodFields, type FiscalYear } from "@/lib/archiveRules";
-import { PENDING_WORK } from "@/lib/invoiceStatuses";
+import { IN_ANALYSIS, PENDING_WORK } from "@/lib/invoiceStatuses";
 import { invoicePeriod } from "@/lib/period";
 
 /** No están en el archivo: la original de una división (cuentan sus partes)
@@ -33,6 +34,9 @@ export type ArchiveMetricsRow = ArchivePeriodFields & {
    *  hasta» más tardío. */
   lastInvoiceDate: Date | null;
   count: number;
+  /** ¿Tiene ubicación? En un taco (de llegada con nº o puesto a mano) o la
+   *  guarda el cliente (B-R13). undefined = no se sabe y no cuenta. */
+  located?: boolean;
 };
 
 export type ArchiveCell = {
@@ -44,6 +48,11 @@ export type ArchiveCell = {
   paper: number;
   /** Medio null: «Por confirmar». No cuenta como papel. */
   unconfirmed: number;
+  /** «Papel sin ubicación» (B-R13): papel que no está en ningún taco ni lo guarda el cliente. */
+  paperWithoutLocation: number;
+  /** «Por confirmar» sin ubicación (sin las que aún se analizan): va al lado
+   *  de la anterior, porque todo el papel de antes del archivo está «Por confirmar». */
+  unconfirmedWithoutLocation: number;
   registered: number;
   unregistered: number;
   /** «Conservar más». */
@@ -64,6 +73,8 @@ export function emptyArchiveCell(): ArchiveCell {
     electronic: 0,
     paper: 0,
     unconfirmed: 0,
+    paperWithoutLocation: 0,
+    unconfirmedWithoutLocation: 0,
     registered: 0,
     unregistered: 0,
     retentionHold: 0,
@@ -97,6 +108,11 @@ export function addToArchiveCell(cell: ArchiveCell, row: ArchiveMetricsRow, fisc
   if (row.medium === "ELECTRONIC") cell.electronic += row.count;
   else if (row.medium === "PAPER") cell.paper += row.count;
   else cell.unconfirmed += row.count;
+  if (row.located === false) {
+    if (row.medium === "PAPER") cell.paperWithoutLocation += row.count;
+    // Lo que aún se analiza no se ofrece para ubicar: el análisis puede decir que es electrónica.
+    else if (row.medium == null && !IN_ANALYSIS.includes(row.status)) cell.unconfirmedWithoutLocation += row.count;
+  }
   if (row.registered) cell.registered += row.count;
   else cell.unregistered += row.count;
   if (row.retentionHold) cell.retentionHold += row.count;

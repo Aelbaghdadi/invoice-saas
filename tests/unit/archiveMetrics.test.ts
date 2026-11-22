@@ -134,6 +134,51 @@ describe("buildArchiveMetrics", () => {
   });
 });
 
+describe("sin ubicación (B-R13)", () => {
+  it("cuenta el papel que no está en ningún taco ni lo guarda el cliente", () => {
+    const [year] = buildArchiveMetrics([
+      row({ medium: "PAPER", located: false, count: 3 }),
+      row({ medium: "PAPER", located: true, count: 4 }),
+      row({ medium: "ELECTRONIC", located: false, count: 5 }),
+    ], [enero]).clients[0].years;
+    expect(year).toMatchObject({ paper: 7, paperWithoutLocation: 3, unconfirmedWithoutLocation: 0 });
+  });
+
+  it("las rechazadas no cuentan", () => {
+    const [year] = buildArchiveMetrics([
+      row({ medium: "PAPER", located: false, status: "REJECTED", count: 2 }),
+      row({ medium: null, located: false, status: "REJECTED" }),
+    ], [enero]).clients[0].years;
+    expect(year).toMatchObject({ rejected: 3, paperWithoutLocation: 0, unconfirmedWithoutLocation: 0 });
+  });
+
+  it("lo «Por confirmar» sin ubicación va a su cifra, no a la del papel", () => {
+    const metrics = buildArchiveMetrics([
+      row({ medium: null, located: false, count: 6 }),
+      row({ medium: null, located: true, count: 1 }),
+      row({ medium: "PAPER", located: false }),
+    ], [enero]);
+    expect(metrics.clients[0].years[0]).toMatchObject({ unconfirmed: 7, unconfirmedWithoutLocation: 6, paperWithoutLocation: 1 });
+    expect(metrics.totals[0]).toMatchObject({ unconfirmedWithoutLocation: 6, paperWithoutLocation: 1 });
+  });
+
+  it("lo «Por confirmar» que espera su análisis o se analiza no cuenta como sin ubicación", () => {
+    const metrics = buildArchiveMetrics([
+      row({ medium: null, located: false, status: "UPLOADED", count: 2 }),
+      row({ medium: null, located: false, status: "ANALYZING", count: 3 }),
+      row({ medium: null, located: false, status: "PENDING_REVIEW" }),
+    ], [enero]);
+    expect(metrics.clients[0].years[0]).toMatchObject({ unconfirmed: 6, unconfirmedWithoutLocation: 1 });
+  });
+
+  it("sin saber si tiene ubicación, no cuenta en ninguna", () => {
+    const cell = emptyArchiveCell();
+    addToArchiveCell(cell, row({ medium: "PAPER" }), 1);
+    addToArchiveCell(cell, row({ medium: null }), 1);
+    expect(cell).toMatchObject({ paper: 1, unconfirmed: 1, paperWithoutLocation: 0, unconfirmedWithoutLocation: 0 });
+  });
+});
+
 describe("addToArchiveCell y archiveFiscalYearOf", () => {
   it("una fila suelta suma igual que en la matriz", () => {
     const cell = emptyArchiveCell();

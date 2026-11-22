@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { BRAND } from "@/lib/brand";
 import {
   ARCHIVE_INDEX_HEADERS,
+  ARCHIVE_INDEX_WIDTHS,
   archiveFormatLabel,
   archiveIndexRow,
   archiveIndexSheets,
@@ -229,6 +230,7 @@ function indexInput(overrides: Partial<ArchiveIndexInput> = {}): ArchiveIndexInp
     currency: null,
     medium: "ELECTRONIC",
     mediumReasonLabel: "PDF con texto: no es un escaneo",
+    location: "Original electrónico",
     original: { fileType: "application/pdf", path: "recibidas/2026-03/R-2026-0153 F-123 Proveedor SL.pdf", sha256: "ab".repeat(32), problems: [] },
     copyFileType: null,
     retainUntil: new Date("2032-12-31T00:00:00Z"),
@@ -240,12 +242,15 @@ function indexInput(overrides: Partial<ArchiveIndexInput> = {}): ArchiveIndexInp
 }
 
 describe("índice del ZIP", () => {
-  it("cabeceras con tildes, y «Original» se llama como en facturas.csv", () => {
+  it("cabeceras con tildes, «Original» se llama como en facturas.csv y detrás va la ubicación del papel", () => {
     expect([...ARCHIVE_INDEX_HEADERS]).toEqual([
       "Nº de registro", "Periodo", "Tipo", "Estado", "Recibida el", "Fecha", "Nº de factura", "Tercero", "NIF",
-      "Base", "Cuota IVA", "Retención", "Total", "Original electrónico o en papel", "Formato", "Fichero en el ZIP",
-      "SHA-256", "Conservar hasta", "Avisos",
+      "Base", "Cuota IVA", "Retención", "Total", "Original electrónico o en papel", "Ubicación del papel", "Formato",
+      "Fichero en el ZIP", "SHA-256", "Conservar hasta", "Avisos",
     ]);
+    // Un ancho por columna, y 40 para la ubicación.
+    expect(ARCHIVE_INDEX_WIDTHS).toHaveLength(ARCHIVE_INDEX_HEADERS.length);
+    expect(ARCHIVE_INDEX_WIDTHS[ARCHIVE_INDEX_HEADERS.indexOf("Ubicación del papel")]).toBe(40);
   });
 
   it("una fila: importes como número, fechas como fecha (la llegada, en hora de Madrid), huella y conservar hasta", () => {
@@ -255,7 +260,7 @@ describe("índice del ZIP", () => {
       "R-2026/0153", "Marzo 2026", "Recibida", "Exportada",
       new Date("2026-03-05T00:00:00Z"), new Date("2026-03-02T00:00:00Z"),
       "F-123", "Proveedor SL", "B12345674", 100, 21, null, 121,
-      "Electrónico", "PDF", "recibidas/2026-03/R-2026-0153 F-123 Proveedor SL.pdf", "ab".repeat(32),
+      "Electrónico", "Original electrónico", "PDF", "recibidas/2026-03/R-2026-0153 F-123 Proveedor SL.pdf", "ab".repeat(32),
       new Date("2032-12-31T00:00:00Z"), null,
     ]);
   });
@@ -275,6 +280,9 @@ describe("índice del ZIP", () => {
     }));
     const at = (header: (typeof ARCHIVE_INDEX_HEADERS)[number]) => row[ARCHIVE_INDEX_HEADERS.indexOf(header)];
     expect(at("Original electrónico o en papel")).toBe("Por confirmar (Escaneo: falta confirmar si hay papel)");
+    expect(archiveIndexRow(indexInput({ medium: "PAPER", location: "Panadería López · 2026 · Caja 3 · Taco 37 · Pág. 28" }))[
+      ARCHIVE_INDEX_HEADERS.indexOf("Ubicación del papel")
+    ]).toBe("Panadería López · 2026 · Caja 3 · Taco 37 · Pág. 28");
     expect(at("Formato")).toBe("Word (.docx), con copia en PDF");
     expect(at("SHA-256")).toBeNull();
     expect(at("Conservar hasta")).toBe("Sin fecha: conservar más (Inmovilizado)");
@@ -368,6 +376,16 @@ describe("LEEME.txt del ZIP del ejercicio", () => {
     const withRejected = archiveReadme({ ...base, includeRejected: true, errorCount: 2 });
     expect(withRejected).toContain("rechazadas/");
     expect(withRejected).toContain("2 originales que faltan o que no coinciden");
+  });
+
+  it("explica la ubicación del papel y avisa de los tacos enteros sin dividir del periodo", () => {
+    const text = archiveReadme(base);
+    expect(text).toMatch(/ {2}Ubicación del papel: dónde está el papel en la asesoría \(caja, taco y página\),\r\n {2}si se devolvió al cliente o si lo guarda él\./);
+    expect(text).not.toContain("sin dividir");
+    expect(archiveReadme({ ...base, pendingWholeTacos: [38] }))
+      .toContain("  Hay 1 taco entero sin dividir en este ejercicio (T38): sus facturas no están en el ZIP.");
+    expect(archiveReadme({ ...base, pendingWholeTacos: [38, 41] }))
+      .toContain("  Hay 2 tacos enteros sin dividir en este ejercicio (T38, T41): sus facturas no están en el ZIP.");
   });
 
   it("habla del producto con el nombre que ve el cliente, no con el interno", () => {

@@ -1,15 +1,17 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { CalendarClock, ChevronLeft, Download, ExternalLink, FileText, Hash, History, Layers } from "lucide-react";
+import { CalendarClock, ChevronLeft, Download, ExternalLink, FileText, Hash, History, Layers, MapPin } from "lucide-react";
 import { auth } from "@/lib/auth";
 import { Badge } from "@/components/ui/Badge";
 import { InvoiceStatusBadge } from "@/components/ui/InvoiceStatusBadge";
 import { AttachOriginalForm } from "@/components/archive/AttachOriginalForm";
 import { MediumBadge } from "@/components/archive/MediumBadge";
 import { MediumSelect } from "@/components/archive/MediumSelect";
+import { PlacePaperButton } from "@/components/archive/PlacePaperButton";
 import { RetentionHoldForm } from "@/components/archive/RetentionHoldForm";
 import { canAccessArchiveInvoice } from "@/lib/archiveAccess";
-import { loadArchiveInvoice } from "@/lib/archiveData";
+import { loadArchiveInvoice, type ArchiveInvoiceDetail } from "@/lib/archiveData";
+import { invoiceOrderLabel, pageRangeLabel, tacoLabel } from "@/lib/paperLocation";
 import { fiscalYearLabel, fiscalYearOf, RETENTION_MIN_YEARS } from "@/lib/archiveRules";
 import { archiveTabHref, clientSheetPath } from "@/lib/clientSheet";
 import { formatDateEs, formatDateTimeEs, formatDayEs } from "@/lib/dates";
@@ -41,6 +43,78 @@ const buttonClass =
 function extensionOf(filename: string): string {
   const match = /\.([a-z0-9]{2,5})$/i.exec(filename);
   return match ? `.${match[1].toLowerCase()}` : "";
+}
+
+/**
+ * El bloque «Ubicación» (5.12): dónde está el papel y lo que se puede hacer
+ * (ver el taco, sacar la factura de él o ponerle ubicación). Una rechazada
+ * también: su papel sigue estando (B-R14 solo la salta en «a todas»). En el
+ * buzón no: su cliente aún no es el de la factura.
+ */
+function LocationBlock({ detail, invoiceId }: { detail: ArchiveInvoiceDetail; invoiceId: string }) {
+  const { row, client, wholeTacoRange, tacoPdfUrl } = detail;
+  const { location, arrivalBatch } = row;
+  const fiscalYear = detail.fiscalYear.startYear;
+  const canPlace = !client.isUnclassifiedBucket;
+  const inTaco = location.tacoId != null;
+  const place = (label: string, target: { moveInvoiceId: string } | { invoiceIds: string[] }) =>
+    canPlace ? <PlacePaperButton target={target} clientId={client.id} fiscalYear={fiscalYear} label={label} /> : null;
+
+  return (
+    <Block title="Ubicación" icon={MapPin}>
+      {inTaco ? (
+        <>
+          <p className="text-[16px] font-bold leading-snug text-slate-900">{location.text}</p>
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-[13px]">
+            <Link href={`/dashboard/archivo/tandas/${location.tacoId}`} className={buttonClass}>
+              {location.tacoNumber != null ? `Ver el ${tacoLabel(location.tacoNumber)}` : "Ver el taco"}
+            </Link>
+            {place("Sacar del taco…", { moveInvoiceId: invoiceId })}
+          </div>
+        </>
+      ) : location.kind === "electronic" ? (
+        <p className="text-[13px] text-slate-600">Original electrónico: no hay papel que guardar.</p>
+      ) : location.kind === "client" ? (
+        <>
+          <p className="text-[13px] text-slate-700">Lo guarda el cliente.</p>
+          <div className="mt-2">{place("Poner ubicación…", { invoiceIds: [invoiceId] })}</div>
+        </>
+      ) : location.kind === "unconfirmed" ? (
+        <>
+          <p className="text-[13px] text-slate-700">Falta confirmar si hay papel. Si lo hay, pon dónde está.</p>
+          <div className="mt-2">{place("Poner ubicación…", { invoiceIds: [invoiceId] })}</div>
+        </>
+      ) : (
+        <>
+          <p className="text-[13px] font-semibold text-amber-700">Sin ubicación.</p>
+          <div className="mt-2">{place("Poner ubicación…", { invoiceIds: [invoiceId] })}</div>
+        </>
+      )}
+      {wholeTacoRange && (
+        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3 text-[13px] text-slate-600">
+          <span>
+            {wholeTacoRange.end > wholeTacoRange.start ? "Págs." : "Pág."} {pageRangeLabel(wholeTacoRange.start, wholeTacoRange.end)} del PDF del{" "}
+            {tacoLabel(wholeTacoRange.tacoNumber)} ({invoiceOrderLabel(wholeTacoRange.order)} factura)
+          </span>
+          {tacoPdfUrl && (
+            <a href={tacoPdfUrl} target="_blank" rel="noopener" className={buttonClass}>
+              <ExternalLink className="h-4 w-4 text-slate-400" />
+              Ver el PDF del taco entero
+            </a>
+          )}
+        </div>
+      )}
+      {arrivalBatch && (
+        <p className="mt-3 border-t border-slate-100 pt-3 text-[13px] text-slate-600">
+          Llegó en la subida del {formatDayEs(arrivalBatch.createdAt)} ({arrivalBatch.fileCount.toLocaleString("es-ES")}{" "}
+          {arrivalBatch.fileCount === 1 ? "fichero" : "ficheros"}).{" "}
+          <Link href={`/dashboard/archivo/tandas/${arrivalBatch.id}`} className="font-medium text-blue-700 hover:underline">
+            Ver la subida
+          </Link>
+        </p>
+      )}
+    </Block>
+  );
 }
 
 /**
@@ -233,6 +307,8 @@ export default async function ArchiveInvoicePage({ params }: Props) {
             <p className="mt-2 text-[11px] text-slate-400">Es un documento dividido: cambiarlo cambia también el resto de sus partes.</p>
           ) : null}
         </Block>
+
+        <LocationBlock detail={detail} invoiceId={id} />
 
         <Block title="Nº de registro" icon={Hash}>
           {row.registerNumber ? (

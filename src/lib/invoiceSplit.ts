@@ -1,7 +1,8 @@
 import { createHash } from "crypto";
 import type { Invoice, InvoiceStatus, Prisma } from "@prisma/client";
-import { putObject, deleteObject, sanitizeFilenameForStorage } from "@/lib/storage";
+import { deleteObject, sanitizeFilenameForStorage } from "@/lib/storage";
 import { splitStorageKey } from "@/lib/splitStorageKey";
+import type { SplitPiece } from "@/lib/pdfPieces";
 import { appendAuditLogs } from "@/lib/auditLog";
 import { closeOpenIssues } from "@/lib/invoiceIssues";
 import { planSplitArchive, splitPartArchiveData } from "@/lib/archiveSplit";
@@ -13,35 +14,14 @@ import { planSplitArchive, splitPartArchiveData } from "@/lib/archiveSplit";
  * condicion; aqui se crean las hijas y se deja el rastro.
  */
 
-/** Un trozo de una division, ya en memoria y listo para subir. */
-export type SplitPiece = {
-  label: string;
-  filename: string;
-  storageKey: string;
-  fileType: string;
-  body: Buffer;
-};
+// El trozo y su subida son los mismos que los del taco entero (tacoSplit.ts).
+export { uploadSplitPieces, type SplitPiece } from "@/lib/pdfPieces";
 
 /** Lo que heredan las hijas de la original. */
 export type SplitSource = Pick<
   Invoice,
   "id" | "clientId" | "type" | "typeUnconfirmed" | "periodType" | "periodMonth" | "periodYear" | "currency"
 > & Partial<Pick<Invoice, "routingCandidateIds">>;
-
-/** Sube los trozos de una division. Si uno falla, borra los ya subidos. */
-export async function uploadSplitPieces(pieces: SplitPiece[]): Promise<string | null> {
-  const uploaded: string[] = [];
-  for (const piece of pieces) {
-    try {
-      await putObject(piece.storageKey, piece.body, piece.fileType);
-      uploaded.push(piece.storageKey);
-    } catch (e) {
-      await Promise.all(uploaded.map((key) => deleteObject(key)));
-      return `Error subiendo "${piece.label}": ${e instanceof Error ? e.message : "fallo"}`;
-    }
-  }
-  return null;
-}
 
 export function discardSplitPieces(pieces: SplitPiece[]): Promise<unknown> {
   return Promise.all(pieces.map((p) => deleteObject(p.storageKey)));

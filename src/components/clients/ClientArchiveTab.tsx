@@ -1,16 +1,20 @@
 import Link from "next/link";
-import { AlertTriangle, Archive, Info } from "lucide-react";
+import { AlertTriangle, Archive, Info, MapPin } from "lucide-react";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Pagination } from "@/components/ui/Pagination";
 import { ArchiveFilters } from "@/components/archive/ArchiveFilters";
 import { DownloadArchiveZip } from "@/components/archive/DownloadArchiveZip";
+import { PlacePaperButton } from "@/components/archive/PlacePaperButton";
 import { loadClientArchive } from "@/lib/archiveData";
 import { ARCHIVE_EDIT_MAX_INVOICES } from "@/lib/archiveEdits";
+import { boxLabelPrefix } from "@/lib/boxProposal";
 import { archiveTabHref, clientSheetHref, parseArchiveTabParams, type ArchiveTabParams, type ArchiveTabQuery } from "@/lib/clientSheet";
 import { formatDateEs } from "@/lib/dates";
 import { ClientArchiveTable } from "./ClientArchiveTable";
 
 const plural = (n: number, one: string, many: string) => `${n.toLocaleString("es-ES")} ${n === 1 ? one : many}`;
+
+type Figure = { text: string; href?: string; extra?: { text: string; href: string } };
 
 /**
  * El archivo del cliente en un ejercicio: sus cifras, los filtros y la tabla
@@ -36,7 +40,13 @@ export async function ClientArchiveTab({
     firmId,
     clientId,
     fiscalYear: query.fiscalYear,
-    filters: { type: query.type, medium: query.medium, includeRejected: query.includeRejected, q: query.q },
+    filters: {
+      type: query.type,
+      medium: query.medium,
+      includeRejected: query.includeRejected,
+      withoutLocation: query.withoutLocation,
+      q: query.q,
+    },
     page: query.page,
     selectionLimit: ARCHIVE_EDIT_MAX_INVOICES,
   });
@@ -53,23 +63,42 @@ export async function ClientArchiveTab({
     ? archive.fiscalYears
     : [fiscalYear, ...archive.fiscalYears].sort((a, b) => b.startYear - a.startYear);
   const inYear = (extra: Partial<ArchiveTabQuery> = {}) => archiveTabHref(basePath, { fiscalYear: fiscalYear.startYear, ...extra });
-  const figures: { text: string; href?: string }[] = [
+  const withoutLocationHref = inYear({ withoutLocation: true });
+  const n = (value: number) => value.toLocaleString("es-ES");
+  const figures: Figure[] = [
     { text: plural(summary.invoices, "factura", "facturas"), href: inYear() },
     { text: plural(summary.received, "recibida", "recibidas"), href: inYear({ type: "recibidas" }) },
     { text: plural(summary.issued, "emitida", "emitidas"), href: inYear({ type: "emitidas" }) },
-    { text: `${summary.electronic.toLocaleString("es-ES")} electrónico`, href: inYear({ medium: "electronico" }) },
-    { text: `${summary.paper.toLocaleString("es-ES")} papel`, href: inYear({ medium: "papel" }) },
-    { text: `${summary.unconfirmed.toLocaleString("es-ES")} por confirmar`, href: inYear({ medium: "por-confirmar" }) },
+    { text: `${n(summary.electronic)} electrónico`, href: inYear({ medium: "electronico" }) },
+    {
+      text: `${n(summary.paper)} papel`,
+      href: inYear({ medium: "papel" }),
+      extra: summary.paperWithoutLocation > 0 ? { text: `${n(summary.paperWithoutLocation)} sin ubicación`, href: withoutLocationHref } : undefined,
+    },
+    {
+      text: `${n(summary.unconfirmed)} por confirmar`,
+      href: inYear({ medium: "por-confirmar" }),
+      extra: summary.unconfirmedWithoutLocation > 0
+        ? { text: `${n(summary.unconfirmedWithoutLocation)} sin ubicación`, href: withoutLocationHref }
+        : undefined,
+    },
     { text: plural(summary.registered, "registrada", "registradas") },
-    { text: `${summary.unregistered.toLocaleString("es-ES")} sin registrar` },
-    { text: `${summary.retentionHold.toLocaleString("es-ES")} conservar más` },
+    { text: `${n(summary.unregistered)} sin registrar` },
+    { text: `${n(summary.retentionHold)} conservar más` },
   ];
-  const filtered = query.type !== "todas" || query.medium !== "todos" || !!query.q;
+  // «12 facturas en papel sin ubicación · 340 por confirmar (pueden ser papel).»
+  const toPlace = [
+    summary.paperWithoutLocation > 0 ? `${plural(summary.paperWithoutLocation, "factura", "facturas")} en papel sin ubicación` : null,
+    summary.unconfirmedWithoutLocation > 0 ? `${n(summary.unconfirmedWithoutLocation)} por confirmar (pueden ser papel)` : null,
+  ].filter((part): part is string => part != null);
+  const filtered = query.type !== "todas" || query.medium !== "todos" || query.withoutLocation || !!query.q;
   // La pestaña Facturas filtra por año natural: con otro ejercicio, el enlace
   // no puede prometer solo las de este ejercicio.
   const naturalYear = archive.client.fiscalYearStartMonth === 1;
   const pendingHref = clientSheetHref(basePath, { tab: "facturas", estado: "pendientes", year: naturalYear ? fiscalYear.startYear : undefined });
-  const tableKey = [fiscalYear.startYear, query.type, query.medium, query.includeRejected, query.q, window.page].join("|");
+  const tableKey = [fiscalYear.startYear, query.type, query.medium, query.includeRejected, query.withoutLocation, query.q, window.page].join("|");
+  // La caja en la tabla, sin el «{cliente} · {ejercicio} · » que en esta pestaña ya se sabe (B-R12).
+  const boxPrefix = boxLabelPrefix({ mode: "PER_CLIENT_YEAR", clientName: archive.client.name, fiscalYearLabel: fiscalYear.label });
 
   return (
     <div className="space-y-4">
@@ -112,6 +141,13 @@ export async function ClientArchiveTab({
               ) : (
                 <span className="font-medium text-slate-800">{f.text}</span>
               )}
+              {f.extra && (
+                <>
+                  {" ("}
+                  <Link href={f.extra.href} className="font-medium text-amber-700 hover:text-blue-700">{f.extra.text}</Link>
+                  {")"}
+                </>
+              )}
             </span>
           ))}
           <span className="text-slate-300"> · </span>
@@ -146,10 +182,36 @@ export async function ClientArchiveTab({
         </p>
       </div>
 
+      {toPlace.length > 0 && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+          <p className="flex min-w-0 flex-1 items-start gap-2 text-[13px] text-amber-900">
+            <MapPin className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-500" />
+            <span>{toPlace.join(" · ")}.</span>
+          </p>
+          <PlacePaperButton
+            target={{
+              clientId: archive.client.id,
+              fiscalYear: fiscalYear.startYear,
+              paperCount: summary.paperWithoutLocation,
+              unconfirmedCount: summary.unconfirmedWithoutLocation,
+            }}
+            clientId={archive.client.id}
+            fiscalYear={fiscalYear.startYear}
+            label="Poner ubicación a todas…"
+          />
+        </div>
+      )}
+
       <ArchiveFilters
         basePath={basePath}
         fiscalYear={fiscalYear.startYear}
-        values={{ type: query.type, medium: query.medium, includeRejected: query.includeRejected, q: query.q }}
+        values={{
+          type: query.type,
+          medium: query.medium,
+          includeRejected: query.includeRejected,
+          withoutLocation: query.withoutLocation,
+          q: query.q,
+        }}
       />
 
       <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -167,6 +229,7 @@ export async function ClientArchiveTab({
               periods={archive.periods}
               typeFilter={query.type}
               selectable={{ ids: archive.selectableIds, total: window.total, filtered }}
+              place={{ clientId: archive.client.id, fiscalYear: fiscalYear.startYear, boxPrefix }}
             />
             <Pagination
               window={window}

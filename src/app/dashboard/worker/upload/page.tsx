@@ -37,7 +37,7 @@ export default async function WorkerUploadPage() {
   // y los lotes abiertos de cada cliente para proponer el suyo al subir.
   const firmId = session.user.advisoryFirmId ?? undefined;
   const now = new Date();
-  const [groupsRaw, { openBatches, lastPeriodTypes, closedPeriods }] = await Promise.all([
+  const [groupsRaw, { openBatches, lastPeriodTypes, closedPeriods }, paper] = await Promise.all([
     firmId
       ? prisma.clientGroup.findMany({
           where: { advisoryFirmId: firmId },
@@ -46,6 +46,10 @@ export default async function WorkerUploadPage() {
         })
       : [],
     loadOpenBatches(firmId, clients.map((c) => c.id), now),
+    // Ajustes del papel (Ajustes → Papel): lo que sale marcado al subir papel.
+    firmId
+      ? prisma.advisoryFirm.findUnique({ where: { id: firmId }, select: { paperScanMode: true, paperBoxMode: true } })
+      : null,
   ]);
   const groups = groupsRaw.map((g) => ({ id: g.id, name: g.name, clientIds: g.members.map((m) => m.clientId) }));
 
@@ -97,6 +101,8 @@ export default async function WorkerUploadPage() {
           lastPeriodTypes={lastPeriodTypes}
           closedPeriods={closedPeriods}
           now={now.toISOString()}
+          firmPaperScanMode={paper?.paperScanMode ?? "PER_INVOICE"}
+          firmPaperBoxMode={paper?.paperBoxMode ?? "PER_CLIENT_YEAR"}
         />
       </div>
     </div>

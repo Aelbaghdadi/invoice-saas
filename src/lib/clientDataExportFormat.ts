@@ -117,6 +117,8 @@ export type ReadmeInput = {
   generatedBy: string;
   invoiceCount: number;
   originalCount: number;
+  /** PDF enteros de los tacos escaneados en la asesoría (tacos/). */
+  tacoPdfCount?: number;
   auditCount: number;
   batchCount: number;
   missingOriginals: number;
@@ -153,6 +155,14 @@ export function readmeText(r: ReadmeInput): string {
     `  Word, Excel, OpenDocument o RTF) tal como se subieron, por periodo`,
     `  (AAAA-MM). El nombre empieza por el id de la factura.`,
     "",
+    ...((r.tacoPdfCount ?? 0) > 0
+      ? [
+        `tacos/`,
+        `  El PDF entero de cada taco escaneado en la asesoría (sus facturas, si se`,
+        `  dividió, están además en su sitio).`,
+        "",
+      ]
+      : []),
     `auditoria.csv`,
     `  Los ${r.auditCount} registros de auditoría de estas facturas: quién cambió qué`,
     `  y cuándo. Cada registro lleva su hash y el del anterior (cadena de hash):`,

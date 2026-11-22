@@ -16,9 +16,9 @@ import { formatDateTimeEs } from "@/lib/dates";
 import { CLIENT_EXPORT_LIMITS, UNKNOWN_FILE_BYTES } from "@/lib/clientDataExport";
 import { formatBytes } from "@/lib/clientDataExportFormat";
 import { loadArchiveYearRows, type ClientArchiveRow } from "@/lib/archiveData";
-import { fiscalQuarterLabel, type FiscalYear } from "@/lib/archiveRules";
+import { fiscalQuarterLabel, fiscalYearRange, type FiscalYear } from "@/lib/archiveRules";
 import { MAX_IDS_IN_QUERY } from "@/lib/invoiceSearch";
-import { invoicePeriod } from "@/lib/period";
+import { invoicePeriod, periodIndex } from "@/lib/period";
 import {
   archiveIndexSheets,
   archiveReadme,
@@ -62,7 +62,37 @@ export type ArchiveExport = {
   /** En el orden del archivo. */
   invoices: ExportInvoice[];
   plan: ArchiveZipPlan;
+  /** Nº de los tacos enteros del cliente sin dividir ni anular cuyo lote cae en el periodo del ZIP. */
+  pendingWholeTacos: number[];
 };
+
+/**
+ * Los tacos enteros del cliente sin dividir ni anular cuyo lote cae en el
+ * ejercicio (o en el trimestre) del ZIP: sus facturas aún no existen, y el
+ * LEEME lo dice.
+ */
+async function pendingWholeTacosIn(
+  clientId: string,
+  firmId: string,
+  fiscalYear: FiscalYear,
+  startMonth: number,
+  quarter: number | null,
+): Promise<number[]> {
+  const tacos = await prisma.uploadBatch.findMany({
+    where: { clientId, advisoryFirmId: firmId, wholePdf: true, pdfSplitAt: null, voidedAt: null },
+    select: { tacoNumber: true, periodMonth: true, periodYear: true },
+    orderBy: { tacoNumber: "asc" },
+  });
+  const [yearFrom, yearTo] = fiscalYearRange(fiscalYear.startYear, startMonth);
+  const [from, to] = quarter ? [yearFrom + 3 * (quarter - 1), yearFrom + 3 * quarter - 1] : [yearFrom, yearTo];
+  return tacos
+    .filter((taco) => taco.tacoNumber != null && taco.periodMonth != null)
+    .filter((taco) => {
+      const index = periodIndex(taco.periodYear, taco.periodMonth as number);
+      return index >= from && index <= to;
+    })
+    .map((taco) => taco.tacoNumber as number);
+}
 
 export type ArchiveExportCheck =
   | { ok: true; archive: ArchiveExport }
@@ -197,7 +227,8 @@ export async function checkArchiveExport(
       error: `Los originales del ${scope} ocupan ${formatBytes(bytes)} y se pueden descargar como mucho ${formatBytes(maxBytes)} de una vez. ${advice}`,
     };
   }
-  return { ok: true, archive: { client, fiscalYear, options, invoices, plan } };
+  const pendingWholeTacos = await pendingWholeTacosIn(client.id, firmId, fiscalYear, client.fiscalYearStartMonth, options.quarter);
+  return { ok: true, archive: { client, fiscalYear, options, invoices, plan, pendingWholeTacos } };
 }
 
 /** Lo que dice la auditoría de la descarga: «ZIP del ejercicio 2026, T2 (…), solo registradas». */
@@ -294,6 +325,7 @@ export async function writeArchiveZip(
       currency: row.currency,
       medium: row.medium,
       mediumReasonLabel: row.mediumReasonLabel,
+      location: row.location.text,
       original: { fileType: fileTypes.get(placement.original) ?? zip.own.fileType, path: placement.original, ...result },
       copyFileType: placement.copy ? fileTypes.get(placement.copy) ?? null : null,
       retainUntil: row.retainUntil,
@@ -320,6 +352,7 @@ export async function writeArchiveZip(
     fileCount: [...read.values()].filter((result) => "sha256" in result).length,
     errorCount: errors.length,
     sheets: sheets.map((sheet) => sheet.name),
+    pendingWholeTacos: archive.pendingWholeTacos,
   })));
 
   if (errors.length > 0) {

@@ -120,7 +120,10 @@ export async function writeAutoMedium(
   const proposal = proposeOriginalMedium({
     fileType: input.fileType,
     hasOtherFormatOriginal: root.originalDocumentId != null,
-    inTaco: root.tacoNumber != null,
+    // Solo con el medio vacío (B-R8): tras «Era papel», la propuesta
+    // electrónica que la conversión dejó como estaba no pasa a papel al
+    // reprocesar. Lo que llega en un taco ya entra como papel (origen TACO).
+    inTaco: root.tacoNumber != null && root.originalMedium == null,
     pdf: input.pdf,
   });
   // Un reproceso con la lectura cortada por tiempo (pdf.js comparte el hilo con
@@ -223,10 +226,11 @@ async function invoicesOfOneClient(
 }
 
 /** Una transacción de edición: un conflicto o una espera larga es { error }
- *  (anexo C11); cualquier otro fallo sigue hacia la acción. */
-async function archiveEditTransaction(
-  work: (tx: Prisma.TransactionClient) => Promise<ArchiveEditResult>,
-): Promise<ArchiveEditResult> {
+ *  (anexo C11); cualquier otro fallo sigue hacia la acción. La usan también
+ *  las escrituras de los tacos (tacos.ts), con su propio resultado. */
+export async function archiveEditTransaction<T = ArchiveEditResult>(
+  work: (tx: Prisma.TransactionClient) => Promise<T>,
+): Promise<T | { error: string }> {
   try {
     return await prisma.$transaction(async (tx) => {
       // SET LOCAL lock_timeout; set_config admite el valor como parámetro.

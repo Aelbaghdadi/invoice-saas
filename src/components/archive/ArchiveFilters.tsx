@@ -20,13 +20,13 @@ const MEDIUMS: SelectOption[] = [
   { value: "por-confirmar", label: "Por confirmar" },
 ];
 
-type Filters = Pick<ArchiveTabQuery, "type" | "medium" | "includeRejected" | "q">;
+type Filters = Pick<ArchiveTabQuery, "type" | "medium" | "includeRejected" | "withoutLocation" | "q">;
 
-const key = (f: Filters) => [f.type, f.medium, f.includeRejected ? "1" : "", f.q.trim()].join("\u0000");
+const key = (f: Filters) => [f.type, f.medium, f.includeRejected ? "1" : "", f.withoutLocation ? "1" : "", f.q.trim()].join("\u0000");
 
 /**
  * Filtros de la pestaña Archivo: recibidas o emitidas, el original, «Incluir
- * rechazadas» y texto. Van a la URL (con el ejercicio) y los aplica el
+ * rechazadas», «Solo sin ubicación» y texto. Van a la URL (con el ejercicio) y los aplica el
  * servidor, que es quien ordena y pagina. Como InvoiceFilters, se llevan en
  * estado local y de la URL solo se copia lo que cambia por fuera.
  */
@@ -80,7 +80,7 @@ export function ArchiveFilters({
     }, 400);
   }
 
-  const filtered = f.type !== "todas" || f.medium !== "todos" || f.includeRejected || !!f.q.trim();
+  const filtered = f.type !== "todas" || f.medium !== "todos" || f.includeRejected || f.withoutLocation || !!f.q.trim();
 
   return (
     <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -121,6 +121,19 @@ export function ArchiveFilters({
         Incluir rechazadas
       </label>
 
+      <label
+        className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] text-slate-600 shadow-sm"
+        title="El papel y lo «Por confirmar» que no está en ningún taco ni lo guarda el cliente"
+      >
+        <input
+          type="checkbox"
+          checked={f.withoutLocation}
+          onChange={(e) => go({ withoutLocation: e.target.checked })}
+          className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+        />
+        Solo sin ubicación
+      </label>
+
       <form
         role="search"
         className="relative min-w-[220px] flex-1"
@@ -135,16 +148,27 @@ export function ArchiveFilters({
           aria-label="Buscar en el archivo del cliente"
           value={f.q}
           onChange={(e) => onText(e.target.value)}
-          placeholder="Nº de factura, tercero, NIF, importe o R-2026/153…"
-          className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-9 text-[13px] placeholder-slate-400 outline-none transition focus:border-accent-500 focus:ring-2 focus:ring-accent-100"
+          placeholder="Nº de factura, tercero, NIF, importe, R-2026/153, T37 o caja 3…"
+          className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-9 text-[13px] placeholder-slate-400 outline-none transition focus:border-accent-500 focus:ring-2 focus:ring-accent-100 [&::-webkit-search-cancel-button]:hidden"
         />
+        {/* La «×» nativa de Chrome va oculta: se montaba con la ruedita de carga. */}
+        {f.q && !isPending && (
+          <button
+            type="button"
+            aria-label="Borrar la búsqueda"
+            onClick={() => go({ q: "" })}
+            className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 hover:text-slate-600"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
         {isPending && <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-slate-400" />}
       </form>
 
       {filtered && (
         <button
           type="button"
-          onClick={() => go({ type: "todas", medium: "todos", includeRejected: false, q: "" })}
+          onClick={() => go({ type: "todas", medium: "todos", includeRejected: false, withoutLocation: false, q: "" })}
           className="inline-flex items-center gap-1 rounded-lg px-2.5 py-2 text-[12px] font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-700"
         >
           <X className="h-3.5 w-3.5" />

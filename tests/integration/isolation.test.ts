@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { NextRequest } from "next/server";
 import { prisma } from "./helpers/db";
 import { fakeS3 } from "./helpers/fakeS3";
-import { makeFirm, makeInvoice, type FirmWorld } from "./helpers/factories";
+import { makeFirm, makeInvoice, makeTaco, type FirmWorld } from "./helpers/factories";
 import { blankPdf, PNG_DATA_URL } from "./helpers/fixtures";
 import { signInAs } from "./helpers/session";
 import { reject, reviewForm, settleAction, validate } from "./helpers/reviewForm";
@@ -17,6 +17,24 @@ import { attachOriginalDocumentAction, removeOriginalDocumentAction } from "@/ap
 import { POST as upload } from "@/app/api/uploads/route";
 import { archiveScope, canAccessArchiveInvoice, canAccessUploadBatch } from "@/lib/archiveAccess";
 import { loadArchiveInvoice, loadArchiveMetrics, loadClientArchive, searchArchive } from "@/lib/archiveData";
+import { GET as tacoPdf } from "@/app/api/archive/tacos/[id]/pdf/route";
+import TacosPage from "@/app/dashboard/archivo/tacos/page";
+import TacoDetailPage from "@/app/dashboard/archivo/tandas/[id]/page";
+import TacoSheetPage from "@/app/imprimir/taco/[id]/page";
+import {
+  boxProposalAction,
+  convertToTacoAction,
+  extendTacoAction,
+  fileTacoAction,
+  placePaperAction,
+  placePaperProposalAction,
+  previewPlacePaperAction,
+  voidTacoAction,
+} from "@/app/dashboard/archivo/tacoActions";
+import { TacoList } from "@/components/archive/TacoList";
+import { tacoAlerts } from "@/lib/tacoData";
+import { tacoViewer } from "@/lib/archiveAccess";
+import { isValidElement, type ReactNode } from "react";
 
 const NO_ACCESS = "No tienes acceso a esta factura.";
 
@@ -173,5 +191,84 @@ describe("el archivo no cruza asesorías (rutas y lecturas nuevas)", () => {
     expect(res.status).toBe(403);
     expect(await prisma.invoice.count({ where: { filename: "intruso.pdf" } })).toBe(0);
     expect(fakeS3().keys()).toEqual(keysBefore);
+  });
+
+  it("los tacos de A no se ven desde B: la pestaña Tacos, el detalle, la hoja, el PDF del taco, los avisos ni el buscador", async () => {
+    const taco = await makeTaco(a, { filed: { boxLabel: "Cliente A SL · 2026 · Caja 3" } });
+    const whole = await makeTaco(a, { wholePdf: { pageCount: 4 } });
+    const document = await prisma.document.findUniqueOrThrow({ where: { id: whole.pdfDocumentId! } });
+    fakeS3().put(document.storageKey, await blankPdf(4));
+    const invoice = await makeInvoice(a.client, { status: "VALIDATED", invoiceNumber: "TACO-A" });
+    await prisma.invoiceArchive.update({
+      where: { invoiceId: invoice.id },
+      data: { uploadBatchId: taco.id, uploadPosition: 1, originalMedium: "PAPER", originalMediumSource: "TACO", originalMediumReason: "taco" },
+    });
+    const listed = (node: ReactNode): string[] => {
+      const out: string[] = [];
+      const walk = (n: ReactNode) => {
+        if (Array.isArray(n)) n.forEach(walk);
+        else if (isValidElement(n)) {
+          if (n.type === TacoList) out.push(...(n.props as { rows: { id: string }[] }).rows.map((row) => row.id));
+          walk((n.props as { children?: ReactNode }).children);
+        }
+      };
+      walk(node);
+      return out;
+    };
+    const thrown = (page: Promise<unknown>) => page.then(() => null, (e: { digest?: string }) => e?.digest ?? String(e));
+
+    for (const user of [b.admin, b.worker]) {
+      signInAs(user);
+      expect(listed(await TacosPage({ searchParams: Promise.resolve({}) }))).toEqual([]);
+      expect(listed(await TacosPage({ searchParams: Promise.resolve({ estado: "por-dividir" }) }))).toEqual([]);
+      for (const id of [taco.id, whole.id]) {
+        expect(await thrown(TacoDetailPage({ params: Promise.resolve({ id }) }))).toBe("NEXT_HTTP_ERROR_FALLBACK;404");
+        expect(await thrown(TacoSheetPage({ params: Promise.resolve({ id }) }))).toBe("NEXT_HTTP_ERROR_FALLBACK;404");
+      }
+      const pdf = await tacoPdf(new NextRequest(`http://x/api/archive/tacos/${whole.id}/pdf`), { params: Promise.resolve({ id: whole.id }) });
+      expect(pdf.status).toBe(404);
+      const viewer = (await tacoViewer({ user }))!;
+      expect(await tacoAlerts(viewer)).toMatchObject({ unfiled: 0, pendingSplits: [] });
+      expect(await searchArchive((await archiveScope({ user }))!, `T${taco.tacoNumber}`)).toEqual([]);
+      expect(await searchArchive((await archiveScope({ user }))!, "caja 3")).toEqual([]);
+    }
+    signInAs(a.admin);
+    expect(listed(await TacosPage({ searchParams: Promise.resolve({}) })).sort()).toEqual([taco.id, whole.id].sort());
+  });
+
+  it("las acciones de tacos sobre lo de A desde B: error y nada cambia (también anular y completar)", async () => {
+    const taco = await makeTaco(a, { fileCount: 2 });
+    const empty = await makeTaco(a, { fileCount: 1 });
+    const digital = await makeTaco(a, { tacoNumber: null });
+    const invoice = await makeInvoice(a.client, { status: "VALIDATED" });
+    await prisma.invoiceArchive.update({
+      where: { invoiceId: invoice.id },
+      data: { originalMedium: "PAPER", originalMediumSource: "MANUAL", originalMediumReason: "manual" },
+    });
+    const snapshot = async () => ({
+      batches: await prisma.uploadBatch.findMany({ where: { advisoryFirmId: a.firm.id }, orderBy: { id: "asc" } }),
+      archive: await prisma.invoiceArchive.findUnique({ where: { invoiceId: invoice.id } }),
+      audit: await prisma.auditLog.count(),
+    });
+    const before = await snapshot();
+
+    for (const user of [b.admin, b.worker]) {
+      signInAs(user);
+      const results = [
+        await fileTacoAction({ batchId: taco.id, destination: { kind: "box", label: "Caja intrusa" } }),
+        await fileTacoAction({ batchId: taco.id, destination: { kind: "newBox" } }),
+        await convertToTacoAction({ batchId: digital.id }),
+        await voidTacoAction({ batchId: empty.id, reason: "Desde otra asesoría" }),
+        await extendTacoAction({ batchId: taco.id, expectedFileCount: 2, addCount: 1 }),
+        await boxProposalAction(taco.id),
+        await previewPlacePaperAction({ target: { invoiceIds: [invoice.id] } }),
+        await placePaperAction({ target: { invoiceIds: [invoice.id] }, destination: { kind: "returned" } }),
+        await placePaperAction({ target: { clientId: a.client.id, fiscalYear: 2026, includeUnconfirmed: true }, destination: { kind: "client" } }),
+        await placePaperAction({ target: { moveInvoiceId: invoice.id }, destination: { kind: "client" } }),
+        await placePaperProposalAction({ clientId: a.client.id, fiscalYear: 2026 }),
+      ];
+      for (const result of results) expect(result).toHaveProperty("error");
+    }
+    expect(await snapshot()).toEqual(before);
   });
 });

@@ -113,3 +113,93 @@ export async function makeFirm(tag: string, options: { demo?: boolean } = {}): P
 export async function makeTwoFirms() {
   return { a: await makeFirm("A"), b: await makeFirm("B") };
 }
+
+export type MakeTacoOptions = {
+  /** Sin poner, el siguiente libre de la asesoría; null, una tanda digital (sin nº). */
+  tacoNumber?: number | null;
+  /** Taco entero en un PDF: crea antes su Document del cliente. */
+  wholePdf?: { pageCount: number; fileHash?: string; split?: { byId: string; at?: Date } };
+  /** null = tanda de varios (con candidateIds). Por defecto, el cliente de la asesoría. */
+  clientId?: string | null;
+  candidateIds?: string[];
+  createdById?: string;
+  fileCount?: number;
+  createdAt?: Date;
+  period?: { periodType: "MONTHLY" | "QUARTERLY"; periodMonth: number; periodYear: number };
+  invoiceType?: "PURCHASE" | "SALE" | "UNKNOWN";
+  filed?: { boxLabel: string; at?: Date } | { returned: true; at?: Date };
+  origin?: "UPLOAD" | "ARCHIVE";
+  voided?: { reason: string; byId?: string };
+};
+
+/**
+ * Una tanda o taco insertado a mano (sin pasar por la subida), para los tests
+ * de tacos. Por defecto, un taco de factura a factura del cliente de la
+ * asesoría, de compras de septiembre de 2026, con 3 páginas. Un taco ARCHIVE
+ * (papel ubicado a mano) lleva solo el año y 0 ficheros.
+ */
+export async function makeTaco(w: FirmWorld, options: MakeTacoOptions = {}) {
+  const origin = options.origin ?? "UPLOAD";
+  const archive = origin === "ARCHIVE";
+  const clientId = options.clientId === undefined ? w.client.id : options.clientId;
+  const createdById = options.createdById ?? w.worker.id;
+  let tacoNumber = options.tacoNumber;
+  if (tacoNumber === undefined) {
+    const [row] = await prisma.$queryRaw<{ next: number }[]>`
+      SELECT (COALESCE(MAX("tacoNumber"), 0) + 1)::int AS next FROM "UploadBatch" WHERE "advisoryFirmId" = ${w.firm.id}`;
+    tacoNumber = row.next;
+  }
+  const period = options.period ?? { periodType: "MONTHLY" as const, periodMonth: 9, periodYear: 2026 };
+  let pdfDocumentId: string | null = null;
+  if (options.wholePdf) {
+    const n = next();
+    const document = await prisma.document.create({
+      data: {
+        filename: `taco-${n}.pdf`,
+        storageKey: `${clientId}/2026-09/taco-${n}.pdf`,
+        fileType: "application/pdf",
+        fileHash: options.wholePdf.fileHash ?? `huella-taco-${n}`,
+        sizeBytes: 1000,
+        uploadedBy: createdById,
+        clientId: clientId as string,
+      },
+    });
+    pdfDocumentId = document.id;
+  }
+  const filedAt = options.filed ? options.filed.at ?? new Date() : null;
+  const voidedAt = options.voided ? new Date() : null;
+  return prisma.uploadBatch.create({
+    data: {
+      advisoryFirmId: w.firm.id,
+      clientId,
+      routingCandidateIds: options.candidateIds ?? [],
+      origin,
+      createdById,
+      fileCount: options.fileCount ?? (archive ? 0 : options.wholePdf ? 1 : 3),
+      periodType: archive ? null : period.periodType,
+      periodMonth: archive ? null : period.periodMonth,
+      periodYear: period.periodYear,
+      invoiceType: archive ? null : options.invoiceType ?? "PURCHASE",
+      tacoNumber,
+      ...(options.createdAt ? { createdAt: options.createdAt } : {}),
+      ...(options.filed
+        ? "returned" in options.filed
+          ? { returnedAt: filedAt, filedAt, filedById: createdById }
+          : { boxLabel: options.filed.boxLabel, filedAt, filedById: createdById }
+        : {}),
+      ...(options.wholePdf
+        ? {
+            wholePdf: true,
+            pdfDocumentId,
+            pdfPageCount: options.wholePdf.pageCount,
+            ...(options.wholePdf.split
+              ? { pdfSplitAt: options.wholePdf.split.at ?? new Date(), pdfSplitById: options.wholePdf.split.byId }
+              : {}),
+          }
+        : {}),
+      ...(options.voided
+        ? { voidedAt, voidedById: options.voided.byId ?? createdById, voidReason: options.voided.reason }
+        : {}),
+    },
+  });
+}

@@ -44,6 +44,10 @@ export default async function SettingsPage() {
           cif: firm?.cif ?? "",
           logoDataUrl: firm?.logoDataUrl ?? null,
         }}
+        paper={{
+          paperScanMode: firm?.paperScanMode ?? "PER_INVOICE",
+          paperBoxMode: firm?.paperBoxMode ?? "PER_CLIENT_YEAR",
+        }}
         profile={{
           name: user?.name ?? "",
           email: user?.email ?? "",

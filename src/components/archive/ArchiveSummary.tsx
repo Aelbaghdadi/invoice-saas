@@ -1,9 +1,11 @@
 import Link from "next/link";
-import { Archive } from "lucide-react";
+import { AlertTriangle, Archive, ArrowRight } from "lucide-react";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { PendingTacoSplitsNotice } from "@/components/archive/PendingTacoSplits";
 import type { ArchiveCell, ArchiveMetrics } from "@/lib/archiveMetrics";
 import { archiveTabHref, clientSheetPath, type ArchiveTabQuery } from "@/lib/clientSheet";
 import { formatDateEs } from "@/lib/dates";
+import type { TacoAlerts } from "@/lib/tacoData";
 
 /** Ejercicios de la matriz: los últimos siete. */
 const MATRIX_YEARS = 7;
@@ -14,6 +16,9 @@ type Figure = {
   /** El filtro de la pestaña Archivo que enseña esas facturas, si lo hay. */
   filter?: Partial<ArchiveTabQuery>;
   tone?: (n: number) => string;
+  /** Debajo, en gris (y también enlaza al filtro): «+ 340 por confirmar». */
+  extra?: (cell: ArchiveCell) => number;
+  extraLabel?: string;
 };
 
 const FIGURES: Figure[] = [
@@ -22,6 +27,14 @@ const FIGURES: Figure[] = [
   { label: "Emitidas", value: (c) => c.issued, filter: { type: "emitidas" } },
   { label: "Electrónico", value: (c) => c.electronic, filter: { medium: "electronico" } },
   { label: "Papel", value: (c) => c.paper, filter: { medium: "papel" } },
+  {
+    label: "Sin ubicación",
+    value: (c) => c.paperWithoutLocation,
+    filter: { withoutLocation: true },
+    tone: (n) => (n > 0 ? "text-amber-700" : ""),
+    extra: (c) => c.unconfirmedWithoutLocation,
+    extraLabel: "por confirmar",
+  },
   { label: "Por confirmar", value: (c) => c.unconfirmed, filter: { medium: "por-confirmar" }, tone: (n) => (n > 0 ? "text-amber-700" : "") },
   { label: "Registradas", value: (c) => c.registered },
   { label: "Sin registrar", value: (c) => c.unregistered },
@@ -29,6 +42,54 @@ const FIGURES: Figure[] = [
 ];
 
 const n = (value: number) => value.toLocaleString("es-ES");
+
+const plural = (count: number, one: string, many: string) => `${n(count)} ${count === 1 ? one : many}`;
+
+/**
+ * Los avisos del Resumen (5.5), encima de la matriz y solo los que no son
+ * cero: tacos enteros por dividir, tacos sin guardar en caja y lo que no tiene
+ * ubicación (el papel y lo «Por confirmar», que en lo de antes del archivo es
+ * casi todo el papel).
+ */
+export function ArchiveAlerts({ alerts }: { alerts: TacoAlerts }) {
+  const { unfiled, unfiledPages, paperWithoutLocation: paper, unconfirmedWithoutLocation: unconfirmed } = alerts;
+  const location = paper > 0 && unconfirmed > 0
+    ? `Hay ${plural(paper, "factura", "facturas")} en papel sin ubicación y ${n(unconfirmed)} por confirmar (pueden ser papel).`
+    : paper > 0
+      ? `Hay ${plural(paper, "factura", "facturas")} en papel sin ubicación.`
+      : unconfirmed > 0
+        ? `Hay ${plural(unconfirmed, "factura", "facturas")} por confirmar sin ubicación (pueden ser papel).`
+        : null;
+  if (alerts.pendingSplits.length === 0 && unfiled === 0 && !location) return null;
+  return (
+    <div className="mb-5 space-y-3">
+      <PendingTacoSplitsNotice splits={alerts.pendingSplits} wording="archive" className="" />
+      {unfiled > 0 && (
+        <div role="status" className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-[13px] text-amber-900">
+          <span className="flex items-start gap-2">
+            <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-500" />
+            <span>
+              Hay {unfiled === 1 ? "1 taco sin guardar" : `${n(unfiled)} tacos sin guardar`} en caja ({plural(unfiledPages, "página", "páginas")}).
+            </span>
+          </span>
+          <Link
+            href="/dashboard/archivo/tacos?estado=sin-guardar"
+            className="inline-flex items-center gap-1 pl-6 font-semibold underline-offset-2 hover:underline sm:pl-0"
+          >
+            Ver los tacos
+            <ArrowRight className="h-3.5 w-3.5" />
+          </Link>
+        </div>
+      )}
+      {location && (
+        <p role="status" className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-[13px] text-amber-900">
+          <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-500" />
+          <span>{location} Ponles ubicación desde la pestaña Archivo de cada cliente.</span>
+        </p>
+      )}
+    </div>
+  );
+}
 
 /**
  * El resumen del archivo: la matriz cliente × ejercicio (los últimos siete) y
@@ -134,7 +195,8 @@ export function ArchiveSummary({
           <h2 className="text-[15px] font-semibold text-slate-800">Ejercicio {year}</h2>
           <p className="text-[12px] text-slate-500">
             «Por confirmar» son escaneos o fotos de los que aún no se sabe si hay papel: no cuentan como papel. Las
-            rechazadas van aparte.
+            rechazadas van aparte. Sin ubicación es papel que no está en ningún taco ni lo guarda el cliente. Las «por
+            confirmar» pueden ser papel o el original electrónico: al ponerles ubicación pasan a papel.
           </p>
         </div>
         <div className="overflow-x-auto">
@@ -160,16 +222,23 @@ export function ArchiveSummary({
                   </td>
                   {FIGURES.map((f) => {
                     const value = f.value(cell);
+                    const extra = f.extra?.(cell) ?? 0;
+                    const href = f.filter && (value > 0 || extra > 0) ? sheet(client.clientId, { fiscalYear: year, ...f.filter }) : null;
                     return (
                       <td key={f.label} className={`whitespace-nowrap px-3 py-2.5 text-right tabular-nums ${f.tone?.(value) ?? "text-slate-700"}`}>
-                        {f.filter && value > 0 ? (
-                          <Link href={sheet(client.clientId, { fiscalYear: year, ...f.filter })} className="hover:text-blue-700 hover:underline">
+                        {href && value > 0 ? (
+                          <Link href={href} className="hover:text-blue-700 hover:underline">
                             {n(value)}
                           </Link>
                         ) : value > 0 ? (
                           n(value)
                         ) : (
                           <span className="text-slate-300">0</span>
+                        )}
+                        {href && extra > 0 && (
+                          <Link href={href} className="block text-[11px] font-normal text-slate-400 hover:text-blue-700 hover:underline">
+                            + {n(extra)} {f.extraLabel}
+                          </Link>
                         )}
                       </td>
                     );
@@ -191,9 +260,15 @@ export function ArchiveSummary({
               <tfoot>
                 <tr className="border-t border-slate-200 bg-slate-50/80 font-semibold text-slate-800">
                   <td className="sticky left-0 bg-slate-50 px-4 py-2.5 sm:px-5">Total</td>
-                  {FIGURES.map((f) => (
-                    <td key={f.label} className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums">{n(f.value(total))}</td>
-                  ))}
+                  {FIGURES.map((f) => {
+                    const extra = f.extra?.(total) ?? 0;
+                    return (
+                      <td key={f.label} className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums">
+                        {n(f.value(total))}
+                        {extra > 0 && <span className="block text-[11px] font-normal text-slate-400">+ {n(extra)} {f.extraLabel}</span>}
+                      </td>
+                    );
+                  })}
                   <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums">{formatDateEs(total.retainUntil)}</td>
                   <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums">{n(total.rejected)}</td>
                 </tr>

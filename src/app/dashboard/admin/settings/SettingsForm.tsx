@@ -3,16 +3,21 @@
 import { useState, useTransition, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
-  Building2, Lock, User, Loader2,
+  Archive, Building2, Lock, User, Loader2,
   Mail, Shield, Users,
   Image as ImageIcon, Trash2,
 } from "lucide-react";
+import type { PaperBoxMode, PaperScanMode } from "@prisma/client";
 import {
-  updateFirm, changePassword, updateProfile, updateFirmLogo, removeFirmLogo,
+  updateFirm, changePassword, updateProfile, updateFirmLogo, removeFirmLogo, updatePaperSettings,
 } from "./actions";
 import { useToast } from "@/components/ui/Toast";
+import {
+  PAPER_BOX_MODE_LABELS, PAPER_BOX_MODES, PAPER_SCAN_MODE_LABELS, PAPER_SCAN_MODES,
+} from "@/lib/paperSettings";
 
 type FirmData = { name: string; cif: string; logoDataUrl: string | null };
+type PaperData = { paperScanMode: PaperScanMode; paperBoxMode: PaperBoxMode };
 
 /**
  * Redimensiona una imagen en el cliente a un ancho máximo y la devuelve como
@@ -48,12 +53,14 @@ type TeamMember = { id: string; name: string; email: string; role: string; creat
 
 type Props = {
   firm: FirmData;
+  paper: PaperData;
   profile: ProfileData;
   team: TeamMember[];
 };
 
 const TABS = [
   { id: "firm",     label: "Asesoría",    icon: Building2 },
+  { id: "paper",    label: "Papel",        icon: Archive },
   { id: "profile",  label: "Mi perfil",    icon: User },
   { id: "password", label: "Contraseña",   icon: Lock },
   { id: "team",     label: "Equipo",       icon: Users },
@@ -83,7 +90,7 @@ const ROLE_BADGE: Record<string, { label: string; color: string; dot: string }> 
   CLIENT: { label: "Cliente", color: "bg-slate-100/80 text-slate-600 border border-slate-200/70", dot: "bg-slate-300" },
 };
 
-export function SettingsForm({ firm, profile, team }: Props) {
+export function SettingsForm({ firm, paper, profile, team }: Props) {
   const [tab, setTab] = useState<TabId>("firm");
 
   return (
@@ -122,6 +129,7 @@ export function SettingsForm({ firm, profile, team }: Props) {
       {/* Content */}
       <div className="min-w-0">
         {tab === "firm"     && <FirmTab firm={firm} />}
+        {tab === "paper"    && <PaperTab paper={paper} />}
         {tab === "profile"  && <ProfileTab profile={profile} />}
         {tab === "password" && <PasswordTab />}
         {tab === "team"     && <TeamTab team={team} />}
@@ -287,6 +295,97 @@ function LogoSection({ initialLogo }: { initialLogo: string | null }) {
       <p className="mt-2 text-[11px] text-slate-400">
         PNG con fondo transparente recomendado. Se mostrará arriba a la izquierda en la barra lateral.
       </p>
+    </div>
+  );
+}
+
+// ─── Paper tab ──────────────────────────────────────────────────────────────
+
+function PaperOption({ name, value, checked, label, help }: {
+  name: string; value: string; checked: boolean; label: string; help: string;
+}) {
+  return (
+    <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-slate-200 px-3.5 py-3 transition hover:border-slate-300 has-[:checked]:border-blue-300 has-[:checked]:bg-blue-50/60">
+      <input type="radio" name={name} value={value} defaultChecked={checked} className="mt-0.5 h-4 w-4 flex-shrink-0 accent-blue-600" />
+      <span className="min-w-0">
+        <span className="block text-[13px] font-medium text-slate-800">{label}</span>
+        <span className="mt-0.5 block text-[12px] text-slate-500">{help}</span>
+      </span>
+    </label>
+  );
+}
+
+function PaperTab({ paper }: { paper: PaperData }) {
+  const { success, error: toastError } = useToast();
+  const [pending, start] = useTransition();
+
+  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    start(async () => {
+      const res = await updatePaperSettings(null, fd);
+      if (res?.success) {
+        success("Ajustes del papel guardados.");
+      } else if (res?.error) {
+        toastError(res.error);
+      }
+    });
+  };
+
+  return (
+    <div className="rounded-2xl border border-slate-200/80 bg-white p-6 shadow-sm">
+      <div className="mb-5 flex items-center gap-3">
+        <div className={headerChipClass}>
+          <Archive className="h-4 w-4 text-blue-600" strokeWidth={1.8} />
+        </div>
+        <div>
+          <h2 className="text-[15px] font-semibold text-slate-800">Papel escaneado y cajas</h2>
+          <p className="text-[12px] text-slate-500">
+            Cómo trabajáis con el papel que escanea la asesoría. Solo cambia lo que la app propone: los tacos que ya
+            existen se quedan como están.
+          </p>
+        </div>
+      </div>
+
+      <form onSubmit={handleSubmit} className="space-y-6">
+        <fieldset className="max-w-[620px] space-y-2">
+          <legend className={labelClass}>Cómo escaneáis el papel</legend>
+          {PAPER_SCAN_MODES.map((mode) => (
+            <PaperOption
+              key={mode}
+              name="paperScanMode"
+              value={mode}
+              checked={paper.paperScanMode === mode}
+              label={PAPER_SCAN_MODE_LABELS[mode].label}
+              help={PAPER_SCAN_MODE_LABELS[mode].help}
+            />
+          ))}
+          <p className="text-[11px] text-slate-400">
+            Es lo que sale marcado al subir papel; se puede cambiar en cada subida.
+          </p>
+        </fieldset>
+
+        <fieldset className="max-w-[620px] space-y-2">
+          <legend className={labelClass}>Cómo guardáis las cajas</legend>
+          {PAPER_BOX_MODES.map((mode) => (
+            <PaperOption
+              key={mode}
+              name="paperBoxMode"
+              value={mode}
+              checked={paper.paperBoxMode === mode}
+              label={PAPER_BOX_MODE_LABELS[mode].label}
+              help={PAPER_BOX_MODE_LABELS[mode].help}
+            />
+          ))}
+        </fieldset>
+
+        <div className={footerClass}>
+          <button type="submit" disabled={pending} className={submitClass}>
+            {pending && <Loader2 className="h-4 w-4 animate-spin" />}
+            Guardar
+          </button>
+        </div>
+      </form>
     </div>
   );
 }

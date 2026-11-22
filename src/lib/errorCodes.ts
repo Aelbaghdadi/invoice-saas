@@ -26,6 +26,11 @@ export type AppErrorCode =
   | "ERR-UPLOAD-005"  // Sin acceso al cliente seleccionado
   | "ERR-UPLOAD-006"  // Duplicado (mismo hash en una factura activa)
   | "ERR-UPLOAD-007"  // Nombre de archivo inválido
+  | "ERR-UPLOAD-008"  // La tanda de la subida no vale (otro cliente, lote o tipo, caducada, anulada, otra asesoría)
+  | "ERR-UPLOAD-009"  // Esa página del taco ya tiene otro fichero
+  | "ERR-UPLOAD-010"  // Un XML en un taco de papel
+  | "ERR-UPLOAD-011"  // El taco entero no es un PDF legible de hasta 500 páginas
+  | "ERR-UPLOAD-012"  // Dos tacos creados a la vez (bloqueo de la asesoría)
   // ── OCR ──────────────────────────────────────────────────
   | "ERR-OCR-001"     // Gemini no disponible / fallo de red
   | "ERR-OCR-002"     // PDF/imagen corrupto o no procesable
@@ -64,6 +69,11 @@ export const ERROR_MESSAGES: Record<AppErrorCode, string> = {
   "ERR-UPLOAD-005": "No tienes acceso a este cliente.",
   "ERR-UPLOAD-006": "Esta factura ya estaba subida (duplicada por contenido).",
   "ERR-UPLOAD-007": "El nombre del archivo contiene caracteres no válidos.",
+  "ERR-UPLOAD-008": "La tanda de esta subida no vale (es de otro cliente, lote o tipo, ha caducado, está anulada o no es de tu asesoría). Pulsa «Subir» otra vez: irá en una tanda nueva.",
+  "ERR-UPLOAD-009": "Esa página del taco ya tiene otro fichero.",
+  "ERR-UPLOAD-010": "Un XML no es un escaneo: no puede ir en un taco de papel. Súbelo sin marcar «Es papel».",
+  "ERR-UPLOAD-011": "El taco entero tiene que ser un PDF que se pueda leer, sin contraseña y de hasta 500 páginas.",
+  "ERR-UPLOAD-012": "Otra persona estaba creando un taco a la vez; vuelve a pulsar «Subir».",
 
   "ERR-OCR-001": "El servicio de OCR no respondió. Reintenta el procesado en unos segundos.",
   "ERR-OCR-002": "El archivo no se pudo leer. Asegúrate de que el PDF o imagen no esté dañado.",

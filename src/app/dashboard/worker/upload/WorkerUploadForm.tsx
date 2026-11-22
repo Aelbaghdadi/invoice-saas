@@ -3,6 +3,7 @@
 import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import type { PaperBoxMode, PaperScanMode } from "@prisma/client";
 import { useToast } from "@/components/ui/Toast";
 import { Select } from "@/components/ui/Select";
 import {
@@ -18,12 +19,10 @@ import {
   Loader2,
   CloudUpload,
   Copy,
+  ArrowUp,
+  ArrowDown,
+  Replace,
 } from "lucide-react";
-import {
-  uploadFilesDirect,
-  type UploadStatus,
-  type UploadResult,
-} from "@/lib/uploadDirectClient";
 import { MONTH_OPTIONS, periodLabel, quarterFromMonth, quarterStartMonth, QUARTER_OPTIONS, type PeriodTypeName } from "@/lib/period";
 import { yearMonthInMadrid } from "@/lib/dates";
 import {
@@ -40,6 +39,17 @@ import {
   type ClosedPeriod,
   type OpenBatch,
 } from "@/lib/batchTarget";
+import {
+  OFFICE_FILES_NOTICE,
+  pageOf,
+  settingsLockReason,
+  type UploadListItem,
+  type UploadListMode,
+} from "@/lib/uploadListState";
+import { tacoLabel } from "@/lib/paperLocation";
+import { useUploadBatch, type BatchOutcome } from "./useUploadBatch";
+import { PaperUploadOptions } from "./PaperUploadOptions";
+import { DigitalBatchLine, PaperBatchPanel, type TacoPanel } from "./PaperBatchPanel";
 
 type UploadType = "PURCHASE" | "SALE" | "UNKNOWN";
 
@@ -56,25 +66,40 @@ function periodStateOf(period: BatchPeriod): PeriodState {
   };
 }
 
-const ACCEPTED_EXTS = new Set(["pdf", "xml", "jpg", "jpeg", "png", "webp", "heic"]);
-const ACCEPTED_MIME = new Set([
-  "application/pdf", "text/xml", "application/xml",
-  "image/jpeg", "image/png", "image/webp", "image/heic",
-]);
-
 function formatSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-type Item = {
-  id: string;
-  file: File;
-  status: UploadStatus;
-  duplicateOf?: string;
-  errorMsg?: string;
+const plural = (n: number, one: string, many: string) => `${n.toLocaleString("es-ES")} ${n === 1 ? one : many}`;
+
+/** Lo que admite la zona de soltar en cada modo. */
+const ACCEPT: Record<UploadListMode, string> = {
+  digital: ".pdf,.xml,.jpg,.jpeg,.png,.webp,.heic",
+  perInvoice: ".pdf,.jpg,.jpeg,.png,.webp,.heic",
+  wholePdf: ".pdf,application/pdf",
 };
+
+const DROP_TEXT: Record<UploadListMode, { title: string; link: string; help: string }> = {
+  digital: {
+    title: "Arrastra aquí las facturas o",
+    link: "selecciona archivos",
+    help: "PDF, XML, JPG, PNG, WEBP o HEIC (fotos de iPhone) · Máximo 20 MB por archivo",
+  },
+  perInvoice: {
+    title: "Arrastra aquí los escaneos o",
+    link: "selecciona archivos",
+    help: "PDF, JPG, PNG, WEBP o HEIC · Máximo 20 MB por archivo · Se ordenan por nombre",
+  },
+  wholePdf: {
+    title: "Arrastra aquí el PDF del taco o",
+    link: "selecciónalo",
+    help: "Un solo PDF de hasta 20 MB y 500 páginas",
+  },
+};
+
+type DigitalLine = { batchId: string; fileCount: number; uploaded: number };
 
 type Props = {
   clients: { id: string; name: string; cif: string }[];
@@ -87,10 +112,23 @@ type Props = {
   closedPeriods: Record<string, ClosedPeriod[]>;
   /** Hora del servidor: lo que se propone sale igual al pintar y al hidratar. */
   now: string;
+  /** Ajustes del papel de la asesoría: lo que sale marcado al subir papel y,
+   *  con las cajas por cliente, el aviso de un taco de varios clientes. */
+  firmPaperScanMode: PaperScanMode;
+  firmPaperBoxMode: PaperBoxMode;
 };
 
-export function WorkerUploadForm({ clients, groups, openBatches, lastPeriodTypes, closedPeriods, now: nowIso }: Props) {
-  const { success, error: toastError, info } = useToast();
+export function WorkerUploadForm({
+  clients,
+  groups,
+  openBatches,
+  lastPeriodTypes,
+  closedPeriods,
+  now: nowIso,
+  firmPaperScanMode,
+  firmPaperBoxMode,
+}: Props) {
+  const { success, error: toastError, info, warning } = useToast();
   const router = useRouter();
   const now = new Date(nowIso);
   // El periodo que se propone para un cliente y un tipo: su lote abierto o,
@@ -107,7 +145,8 @@ export function WorkerUploadForm({ clients, groups, openBatches, lastPeriodTypes
   // sin lotes ni subidas (mensual, el mes anterior), no lo del primero de la lista.
   const unassignedPeriod = () =>
     periodStateOf(defaultUploadTarget({ openBatches: [], type: "UNKNOWN", lastPeriodType: null, now }));
-  const [items, setItems] = useState<Item[]>([]);
+  const uploads = useUploadBatch();
+  const { list } = uploads;
   const [clientId, setClientId] = useState(clients[0]?.id ?? "");
   // Modo de subida: "single" = un cliente; "classify" = clasificar por CIF
   // entre varias empresas candidatas (grupo guardado o selección ad-hoc).
@@ -122,9 +161,19 @@ export function WorkerUploadForm({ clients, groups, openBatches, lastPeriodTypes
   // Tocado a mano (o elegido un lote): cambiar el tipo ya no lo vuelve a
   // proponer. Cambiar de cliente si.
   const [periodTouched, setPeriodTouched] = useState(false);
+  const [isPaper, setIsPaper] = useState(false);
+  const [scanMode, setScanMode] = useState<PaperScanMode>(firmPaperScanMode);
+  const [tacoPanels, setTacoPanels] = useState<TacoPanel[]>([]);
+  const [digitalLines, setDigitalLines] = useState<DigitalLine[]>([]);
   const [isDragging, setIsDragging] = useState(false);
-  const [isPending, setIsPending] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const isPending = uploads.pending;
+
+  const listMode: UploadListMode = !isPaper ? "digital" : scanMode === "WHOLE_PDF" ? "wholePdf" : "perInvoice";
+  // Con ficheros de una tanda empezada sin subir, el cliente, el lote, el tipo
+  // y el papel no cambian: irían a otra tanda y el montón quedaría partido.
+  const lockReason = settingsLockReason(list);
+  const settingsLocked = isPending || lockReason != null;
 
   const { periodType, quarter } = period;
   const effectivePeriodMonth = periodType === "QUARTERLY" ? quarterStartMonth(quarter) : period.month;
@@ -151,6 +200,9 @@ export function WorkerUploadForm({ clients, groups, openBatches, lastPeriodTypes
     setClientId(nextClientId);
     setPeriod(proposedPeriod(nextClientId, type));
     setPeriodTouched(false);
+    // La tarjeta del taco y la línea «¿Era papel?» son de la subida de antes.
+    setTacoPanels([]);
+    setDigitalLines([]);
   };
 
   const chooseType = (nextType: UploadType) => {
@@ -160,6 +212,8 @@ export function WorkerUploadForm({ clients, groups, openBatches, lastPeriodTypes
 
   const chooseMode = (nextMode: "single" | "classify") => {
     setMode(nextMode);
+    // El taco entero es de un solo cliente.
+    if (nextMode === "classify" && scanMode === "WHOLE_PDF") setScanMode("PER_INVOICE");
     if (periodTouched) return;
     setPeriod(nextMode === "single" ? proposedPeriod(clientId, type) : unassignedPeriod());
   };
@@ -191,28 +245,16 @@ export function WorkerUploadForm({ clients, groups, openBatches, lastPeriodTypes
   const accessibleClientIds = new Set(clients.map((c) => c.id));
   const visibleGroups = groups.filter((g) => g.clientIds.some((cid) => accessibleClientIds.has(cid)));
 
-  const addFiles = (incoming: FileList | File[]) => {
-    const valid = Array.from(incoming).filter((f) => {
-      const ext = f.name.split(".").pop()?.toLowerCase() ?? "";
-      return ACCEPTED_MIME.has(f.type) || ACCEPTED_EXTS.has(ext);
-    });
-    setItems((prev) => {
-      // De-dupe en cliente por nombre+size (mismo archivo arrastrado dos
-      // veces antes de subir). El dedupe real por hash lo hace el server.
-      const seen = new Set(prev.map((i) => `${i.file.name}::${i.file.size}`));
-      const fresh = valid
-        .filter((f) => !seen.has(`${f.name}::${f.size}`))
-        .map<Item>((f) => ({
-          id: `${f.name}-${f.size}-${Math.random().toString(36).slice(2, 8)}`,
-          file: f,
-          status: "queued",
-        }));
-      return [...prev, ...fresh];
-    });
+  const showNotices = (notices: readonly string[]) => {
+    for (const text of notices) {
+      if (text === OFFICE_FILES_NOTICE) info(text);
+      else warning(text);
+    }
   };
 
-  const removeItem = (id: string) =>
-    setItems((prev) => prev.filter((i) => i.id !== id));
+  const addFiles = (incoming: FileList | File[]) => {
+    showNotices(uploads.add(Array.from(incoming), listMode));
+  };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
@@ -220,74 +262,73 @@ export function WorkerUploadForm({ clients, groups, openBatches, lastPeriodTypes
     if (!isPending) addFiles(e.dataTransfer.files);
   };
 
-  const updateItem = (idx: number, patch: Partial<Item>) =>
-    setItems((prev) => {
-      const next = [...prev];
-      if (next[idx]) next[idx] = { ...next[idx], ...patch };
+  /** Lo que deja la subida: la tarjeta de cada taco y la línea «¿Era papel?»
+   *  de cada tanda digital con algo subido. Un reintento suma a la suya. */
+  const keepOutcomes = (outcomes: readonly BatchOutcome[]) => {
+    setTacoPanels((prev) => {
+      let next = [...prev];
+      for (const outcome of outcomes) {
+        if (outcome.kind === "digital") continue;
+        const index = next.findIndex((panel) => panel.batchId === outcome.batchId);
+        if (index < 0) {
+          next = [...next, outcome];
+        } else if (outcome.kind === "perInvoice") {
+          const current = next[index];
+          if (current.kind === "perInvoice") {
+            next[index] = { ...current, uploaded: current.uploaded + outcome.uploaded, duplicates: current.duplicates + outcome.duplicates };
+          }
+        }
+      }
       return next;
     });
+    setDigitalLines((prev) => {
+      const next = [...prev];
+      for (const outcome of outcomes) {
+        if (outcome.kind !== "digital") continue;
+        const index = next.findIndex((line) => line.batchId === outcome.batchId);
+        if (index < 0) next.push({ batchId: outcome.batchId, fileCount: outcome.fileCount, uploaded: outcome.uploaded });
+        else next[index] = { ...next[index], uploaded: next[index].uploaded + outcome.uploaded };
+      }
+      return next;
+    });
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!items.length || isPending) return;
+    if (!list.items.length || isPending) return;
     if (mode === "single" && (!clientId || selectionClosed)) return;
     if (mode === "classify" && candidateIds.size === 0) return;
 
-    setIsPending(true);
-    setItems((prev) =>
-      prev.map((i) => (i.status === "error" ? { ...i, status: "queued", errorMsg: undefined } : i)),
-    );
-
-    // Snapshot inmediato — el state cambia durante el upload, pero el
-    // mapping uploadIdx → realIdx tiene que ser estable.
-    const snapshot = items;
-    const toUpload = snapshot
-      .map((it, idx) => ({ it, idx }))
-      .filter(({ it }) => it.status !== "ok" && it.status !== "duplicate");
-
-    const results = await uploadFilesDirect(
-      toUpload.map((x) => x.it.file),
-      mode === "classify"
-        ? {
-            candidateClientIds: [...candidateIds],
-            periodType,
-            periodMonth: effectivePeriodMonth,
-            periodYear: period.year,
-            type,
-          }
-        : {
-            clientId,
-            periodType,
-            periodMonth: effectivePeriodMonth,
-            periodYear: period.year,
-            type,
-          },
-      3,
-      (uploadIdx, status) => {
-        const realIdx = toUpload[uploadIdx]?.idx;
-        if (realIdx != null) updateItem(realIdx, { status });
+    const outcome = await uploads.upload(
+      {
+        clientId: mode === "single" ? clientId : null,
+        candidateClientIds: mode === "classify" ? [...candidateIds] : [],
+        periodType,
+        periodMonth: effectivePeriodMonth,
+        periodYear: period.year,
+        type,
       },
-      (uploadIdx, result: UploadResult) => {
-        const realIdx = toUpload[uploadIdx]?.idx;
-        if (realIdx == null) return;
-        if (result.status === "ok") {
-          updateItem(realIdx, { status: "ok" });
-        } else if (result.status === "duplicate") {
-          updateItem(realIdx, { status: "duplicate", duplicateOf: result.of });
-        } else {
-          updateItem(realIdx, { status: "error", errorMsg: result.message });
-        }
-      },
+      listMode,
     );
+    if ("error" in outcome) {
+      toastError(outcome.error);
+      return;
+    }
 
-    setIsPending(false);
-
-    const okCount = results.filter((r) => r.status === "ok").length;
-    const dupCount = results.filter((r) => r.status === "duplicate").length;
-    const errCount = results.filter((r) => r.status === "error").length;
-
-    if (okCount > 0) {
+    keepOutcomes(outcome.batches);
+    const { ok: okCount, duplicates: dupCount, errors: errCount } = outcome;
+    const tacos = outcome.batches.filter((batch) => batch.kind !== "digital");
+    for (const taco of tacos) {
+      if (taco.kind === "wholePdf") {
+        success(`${tacoLabel(taco.tacoNumber)}: PDF subido (${plural(taco.pageCount, "página", "páginas")}). Falta marcar dónde empieza cada factura.`);
+      } else if (taco.uploaded > 0) {
+        success(`${tacoLabel(taco.tacoNumber)}: ${plural(taco.uploaded, "página subida", "páginas subidas")}.`);
+      }
+    }
+    if (okCount > 0 && tacos.length === 0) {
       success(`${okCount} factura${okCount !== 1 ? "s" : ""} subida${okCount !== 1 ? "s" : ""} correctamente`);
+    }
+    if (okCount > 0) {
       // Los lotes abiertos cambian (el de esta subida ya lo es): sin perder lo elegido.
       router.refresh();
       if (mode === "classify") setClassifyNotice(okCount);
@@ -301,12 +342,27 @@ export function WorkerUploadForm({ clients, groups, openBatches, lastPeriodTypes
 
     // Auto-limpiar OK y duplicadas tras 1.5s. Los errores se quedan
     // para que el gestor vea que paso y pueda reintentar.
-    setTimeout(() => {
-      setItems((prev) => prev.filter((i) => i.status === "error" || i.status === "queued"));
-    }, 1500);
+    setTimeout(uploads.clearFinished, 1500);
   };
 
-  const pendingCount = items.filter((i) => i.status !== "ok" && i.status !== "duplicate").length;
+  const waiting = list.items.filter((i) => i.status !== "ok" && i.status !== "duplicate");
+  const pendingCount = waiting.length;
+  // Filas que aún no tienen tanda: las que se ordenan y se mueven.
+  const movableCount = list.items.filter((i) => !i.batchId && (i.status === "queued" || i.status === "error")).length;
+  const pendingTaco = waiting.find((i) => i.tacoNumber != null)?.tacoNumber ?? null;
+  const showPages = listMode === "perInvoice";
+
+  const submitLabel = isPending
+    ? "Subiendo..."
+    : listMode === "wholePdf"
+      ? "Subir el PDF del taco"
+      : listMode === "perInvoice"
+        ? pendingTaco != null && movableCount === 0
+          ? `Subir ${plural(pendingCount, "página", "páginas")} del ${tacoLabel(pendingTaco)}`
+          : `Subir el taco (${plural(pendingCount, "página", "páginas")})`
+        : `Subir ${pendingCount > 0 ? `${pendingCount} archivo${pendingCount !== 1 ? "s" : ""}` : "archivos"}`;
+
+  const drop = DROP_TEXT[listMode];
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
@@ -344,7 +400,7 @@ export function WorkerUploadForm({ clients, groups, openBatches, lastPeriodTypes
                 key={m}
                 type="button"
                 onClick={() => chooseMode(m)}
-                disabled={m === "classify" && clients.length < 2}
+                disabled={(m === "classify" && clients.length < 2) || settingsLocked}
                 className={`flex-1 rounded-lg border px-3 py-2 text-[12px] font-medium transition disabled:opacity-40 ${
                   mode === m ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 text-slate-500 hover:bg-slate-50"
                 }`}
@@ -364,6 +420,7 @@ export function WorkerUploadForm({ clients, groups, openBatches, lastPeriodTypes
               <Select
                 value={clientId}
                 onChange={chooseClient}
+                disabled={settingsLocked}
                 options={clients.map((c) => ({ value: c.id, label: `${c.name} (${c.cif})` }))}
               />
             </div>
@@ -392,7 +449,7 @@ export function WorkerUploadForm({ clients, groups, openBatches, lastPeriodTypes
                         <button
                           type="button"
                           onClick={() => { if (!chosen) pickBatch(b); }}
-                          disabled={isPending}
+                          disabled={settingsLocked}
                           aria-disabled={chosen}
                           className={`inline-flex flex-shrink-0 items-center gap-1 text-[11px] font-semibold text-blue-700 transition disabled:opacity-50 ${
                             chosen ? "cursor-default px-1 py-1" : "rounded-lg border border-blue-200 bg-white px-2.5 py-1 hover:bg-blue-50"
@@ -445,7 +502,7 @@ export function WorkerUploadForm({ clients, groups, openBatches, lastPeriodTypes
                   <button
                     type="button"
                     onClick={() => pickPeriod(b)}
-                    disabled={isPending}
+                    disabled={settingsLocked}
                     className="rounded-lg bg-amber-600 px-2.5 py-1 text-[11px] font-semibold text-white transition hover:bg-amber-700 disabled:opacity-50"
                   >
                     Añadir a {label}
@@ -463,6 +520,7 @@ export function WorkerUploadForm({ clients, groups, openBatches, lastPeriodTypes
                 </label>
                 <Select
                   value={groupId}
+                  disabled={settingsLocked}
                   onChange={(v) => {
                     setGroupId(v);
                     const g = visibleGroups.find((x) => x.id === v);
@@ -483,6 +541,7 @@ export function WorkerUploadForm({ clients, groups, openBatches, lastPeriodTypes
                     <input
                       type="checkbox"
                       checked={candidateIds.has(c.id)}
+                      disabled={settingsLocked}
                       onChange={() => {
                         setGroupId("");
                         setCandidateIds((prev) => {
@@ -515,7 +574,8 @@ export function WorkerUploadForm({ clients, groups, openBatches, lastPeriodTypes
                 key={pt}
                 type="button"
                 onClick={() => changePeriod({ periodType: pt })}
-                className={`flex-1 rounded-lg border px-3 py-2 text-[12px] font-medium transition ${
+                disabled={settingsLocked}
+                className={`flex-1 rounded-lg border px-3 py-2 text-[12px] font-medium transition disabled:opacity-40 ${
                   periodType === pt
                     ? "border-blue-500 bg-blue-50 text-blue-700"
                     : "border-slate-200 text-slate-500 hover:bg-slate-50"
@@ -536,12 +596,14 @@ export function WorkerUploadForm({ clients, groups, openBatches, lastPeriodTypes
               <Select
                 value={String(period.month)}
                 onChange={(v) => changePeriod({ month: Number(v), quarter: quarterFromMonth(Number(v)) })}
+                disabled={settingsLocked}
                 options={MONTH_OPTIONS}
               />
             ) : (
               <Select
                 value={String(quarter)}
                 onChange={(v) => changePeriod({ quarter: Number(v), month: quarterStartMonth(Number(v)) })}
+                disabled={settingsLocked}
                 options={QUARTER_OPTIONS.map((q) => ({ value: String(q.value), label: q.label }))}
               />
             )}
@@ -550,7 +612,7 @@ export function WorkerUploadForm({ clients, groups, openBatches, lastPeriodTypes
             <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
               Año
             </label>
-            <Select value={String(period.year)} onChange={(v) => changePeriod({ year: Number(v) })} options={yearOptions} />
+            <Select value={String(period.year)} onChange={(v) => changePeriod({ year: Number(v) })} disabled={settingsLocked} options={yearOptions} />
           </div>
           <div>
             <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
@@ -559,6 +621,7 @@ export function WorkerUploadForm({ clients, groups, openBatches, lastPeriodTypes
             <Select
               value={type}
               onChange={(v) => chooseType(v as UploadType)}
+              disabled={settingsLocked}
               options={[
                 { value: "PURCHASE", label: "Facturas recibidas" },
                 { value: "SALE", label: "Facturas emitidas" },
@@ -567,6 +630,23 @@ export function WorkerUploadForm({ clients, groups, openBatches, lastPeriodTypes
             />
           </div>
         </div>
+
+        <PaperUploadOptions
+          isPaper={isPaper}
+          onPaperChange={setIsPaper}
+          scanMode={scanMode}
+          onScanModeChange={setScanMode}
+          classify={mode === "classify"}
+          boxMode={firmPaperBoxMode}
+          disabled={settingsLocked}
+        />
+
+        {lockReason && (
+          <p role="status" className="mt-3 flex items-start gap-1.5 text-[12px] text-amber-700">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+            {lockReason}
+          </p>
+        )}
       </div>
 
       <div
@@ -574,7 +654,7 @@ export function WorkerUploadForm({ clients, groups, openBatches, lastPeriodTypes
         onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
         onDragLeave={() => setIsDragging(false)}
         onClick={() => !isPending && inputRef.current?.click()}
-        className={`flex flex-col items-center justify-center rounded-xl border-2 border-dashed px-8 py-12 transition-colors ${
+        className={`flex flex-col items-center justify-center rounded-xl border-2 border-dashed px-6 py-10 text-center transition-colors sm:px-8 sm:py-12 ${
           isPending ? "cursor-not-allowed opacity-60" : "cursor-pointer"
         } ${
           isDragging
@@ -585,65 +665,124 @@ export function WorkerUploadForm({ clients, groups, openBatches, lastPeriodTypes
         <input
           ref={inputRef}
           type="file"
-          accept=".pdf,.xml,.jpg,.jpeg,.png,.webp,.heic"
-          multiple
+          accept={ACCEPT[listMode]}
+          multiple={listMode !== "wholePdf"}
           className="hidden"
-          onChange={(e) => e.target.files && addFiles(e.target.files)}
+          onChange={(e) => {
+            if (e.target.files) addFiles(e.target.files);
+            // Para poder volver a elegir los mismos ficheros después de quitarlos.
+            e.target.value = "";
+          }}
         />
         <div className={`mb-4 flex h-14 w-14 items-center justify-center rounded-xl ${isDragging ? "bg-blue-100" : "bg-slate-100"}`}>
           <CloudUpload className={`h-7 w-7 ${isDragging ? "text-blue-500" : "text-slate-400"}`} />
         </div>
         <p className="text-[14px] font-semibold text-slate-700">
-          Arrastra aquí las facturas o{" "}
-          <span className="text-blue-600">selecciona archivos</span>
+          {drop.title}{" "}
+          <span className="text-blue-600">{drop.link}</span>
         </p>
-        <p className="mt-1 text-[12px] text-slate-400">
-          PDF, XML, JPG, PNG, WEBP o HEIC (fotos de iPhone) · Máximo 20 MB por archivo
-        </p>
+        <p className="mt-1 text-[12px] text-slate-400">{drop.help}</p>
       </div>
 
-      {items.length > 0 && (
+      {list.items.length > 0 && (
         <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
-          <div className="flex items-center justify-between border-b border-slate-100 px-5 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-3 sm:px-5">
             <p className="text-[13px] font-semibold text-slate-700">
-              {items.length} archivo{items.length !== 1 ? "s" : ""}
+              {list.items.length} archivo{list.items.length !== 1 ? "s" : ""}
             </p>
-            {!isPending && items.some((i) => i.status === "queued" || i.status === "error") && (
+            {!isPending && list.items.some((i) => i.status === "queued" || i.status === "error") && (
               <button
                 type="button"
-                onClick={() => setItems((prev) => prev.filter((i) => i.status !== "queued" && i.status !== "error"))}
+                onClick={uploads.clearWaiting}
                 className="text-[11px] font-medium text-slate-400 hover:text-slate-600"
               >
                 Limpiar lista
               </button>
             )}
           </div>
+          {showPages && movableCount > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5 border-b border-slate-100 bg-slate-50/60 px-4 py-2 text-[12px] text-slate-600 sm:px-5">
+              <p>
+                {plural(movableCount, "fichero", "ficheros")} · el taco tendrá {plural(movableCount, "página", "páginas")} en este orden
+                {list.manualOrder && <span className="block font-medium text-amber-700">Pon el papel en este mismo orden.</span>}
+              </p>
+              <p className="flex items-center gap-1.5">
+                <span className="text-slate-500">Ordenar por:</span>
+                {(["name", "time"] as const).map((sortBy, i) => (
+                  <span key={sortBy} className="flex items-center gap-1.5">
+                    {i > 0 && <span className="text-slate-300">·</span>}
+                    <button
+                      type="button"
+                      onClick={() => uploads.resort(sortBy)}
+                      disabled={isPending}
+                      aria-pressed={list.sortBy === sortBy && !list.manualOrder}
+                      className={`font-medium ${list.sortBy === sortBy && !list.manualOrder ? "text-slate-800" : "text-blue-700 hover:underline"}`}
+                    >
+                      {sortBy === "name" ? "nombre" : "hora del fichero"}
+                    </button>
+                  </span>
+                ))}
+              </p>
+            </div>
+          )}
           <ul className="divide-y divide-slate-50">
-            {items.map((item) => (
+            {list.items.map((item) => (
               <ItemRow
                 key={item.id}
                 item={item}
-                onRemove={() => removeItem(item.id)}
+                page={showPages || item.tacoNumber != null ? pageOf(list, item.id) : null}
+                movable={showPages && !item.batchId && (item.status === "queued" || item.status === "error")}
+                movableCount={movableCount}
                 disabled={isPending}
+                onRemove={() => uploads.remove(item.id)}
+                onMoveBy={(delta) => uploads.moveBy(item.id, delta)}
+                onMoveTo={(target) => uploads.moveTo(item.id, target)}
+                onReplace={(file) => {
+                  const text = uploads.replace(item.id, file);
+                  if (text) warning(text);
+                }}
               />
             ))}
           </ul>
         </div>
       )}
 
-      <div className="flex items-center justify-between">
-        <p className="text-[12px] text-slate-400">
-          Las facturas se suben directamente al almacenamiento y se analizan automáticamente con OCR.
-        </p>
+      {(tacoPanels.length > 0 || digitalLines.some((line) => line.uploaded > 0)) && (
+        <div className="space-y-3">
+          {tacoPanels.map((panel) => (
+            <PaperBatchPanel
+              key={panel.batchId}
+              panel={panel}
+              errors={list.items.filter((i) => i.batchId === panel.batchId && i.status === "error").length}
+              onClose={() => setTacoPanels((prev) => prev.filter((p) => p.batchId !== panel.batchId))}
+            />
+          ))}
+          {digitalLines.filter((line) => line.uploaded > 0).map((line) => (
+            <DigitalBatchLine
+              key={line.batchId}
+              batchId={line.batchId}
+              fileCount={line.fileCount}
+              onClose={() => setDigitalLines((prev) => prev.filter((l) => l.batchId !== line.batchId))}
+            />
+          ))}
+        </div>
+      )}
+
+      <div className="flex flex-col-reverse gap-3 sm:flex-row sm:items-center sm:justify-between">
+        {isPending ? (
+          <p className="text-[12px] font-medium text-amber-700">No cierres esta pestaña hasta que termine la subida.</p>
+        ) : (
+          <p className="text-[12px] text-slate-400">
+            Las facturas se suben directamente al almacenamiento y se analizan automáticamente con OCR.
+          </p>
+        )}
         <button
           type="submit"
-          disabled={!items.length || isPending || pendingCount === 0 || (mode === "single" ? !clientId || selectionClosed : candidateIds.size === 0)}
-          className="flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-[13px] font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={!list.items.length || isPending || pendingCount === 0 || (mode === "single" ? !clientId || selectionClosed : candidateIds.size === 0)}
+          className="flex flex-shrink-0 items-center justify-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-[13px] font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-          {isPending
-            ? "Subiendo..."
-            : `Subir ${pendingCount > 0 ? `${pendingCount} archivo${pendingCount !== 1 ? "s" : ""}` : "archivos"}`}
+          {submitLabel}
         </button>
       </div>
     </form>
@@ -652,64 +791,165 @@ export function WorkerUploadForm({ clients, groups, openBatches, lastPeriodTypes
 
 function ItemRow({
   item,
-  onRemove,
+  page,
+  movable,
+  movableCount,
   disabled,
+  onRemove,
+  onMoveBy,
+  onMoveTo,
+  onReplace,
 }: {
-  item: Item;
-  onRemove: () => void;
+  item: UploadListItem;
+  /** «Pág. N» (la que tiene o tendrá en el taco), o null fuera de un taco. */
+  page: number | null;
+  /** Fila sin tanda en papel factura a factura: se puede mover. */
+  movable: boolean;
+  movableCount: number;
   disabled: boolean;
+  onRemove: () => void;
+  onMoveBy: (delta: -1 | 1) => void;
+  onMoveTo: (page: number) => void;
+  onReplace: (file: File) => void;
 }) {
-  const ext = item.file.name.split(".").pop()?.toLowerCase();
+  const [target, setTarget] = useState("");
+  const replaceRef = useRef<HTMLInputElement>(null);
+  const ext = item.name.split(".").pop()?.toLowerCase();
   const Icon = ext === "xml" ? FileCode2
     : ["jpg", "jpeg", "png", "webp", "heic"].includes(ext ?? "") ? Image
     : FileText;
+  const canMove = movable && !disabled;
+  const moveTo = () => {
+    const value = Number(target);
+    if (Number.isInteger(value) && value >= 1 && value <= movableCount) onMoveTo(value);
+    setTarget("");
+  };
 
   return (
-    <li className="flex items-center gap-3 px-5 py-3">
-      <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-slate-100">
-        <Icon className="h-4 w-4 text-slate-400" />
-      </div>
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-[13px] font-medium text-slate-700">{item.file.name}</p>
+    <li className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3 sm:px-5">
+      {page != null ? (
+        <span className="flex h-8 min-w-[3.5rem] flex-shrink-0 items-center justify-center rounded-lg bg-blue-50 px-2 text-[11px] font-semibold text-blue-700">
+          Pág. {page}
+        </span>
+      ) : (
+        <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-slate-100">
+          <Icon className="h-4 w-4 text-slate-400" />
+        </div>
+      )}
+      <div className="min-w-0 flex-1 basis-40">
+        <p className="truncate text-[13px] font-medium text-slate-700" title={item.name}>{item.name}</p>
         <p className="text-[11px] text-slate-400">
-          {formatSize(item.file.size)}
+          {formatSize(item.size)}
           {item.status === "duplicate" && item.duplicateOf && (
             <span className="ml-2 text-amber-600">· duplicado de {item.duplicateOf}</span>
           )}
-          {item.status === "error" && item.errorMsg && (
-            <span className="ml-2 text-red-600">· {item.errorMsg}</span>
+          {item.status === "error" && item.errorMessage && (
+            <span className="ml-2 text-red-600">· {item.errorMessage}</span>
           )}
         </p>
       </div>
-      <StatusBadge item={item} />
-      {(item.status === "queued" || item.status === "error" || item.status === "duplicate") && !disabled && (
-        <button
-          type="button"
-          onClick={onRemove}
-          className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-slate-300 transition hover:bg-slate-100 hover:text-slate-500"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
-      )}
+      <div className="flex flex-shrink-0 items-center gap-1.5">
+        {movable && (
+          <>
+            <button
+              type="button"
+              onClick={() => onMoveBy(-1)}
+              disabled={!canMove || page === 1}
+              aria-label="Subir una fila"
+              title="Subir una fila"
+              className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-40"
+            >
+              <ArrowUp className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => onMoveBy(1)}
+              disabled={!canMove || page === movableCount}
+              aria-label="Bajar una fila"
+              title="Bajar una fila"
+              className="flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 disabled:opacity-40"
+            >
+              <ArrowDown className="h-3.5 w-3.5" />
+            </button>
+            <span className="flex items-center gap-1">
+              <input
+                type="number"
+                inputMode="numeric"
+                min={1}
+                max={movableCount}
+                value={target}
+                onChange={(e) => setTarget(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    moveTo();
+                  }
+                }}
+                disabled={!canMove || movableCount < 2}
+                aria-label="Mover a otra página"
+                placeholder="Pág."
+                className="h-7 w-14 rounded-lg border border-slate-200 px-1.5 text-[12px] text-slate-700 disabled:opacity-40"
+              />
+              <button
+                type="button"
+                onClick={moveTo}
+                disabled={!canMove || !target}
+                className="h-7 rounded-lg border border-slate-200 px-2 text-[11px] font-medium text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+              >
+                Mover
+              </button>
+            </span>
+          </>
+        )}
+        {item.status === "error" && item.batchId && !disabled && (
+          <>
+            <input
+              ref={replaceRef}
+              type="file"
+              accept={item.tacoNumber != null ? ACCEPT.perInvoice : ACCEPT.digital}
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) onReplace(file);
+                e.target.value = "";
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => replaceRef.current?.click()}
+              className="inline-flex h-7 items-center gap-1 rounded-lg border border-slate-200 px-2 text-[11px] font-medium text-slate-600 hover:bg-slate-50"
+            >
+              <Replace className="h-3.5 w-3.5" />
+              Cambiar el fichero
+            </button>
+          </>
+        )}
+        <StatusBadge item={item} />
+        {(item.status === "queued" || item.status === "error" || item.status === "duplicate") && !disabled && (
+          <button
+            type="button"
+            onClick={onRemove}
+            aria-label="Quitar de la lista"
+            title="Quitar de la lista"
+            className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-slate-300 transition hover:bg-slate-100 hover:text-slate-500"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
     </li>
   );
 }
 
-function StatusBadge({ item }: { item: Item }) {
+function StatusBadge({ item }: { item: UploadListItem }) {
   switch (item.status) {
     case "queued":
       return null;
-    case "hashing":
     case "uploading":
-    case "registering":
       return (
         <span className="flex items-center gap-1.5 rounded-full bg-blue-50 px-2.5 py-1 text-[11px] font-medium text-blue-700">
           <Loader2 className="h-3 w-3 animate-spin" />
-          {item.status === "hashing"
-            ? "Preparando"
-            : item.status === "uploading"
-              ? "Subiendo"
-              : "Registrando"}
+          Subiendo
         </span>
       );
     case "ok":
@@ -733,7 +973,7 @@ function StatusBadge({ item }: { item: Item }) {
       return (
         <span
           className="flex items-center gap-1.5 rounded-full bg-red-50 px-2.5 py-1 text-[11px] font-medium text-red-700"
-          title={item.errorMsg ?? "Error"}
+          title={item.errorMessage ?? "Error"}
         >
           <AlertCircle className="h-3 w-3" />
           Error

@@ -21,7 +21,8 @@ function row(overrides: Partial<Record<(typeof ARCHIVE_INDEX_HEADERS)[number], A
     "Cuota IVA": 259.25,
     Retención: null,
     Total: -1493.75,
-    "Original electrónico o en papel": "Electrónico",
+    "Original electrónico o en papel": "Papel",
+    "Ubicación del papel": "Panadería López · 2026 · Caja 3 · Taco 37 · Pág. 28",
     Formato: "PDF",
     "Fichero en el ZIP": "recibidas/2026-03/R-2026-0001 00123 Proveedor SL.pdf",
     "SHA-256": "ab".repeat(32),
@@ -54,6 +55,11 @@ describe("indice.xlsx", () => {
       expect(headers).toEqual([...ARCHIVE_INDEX_HEADERS]);
     }
     expect(XLSX.utils.sheet_to_json(book.Sheets.Emitidas)).toEqual([]);
+    // «Ubicación del papel», detrás de «Original electrónico o en papel», con 40 de ancho.
+    const headers = [...ARCHIVE_INDEX_HEADERS];
+    expect(headers.indexOf("Ubicación del papel")).toBe(headers.indexOf("Original electrónico o en papel") + 1);
+    const cols = read(archiveIndexXlsx([{ name: "Recibidas", rows: [headers, row()] }])).Sheets.Recibidas["!cols"];
+    expect(cols?.[headers.indexOf("Ubicación del papel")]?.wch ?? 40).toBe(40);
   });
 
   it("tipos de celda: importes como número, fechas como fecha y textos como texto", () => {
@@ -68,6 +74,7 @@ describe("indice.xlsx", () => {
     // Un nº de factura con ceros delante sigue siendo texto.
     expect(at("Nº de factura")).toMatchObject({ t: "s", v: "00123" });
     expect(at("SHA-256")).toMatchObject({ t: "s" });
+    expect(at("Ubicación del papel")).toMatchObject({ t: "s", v: "Panadería López · 2026 · Caja 3 · Taco 37 · Pág. 28" });
     // Lo vacío no deja celda.
     expect(at("Retención")).toBeUndefined();
     expect(at("Avisos")).toBeUndefined();

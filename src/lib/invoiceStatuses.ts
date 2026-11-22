@@ -41,6 +41,10 @@ export const NEEDS_REVIEW: InvoiceStatus[] = [
  *  duplicada», «Es duplicada»). NEEDS_REVIEW mas el legacy ANALYZED. */
 export const REVIEWABLE: InvoiceStatus[] = [...NEEDS_REVIEW, "ANALYZED"];
 
+/** Esperando su análisis o analizándose: el análisis aún puede decidir si el
+ *  original es electrónico o papel de las que siguen «Por confirmar» (R11). */
+export const IN_ANALYSIS: InvoiceStatus[] = ["UPLOADED", "ANALYZING"];
+
 /** Trabajo terminado (independientemente de si se valida o rechaza). */
 export const DONE_WORK: InvoiceStatus[] = [
   "VALIDATED",
@@ -200,6 +204,8 @@ export const AUDIT_FIELD_LABELS: Record<string, string> = {
   retentionHold: "Conservar más",
   originalDocument: "Original en otro formato",
   archiveExport: "Descarga del archivo del ejercicio",
+  // «Taco 37 · Pág. 12 (sin guardar)» → «Caja 3 · Taco 37 · Pág. 12».
+  paperLocation: "Ubicación del papel",
 };
 
 /** Categorias de rechazo: el desplegable del rechazo, el aviso de una factura
@@ -305,6 +311,8 @@ export function formatAuditValue(value: string | null | undefined, field?: strin
     return reason ? `Conservar más: ${reason}` : value === "true" ? "Conservar más" : "No";
   }
   if (value == null || value === "") return "—";
+  // Ya es el texto que se ve; una etiqueta de caja puede llamarse como un estado.
+  if (field === "paperLocation") return value;
   // Valores que solo tienen sentido en su campo («MANUAL» o «IA» sueltos
   // podrian ser un nombre).
   if (field === "retentionType") return RETENTION_TYPE_LABEL[value as keyof typeof RETENTION_TYPE_LABEL] ?? value;

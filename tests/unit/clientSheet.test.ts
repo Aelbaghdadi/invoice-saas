@@ -107,11 +107,11 @@ describe("pestaña Archivo de la ficha", () => {
 
   it("lee los filtros de la URL; lo que no entiende es «todas» o «todos»", () => {
     expect(parseArchiveTabParams({})).toEqual({
-      fiscalYear: null, type: "todas", medium: "todos", includeRejected: false, q: "", page: 1,
+      fiscalYear: null, type: "todas", medium: "todos", includeRejected: false, withoutLocation: false, q: "", page: 1,
     });
     expect(parseArchiveTabParams({
       ejercicio: "2025", tipo: "emitidas", original: "por-confirmar", rechazadas: "1", q: "  F-12  ", page: "3",
-    })).toEqual({ fiscalYear: 2025, type: "emitidas", medium: "por-confirmar", includeRejected: true, q: "F-12", page: 3 });
+    })).toEqual({ fiscalYear: 2025, type: "emitidas", medium: "por-confirmar", includeRejected: true, withoutLocation: false, q: "F-12", page: 3 });
     expect(parseArchiveTabParams({ ejercicio: "1999", tipo: "PURCHASE", original: "PAPER", rechazadas: "si", page: "-1" }))
       .toMatchObject({ fiscalYear: null, type: "todas", medium: "todos", includeRejected: false, page: 1 });
     expect(parseArchiveTabParams({ q: "x".repeat(300) }).q).toHaveLength(100);
@@ -120,7 +120,7 @@ describe("pestaña Archivo de la ficha", () => {
   it("un parámetro repetido en la URL (?q=a&q=b llega como array) no la tumba: vale el primero", () => {
     expect(parseArchiveTabParams({
       ejercicio: ["2025", "2026"], tipo: ["emitidas", "recibidas"], original: ["papel"], rechazadas: ["1", "0"], q: [" a ", "b"], page: ["2", "9"],
-    })).toEqual({ fiscalYear: 2025, type: "emitidas", medium: "papel", includeRejected: true, q: "a", page: 2 });
+    })).toEqual({ fiscalYear: 2025, type: "emitidas", medium: "papel", includeRejected: true, withoutLocation: false, q: "a", page: 2 });
     expect(parseArchiveTabParams({ q: [] })).toMatchObject({ q: "" });
   });
 
@@ -133,7 +133,18 @@ describe("pestaña Archivo de la ficha", () => {
     expect(href).toBe(`${base}?tab=archivo&ejercicio=2025&tipo=recibidas&original=papel&rechazadas=1&q=R-2026%2F1&page=2`);
     const params = Object.fromEntries(new URL(href, "http://x").searchParams);
     expect(parseArchiveTabParams(params)).toEqual({
-      fiscalYear: 2025, type: "recibidas", medium: "papel", includeRejected: true, q: "R-2026/1", page: 2,
+      fiscalYear: 2025, type: "recibidas", medium: "papel", includeRejected: true, withoutLocation: false, q: "R-2026/1", page: 2,
     });
+  });
+
+  it("«Solo sin ubicación» va en la URL como ubicacion=sin, y se lee igual", () => {
+    const base = "/dashboard/worker/clients/c1";
+    const href = archiveTabHref(base, { fiscalYear: 2026, withoutLocation: true });
+    expect(href).toBe(`${base}?tab=archivo&ejercicio=2026&ubicacion=sin`);
+    expect(parseArchiveTabParams(Object.fromEntries(new URL(href, "http://x").searchParams))).toMatchObject({ withoutLocation: true });
+    expect(archiveTabHref(base, { withoutLocation: false })).toBe(`${base}?tab=archivo`);
+    // Lo que no es «sin» no filtra; repetido, vale el primero.
+    expect(parseArchiveTabParams({ ubicacion: "si" }).withoutLocation).toBe(false);
+    expect(parseArchiveTabParams({ ubicacion: ["sin", "no"] }).withoutLocation).toBe(true);
   });
 });

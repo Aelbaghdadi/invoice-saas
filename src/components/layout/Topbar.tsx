@@ -39,6 +39,8 @@ const ROUTE_LABELS: Record<string, string> = {
   "/dashboard/support":            "Soporte",
   "/dashboard/support/new":        "Nuevo ticket",
   "/dashboard/support/team":       "Equipo de soporte",
+  // Resumen, Tacos, la ficha de una factura y las tandas: todo cae aquí por prefijo.
+  "/dashboard/archivo":            "Archivo",
 };
 
 /** Subtítulo contextual — solo en las raíces (paneles), donde aporta. */

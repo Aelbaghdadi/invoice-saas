@@ -5,7 +5,7 @@ import { unzipSync, strFromU8 } from "fflate";
 import { createHash } from "node:crypto";
 import { prisma } from "./helpers/db";
 import { fakeS3 } from "./helpers/fakeS3";
-import { makeFirm, makeInvoice, type FirmWorld } from "./helpers/factories";
+import { makeFirm, makeInvoice, makeTaco, type FirmWorld } from "./helpers/factories";
 import { signInAs } from "./helpers/session";
 import { appendAuditLogs } from "@/lib/auditLog";
 import { CLIENT_EXPORT_LIMITS, writeClientDataZip } from "@/lib/clientDataExport";
@@ -311,6 +311,33 @@ describe("descargar los datos de un cliente (F-044)", () => {
       "Los originales del cliente ocupan 11 bytes y se pueden descargar como mucho 10 bytes de una vez. Descarga el archivo de cada ejercicio (ficha del cliente → Archivo) o pide la exportación completa a soporte.",
     );
     CLIENT_EXPORT_LIMITS.maxBytes = 11;
+    expect((await call(w.client.id, "?check=1")).status).toBe(200);
+  });
+
+  it("lleva el PDF de cada taco entero del cliente en tacos/ (también anulado) y cuenta en el tope; el de otro cliente, no", async () => {
+    const taco = await makeTaco(w, { wholePdf: { pageCount: 30 } });
+    const voided = await makeTaco(w, { wholePdf: { pageCount: 3 }, voided: { reason: "Subido por error" } });
+    const b = await makeFirm("B");
+    const foreign = await makeTaco(b, { wholePdf: { pageCount: 3 } });
+    for (const batch of [taco, voided, foreign]) {
+      const document = await prisma.document.findUniqueOrThrow({ where: { id: batch.pdfDocumentId! } });
+      fakeS3().put(document.storageKey, `%PDF del taco ${batch.tacoNumber} de ${batch.advisoryFirmId}`);
+    }
+
+    signInAs(w.admin);
+    const zip = await unzip(await call(w.client.id));
+    expect(zip.names.filter((name) => name.startsWith("tacos/"))).toEqual([`tacos/Taco ${taco.tacoNumber}.pdf`, `tacos/Taco ${voided.tacoNumber}.pdf`].sort());
+    expect(zip.text(`tacos/Taco ${taco.tacoNumber}.pdf`)).toBe(`%PDF del taco ${taco.tacoNumber} de ${w.firm.id}`);
+    expect(zip.text("LEEME.txt")).toContain("El PDF entero de cada taco escaneado en la asesoría");
+    // No son facturas: ni en facturas.json ni entre los originales.
+    expect(JSON.parse(zip.text("facturas.json"))).toHaveLength(2);
+    expect(zip.names.filter((n) => n.startsWith("originales/"))).toHaveLength(2);
+
+    // Sus 1.000 bytes cuentan (las dos facturas de makeFirm, sin tamaño, 20 MB cada una).
+    const base = 2 * 20 * 1024 * 1024;
+    CLIENT_EXPORT_LIMITS.maxBytes = base + 1999;
+    expect((await call(w.client.id, "?check=1")).status).toBe(413);
+    CLIENT_EXPORT_LIMITS.maxBytes = base + 2000;
     expect((await call(w.client.id, "?check=1")).status).toBe(200);
   });
 

@@ -55,12 +55,13 @@ importante:
 | `ExportBatch` | Lote exportado. Las facturas se marcan vía `Invoice.exportBatchId`. |
 | `SupportTicket` / `SupportMessage` | Soporte: un aviso de la asesoría al equipo del producto y su hilo. Cuelga de la asesoría; el equipo (`SUPPORT_USERNAMES`) ve los de todas. |
 | `InvoiceArchive` | Archivo de una factura, una fila por factura (la crea un trigger): llegada, electrónico o papel, original en otro formato, nº de registro y «conservar más». Ver [Archivo de facturas](#archivo-de-facturas). |
-| `UploadBatch` | Tanda de subida o taco de papel. Cuelga de la asesoría. Es de la entrega B del archivo: hoy no se crea ninguna. |
+| `UploadBatch` | Tanda de subida (cada «Subir» del gestor) o taco de papel («Taco 37»), con su caja o su devolución. Cuelga de la asesoría. Ver [Papel: tandas, tacos y cajas](#papel-tandas-tacos-y-cajas). |
 | `InvoiceRegisterSeries` | Último nº de registro del archivo por cliente, tipo (R recibidas, E emitidas) y año. |
 
 Columnas del archivo en entidades de antes: `Client.fiscalYearStartMonth`
-(inicio del ejercicio del cliente) y `AdvisoryFirm.isDemo` (asesoría de
-demostración, que solo se marca a mano).
+(inicio del ejercicio del cliente), `AdvisoryFirm.isDemo` (asesoría de
+demostración, que solo se marca a mano) y `AdvisoryFirm.paperScanMode` /
+`paperBoxMode` (cómo escanea el papel y cómo guarda las cajas, en Ajustes).
 
 ### Estados de Invoice
 
@@ -348,28 +349,30 @@ trivial. Una query rota aquí es un leak entre asesorías.
 ## Archivo de facturas
 
 Un archivo por cliente y ejercicio, en el orden del libro: por periodo de
-deducción y, dentro de cada periodo, por llegada. Lo forman la migración
-`00000000000012_archivo` (tablas, relleno de lo que ya existía y triggers) y los
-módulos `src/lib/archive*.ts`, `originalMedium.ts` y `registerNumbers.ts`. La
-fase 1 va en dos entregas:
+deducción y, dentro de cada periodo, por llegada. Lo forman las migraciones
+`00000000000012_archivo` (tablas, relleno de lo que ya existía y triggers) y
+`00000000000013_archivo_tacos` (el papel: ajustes, taco entero, anulación y sus
+guardas), y los módulos `src/lib/archive*.ts`, `originalMedium.ts` y
+`registerNumbers.ts`, más los del papel (abajo). La fase 1 va en dos entregas:
 
-- **Entrega A (esta):** el archivo digital. Nº de registro del archivo al
-  exportar a A3; electrónico o papel, que propone la app y se puede cambiar;
-  «conservar hasta» y «conservar más»; buscador y original a un clic; originales
-  en Word, Excel, OpenDocument o RTF adjuntos a su factura; ZIP del ejercicio con
-  índice Excel; y cifras por cliente y ejercicio.
-- **Entrega B (pendiente):** el papel. Tandas y tacos al subir, cajas, hoja del
-  taco con QR, «Era papel» y «Poner ubicación». Espera a saber cómo escanea y
-  cómo guarda el papel la asesoría. El esquema de la 12 ya lo trae todo, así que
-  no hará falta otra migración. Mientras, nadie crea tandas y ninguna pantalla
-  habla de tacos, cajas ni ubicación.
+- **Entrega A:** el archivo digital. Nº de registro del archivo al exportar a
+  A3; electrónico o papel, que propone la app y se puede cambiar; «conservar
+  hasta» y «conservar más»; buscador y original a un clic; originales en Word,
+  Excel, OpenDocument o RTF adjuntos a su factura; ZIP del ejercicio con índice
+  Excel; y cifras por cliente y ejercicio.
+- **Entrega B:** el papel. Tandas y tacos al subir (factura a factura o el taco
+  entero en un PDF), cajas, hoja del taco para imprimir (sin QR), ubicación
+  «Caja 3 · Taco 37 · Pág. 28» en todas las pantallas, «Era papel», «Poner
+  ubicación», «Sacar del taco», anular y completar un taco. Ver [Papel: tandas,
+  tacos y cajas](#papel-tandas-tacos-y-cajas).
 
 ### Modelo, y por qué va en una tabla aparte
 
 | Qué | Para qué |
 |-----|----------|
 | `InvoiceArchive` | Una fila por factura (clave `invoiceId`): llegada (`receivedAt`), nº de parte de una división (`splitPart`), electrónico o papel (`originalMedium`, con su origen, su motivo y `pdfProducer`), original en otro formato (`originalDocumentId` → `Document`), nº de registro (serie, número y fecha) y «conservar más» (motivo y nota). |
-| `UploadBatch` | Tanda de subida o taco de papel. Cuelga de la asesoría. `InvoiceArchive` la apunta dos veces: la tanda de llegada (`uploadBatchId` y `uploadPosition`, que fijan el orden y no cambian) y el taco donde se guarda el papel (`paperBatchId`, que se puede poner después sin tocar la llegada). Es de la entrega B: hoy no se crea ninguna. |
+| `UploadBatch` | Tanda de subida o taco de papel. Cuelga de la asesoría. `InvoiceArchive` la apunta dos veces: la tanda de llegada (`uploadBatchId` y `uploadPosition`, que fijan el orden y no cambian) y el taco donde se guarda el papel (`paperBatchId`, que se puede poner después sin tocar la llegada). La 13 le añade los candidatos de una tanda de varios (`routingCandidateIds`), el taco entero (`wholePdf`, `pdfDocumentId`, `pdfPageCount`, `pdfSplitAt`, `pdfSplitById`) y la anulación (`voidedAt`, `voidedById`, `voidReason`). |
+| `AdvisoryFirm.paperScanMode` / `paperBoxMode` | Cómo escanea el papel la asesoría (factura a factura o el taco entero en un PDF) y cómo guarda las cajas (una por cliente y año o todas juntas). Solo cambian lo que la app propone. |
 | `InvoiceRegisterSeries` | Último nº de registro por cliente, tipo (R recibidas, E emitidas) y año. |
 | `Client.fiscalYearStartMonth` | Mes en que empieza el ejercicio del cliente (1 = año natural). |
 | `AdvisoryFirm.isDemo` | Asesoría de demostración: la única en la que el reset puede borrar facturas y documentos. Solo se marca a mano en la BD. |
@@ -564,6 +567,8 @@ Al final del `migration.sql` de la 12, después del relleno. Todos dan
 | `archive_row_guard` | BEFORE UPDATE en `InvoiceArchive` | Un nº de registro a medias (sin serie o sin fecha), en la serie de otro cliente, tipo o año, o que cambie una vez puesto; que cambien la tanda de llegada o la posición ya puestas; que el papel vuelva a quedarse sin taco. El original adjunto sí se puede quitar: queda en la auditoría y el `Document` no se borra. |
 | `register_series_guard` | BEFORE UPDATE en `InvoiceRegisterSeries` | Que una serie cambie de cliente, tipo o año, o que su contador baje (la siguiente reserva repetiría números). |
 | `taco_number_guard` | BEFORE UPDATE OF `tacoNumber` en `UploadBatch` | Que cambie el nº de un taco ya puesto. |
+| `upload_batch_guard` (13) | BEFORE INSERT OR UPDATE en `UploadBatch` | Que cambie lo que fija una tanda (asesoría, cliente, candidatos, origen, creación, lote, tipo, modo y PDF); que baje su nº de ficheros o que crezca fuera de un taco de factura a factura sin anular; un taco entero sin nº, sin PDF, de varios ficheros o sin cliente; dividirlo dos veces; anular sin motivo, dos veces o algo que no sea un taco subido; guardar en caja o devolver una tanda sin nº; cambiar la caja de un taco anulado; un cliente, candidato o PDF de otra asesoría. |
+| `archive_batch_firm_guard` (13) | BEFORE UPDATE OF `uploadBatchId`, `paperBatchId` en `InvoiceArchive` | Poner en una factura la tanda o el taco de otra asesoría, o su papel en una tanda sin nº. |
 
 - **La llave es la de la auditoría** (`SET LOCAL app.allow_audit_mutation`,
   dentro de una transacción), pero para borrar facturas y documentos hace falta
@@ -627,7 +632,8 @@ Al final del `migration.sql` de la 12, después del relleno. Todos dan
   administrador y la del gestor) y la ficha de archivo de una factura
   (`/dashboard/archivo/facturas/[id]`). Cada página comprueba el rol y el
   acceso ella misma (el proxy deja entrar en `/dashboard` a cualquiera); sin
-  acceso, 404. Lo de papel (tacos, cajas, ubicación) llega con la entrega B.
+  acceso, 404. Las del papel, en [Papel: tandas, tacos y
+  cajas](#papel-tandas-tacos-y-cajas).
 - **Ediciones** (`setOriginalMedium` y `setRetentionHold` en
   `src/lib/archiveEdits.ts`, acciones en `src/app/dashboard/archivo/actions.ts`):
   solo escriben en `InvoiceArchive`, así que no cambian `Invoice.updatedAt` (una
@@ -710,9 +716,167 @@ Al final del `migration.sql` de la 12, después del relleno. Todos dan
   «Original electrónico o en papel» («Original» sigue siendo la ruta del
   fichero).
 
+### Papel: tandas, tacos y cajas
+
+La entrega B: dónde está el papel que escanea la asesoría. Módulos:
+`uploadBatches.ts` (crear tandas y tacos, nº de taco, el taco entero al subirlo),
+`uploadListState.ts` y `uploadOrder.ts` (la lista de la subida, puros),
+`tacos.ts` (guardar, «Era papel», «Poner ubicación», anular y completar),
+`tacoSplit.ts`, `tacoSplitPlan.ts` y `pdfPieces.ts` (dividir el taco entero),
+`paperLocation.ts` y `boxProposal.ts` (ubicación, huecos y caja propuesta,
+puros) y `tacoData.ts` (lectura de la pestaña Tacos, el detalle y los avisos).
+
+- **Dos ajustes de la asesoría** (Ajustes → Papel, solo el ADMIN):
+  «Cómo escaneáis el papel» (factura a factura, por defecto, o el taco entero en
+  un PDF) y «Cómo guardáis las cajas» (una por cliente y año, por defecto, o
+  todas juntas). Solo cambian lo que la app propone: el modo que sale marcado al
+  subir papel y la caja que se propone. Nada de lo hecho cambia.
+- **Una tanda en cada «Subir» del gestor**, también digital (`startUploadBatch`
+  antes de subir; una subida digital de más de 500 ficheros va en tandas de 500).
+  Fija la llegada (`receivedAt` = creación de la tanda) y el orden de lo que se
+  subió junto, y es lo que permite después «Era papel». El portal sigue subiendo
+  sin tanda. Cada fichero lleva su tanda y su posición; `/api/uploads` comprueba
+  que casan cliente, lote y tipo (ERR-UPLOAD-008), que la página está libre (un
+  reintento que ya llegó responde 200 `alreadyUploaded`, otro fichero 409
+  ERR-UPLOAD-009) y que un XML no va en un taco (ERR-UPLOAD-010). Una tanda
+  digital caduca a las 24 h; un taco, no.
+- **Nº de taco** («Taco 37», «T37»): correlativo por asesoría, el mismo contador
+  para todos los tacos, nunca se reutiliza ni cambia. Se reserva en la
+  transacción que lo pone con `pg_advisory_xact_lock(48049, hashtext(firmId))`
+  y después `MAX + 1`, en dos sentencias (en una sola, la foto sería anterior al
+  bloqueo). El bloqueo para los «Subir» de toda la asesoría, así que va **el
+  último**, justo antes de escribir la tanda (B-R21): las escrituras de varias
+  filas bloquean primero la tanda, después las raíces de división y el resto de
+  filas, vuelven a leer y validan, y solo entonces toman el de la asesoría.
+- **La página es la posición** (`uploadPosition`). Factura a factura, «Pág. 28»
+  es la factura 28.ª del montón aunque tenga varias hojas (un fichero, una
+  página). En el taco entero es la página **del PDF** donde empieza la factura
+  («Pág. 27 del PDF»), y el detalle y la hoja llevan además su orden («12.ª»):
+  con un escáner a dos caras la página del PDF no es la hoja. En el papel se
+  cuentan facturas, no hojas. Las partes de una división comparten la página de
+  su factura.
+- **El taco entero en un PDF** se crea al subir su PDF (`createWholeTaco`, de
+  hasta 20 MB y 500 páginas; si la subida falla, no se gasta ningún nº). Hasta
+  que se marca dónde empieza cada factura es un `Document` colgado de la tanda
+  (`pdfDocumentId`), **sin `Invoice`**: así no entra en la cola de revisión, ni
+  en los contadores, ni lo coge `retry-stuck` ni el OCR. Lo pendiente se ve en la
+  tarjeta de la subida, en Tacos («Por dividir»), en el Resumen y en los paneles,
+  y el periodo de su lote no se cierra ni desde Lotes ni desde Cierres. Se divide
+  una vez (`splitWholeTaco`, hasta 300 facturas): corta el PDF con
+  `pdfPieces.ts` (los trozos se suben igual que en «Dividir PDF» de la revisión y
+  en la separación automática, `invoiceSplit.ts`) y crea
+  **facturas independientes**, no partes de una división: una familia es un solo
+  papel (R11), y con 52 facturas colgando de una raíz cambiar el medio o adjuntar
+  un Word a una lo cambiaría en todas. Vuelve a mirar el cierre del periodo
+  dentro de la transacción, después de reservar.
+- **Con la separación automática** (`autoSplit.ts`, un PDF con varias facturas
+  que Gemini separa al analizarlo): no toca las facturas de un taco entero, que
+  ya marcó una persona. En una subida factura a factura sí separa, y las hijas
+  heredan tanda, página y nº de parte como en «Dividir». Si su transacción se
+  cruza con «Guardar en caja», «Era papel» o «Anular» (bloquean la tanda y luego
+  sus filas; ella, al revés) y Postgres la aborta (40P01), se repite.
+- **Caja** (`fileTaco`): etiqueta libre de 2 a 80 caracteres, o «Devuelto al
+  cliente» con la fecha de hoy; se puede cambiar cuantas veces haga falta y cada
+  cambio deja `paperLocation` en la auditoría de cada factura cuyo papel está en
+  el taco. La propuesta (`proposeBoxLabels`) solo rellena el campo: «una por
+  cliente y año» propone la última caja de ese cliente y ejercicio («Panadería
+  López · 2026 · Caja 3»; sin cliente, «Varios clientes · 2026 · Caja 1»), «todas
+  juntas» la última de la asesoría («Caja 12»), y solo cuentan las etiquetas del
+  modo actual, para que cambiar el ajuste no mezcle cajas. «Caja nueva» la
+  calcula **el servidor** al guardar, con el bloqueo de la asesoría, para que
+  dos a la vez no den la misma; el número es el que va detrás de «caja», no el
+  año del final de una etiqueta escrita a mano. Las sugerencias del campo solo
+  llevan cajas de tacos que quien pregunta ve (B-R20): con «una por cliente y
+  año» la etiqueta lleva el nombre del cliente. La propuesta y «Caja nueva» sí
+  cuentan todas.
+- **Ubicación** (`paperLocationOf`): el taco del papel es `paperBatch` si lo hay;
+  si no, la tanda de llegada si es un taco. «Panadería López · 2026 · Caja 3 ·
+  Taco 37 · Pág. 28», «Devuelto al cliente el 21/11/2026 · Taco 37 · Pág. 28»,
+  «Taco 37 · Pág. 28 (sin guardar)», «(taco anulado)», «{caja} · papel ubicado a
+  mano», «Lo guarda el cliente», «Original electrónico», «Por confirmar» o «Sin
+  ubicación». Sale en la pestaña Archivo del cliente (forma corta, sin el
+  «{cliente} · {ejercicio} · » que ahí ya se sabe), en la ficha, en el buscador
+  (que encuentra por «T37», «taco 37 pág 28», «caja 3» y las palabras de una
+  etiqueta) y en el `indice.xlsx` del ZIP («Ubicación del papel»). Las palabras
+  de una etiqueta (`boxLabelMatchesWords`) cuentan como texto, no como exactas, y
+  alguna tiene que estar fuera del «{cliente} · {ejercicio} · » de la caja: el
+  nombre del cliente o el año solos traerían todo su papel guardado. El filtro
+  de texto de la pestaña del cliente entiende lo mismo que el buscador.
+- **Papel sin ubicación** = PAPER, no rechazada, sin taco y sin «lo guarda el
+  cliente». El papel de un taco sin guardar no cuenta (es otro aviso: «tacos sin
+  guardar en caja»). Al lado va siempre **«Por confirmar» sin ubicación**: fuera
+  de un taco un escaneo nunca se da por papel, así que todo el papel de antes del
+  archivo está «Por confirmar» y sin esa cifra la métrica saldría 0. En las
+  cifras, `located` (paperHeldByClient, `paperBatchId` o tanda de llegada con
+  nº, lo mismo que `paperLocationOf`). Lo «Por confirmar» que espera su análisis
+  o se está analizando (`IN_ANALYSIS`) no cuenta: el análisis aún puede decir
+  que es electrónico.
+- **«Poner ubicación»** (`placePaper`) sobre una selección (200), sobre todo lo
+  sin ubicación de un cliente y ejercicio (2.000; con «Incluir las por
+  confirmar») o **«Sacar del taco»** de una factura: en una caja (un taco ARCHIVE
+  por cliente, ejercicio y caja, que se reutiliza; sin páginas), «Se lo
+  devolvemos hoy» o «Lo tiene el cliente». Amplía a la familia de división, pero
+  solo a lo del mismo cliente: una subida «entre varias» que se separa sola deja
+  hijas de varios clientes (y la raíz en el buzón) en una familia, y el papel de
+  cada una es de su cliente. Se salta lo que no se puede ubicar y lo cuenta antes (`previewPlacePaper`); lo
+  «Por confirmar» pasa a PAPER/MANUAL, que el análisis ya no cambia, así que se
+  salta («se está analizando») si alguna de su familia espera su análisis o se
+  analiza, como en `setOriginalMedium`. **«Era papel: crear taco»**
+  (`convertToTaco`) da nº a una tanda digital y pasa su «Por confirmar» a
+  PAPER/TACO; las electrónicas se quedan como están.
+- **`writeAutoMedium` solo da «taco» a una fila con el medio vacío**: una
+  propuesta electrónica que «Era papel» dejó como estaba no pasa a papel al
+  reprocesarla.
+- **Anular un taco** (`voidTaco`, con motivo): solo uno subido y sin facturas
+  vivas ni papel puesto desde fuera (un taco entero al cliente o lote
+  equivocados, uno vacío, uno con todo rechazado). Conserva su nº y su historia,
+  sale de los avisos, no bloquea el cierre, no cuenta como duplicado del PDF ni
+  para la propuesta de caja. La subida toma la tanda `FOR SHARE`, así que una
+  factura y una anulación a la vez no dejan un taco anulado con una factura viva.
+- **Completar un taco** (`extendTaco` + «Completar el taco» en su detalle): los
+  ficheros que faltan van a sus páginas vacías o al final (el `fileCount` solo
+  sube, con el valor leído como testigo). El navegador calcula la huella de cada
+  fichero y reconoce lo que ya está, así que se puede soltar otra vez todo el
+  montón. Con el periodo del lote cerrado no se hace sitio: la subida no
+  entraría y las páginas nuevas quedarían «sin factura» para siempre.
+- **La hoja del taco** (`/imprimir/taco/[id]`): fuera del dashboard (sin barra
+  lateral), A4 en blanco y negro, «TACO 37» en grande, cliente, lote, caja (o una
+  línea para escribirla), «Conservar hasta (como mínimo)» y la lista por página
+  con los huecos; mientras una factura se analiza, el nombre de su fichero. La
+  página comprueba ella misma sesión, rol y acceso (el proxy solo exige sesión
+  fuera de `/dashboard`). Sin QR: necesitaría un paquete.
+- **Acceso** (B-R20, una sola definición: `uploadBatchVisibleWhere` en
+  `archiveAccess.ts`, que usan `canAccessUploadBatch`, los listados y los
+  avisos). El ADMIN, todas las de su asesoría. El WORKER, una tanda con cliente
+  solo si lo tiene asignado, **aunque la creara él**: si le quitan el cliente,
+  deja de ver su PDF, de dividirlo y de guardarlo. Una tanda de varios, si la
+  creó, si tiene alguno de sus candidatos (mientras esperan el ruteo sus
+  facturas están en el buzón) o el cliente de alguna de sus facturas; en el
+  detalle y en la hoja, las de clientes que no tiene salen como «Factura de otra
+  empresa».
+- **Guardas de la 13** (`upload_batch_guard`, `archive_batch_firm_guard`, en la
+  tabla de triggers): lo que fija una tanda no cambia, el taco entero se divide
+  una vez, se anula una vez y con motivo, y la tanda y el taco de una fila de
+  archivo son de su asesoría. Sin llave: ningún camino de la app la necesita.
+- **Reset de la demo**: borra facturas, después tandas y después documentos (la
+  FK de `pdfDocumentId` es RESTRICT: el PDF de un taco entero no se puede borrar
+  mientras exista su tanda).
+- **Descarga de datos del cliente** (F-044): lleva el PDF de cada taco entero del
+  cliente en `tacos/` (anulados incluidos: es un documento suyo).
+
 ### Pendiente (fuera de la fase 1)
 
-- **La entrega B** (papel: tandas, tacos, cajas y ubicación), arriba.
+- **Mejoras del papel** (entrega B): QR en la hoja que abra el taco (necesita un
+  paquete); proponer los cortes del taco entero (texto de cada página, NIF y
+  totales); «Corregir las marcas» de un taco entero ya dividido (rechazar las
+  afectadas y crear las nuevas con `splitPart` libre en su página, sin
+  migración); «Rechazar el taco» de una vez; elegir la fecha de «Devuelto al
+  cliente»; un taco entero en varios PDF y PDF de más de 20 MB; la ubicación en
+  la pantalla de revisión y en `facturas.csv` de la descarga de datos; «+ Taco 38
+  por dividir» en la tarjeta del lote; arrastrar y soltar filas en la lista de la
+  subida; el nº de hojas de cada fichero en la hoja del taco; encolar el OCR de
+  un taco grande detrás de lo que ya espera; y el acceso del cliente (portal) a
+  su archivo.
 - **Clientes que no se exportan desde la app.** El nº de registro solo se pone en
   `commitExportBatch`: un cliente que la asesoría lleva en otro programa, o que
   mete a mano en A3, no tendrá nunca número y todo su archivo saldrá «sin

@@ -219,7 +219,7 @@ export function checkArchiveFiles(
 // ── Índice ──────────────────────────────────────────────────────────────────
 
 /** «Original» del índice de la especificación, renombrada como en
- *  facturas.csv (anexo C10). Sin «Ubicación del papel» en esta entrega. */
+ *  facturas.csv (anexo C10), y detrás, dónde está el papel (B-R12). */
 export const ARCHIVE_INDEX_HEADERS = [
   "Nº de registro",
   "Periodo",
@@ -235,6 +235,7 @@ export const ARCHIVE_INDEX_HEADERS = [
   "Retención",
   "Total",
   "Original electrónico o en papel",
+  "Ubicación del papel",
   "Formato",
   "Fichero en el ZIP",
   "SHA-256",
@@ -257,7 +258,7 @@ export function archiveIndexHeaders(folder: ArchiveZipFolder): string[] {
 }
 
 /** Ancho de cada columna del índice, en caracteres. */
-export const ARCHIVE_INDEX_WIDTHS = [14, 14, 9, 16, 12, 11, 18, 32, 13, 12, 11, 11, 12, 28, 22, 60, 66, 16, 50];
+export const ARCHIVE_INDEX_WIDTHS = [14, 14, 9, 16, 12, 11, 18, 32, 13, 12, 11, 11, 12, 28, 40, 22, 60, 66, 16, 50];
 
 /** Texto (siempre texto), número (importe), fecha (sin hora) o vacío. */
 export type ArchiveIndexCell = string | number | Date | null;
@@ -288,6 +289,8 @@ export type ArchiveIndexInput = {
   currency: string | null;
   medium: OriginalMedium | null;
   mediumReasonLabel: string | null;
+  /** Dónde está el papel: «Caja 3 · Taco 37 · Pág. 28», «Lo guarda el cliente»… (B-R12). */
+  location: string;
   /** El original en el ZIP: ruta, su huella calculada al pasar y sus
    *  problemas (checkArchiveFiles). */
   original: { fileType: string; path: string } & ArchiveOriginalCheck;
@@ -360,6 +363,7 @@ export function archiveIndexRow(row: ArchiveIndexInput): ArchiveIndexCell[] {
     row.irpfAmount,
     row.totalAmount,
     row.medium == null && row.mediumReasonLabel ? `${medium} (${row.mediumReasonLabel})` : medium,
+    row.location,
     archiveFormatLabel(row.original.fileType, row.copyFileType),
     row.original.path,
     row.original.sha256,
@@ -405,7 +409,17 @@ export type ArchiveReadmeInput = {
   fileCount: number;
   errorCount: number;
   sheets: string[];
+  /** Nº de los tacos enteros del cliente sin dividir ni anular en este periodo: sus facturas aún no existen. */
+  pendingWholeTacos?: readonly number[];
 };
+
+/** «Hay 2 tacos enteros sin dividir en este ejercicio (T38, T41): sus facturas no están en el ZIP.» */
+function pendingWholeTacosLines(numbers: readonly number[]): string[] {
+  if (numbers.length === 0) return [];
+  const list = numbers.map((n) => `T${n}`).join(", ");
+  const lead = numbers.length === 1 ? "Hay 1 taco entero sin dividir" : `Hay ${numbers.length} tacos enteros sin dividir`;
+  return [`  ${lead} en este ejercicio (${list}): sus facturas no están en el ZIP.`];
+}
 
 /**
  * El LEEME.txt del ZIP del ejercicio: qué es cada cosa y cómo comprobarla. Es
@@ -440,6 +454,9 @@ export function archiveReadme(r: ArchiveReadmeInput): string {
     `  Hojas: ${r.sheets.join(", ")}.`,
     "  «Fichero en el ZIP» dice dónde está el original de cada factura y «SHA-256»,",
     "  su huella.",
+    "  Ubicación del papel: dónde está el papel en la asesoría (caja, taco y página),",
+    "  si se devolvió al cliente o si lo guarda él.",
+    ...pendingWholeTacosLines(r.pendingWholeTacos ?? []),
     "",
     "recibidas/ y emitidas/",
     "  Los originales de las facturas con nº de registro, por periodo de deducción",

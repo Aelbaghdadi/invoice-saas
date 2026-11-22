@@ -58,6 +58,12 @@ commits). Mantenedlo así; no traduzcáis a inglés cosas existentes.
   `Invoice.updatedAt` es el testigo de concurrencia de la revisión y del
   export. Y un SQL en crudo sobre una tabla con `@updatedAt` pone
   `"updatedAt" = now() AT TIME ZONE 'UTC'`.
+- **Un taco entero no es una factura hasta que se divide**: es un `Document`
+  colgado de su tanda (`UploadBatch.pdfDocumentId`). No le pongáis una
+  `Invoice`: entraría en la cola, en los contadores y en el OCR.
+- **El bloqueo del nº de taco (48049) va el último en la transacción**: para
+  los «Subir» de toda la asesoría. Primero la tanda, las filas y la
+  validación; el bloqueo, justo antes de escribir (ARCHITECTURE.md → Papel).
 - **`tests/unit` corre en el build de Docker sin `.env` ni BD**: si falla, no
   hay imagen. Los tests contra Postgres van en otra carpeta (p. ej.
   `tests/integration`), fuera de esa barrera. Ver ARCHITECTURE.md → Testing.
@@ -94,6 +100,14 @@ linter no lo detecta — está en vuestra responsabilidad.
   [src/lib/originalMedium.ts](src/lib/originalMedium.ts) (electrónico o papel) y
   [src/lib/archiveData.ts](src/lib/archiveData.ts) (lectura y buscador). Los triggers y el
   relleno, al final de `prisma/migrations/00000000000012_archivo/migration.sql`
+- ¿Tacos, cajas o ubicación? → [ARCHITECTURE.md → Papel: tandas, tacos y cajas](ARCHITECTURE.md#papel-tandas-tacos-y-cajas);
+  [src/lib/uploadBatches.ts](src/lib/uploadBatches.ts) (tandas, nº de taco y taco entero al subir),
+  [src/lib/tacos.ts](src/lib/tacos.ts) (guardar, «Era papel», «Poner ubicación», anular, completar),
+  [src/lib/tacoSplit.ts](src/lib/tacoSplit.ts) (dividir el taco entero),
+  [src/lib/paperLocation.ts](src/lib/paperLocation.ts) (ubicación y huecos),
+  [src/lib/uploadListState.ts](src/lib/uploadListState.ts) (la lista de la subida) y
+  [src/lib/tacoData.ts](src/lib/tacoData.ts) (Tacos, detalle, hoja y avisos). Las guardas,
+  al final de `prisma/migrations/00000000000013_archivo_tacos/migration.sql`
 - ¿ZIP del ejercicio o descarga de datos del cliente? → [src/lib/archiveExport.ts](src/lib/archiveExport.ts),
   [src/lib/clientDataExport.ts](src/lib/clientDataExport.ts) y el ZIP en streaming de los dos,
   [src/lib/zipStream.ts](src/lib/zipStream.ts)

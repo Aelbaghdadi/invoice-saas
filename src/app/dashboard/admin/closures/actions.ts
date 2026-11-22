@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { sendPeriodSummary } from "@/lib/periodSummary";
+import { pendingTacoSplitCloseError, pendingTacoSplitInPeriod } from "@/lib/tacoSplit";
 
 export async function closePeriod(formData: FormData) {
   const session = await auth();
@@ -36,6 +37,10 @@ export async function closePeriod(formData: FormData) {
   if (existing && !existing.reopenedAt) {
     return { error: "Este periodo ya está cerrado." };
   }
+
+  // Un taco entero sin dividir: sus facturas aún no existen (B-R9).
+  const pendingTaco = await pendingTacoSplitInPeriod(clientId, month, year);
+  if (pendingTaco != null) return { error: pendingTacoSplitCloseError(pendingTaco) };
 
   // Upsert: if was reopened, re-close it
   await prisma.periodClosure.upsert({

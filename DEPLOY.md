@@ -59,7 +59,8 @@ Postgres, son 20 por réplica: súbelo o baja el `max`.
 Automáticas: el contenedor ejecuta `prisma migrate deploy` en el arranque
 ([`docker-entrypoint.sh`](docker-entrypoint.sh)) antes de levantar Next. Es
 idempotente; en una BD nueva crea todo el esquema. No hay pasos manuales,
-salvo en la 12 (archivo), que los tiene antes y después del Redeploy (§10).
+salvo en la 12 (archivo), que los tiene antes y después del Redeploy (§10). La
+13 (tacos y cajas) solo tiene comprobaciones después (§11).
 
 El historial se **regeneró a un baseline limpio** (`00000000000000_init` =
 esquema completo + `00000000000001_audit_immutability` = triggers de auditoría),
@@ -614,3 +615,124 @@ las facturas que se subieron sin el trigger, y las comprobaciones de §10.4.
 
 **Deshacer la 12 entera** es restaurar la copia de §10.2 en una BD vacía y
 volver a la imagen anterior; se pierde todo lo que se hizo después de la copia.
+
+## 11. Tacos y cajas (migración 13)
+
+La `00000000000013_archivo_tacos` es la del papel (entrega B del archivo,
+ARCHITECTURE.md → Papel: tandas, tacos y cajas). **Solo es esquema: no toca
+ningún dato.** Añade:
+
+- en `AdvisoryFirm`, los dos ajustes del papel: `paperScanMode`
+  (`PER_INVOICE`, «factura a factura», por defecto) y `paperBoxMode`
+  (`PER_CLIENT_YEAR`, «una caja por cliente y año», por defecto), con sus enums;
+- en `UploadBatch`, los candidatos de una tanda de varios
+  (`routingCandidateIds`, vacío por defecto), las columnas del taco entero en un
+  PDF (`wholePdf`, `pdfDocumentId` —único, clave foránea RESTRICT a `Document`—,
+  `pdfPageCount`, `pdfSplitAt`, `pdfSplitById`) y las de la anulación
+  (`voidedAt`, `voidedById`, `voidReason`);
+- dos guardas, al final de su `migration.sql`: `upload_batch_guard` (BEFORE
+  INSERT OR UPDATE en `UploadBatch`: lo que fija una tanda no cambia, el taco
+  entero se divide una vez, se anula una vez y con motivo, una tanda sin nº no se
+  guarda en caja…) y `archive_batch_firm_guard` (BEFORE UPDATE OF
+  `uploadBatchId`, `paperBatchId` en `InvoiceArchive`: la tanda y el taco de una
+  factura son de su asesoría, y el papel solo va en un taco con nº). Mensajes que
+  empiezan por «Archivo:» y `check_violation` (23514), como los de la 12.
+
+Sin relleno: las columnas nuevas llevan valor por defecto y no hay ninguna tanda
+que completar (la entrega A no crea ninguna). Sin variables nuevas en Coolify.
+
+### 11.1 Orden, también si producción aplica la 10, la 11, la 12 y la 13 de golpe
+
+`prisma migrate deploy` las aplica en el mismo arranque, una detrás de otra por
+su nombre (10, 11, 12, 13) y cada una en su transacción. La 13 necesita la 12
+(cuelga de `UploadBatch`) y no cambia nada de lo que hace la 12, así que el
+orden de §10 vale entero:
+
+1. Primero en dev (§10.1, y aquí además las pantallas del papel: §11.3).
+2. La copia fuera del servidor justo antes del Redeploy (§10.2): es la misma
+   para la 12 y la 13.
+3. Redeploy: entran la 10, la 11, la 12 y la 13.
+4. Con el contenedor viejo ya parado, la segunda pasada del relleno de la 12
+   (§10.3). Las guardas de la 13 no le estorban: el relleno no crea tandas ni
+   pone ninguna en las filas de archivo.
+5. Las comprobaciones de la 12 (§10.4), la detección (§10.6) y después las de
+   la 13 (§11.2).
+
+Si `migrate deploy` falla en la 13, la 12 ya queda aplicada (cada migración va
+en su transacción) y el contenedor nuevo no arranca: el viejo sigue sirviendo.
+Lo mismo que en §10.3: sin `migrate reset`, y el error en el log del despliegue.
+
+Si dev ya tiene la 12 (con la entrega A), allí solo entra la 13 y no hay
+segunda pasada: basta con las comprobaciones de §11.2.
+
+### 11.2 Comprobaciones
+
+Justo después del Redeploy, **antes de que nadie suba papel**:
+
+```sql
+-- 0: la entrega A no crea tandas. Si sale otra cosa, alguien ha subido ya
+-- con la entrega B (es normal en dev si se ha probado).
+SELECT count(*) AS tandas FROM "UploadBatch";
+
+-- Una fila por combinación: todas las asesorías con los valores por defecto
+-- (PER_INVOICE y PER_CLIENT_YEAR) hasta que un administrador los cambie.
+SELECT "paperScanMode", "paperBoxMode", count(*) AS asesorias
+FROM "AdvisoryFirm" GROUP BY 1, 2;
+
+-- Las dos guardas de la 13: tienen que salir las dos.
+SELECT tgname, tgrelid::regclass AS tabla
+FROM pg_trigger
+WHERE NOT tgisinternal AND tgname IN ('upload_batch_guard', 'archive_batch_firm_guard');
+
+-- La 13 aplicada y terminada.
+SELECT migration_name, finished_at FROM "_prisma_migrations"
+WHERE migration_name = '00000000000013_archivo_tacos';
+```
+
+Que el esquema de la BD cuadra con el de la app se puede ver en una copia (no en
+producción): con la copia restaurada y las 13 aplicadas, `npx prisma migrate
+diff --from-config-datasource --to-schema prisma/schema.prisma --script` tiene
+que dar `-- This is an empty migration.`.
+
+### 11.3 Primero en dev: lo que hay que mirar
+
+Como administrador y como gestor, también en el móvil: Ajustes → Papel (los
+dos ajustes); subir papel factura a factura y un taco entero; la tarjeta del
+taco con «Imprimir hoja» y «Guardar en caja…»; Archivo → Tacos y el detalle de
+un taco; marcar las facturas de un taco entero; la columna «Ubicación» de la
+pestaña Archivo de un cliente, «Poner ubicación…» y el buscador con «T1» y
+«caja 1». Lo que se cree en dev al probar no hay que borrarlo: un taco de
+prueba se anula («Anular el taco…»).
+
+### 11.4 Reversión de emergencia
+
+Solo si una guarda de la 13 impide algo que la app tiene que poder hacer (error
+«Archivo:», 23514) y no se puede esperar a una corrección. Antes, la copia y
+avisar. Las columnas y las funciones se quedan; en `psql` (escribe):
+
+```sql
+BEGIN;
+DROP TRIGGER IF EXISTS upload_batch_guard ON "UploadBatch";
+DROP TRIGGER IF EXISTS archive_batch_firm_guard ON "InvoiceArchive";
+COMMIT;
+```
+
+**Volver a ponerlas:** `migrate deploy` no las vuelve a crear (la 13 consta como
+aplicada) y una migración aplicada no se edita. Se ejecutan en `psql`, dentro de
+`BEGIN; … COMMIT;`, los dos `CREATE TRIGGER` del final del `migration.sql` de la
+13 (las funciones siguen en la BD).
+
+**Volver a la imagen de la entrega A** con la 13 aplicada funciona: ese código
+no lee las columnas nuevas, no crea tandas y sus valores por defecto valen. Una
+sola excepción: si en la asesoría de demo hay un taco entero, su reset falla
+(la entrega A borra los documentos antes que las tandas y la clave foránea del
+PDF del taco lo impide); antes de volver atrás, que nadie suba un taco entero a
+la demo, o se vuelve con la copia.
+
+### 11.5 Copias del repo en local
+
+La 13 cambia el cliente de Prisma (enums y columnas nuevas). Si en local hay
+varias copias del repo que comparten `node_modules` por enlaces, un `npx prisma
+generate` en una pisa el cliente generado de todas las demás. Cada copia con su
+propio `node_modules/@prisma/client` y `node_modules/.prisma`, y `generate` solo
+en la suya.

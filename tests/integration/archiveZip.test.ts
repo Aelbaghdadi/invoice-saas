@@ -9,7 +9,7 @@ import * as XLSX from "xlsx";
 import type { Invoice, Prisma } from "@prisma/client";
 import { prisma } from "./helpers/db";
 import { fakeS3 } from "./helpers/fakeS3";
-import { makeFirm, makeInvoice, type FirmWorld } from "./helpers/factories";
+import { makeFirm, makeInvoice, makeTaco, type FirmWorld } from "./helpers/factories";
 import { signInAs, signOut } from "./helpers/session";
 import { GET as archiveZip } from "@/app/api/archive/clients/[id]/zip/route";
 import { CLIENT_EXPORT_LIMITS } from "@/lib/clientDataExport";
@@ -393,5 +393,44 @@ describe("acceso", () => {
     }
     expect(await (await call(client.id, "?ejercicio=2026&check=1")).json()).toEqual({ ok: true, invoices: 10 });
     expect(await archiveExportTrail()).toEqual([]);
+  });
+});
+
+describe("la ubicación del papel (entrega B)", () => {
+  it("cada fila lleva su ubicación y el LEEME avisa de los tacos enteros sin dividir del ejercicio", async () => {
+    const box = "Panadería López SL · 2026 · Caja 3";
+    const taco = await makeTaco(w, { clientId: client.id, filed: { boxLabel: box }, period: { periodType: "MONTHLY", periodMonth: 3, periodYear: 2026 } });
+    const paper = await stored({ periodMonth: 3, status: "VALIDATED", invoiceNumber: "F-PAPEL" }, { receivedAt: "2026-03-10T09:00:00Z" });
+    await prisma.invoiceArchive.update({
+      where: { invoiceId: paper.id },
+      data: { uploadBatchId: taco.id, uploadPosition: 2, originalMedium: "PAPER", originalMediumSource: "TACO", originalMediumReason: "taco" },
+    });
+    const held = await stored({ periodMonth: 3, status: "VALIDATED", invoiceNumber: "F-CLIENTE" }, { receivedAt: "2026-03-11T09:00:00Z" });
+    await prisma.invoiceArchive.update({
+      where: { invoiceId: held.id },
+      data: { originalMedium: "PAPER", originalMediumSource: "MANUAL", originalMediumReason: "manual", paperHeldByClient: true },
+    });
+    await stored({ periodMonth: 3, status: "VALIDATED", invoiceNumber: "F-DUDA" }, { receivedAt: "2026-03-12T09:00:00Z" });
+    // Sin dividir: el de abril de 2026 cuenta; el anulado y el de 2025, no.
+    const pending = await makeTaco(w, { clientId: client.id, wholePdf: { pageCount: 30 }, period: { periodType: "MONTHLY", periodMonth: 4, periodYear: 2026 } });
+    await makeTaco(w, { clientId: client.id, wholePdf: { pageCount: 5 }, voided: { reason: "Subido por error" } });
+    await makeTaco(w, { clientId: client.id, wholePdf: { pageCount: 5 }, period: { periodType: "MONTHLY", periodMonth: 11, periodYear: 2025 } });
+
+    signInAs(w.admin);
+    const zip = await unzip(await call(client.id, "?ejercicio=2026"));
+    const location = (number: string) => zip.sheet("Sin registrar").find((r) => r["Nº de factura"] === number)!["Ubicación del papel"];
+    expect(location("F-PAPEL")).toBe(`${box} · Taco ${taco.tacoNumber} · Pág. 2`);
+    expect(location("F-CLIENTE")).toBe("Lo guarda el cliente");
+    expect(location("F-DUDA")).toBe("Por confirmar");
+    const [headers] = XLSX.utils.sheet_to_json<string[]>(zip.book!.Sheets["Sin registrar"], { header: 1 });
+    expect(headers.indexOf("Ubicación del papel")).toBe(headers.indexOf("Original electrónico o en papel") + 1);
+
+    const readme = zip.text("LEEME.txt");
+    expect(readme).toContain("Ubicación del papel: dónde está el papel en la asesoría (caja, taco y página),");
+    expect(readme).toContain(`Hay 1 taco entero sin dividir en este ejercicio (T${pending.tacoNumber}): sus facturas no están en el ZIP.`);
+    // El de 2025 sale en el ZIP de 2025.
+    const old = await unzip(await call(client.id, "?ejercicio=2025"));
+    expect(old.text("LEEME.txt")).toMatch(/Hay 1 taco entero sin dividir en este ejercicio \(T\d+\)/);
+    expect(old.text("LEEME.txt")).not.toContain(`T${pending.tacoNumber})`);
   });
 });

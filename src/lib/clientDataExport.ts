@@ -53,9 +53,14 @@ export async function checkClientExport(clientId: string, firmId: string): Promi
   // sigue con el clientId del buzon despues de rutearlo. Tambien los
   // originales en otro formato (Word, Excel…) adjuntos a sus facturas, que no
   // son el documento de ninguna (anexo C8); cada documento, una vez. Lo que no
-  // tiene tamaño guardado cuenta como una subida del maximo.
+  // tiene tamaño guardado cuenta como una subida del maximo. Y el PDF de cada
+  // taco entero del cliente, que no es el documento de ninguna factura.
   const documents: Prisma.DocumentWhereInput = {
-    OR: [{ invoices: { some: { clientId } } }, { archiveOriginals: { some: { invoice: { clientId } } } }],
+    OR: [
+      { invoices: { some: { clientId } } },
+      { archiveOriginals: { some: { invoice: { clientId } } } },
+      { tacoPdfBatch: { is: { clientId, wholePdf: true } } },
+    ],
   };
   const [invoiceCount, sizes, unsized, withoutDocument] = await Promise.all([
     prisma.invoice.count({ where: { clientId } }),
@@ -153,6 +158,32 @@ export async function writeClientDataZip(
       console.error(`[clientDataExport] ${client.id}: no se pudo descargar ${file.storageKey}:`, err);
       missing.push(`${path}\t${storageFailure(err, received)}`);
       paths.set(file.storageKey, `${path} (incompleto o ausente, ver ERRORES.txt)`);
+    }
+  }
+  const originalCount = paths.size - missing.length;
+
+  // El PDF de cada taco entero del cliente (anulados incluidos: también es un
+  // documento suyo), aparte: hasta que se divide no es ninguna factura.
+  const tacoPdfs = await prisma.uploadBatch.findMany({
+    where: { clientId: client.id, wholePdf: true, pdfDocument: { is: { clientId: client.id } } },
+    orderBy: { tacoNumber: "asc" },
+    select: { tacoNumber: true, pdfDocument: { select: { storageKey: true, createdAt: true } } },
+  });
+  let tacoPdfCount = 0;
+  for (const taco of tacoPdfs) {
+    const document = taco.pdfDocument;
+    if (!document || taco.tacoNumber == null || paths.has(document.storageKey)) continue;
+    const path = `tacos/Taco ${taco.tacoNumber}.pdf`;
+    paths.set(document.storageKey, path);
+    let received = 0;
+    try {
+      const chunks = await openObject(document.storageKey);
+      await out.binary(path, counted(chunks, (n) => (received += n)), document.createdAt);
+      tacoPdfCount++;
+    } catch (err) {
+      if (out.closed) throw err;
+      console.error(`[clientDataExport] ${client.id}: no se pudo descargar ${document.storageKey}:`, err);
+      missing.push(`${path}\t${storageFailure(err, received)}`);
     }
   }
 
@@ -268,7 +299,8 @@ export async function writeClientDataZip(
       generatedAt: formatDateTimeEs(new Date()),
       generatedBy,
       invoiceCount: invoices.length,
-      originalCount: paths.size - missing.length,
+      originalCount,
+      tacoPdfCount,
       auditCount,
       batchCount: batches.length,
       missingOriginals: missing.length,

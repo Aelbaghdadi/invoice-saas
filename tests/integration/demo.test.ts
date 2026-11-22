@@ -5,7 +5,7 @@ import { afterEach, describe, it, expect } from "vitest";
 import { NextRequest } from "next/server";
 import { prisma } from "./helpers/db";
 import { fakeS3 } from "./helpers/fakeS3";
-import { makeFirm, makeTwoFirms, type FirmWorld } from "./helpers/factories";
+import { makeFirm, makeTaco, makeTwoFirms, type FirmWorld } from "./helpers/factories";
 import { signInAs } from "./helpers/session";
 import { DEMO_RESET_NOT_ALLOWED, reseedDemo } from "@/lib/demoSeed";
 import { isValidNIF } from "@/lib/validators";
@@ -106,6 +106,27 @@ describe("Reset demo", () => {
     expect(after.archives.map((a) => [a.originalMedium, a.originalMediumSource, a.originalMediumReason]))
       .toEqual(after.archives.map(() => [null, "AUTO", "backfill_pending"]));
 
+    expect(await firmFootprint(other)).toEqual(otherBefore);
+  });
+
+  it("con un taco entero (tanda con su PDF) y uno de factura a factura, el reset lo borra todo y la otra asesoría queda igual", async () => {
+    const demo = await makeFirm("A", { demo: true });
+    const other = await makeFirm("B");
+    for (const w of [demo, other]) {
+      await withFiles(w);
+      await makeTaco(w, { wholePdf: { pageCount: 7 } });
+      const perInvoice = await makeTaco(w);
+      await prisma.invoiceArchive.update({ where: { invoiceId: w.invoices.pending.id }, data: { uploadBatchId: perInvoice.id, uploadPosition: 1 } });
+      await prisma.invoiceArchive.update({ where: { invoiceId: w.invoices.validated.id }, data: { paperBatchId: (await makeTaco(w, { origin: "ARCHIVE" })).id } });
+    }
+    const otherBefore = await firmFootprint(other);
+    expect(otherBefore.batches.filter((batch) => batch.wholePdf)).toHaveLength(1);
+
+    expect((await reseedDemo(demo.firm.id, demo.admin.id)).ok).toBe(true);
+
+    const after = await firmFootprint(demo);
+    expect(after.batches).toEqual([]);
+    expect(await prisma.document.count({ where: { clientId: demo.client.id } })).toBe(0);
     expect(await firmFootprint(other)).toEqual(otherBefore);
   });
 

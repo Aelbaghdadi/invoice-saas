@@ -11,6 +11,7 @@ import { sendPeriodSummary } from "@/lib/periodSummary";
 import { canAccessClient } from "@/lib/accessibleClients";
 import { moveBatchInvoices, type MoveBatchResult } from "@/lib/batchMove";
 import { parseBatchPeriod } from "@/lib/batchTarget";
+import { pendingTacoSplitCloseError, pendingTacoSplitInPeriod } from "@/lib/tacoSplit";
 import type { InvoiceType, InvoiceStatus, PeriodType } from "@prisma/client";
 
 export type BatchAction =
@@ -67,6 +68,11 @@ export async function closePeriodFromBatch(
 
   const access = await assertBatchAccess(session, parsed.clientId);
   if (access) return access;
+
+  // Un taco entero sin dividir: sus facturas aún no existen y no las cuenta
+  // lo de abajo (B-R9).
+  const pendingTaco = await pendingTacoSplitInPeriod(parsed.clientId, parsed.month, parsed.year);
+  if (pendingTaco != null) return { error: pendingTacoSplitCloseError(pendingTaco) };
 
   // Comprobar que no queda nada pendiente en el periodo (todo tipo). El
   // cierre es del periodo completo, no solo del tipo.

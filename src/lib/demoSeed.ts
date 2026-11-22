@@ -114,8 +114,10 @@ export async function reseedDemo(
     await tx.invoice.updateMany({ where: { clientId: { in: clientIds } }, data: { exportBatchId: null } });
     await tx.exportBatch.deleteMany({ where: { userId: triggeredBy } });
     await tx.invoice.deleteMany({ where: { clientId: { in: clientIds } } });
-    await tx.document.deleteMany({ where: { clientId: { in: clientIds } } });
+    // Las tandas antes que los documentos: el PDF de un taco entero no se
+    // puede borrar mientras exista su tanda (FK RESTRICT, migración 13).
     await tx.uploadBatch.deleteMany({ where: { advisoryFirmId: firmId } });
+    await tx.document.deleteMany({ where: { clientId: { in: clientIds } } });
     await tx.periodClosure.deleteMany({ where: { clientId: { in: clientIds } } });
     await tx.accountEntry.deleteMany({ where: { clientId: { in: clientIds } } });
     await tx.workerClientAssignment.deleteMany({ where: { clientId: { in: clientIds } } });

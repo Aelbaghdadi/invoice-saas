@@ -10,12 +10,16 @@ import {
   recordSplitSource,
   uploadSplitPieces,
 } from "@/lib/invoiceSplit";
+import { isTransactionConflictError } from "@/lib/exportConflict";
 
 /**
  * Por encima de esto el PDF no cabe en una peticion a Gemini (20 MB, y el
  * base64 ocupa un tercio mas): ni se intenta, va entero al OCR como siempre.
  */
 export const AUTO_SPLIT_MAX_BYTES = 14 * 1024 * 1024;
+
+/** Intentos de guardar la division si se cruza con otra escritura del taco. */
+const AUTO_SPLIT_SAVE_ATTEMPTS = 3;
 
 /**
  * Separacion automatica de un taco (varias facturas en un PDF, con albaranes
@@ -42,6 +46,12 @@ export async function autoSplitPdf(
 ): Promise<string[] | null> {
   // Una hija ya es el resultado de una division: no se vuelve a partir.
   if (invoice.splitFromId || pdfBytes.length > AUTO_SPLIT_MAX_BYTES) return null;
+  // Lo que sale de un taco entero ya lo ha marcado una persona factura a
+  // factura (tacoSplit.ts): no se vuelve a partir ni se le quitan paginas.
+  const fromWholeTaco = await prisma.invoiceArchive.count({
+    where: { invoiceId: invoice.id, uploadBatch: { wholePdf: true } },
+  });
+  if (fromWholeTaco > 0) return null;
 
   let numPages: number;
   try {
@@ -80,22 +90,37 @@ export async function autoSplitPdf(
     return null;
   }
 
+  const saveSplit = () => prisma.$transaction(async (tx) => {
+    // Con la valla del OCR: si otra ejecucion ha cogido la factura (el cron
+    // la relanzo), esta no la parte.
+    const reserved = await tx.invoice.updateMany({
+      where: ocrFenceWhere(invoice.id, ocrToken),
+      data: { status: "SPLIT_SOURCE" },
+    });
+    if (reserved.count === 0) return null;
+    const ids = await createSplitChildren(tx, invoice, userId, pieces);
+    await recordSplitSource(tx, invoice.id, "ANALYZING", userId, [
+      { field: "auto:division", oldValue: `${numPages} páginas`, newValue: segmentationSummary(segmentation) },
+    ]);
+    await afterSplit(tx);
+    return ids;
+  }, { timeout: 30_000, maxWait: 5_000 });
+
   try {
-    const childIds = await prisma.$transaction(async (tx) => {
-      // Con la valla del OCR: si otra ejecucion ha cogido la factura (el cron
-      // la relanzo), esta no la parte.
-      const reserved = await tx.invoice.updateMany({
-        where: ocrFenceWhere(invoice.id, ocrToken),
-        data: { status: "SPLIT_SOURCE" },
-      });
-      if (reserved.count === 0) return null;
-      const ids = await createSplitChildren(tx, invoice, userId, pieces);
-      await recordSplitSource(tx, invoice.id, "ANALYZING", userId, [
-        { field: "auto:division", oldValue: `${numPages} páginas`, newValue: segmentationSummary(segmentation) },
-      ]);
-      await afterSplit(tx);
-      return ids;
-    }, { timeout: 30_000, maxWait: 5_000 });
+    let childIds: string[] | null;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        childIds = await saveSplit();
+        break;
+      } catch (e) {
+        // «Guardar en caja», «Era papel» o «Anular» bloquean la tanda y luego
+        // sus filas; esto, la fila de la original y luego la tanda (la FK de
+        // las hijas). Postgres aborta a uno de los dos (40P01) y la
+        // transaccion no deja nada: se repite en vez de analizar el taco entero.
+        if (attempt < AUTO_SPLIT_SAVE_ATTEMPTS && isTransactionConflictError(e)) continue;
+        throw e;
+      }
+    }
     if (!childIds) await discardSplitPieces(pieces);
     // Sin la valla no es nuestra: ni partir ni analizar (lo hace la otra).
     return childIds ?? [];

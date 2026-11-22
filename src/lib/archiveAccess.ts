@@ -4,6 +4,7 @@
  * al ADMIN le deja pasar sin mirarla. El portal (CLIENT) no tiene archivo en
  * esta fase.
  */
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getAccessibleClientIds } from "@/lib/accessibleClients";
 
@@ -59,23 +60,67 @@ export async function canAccessArchiveInvoice(session: ArchiveSession, invoiceId
   return assignment != null;
 }
 
+/** Quien mira tandas y tacos (B-R20): `clientIds`, los de archiveScope. */
+export type TacoViewer = { firmId: string; userId: string; role: "ADMIN" | "WORKER"; clientIds: string[] };
+
+/** El que mira tandas y tacos, con los clientes de archiveScope; null si no entra. */
+export async function tacoViewer(session: ArchiveSession): Promise<TacoViewer | null> {
+  const scope = await archiveScope(session);
+  if (!scope) return null;
+  return {
+    firmId: scope.firmId,
+    userId: session.user.id,
+    role: session.user.role === "ADMIN" ? "ADMIN" : "WORKER",
+    clientIds: scope.clientIds,
+  };
+}
+
 /**
- * ¿Puede ver esta tanda (o taco)? El ADMIN, si es de su asesoría. El WORKER,
- * si es de un cliente suyo o la subió él (las de «varios» no tienen cliente).
+ * Las tandas (y tacos) que ve (B-R20). El ADMIN, todas las de su asesoría. El
+ * WORKER:
+ * - con cliente, solo si lo tiene asignado (aunque la creara él: si le quitan
+ *   el cliente, deja de ver su PDF, de dividirlo y de guardarlo);
+ * - de varios (sin cliente), si la creó él, si tiene asignado alguno de sus
+ *   candidatos (mientras esperan el ruteo, sus facturas están en el buzón) o
+ *   el cliente de alguna factura que llegó en ella o cuyo papel está en ella.
+ * Es la única definición: canAccessUploadBatch la usa para una tanda, y los
+ * listados, avisos y cifras de tacos para filtrar.
  */
+export function uploadBatchVisibleWhere(viewer: TacoViewer): Prisma.UploadBatchWhereInput {
+  if (viewer.role === "ADMIN") return { advisoryFirmId: viewer.firmId };
+  const ofMyClients = { invoice: { clientId: { in: viewer.clientIds } } };
+  return {
+    advisoryFirmId: viewer.firmId,
+    OR: [
+      { clientId: { in: viewer.clientIds } },
+      {
+        clientId: null,
+        OR: [
+          { createdById: viewer.userId },
+          { routingCandidateIds: { hasSome: viewer.clientIds } },
+          { archives: { some: ofMyClients } },
+          { paperArchives: { some: ofMyClients } },
+        ],
+      },
+    ],
+  };
+}
+
+/** ¿Puede ver esta tanda (o taco)? Con el criterio de uploadBatchVisibleWhere. */
 export async function canAccessUploadBatch(session: ArchiveSession, batchId: string): Promise<boolean> {
-  const { id: userId, role, advisoryFirmId } = session.user;
-  if ((role !== "ADMIN" && role !== "WORKER") || !advisoryFirmId) return false;
-  const batch = await prisma.uploadBatch.findUnique({
-    where: { id: batchId },
-    select: { advisoryFirmId: true, clientId: true, createdById: true },
-  });
-  if (!batch || batch.advisoryFirmId !== advisoryFirmId) return false;
-  if (role === "ADMIN" || batch.createdById === userId) return true;
-  if (!batch.clientId) return false;
-  const assignment = await prisma.workerClientAssignment.findUnique({
-    where: { workerId_clientId: { workerId: userId, clientId: batch.clientId } },
-    select: { clientId: true },
-  });
-  return assignment != null;
+  const viewer = await tacoViewer(session);
+  if (!viewer) return false;
+  const found = await prisma.uploadBatch.count({ where: { AND: [{ id: batchId }, uploadBatchVisibleWhere(viewer)] } });
+  return found > 0;
+}
+
+/**
+ * Clientes cuyas facturas ve sin enmascarar en el detalle y la hoja de un
+ * taco: el ADMIN, todos ("all"); el WORKER, los suyos de la asesoría. Nadie
+ * más, ninguno.
+ */
+export async function visibleClientIds(session: ArchiveSession): Promise<Set<string> | "all"> {
+  const viewer = await tacoViewer(session);
+  if (!viewer) return new Set();
+  return viewer.role === "ADMIN" ? "all" : new Set(viewer.clientIds);
 }

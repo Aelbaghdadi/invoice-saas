@@ -104,4 +104,9 @@ describe("LEEME.txt", () => {
   it("con originales que faltan, habla de ERRORES.txt", () => {
     expect(readmeText({ ...base, missingOriginals: 2 })).toContain("2 originales no se pudieron descargar");
   });
+  it("con tacos enteros, explica la carpeta tacos/; sin ellos, no la nombra", () => {
+    expect(readmeText(base)).not.toContain("tacos/");
+    const text = readmeText({ ...base, tacoPdfCount: 2 });
+    expect(text).toMatch(/tacos\/\r\n {2}El PDF entero de cada taco escaneado en la asesoría \(sus facturas, si se\r\n {2}dividió, están además en su sitio\)\./);
+  });
 });

@@ -106,9 +106,11 @@ async function main() {
     await tx.invoice.updateMany({ where: { clientId: { in: clientIds } }, data: { exportBatchId: null } });
     await tx.exportBatch.deleteMany({ where: { userId: admin.id } });
     await tx.invoice.deleteMany({ where: { clientId: { in: clientIds } } });
+    // Las tandas antes que los documentos: el PDF de un taco entero no se
+    // puede borrar mientras exista su tanda (FK RESTRICT, migración 13).
+    await tx.uploadBatch.deleteMany({ where: { advisoryFirmId: firmId } });
     // Con el bypass, como las facturas: fuera de la transaccion lo para el trigger.
     await tx.document.deleteMany({ where: { clientId: { in: clientIds } } });
-    await tx.uploadBatch.deleteMany({ where: { advisoryFirmId: firmId } });
   });
   await prisma.periodClosure.deleteMany({ where: { clientId: { in: clientIds } } });
   await prisma.accountEntry.deleteMany({ where: { clientId: { in: clientIds } } });

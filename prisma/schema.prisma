@@ -185,6 +185,21 @@ enum UploadBatchOrigin {
   ARCHIVE
 }
 
+/// Cómo escanea el papel la asesoría (Ajustes). Es lo que sale marcado al
+/// subir papel; el gestor lo puede cambiar en cada subida.
+/// PER_INVOICE: un fichero por factura. WHOLE_PDF: el taco entero en un PDF.
+enum PaperScanMode {
+  PER_INVOICE
+  WHOLE_PDF
+}
+
+/// Cómo guarda las cajas la asesoría (Ajustes). Solo cambia la caja que se
+/// propone al guardar un taco: las etiquetas ya puestas no cambian.
+enum PaperBoxMode {
+  PER_CLIENT_YEAR
+  SHARED
+}
+
 model AdvisoryFirm {
   id        String   @id @default(cuid())
   name      String
@@ -198,6 +213,9 @@ model AdvisoryFirm {
   /// facturas y documentos de estas asesorías, y reseedDemo lo comprueba antes
   /// de tocar nada.
   isDemo    Boolean  @default(false)
+  /// Ajustes del papel (pestaña «Papel» de Ajustes, solo el ADMIN).
+  paperScanMode PaperScanMode @default(PER_INVOICE)
+  paperBoxMode  PaperBoxMode  @default(PER_CLIENT_YEAR)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -367,6 +385,8 @@ model Document {
   invoices Invoice[]
   /// Filas de archivo cuyo original es este documento (un Word adjunto).
   archiveOriginals InvoiceArchive[]
+  /// El taco entero del que es el PDF.
+  tacoPdfBatch UploadBatch? @relation("TacoPdf")
 }
 
 model Invoice {
@@ -817,6 +837,8 @@ model InvoiceArchive {
 /// Fija la llegada y el orden de sus facturas.
 /// Si tiene tacoNumber es un TACO (papel escaneado en la asesoría): se numera por
 /// asesoría al crearlo, y la caja es una etiqueta que se pone al guardarlo.
+/// Un taco entero (wholePdf) nace al subir su PDF (pdfDocument) y espera hasta
+/// que se marca dónde empieza cada factura (pdfSplitAt).
 /// Cuelga de la asesoría (multitenancy).
 model UploadBatch {
   id             String            @id @default(cuid())
@@ -844,6 +866,26 @@ model UploadBatch {
   returnedAt     DateTime?
   filedAt        DateTime?
   filedById      String?
+  /// «Clasificar entre varios» (clientId null): las empresas candidatas de la
+  /// subida. Puestas al crearla, no cambian. Vacío en las demás.
+  routingCandidateIds String[] @default([])
+  /// Taco entero en un PDF: un solo fichero, el PDF, que no es una factura.
+  /// Las facturas salen al marcar dónde empieza cada una (pdfSplitAt), con
+  /// uploadPosition = la página del PDF donde empiezan.
+  wholePdf       Boolean   @default(false)
+  /// El PDF del taco entero y sus páginas: se ponen al crearlo y no cambian.
+  pdfDocumentId  String?   @unique
+  pdfDocument    Document? @relation("TacoPdf", fields: [pdfDocumentId], references: [id], onDelete: Restrict)
+  pdfPageCount   Int?
+  /// Cuándo y quién marcó dónde empieza cada factura. Sin clave foránea, como
+  /// createdById. Puestos, no cambian: un taco entero se divide una vez.
+  pdfSplitAt     DateTime?
+  pdfSplitById   String?
+  /// Taco anulado (subido por error y sin facturas vivas): cuándo, quién y
+  /// por qué. Se pone una vez; conserva su nº.
+  voidedAt       DateTime?
+  voidedById     String?
+  voidReason     String?
   createdAt      DateTime          @default(now())
   updatedAt      DateTime          @updatedAt
 

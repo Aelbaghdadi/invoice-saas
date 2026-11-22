@@ -17,6 +17,8 @@ import { PENDING_WORK, auditFieldLabelInline, completionPercent, formatAuditValu
 import { formatDateEs } from "@/lib/dates";
 import { periodLabel } from "@/lib/period";
 import { InvoiceStatusBadge } from "@/components/ui/InvoiceStatusBadge";
+import { PendingTacoSplits } from "@/components/archive/PendingTacoSplits";
+import { tacoViewer } from "@/lib/archiveAccess";
 
 function initials(name: string) {
   return name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase();
@@ -51,6 +53,7 @@ export default async function AdminDashboard() {
   const session = await auth();
   if (!session?.user || session.user.role !== "ADMIN") redirect("/login");
   const firmId = session.user.advisoryFirmId ?? undefined;
+  const tacos = await tacoViewer(session).catch(() => null);
 
   // ── Fetch all real data ───────────────────────────────────────────────
   const [
@@ -168,6 +171,7 @@ export default async function AdminDashboard() {
   return (
     <div className="space-y-5">
       <RoutingInboxNotice user={session.user} />
+      {tacos && <PendingTacoSplits viewer={tacos} className="" />}
 
       {/* Stat cards */}
       <div className="stagger grid grid-cols-1 sm:grid-cols-2 2xl:grid-cols-4 gap-4">

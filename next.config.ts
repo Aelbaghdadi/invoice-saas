@@ -77,6 +77,14 @@ const nextConfig: NextConfig = {
           { key: "X-Content-Type-Options", value: "nosniff" },
         ],
       },
+      // El PDF de un taco entero (lo escanea la asesoría, pero es un fichero subido): lo mismo.
+      {
+        source: "/api/archive/tacos/:id/pdf",
+        headers: [
+          { key: "Content-Security-Policy", value: rawFileCsp },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+        ],
+      },
       // Los adjuntos de soporte tambien los sube un usuario: misma politica.
       {
         source: "/api/support/attachments/:id",

@@ -229,6 +229,17 @@ describe("auditoría del archivo de facturas", () => {
     expect(formatAuditValue(null, "issuerName")).toBe("—");
   });
 
+  it("la ubicación del papel: su etiqueta, y el valor tal cual", () => {
+    expect(auditFieldLabel("paperLocation")).toBe("Ubicación del papel");
+    expect(formatAuditValue("Taco 37 · Pág. 12 (sin guardar)", "paperLocation")).toBe("Taco 37 · Pág. 12 (sin guardar)");
+    expect(formatAuditValue("Panadería López · 2026 · Caja 3 · Taco 37 · Pág. 12", "paperLocation")).toBe(
+      "Panadería López · 2026 · Caja 3 · Taco 37 · Pág. 12",
+    );
+    // Una caja que se llame como un estado no se traduce.
+    expect(formatAuditValue("VALIDATED", "paperLocation")).toBe("VALIDATED");
+    expect(formatAuditValue(null, "paperLocation")).toBe("—");
+  });
+
   it("el nº de registro se ve tal cual", () => {
     expect(formatAuditValue(null, "registerNumber")).toBe("—");
     expect(formatAuditValue("R-2026/0153", "registerNumber")).toBe("R-2026/0153");

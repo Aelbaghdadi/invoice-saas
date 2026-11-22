@@ -193,6 +193,8 @@ export type ArchiveTabParams = {
   tipo?: string | string[];
   original?: string | string[];
   rechazadas?: string | string[];
+  /** «sin»: solo lo que no tiene ubicación (B-R13). */
+  ubicacion?: string | string[];
   q?: string | string[];
   page?: string | string[];
 };
@@ -203,6 +205,8 @@ export type ArchiveTabQuery = {
   type: ArchiveTypeFilter;
   medium: ArchiveMediumFilter;
   includeRejected: boolean;
+  /** «Solo sin ubicación»: papel y «Por confirmar» sin ubicación (B-R13). */
+  withoutLocation: boolean;
   q: string;
   page: number;
 };
@@ -219,6 +223,7 @@ export function parseArchiveTabParams(params: ArchiveTabParams): ArchiveTabQuery
     type: ARCHIVE_TYPES.includes(tipo as ArchiveTypeFilter) ? (tipo as ArchiveTypeFilter) : "todas",
     medium: ARCHIVE_MEDIUMS.includes(original as ArchiveMediumFilter) ? (original as ArchiveMediumFilter) : "todos",
     includeRejected: firstSearchParam(params.rechazadas) === "1",
+    withoutLocation: firstSearchParam(params.ubicacion) === "sin",
     q: (firstSearchParam(params.q) ?? "").trim().slice(0, 100),
     page: parsePage(firstSearchParam(params.page)),
   };
@@ -232,6 +237,7 @@ export function archiveTabHref(basePath: string, query: Partial<ArchiveTabQuery>
     tipo: query.type && query.type !== "todas" ? query.type : undefined,
     original: query.medium && query.medium !== "todos" ? query.medium : undefined,
     rechazadas: query.includeRejected ? "1" : undefined,
+    ubicacion: query.withoutLocation ? "sin" : undefined,
     q: query.q || undefined,
     page: query.page && query.page > 1 ? query.page : undefined,
   });

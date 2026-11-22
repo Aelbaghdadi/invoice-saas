@@ -12,6 +12,8 @@ import { periodLabel } from "@/lib/period";
 import { loadBatchRows } from "@/lib/batchGroups";
 import { reviewHref } from "@/lib/reviewNavigation";
 import { startOfTodayInMadrid } from "@/lib/dates";
+import { tacoViewer } from "@/lib/archiveAccess";
+import { PendingTacoSplits } from "@/components/archive/PendingTacoSplits";
 
 /**
  * Mesa de trabajo del gestor.
@@ -43,6 +45,7 @@ type BatchRow = {
 export default async function WorkerDashboard() {
   const session = await auth();
   if (!session?.user) return null;
+  const tacos = await tacoViewer(session).catch(() => null);
 
   const assignments = await prisma.workerClientAssignment
     .findMany({
@@ -247,6 +250,7 @@ export default async function WorkerDashboard() {
       <div className="mb-6 empty:hidden">
         <RoutingInboxNotice user={session.user} />
       </div>
+      {tacos && <PendingTacoSplits viewer={tacos} />}
 
       {/* KPIs */}
       <div className="grid grid-cols-4 gap-4">
