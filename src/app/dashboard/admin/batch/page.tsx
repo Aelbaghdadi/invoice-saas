@@ -294,6 +294,7 @@ export default async function BatchPage({
             return (
               <div
                 key={`${g.clientId}-${g.periodYear}-${g.periodMonth}-${g.periodType}-${g.type}`}
+                data-tour="lotes-lote"
                 className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"
               >
                 {/* Header */}

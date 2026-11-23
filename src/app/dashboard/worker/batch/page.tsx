@@ -320,6 +320,7 @@ export default async function WorkerBatchPage({
             return (
               <div
                 key={`${g.clientId}-${g.periodYear}-${g.periodMonth}-${g.periodType}-${g.type}`}
+                data-tour="lotes-lote"
                 className={
                   "rounded-xl border bg-white p-5 shadow-sm " +
                   (closed

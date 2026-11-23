@@ -36,7 +36,7 @@ export function PaperUploadOptions({
   disabled: boolean;
 }) {
   return (
-    <div className="mt-4 space-y-3 rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-3">
+    <div data-tour="subir-papel" className="mt-4 space-y-3 rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-3">
       <label className="flex items-start gap-2.5 text-[13px] text-slate-700">
         <input
           type="checkbox"

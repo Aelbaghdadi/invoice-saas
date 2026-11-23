@@ -174,7 +174,7 @@ export default async function AdminDashboard() {
       {tacos && <PendingTacoSplits viewer={tacos} className="" />}
 
       {/* Stat cards */}
-      <div className="stagger grid grid-cols-1 sm:grid-cols-2 2xl:grid-cols-4 gap-4">
+      <div data-tour="panel-cifras" className="stagger grid grid-cols-1 sm:grid-cols-2 2xl:grid-cols-4 gap-4">
         {stats.map((s) => {
           const Icon = s.icon;
           return (
@@ -363,7 +363,7 @@ export default async function AdminDashboard() {
         </div>
 
         {/* Progreso por cliente (real data) */}
-        <div className="animate-fade-in-up 2xl:col-span-2 rounded-2xl border border-slate-200/80 bg-white shadow-sm">
+        <div data-tour="panel-progreso" className="animate-fade-in-up 2xl:col-span-2 rounded-2xl border border-slate-200/80 bg-white shadow-sm">
           <div className="border-b border-slate-100 px-6 py-3.5">
             <h2 className="text-[15px] font-semibold text-slate-800">Progreso por cliente</h2>
           </div>

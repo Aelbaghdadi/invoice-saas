@@ -275,7 +275,7 @@ export function ExportForm({ clients, initial, previous, years }: Props) {
     <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
       {dialog}
       {/* ── LEFT: filters ────────────────────────────────────────────────── */}
-      <div className="lg:col-span-3 space-y-5">
+      <div data-tour="exportar-filtros" className="lg:col-span-3 space-y-5">
 
         {/* Client */}
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -410,7 +410,7 @@ export function ExportForm({ clients, initial, previous, years }: Props) {
         <div className="sticky top-6 space-y-4">
 
           {/* Summary card */}
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div data-tour="exportar-resumen" className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="mb-5 flex items-center gap-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50">
                 <FileDown className="h-5 w-5 text-blue-600" />

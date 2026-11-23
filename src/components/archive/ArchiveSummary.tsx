@@ -133,7 +133,7 @@ export function ArchiveSummary({
 
   return (
     <div className="space-y-5">
-      <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
+      <section data-tour="archivo-resumen" className="rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="border-b border-slate-100 px-4 py-3 sm:px-5">
           <h2 className="text-[15px] font-semibold text-slate-800">Facturas por cliente y ejercicio</h2>
           <p className="text-[12px] text-slate-500">Pulsa un ejercicio para ver su desglose abajo.</p>

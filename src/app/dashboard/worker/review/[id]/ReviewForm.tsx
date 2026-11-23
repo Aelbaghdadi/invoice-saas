@@ -1947,7 +1947,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
       {/* Split panel */}
       <div className="flex flex-1 overflow-hidden">
         {/* LEFT — file viewer */}
-        <div className="flex w-[55%] min-h-0 flex-col border-r border-slate-200 bg-slate-50 overflow-hidden">
+        <div data-tour="revision-visor" className="flex w-[55%] min-h-0 flex-col border-r border-slate-200 bg-slate-50 overflow-hidden">
           {previewLoading ? (
             <div className="flex flex-1 items-center justify-center">
               <Loader2 className="h-8 w-8 animate-spin text-slate-300" />
@@ -2296,7 +2296,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
               </p>
             )}
 
-            <div className="grid grid-cols-2 gap-2.5">
+            <div data-tour="revision-partes" className="grid grid-cols-2 gap-2.5">
               {/* Lado editable: Emisor en PURCHASE, Receptor en SALE.
                   Es siempre la "otra parte" — la que NO es el cliente. El key
                   por lockedSide fuerza remontar los inputs al cambiar el tipo,
@@ -2765,7 +2765,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
             {/* Importes — desglose de IVA. Una linea por tipo impositivo.
                 Las facturas con varios tipos (4% + 10% + 21%) usan varias
                 lineas; al exportar se emite una fila por cada una. */}
-            <fieldset className="rounded-xl border border-slate-200 bg-white p-3 space-y-2">
+            <fieldset data-tour="revision-iva" className="rounded-xl border border-slate-200 bg-white p-3 space-y-2">
               <legend className="px-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 Desglose de IVA
               </legend>
@@ -3179,7 +3179,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
             )}
 
             {/* Cuentas contables */}
-            <fieldset className="rounded-xl border border-slate-200 bg-white p-3">
+            <fieldset data-tour="revision-cuentas" className="rounded-xl border border-slate-200 bg-white p-3">
               <legend className="px-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                 Cuentas contables
               </legend>
@@ -3312,7 +3312,7 @@ export function ReviewForm({ invoice, exportedAt = null, pendingReexport = false
           {/* Por debajo de 2xl los botones secundarios se quedan en icono (el
               title lo explica): con texto no cabian en el 45 % derecho y el
               boton verde se salia del panel. */}
-          <div className="sticky bottom-0 flex items-center gap-2 border-t border-slate-100 bg-white px-4 py-3 2xl:gap-2.5 2xl:px-5">
+          <div data-tour="revision-acciones" className="sticky bottom-0 flex items-center gap-2 border-t border-slate-100 bg-white px-4 py-3 2xl:gap-2.5 2xl:px-5">
             {/* En una validada no hay borrador: se guarda como correccion. */}
             {!isValidated && (
               <button

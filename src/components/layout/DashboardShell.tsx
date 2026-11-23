@@ -8,6 +8,7 @@ import { LegalDisclaimer } from "./LegalDisclaimer";
 import { X, ChevronLeft, ChevronRight } from "lucide-react";
 import { Role } from "@prisma/client";
 import { ToastProvider } from "@/components/ui/Toast";
+import { TourProvider } from "@/components/tour/TourProvider";
 
 type Props = {
   role: Role;
@@ -80,6 +81,7 @@ export function DashboardShell({ role, userName, userEmail, firmName, firmLogo, 
 
   return (
     <ToastProvider>
+    <TourProvider role={role}>
     <div className="flex h-screen overflow-hidden bg-white">
       {/* Mobile overlay */}
       {sidebarOpen && (
@@ -146,6 +148,7 @@ export function DashboardShell({ role, userName, userEmail, firmName, firmLogo, 
         <LegalDisclaimer />
       </div>
     </div>
+    </TourProvider>
     </ToastProvider>
   );
 }

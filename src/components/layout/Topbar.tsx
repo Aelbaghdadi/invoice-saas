@@ -2,6 +2,7 @@
 
 import { usePathname } from "next/navigation";
 import { Menu } from "lucide-react";
+import { TourButton } from "@/components/tour/TourButton";
 
 type TopbarProps = {
   userName: string;
@@ -41,6 +42,7 @@ const ROUTE_LABELS: Record<string, string> = {
   "/dashboard/support/team":       "Equipo de soporte",
   // Resumen, Tacos, la ficha de una factura y las tandas: todo cae aquí por prefijo.
   "/dashboard/archivo":            "Archivo",
+  "/dashboard/recorrido":          "Recorrido",
 };
 
 /** Subtítulo contextual — solo en las raíces (paneles), donde aporta. */
@@ -110,6 +112,7 @@ export function Topbar({ userName, onMenuClick }: TopbarProps) {
           perfil del sidebar (abajo-izquierda); aqui no lo repetimos. Sin
           dropdown — la sesion se cierra desde el sidebar. */}
       <div className="flex items-center gap-3">
+        <TourButton />
         <span
           suppressHydrationWarning
           className="hidden text-[12px] text-slate-400 md:block"

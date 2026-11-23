@@ -390,7 +390,7 @@ export function WorkerUploadForm({
           Configuración del lote
         </h2>
         {/* Modo: un cliente vs clasificar entre varios por CIF */}
-        <div className="mb-4">
+        <div data-tour="subir-modo" className="mb-4">
           <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
             Modo de subida
           </label>
@@ -426,7 +426,7 @@ export function WorkerUploadForm({
             </div>
 
             {clientOpenBatches.length > 0 && (
-              <div className="mb-4">
+              <div data-tour="subir-lote" className="mb-4">
                 <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                   Lotes abiertos de este cliente
                 </label>
@@ -650,6 +650,7 @@ export function WorkerUploadForm({
       </div>
 
       <div
+        data-tour="subir-zona"
         onDrop={handleDrop}
         onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
         onDragLeave={() => setIsDragging(false)}

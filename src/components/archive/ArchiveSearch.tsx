@@ -43,7 +43,7 @@ export function ArchiveSearch({
   keep?: Record<string, string | undefined>;
 }) {
   return (
-    <section className="mb-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+    <section data-tour="archivo-buscador" className="mb-6 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
       <h2 className="mb-1 text-[15px] font-semibold text-slate-800">¿Dónde está?</h2>
       <p className="mb-3 text-[12px] text-slate-500">
         Busca en el archivo de {role === "ADMIN" ? "la asesoría" : "tus clientes"}: por nº de factura, tercero, NIF, importe, nº de
