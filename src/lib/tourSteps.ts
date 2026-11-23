@@ -194,7 +194,7 @@ const STEPS: TourStep[] = [
   {
     chapter: "Archivo",
     title: "¿Dónde está?",
-    body: "Cualquier factura por número, proveedor, NIF, importe o número de registro. Si el original es papel, te dice la caja, el taco y la página.",
+    body: "Cualquier factura por número, proveedor, NIF, importe o número de registro. Si el original es papel, te dice la caja, el taco y la página. Prueba con «caja 1» o con el nombre de un proveedor.",
     path: "/dashboard/archivo",
     targets: ["archivo-buscador"],
     placement: "bottom",

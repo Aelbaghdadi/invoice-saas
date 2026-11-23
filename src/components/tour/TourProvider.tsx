@@ -357,10 +357,12 @@ export function TourProvider({ role, children }: { role: Role; children: React.R
                 <button
                   type="button"
                   onClick={() => go(index - 1)}
-                  className="flex min-h-[42px] items-center gap-1.5 rounded-xl border border-slate-200 px-3.5 text-[13px] font-semibold text-slate-600 hover:bg-slate-50"
+                  aria-label="Anterior"
+                  className="flex min-h-[42px] items-center gap-1.5 whitespace-nowrap rounded-xl border border-slate-200 px-3.5 text-[13px] font-semibold text-slate-600 hover:bg-slate-50"
                 >
                   <ArrowLeft className="h-4 w-4" />
-                  Anterior
+                  {/* En el último paso no cabe con los otros dos botones. */}
+                  {!step.finalAction && "Anterior"}
                 </button>
               )}
               <span className="flex-1" />
@@ -369,14 +371,14 @@ export function TourProvider({ role, children }: { role: Role; children: React.R
                   <button
                     type="button"
                     onClick={stop}
-                    className="flex min-h-[42px] items-center rounded-xl px-3 text-[13px] font-semibold text-slate-500 hover:bg-slate-50"
+                    className="flex min-h-[42px] items-center whitespace-nowrap rounded-xl px-3 text-[13px] font-semibold text-slate-500 hover:bg-slate-50"
                   >
                     Terminar
                   </button>
                   <button
                     type="button"
                     onClick={() => finish(step.finalAction!.path)}
-                    className="flex min-h-[42px] items-center gap-1.5 rounded-xl bg-blue-600 px-4 text-[13px] font-semibold text-white shadow-sm hover:bg-blue-700"
+                    className="flex min-h-[42px] items-center gap-1.5 whitespace-nowrap rounded-xl bg-blue-600 px-4 text-[13px] font-semibold text-white shadow-sm hover:bg-blue-700"
                   >
                     {step.finalAction.label}
                     <ArrowRight className="h-4 w-4" />
@@ -386,7 +388,7 @@ export function TourProvider({ role, children }: { role: Role; children: React.R
                 <button
                   type="button"
                   onClick={() => go(index + 1)}
-                  className="flex min-h-[42px] items-center gap-1.5 rounded-xl bg-blue-600 px-4 text-[13px] font-semibold text-white shadow-sm hover:bg-blue-700"
+                  className="flex min-h-[42px] items-center gap-1.5 whitespace-nowrap rounded-xl bg-blue-600 px-4 text-[13px] font-semibold text-white shadow-sm hover:bg-blue-700"
                 >
                   {index === 0 ? "Empezar" : isLast ? "Terminar" : "Siguiente"}
                   <ArrowRight className="h-4 w-4" />
