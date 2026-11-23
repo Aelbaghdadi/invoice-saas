@@ -75,12 +75,16 @@ export function TourProvider({ role, children }: { role: Role; children: React.R
   // La navegación lanzada para un paso: desde qué ruta, para saber cuándo ha
   // terminado (o si una redirección nos ha dejado en otra pantalla).
   const navRef = useRef<{ index: number; from: string } | null>(null);
+  // El último paso atendido: si la ruta cambia sin cambiar de paso ni haber
+  // navegado el recorrido, es que la persona se ha ido a otra pantalla.
+  const handledRef = useRef<number | null>(null);
 
   const active = index !== null;
   const step = index !== null ? steps[index] : null;
 
   const stop = useCallback(() => {
     navRef.current = null;
+    handledRef.current = null;
     setIndex(null);
     setTarget(null);
     setLayout(null);
@@ -90,6 +94,7 @@ export function TourProvider({ role, children }: { role: Role; children: React.R
   const start = useCallback(() => {
     if (!available) return;
     navRef.current = null;
+    handledRef.current = null;
     setOffPage(false);
     setTarget(null);
     setIndex(0);
@@ -110,7 +115,9 @@ export function TourProvider({ role, children }: { role: Role; children: React.R
     [steps.length, stop],
   );
 
-  // Arranque: el paso guardado (una recarga a mitad) o «?recorrido=1».
+  // Arranque: el paso guardado (una recarga a mitad, solo si se sigue en su
+  // pantalla: si no, la persona se ha ido y no se la trae de vuelta) o
+  // «?recorrido=1».
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- el portal solo existe en el navegador
     setMounted(true);
@@ -119,14 +126,24 @@ export function TourProvider({ role, children }: { role: Role; children: React.R
     try {
       const raw = window.sessionStorage.getItem(STORAGE_KEY);
       const parsed = raw ? (JSON.parse(raw) as { index?: unknown }) : null;
-      if (parsed && typeof parsed.index === "number" && parsed.index >= 0 && parsed.index < steps.length) saved = parsed.index;
+      if (
+        parsed &&
+        typeof parsed.index === "number" &&
+        parsed.index >= 0 &&
+        parsed.index < steps.length &&
+        isOnStepPage(steps[parsed.index], window.location.pathname)
+      ) {
+        saved = parsed.index;
+      } else if (raw) {
+        window.sessionStorage.removeItem(STORAGE_KEY);
+      }
     } catch {
       /* sin almacenamiento: se empieza de cero */
     }
     const fromUrl = new URLSearchParams(window.location.search).get("recorrido") === "1";
     if (saved !== null) setIndex(saved);
     else if (fromUrl) setIndex(0);
-  }, [available, steps.length]);
+  }, [available, steps]);
 
   useEffect(() => {
     try {
@@ -144,6 +161,8 @@ export function TourProvider({ role, children }: { role: Role; children: React.R
     if (!current) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let cancelled = false;
+    const stepChanged = handledRef.current !== index;
+    handledRef.current = index;
 
     if (isOnStepPage(current, pathname)) {
       navRef.current = null;
@@ -192,6 +211,13 @@ export function TourProvider({ role, children }: { role: Role; children: React.R
       }
       return;
     }
+    if (!stepChanged) {
+      // Mismo paso, otra pantalla y sin navegación del recorrido: la persona
+      // se ha ido por su cuenta (atrás, un enlace de lo resaltado). Se cierra
+      // en vez de llevarla de vuelta.
+      stop();
+      return;
+    }
     navRef.current = { index, from: pathname };
     setPhase("navigating");
     setTarget(null);
@@ -205,7 +231,7 @@ export function TourProvider({ role, children }: { role: Role; children: React.R
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [index, pathname, steps, router]);
+  }, [index, pathname, steps, router, stop]);
 
   // Seguir al bloque: el scroll, los datos que llegan y el tamaño de la ventana
   // lo mueven. Un bucle por fotograma es lo más sencillo y no pinta si nada cambia.
