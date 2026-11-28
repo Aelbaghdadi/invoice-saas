@@ -34,6 +34,10 @@ import {
 import { TacoList } from "@/components/archive/TacoList";
 import { tacoAlerts } from "@/lib/tacoData";
 import { tacoViewer } from "@/lib/archiveAccess";
+import { GET as invoiceRaw } from "@/app/api/invoices/[id]/raw/route";
+import { GET as invoicePreview } from "@/app/api/invoices/[id]/preview/route";
+import { reopenPeriod } from "@/app/dashboard/admin/closures/actions";
+import { dismissIssue, resolveIssue } from "@/app/dashboard/worker/issues/actions";
 import { isValidElement, type ReactNode } from "react";
 
 const NO_ACCESS = "No tienes acceso a esta factura.";
@@ -270,5 +274,73 @@ describe("el archivo no cruza asesorías (rutas y lecturas nuevas)", () => {
       for (const result of results) expect(result).toHaveProperty("error");
     }
     expect(await snapshot()).toEqual(before);
+  });
+});
+
+describe("Parte 0: los PDF, los cierres y las incidencias de A no se tocan desde B", () => {
+  const raw = (id: string) => invoiceRaw(new NextRequest(`http://x/api/invoices/${id}/raw`), { params: Promise.resolve({ id }) });
+  const preview = (id: string) =>
+    invoicePreview(new NextRequest(`http://x/api/invoices/${id}/preview`), { params: Promise.resolve({ id }) });
+
+  it("/raw y /preview de una factura de A: 403 al admin y al gestor de B; el admin y el gestor de A sí la ven", async () => {
+    const { id } = await makeInvoice(a.client, { storageKey: "k-pdf" });
+    for (const user of [b.admin, b.worker]) {
+      signInAs(user);
+      expect((await raw(id)).status).toBe(403);
+      expect((await preview(id)).status).toBe(403);
+    }
+    for (const user of [a.admin, a.worker]) {
+      signInAs(user);
+      expect((await raw(id)).status).toBe(200);
+      expect((await preview(id)).status).toBe(200);
+    }
+  });
+
+  it("un gestor de B asignado a un cliente de A tampoco ve su PDF: la asesoría manda", async () => {
+    const { id } = await makeInvoice(a.client, { storageKey: "k-pdf" });
+    await prisma.workerClientAssignment.create({ data: { workerId: b.worker.id, clientId: a.client.id } });
+    signInAs(b.worker);
+    expect((await raw(id)).status).toBe(403);
+    expect((await preview(id)).status).toBe(403);
+  });
+
+  it("reabrir un cierre de A desde B: error y sigue cerrado; un id que no existe da error, no excepción", async () => {
+    const closure = await prisma.periodClosure.create({ data: { clientId: a.client.id, month: 9, year: 2026, closedBy: a.admin.id } });
+    const form = (closureId: string) => {
+      const fd = new FormData();
+      fd.set("closureId", closureId);
+      return fd;
+    };
+    signInAs(b.admin);
+    expect(await reopenPeriod(form(closure.id))).toEqual({ error: "Cierre no encontrado." });
+    expect(await reopenPeriod(form("no-existe"))).toEqual({ error: "Cierre no encontrado." });
+    expect(await prisma.periodClosure.findUniqueOrThrow({ where: { id: closure.id } })).toEqual(closure);
+
+    signInAs(a.admin);
+    expect(await reopenPeriod(form(closure.id))).toEqual({ success: true });
+    expect((await prisma.periodClosure.findUniqueOrThrow({ where: { id: closure.id } })).reopenedBy).toBe(a.admin.id);
+    expect(await reopenPeriod(form(closure.id))).toEqual({ error: "Este periodo ya está abierto." });
+  });
+
+  it("resolver o descartar una incidencia de A desde B: error y ni la incidencia ni la factura cambian", async () => {
+    const { id } = await makeInvoice(a.client, { status: "NEEDS_ATTENTION" });
+    const issue = await prisma.invoiceIssue.create({ data: { invoiceId: id, type: "MANUAL", description: "Revisar el CIF" } });
+    const form = () => {
+      const fd = new FormData();
+      fd.set("issueId", issue.id);
+      return fd;
+    };
+    for (const user of [b.admin, b.worker]) {
+      signInAs(user);
+      expect(await resolveIssue(null, form())).toEqual({ error: NO_ACCESS });
+      expect(await dismissIssue(null, form())).toEqual({ error: NO_ACCESS });
+    }
+    expect(await prisma.invoiceIssue.findUniqueOrThrow({ where: { id: issue.id } })).toEqual(issue);
+    expect((await row(id)).status).toBe("NEEDS_ATTENTION");
+    expect(await prisma.invoiceStatusHistory.count({ where: { invoiceId: id } })).toBe(0);
+
+    signInAs(a.admin);
+    expect(await resolveIssue(null, form())).toEqual({ success: true });
+    expect((await row(id)).status).toBe("PENDING_REVIEW");
   });
 });

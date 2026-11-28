@@ -11,8 +11,8 @@ export const dynamic = "force-dynamic";
  * El original de una factura del archivo, a un clic: el adjunto en otro
  * formato si lo hay (Word, Excel…, siempre como descarga); si no, el documento
  * entero si es una parte de una división; si no, el suyo. Con ?copia=1, el
- * fichero que lee la app. Comprueba la asesoría también para el ADMIN (no usa
- * canReadInvoice) y responde 404 sin acceso, para no decir si existe. La CSP
+ * fichero que lee la app. Comprueba la asesoría también para el ADMIN y
+ * responde 404 sin acceso, para no decir si existe. La CSP
  * sandbox y nosniff de esta ruta están en next.config.ts.
  */
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {

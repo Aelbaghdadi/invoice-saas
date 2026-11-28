@@ -63,6 +63,14 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           throw new Error("ACCOUNT_LOCKED");
         }
 
+        // Un ADMIN o WORKER sin asesoría no entra: muchas consultas filtran con
+        // `advisoryFirmId ?? undefined` y, sin ella, verían todas las asesorías.
+        // Todas las altas la ponen; si aparece uno así, es un error de datos.
+        if (user.role !== "CLIENT" && !user.advisoryFirmId) {
+          console.error(`[auth] el usuario ${user.id} (${user.role}) no tiene asesoría: no se le deja entrar`);
+          return null;
+        }
+
         const isValid = await bcrypt.compare(password, user.passwordHash);
 
         if (!isValid) {

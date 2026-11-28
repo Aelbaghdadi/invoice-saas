@@ -3,20 +3,23 @@
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
+import { canAccessClient } from "@/lib/accessibleClients";
 
 export type IssueActionState = { error?: string; success?: boolean } | null;
 
-async function assertWorkerAccess(userId: string, role: string, invoiceId: string): Promise<IssueActionState> {
-  if (role !== "WORKER") return null;
+/** WORKER: el cliente asignado. ADMIN: de su asesoria. Antes el ADMIN pasaba
+ *  sin mirarla y, con el id, cerraba la incidencia de otra asesoria y cambiaba
+ *  el estado de su factura. */
+async function assertAccess(
+  session: { user: { id: string; role: string; advisoryFirmId?: string | null } },
+  invoiceId: string,
+): Promise<IssueActionState> {
   const invoice = await prisma.invoice.findUnique({
     where: { id: invoiceId },
     select: { clientId: true },
   });
   if (!invoice) return { error: "Factura no encontrada" };
-  const assignment = await prisma.workerClientAssignment.findUnique({
-    where: { workerId_clientId: { workerId: userId, clientId: invoice.clientId } },
-  });
-  if (!assignment) return { error: "No tienes acceso a esta factura." };
+  if (!(await canAccessClient(session, invoice.clientId))) return { error: "No tienes acceso a esta factura." };
   return null;
 }
 
@@ -38,7 +41,7 @@ export async function resolveIssue(
   if (!issue) return { error: "Incidencia no encontrada" };
   if (issue.status !== "OPEN") return { error: "La incidencia ya está cerrada" };
 
-  const accessErr = await assertWorkerAccess(session.user.id, session.user.role, issue.invoiceId);
+  const accessErr = await assertAccess(session, issue.invoiceId);
   if (accessErr) return accessErr;
 
   await prisma.invoiceIssue.update({
@@ -98,7 +101,7 @@ export async function dismissIssue(
   if (!issue) return { error: "Incidencia no encontrada" };
   if (issue.status !== "OPEN") return { error: "La incidencia ya está cerrada" };
 
-  const accessErr = await assertWorkerAccess(session.user.id, session.user.role, issue.invoiceId);
+  const accessErr = await assertAccess(session, issue.invoiceId);
   if (accessErr) return accessErr;
 
   await prisma.invoiceIssue.update({

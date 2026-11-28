@@ -42,6 +42,30 @@ export function reviewHref(
   return `/dashboard/worker/review/${invoiceId}${qs ? `?${qs}` : ""}`;
 }
 
+/** Estados que abren la revision desde «Facturas» del administrador, con el
+ *  texto del boton. ANALYZED es antiguo: se revisa como una «Por revisar». */
+const ADMIN_LIST_REVIEW_LABEL: Record<string, string> = {
+  PENDING_REVIEW: "Revisar",
+  NEEDS_ATTENTION: "Revisar",
+  ANALYZED: "Revisar",
+  VALIDATED: "Ver / Corregir",
+  EXPORTED: "Ver / Corregir",
+};
+
+/**
+ * El boton de una factura en «Facturas» del administrador. Las que se revisan
+ * o se corrigen van a la revision, que es donde se hace; el resto (subiendo,
+ * analizandose, rechazadas…), a la ficha de solo lectura. Antes las «Por
+ * revisar» y «Con incidencias» decian «Ver» y llevaban a la ficha, y las que se
+ * estaban analizando decian «Revisar». El error del OCR tiene sus propios
+ * botones en la tabla.
+ */
+export function adminListLink(invoiceId: string, status: string, back: string): { href: string; label: string } {
+  const label = ADMIN_LIST_REVIEW_LABEL[status];
+  if (label) return { href: reviewHref(invoiceId, { back }), label };
+  return { href: `/dashboard/admin/invoices/${invoiceId}`, label: "Ver" };
+}
+
 /** Anterior y siguiente de la actual en la lista del lote. */
 export function neighbours(ids: string[], currentId: string): Neighbours {
   const index = ids.indexOf(currentId);

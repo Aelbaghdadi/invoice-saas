@@ -1,8 +1,7 @@
 /**
  * Quién entra en el archivo (R22). Lo usan las rutas y las páginas nuevas, que
- * comprueban también la asesoría del ADMIN: no reutilizan canReadInvoice, que
- * al ADMIN le deja pasar sin mirarla. El portal (CLIENT) no tiene archivo en
- * esta fase.
+ * comprueban también la asesoría del ADMIN. El portal (CLIENT) no tiene
+ * archivo en esta fase.
  */
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";

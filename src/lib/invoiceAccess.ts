@@ -1,33 +1,40 @@
 import { prisma } from "@/lib/prisma";
 
-type SessionUser = { id: string; role: string };
+type SessionUser = { id: string; role: string; advisoryFirmId?: string | null };
+
+/** Lo que hace falta de la factura: su cliente, los candidatos del buzón y la
+ *  asesoría del cliente. */
+export type InvoiceForAccess = {
+  clientId: string;
+  routingCandidateIds: string[];
+  client: { advisoryFirmId: string };
+};
+
+/** El select de Prisma que da un InvoiceForAccess. */
+export const INVOICE_ACCESS_SELECT = {
+  clientId: true,
+  routingCandidateIds: true,
+  client: { select: { advisoryFirmId: true } },
+} as const;
 
 /**
  * ¿Puede este usuario VER esta factura (preview / descarga del binario)?
  * Misma regla que comparten /preview y el stream /raw, para no divergir:
- *  - ADMIN: sí (las queries de su firma ya acotan qué facturas llegan a la UI).
- *  - WORKER: si tiene el cliente asignado, o —para "por clasificar"— si tiene
- *    asignado alguno de los clientes candidatos del lote.
+ *  - ADMIN: si la factura es de un cliente de su asesoría. Antes pasaba sin
+ *    mirarla y, con el id, se descargaba el PDF de otra asesoría.
+ *  - WORKER: dentro de su asesoría, si tiene el cliente asignado o —para "por
+ *    clasificar"— alguno de los clientes candidatos del lote.
  *  - CLIENT: solo sus propias facturas.
  */
-export async function canReadInvoice(
-  user: SessionUser,
-  invoice: { clientId: string; routingCandidateIds: string[] },
-): Promise<boolean> {
-  if (user.role === "ADMIN") return true;
-
-  if (user.role === "WORKER") {
-    const assignment = await prisma.workerClientAssignment.findUnique({
-      where: { workerId_clientId: { workerId: user.id, clientId: invoice.clientId } },
+export async function canReadInvoice(user: SessionUser, invoice: InvoiceForAccess): Promise<boolean> {
+  if (user.role === "ADMIN" || user.role === "WORKER") {
+    if (!user.advisoryFirmId || invoice.client.advisoryFirmId !== user.advisoryFirmId) return false;
+    if (user.role === "ADMIN") return true;
+    const assignment = await prisma.workerClientAssignment.findFirst({
+      where: { workerId: user.id, clientId: { in: [invoice.clientId, ...invoice.routingCandidateIds] } },
+      select: { clientId: true },
     });
-    if (assignment) return true;
-    if (invoice.routingCandidateIds.length > 0) {
-      const candidate = await prisma.workerClientAssignment.findFirst({
-        where: { workerId: user.id, clientId: { in: invoice.routingCandidateIds } },
-      });
-      return Boolean(candidate);
-    }
-    return false;
+    return assignment != null;
   }
 
   if (user.role === "CLIENT") {

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { canReadInvoice } from "@/lib/invoiceAccess";
+import { canReadInvoice, INVOICE_ACCESS_SELECT } from "@/lib/invoiceAccess";
 
 export const dynamic = "force-dynamic";
 
@@ -17,7 +17,7 @@ export async function GET(
   const { id } = await params;
   const invoice = await prisma.invoice.findUnique({
     where: { id },
-    select: { fileType: true, clientId: true, routingCandidateIds: true },
+    select: { fileType: true, ...INVOICE_ACCESS_SELECT },
   });
   if (!invoice) return NextResponse.json({ error: "Not found" }, { status: 404 });
 

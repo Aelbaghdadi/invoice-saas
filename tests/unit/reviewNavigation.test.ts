@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { neighbours, nextPendingAfter, parseBackHref, reviewHref } from "@/lib/reviewNavigation";
+import { adminListLink, neighbours, nextPendingAfter, parseBackHref, reviewHref } from "@/lib/reviewNavigation";
 
 const lote = ["f1", "f2", "f3", "f4", "f5"];
 
@@ -100,5 +100,25 @@ describe("reviewHref — enlaces de los listados a la revision", () => {
   it("sin cola ni listado, la URL limpia", () => {
     expect(reviewHref("f1")).toBe("/dashboard/worker/review/f1");
     expect(reviewHref("f1", { bucket: "all" })).toBe("/dashboard/worker/review/f1");
+  });
+});
+
+describe("adminListLink — el botón de «Facturas» del administrador", () => {
+  const back = "/dashboard/admin/invoices?page=2";
+
+  it("las por revisar y con incidencias abren la revisión con «Revisar»", () => {
+    for (const status of ["PENDING_REVIEW", "NEEDS_ATTENTION", "ANALYZED"]) {
+      expect(adminListLink("f1", status, back)).toEqual({ href: reviewHref("f1", { back }), label: "Revisar" });
+    }
+  });
+
+  it("las validadas abren la revisión para corregirlas", () => {
+    expect(adminListLink("f1", "VALIDATED", back)).toEqual({ href: reviewHref("f1", { back }), label: "Ver / Corregir" });
+  });
+
+  it("las que se están analizando, las rechazadas y el resto van a la ficha con «Ver»", () => {
+    for (const status of ["UPLOADED", "ANALYZING", "REJECTED", "SPLIT_SOURCE", "PENDING_ROUTING"]) {
+      expect(adminListLink("f1", status, back)).toEqual({ href: "/dashboard/admin/invoices/f1", label: "Ver" });
+    }
   });
 });

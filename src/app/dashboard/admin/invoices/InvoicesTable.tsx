@@ -5,7 +5,7 @@ import { Badge } from "@/components/ui/Badge";
 import { InvoiceStatusBadge } from "@/components/ui/InvoiceStatusBadge";
 import { formatEur } from "@/lib/format";
 import { formatDateEs } from "@/lib/dates";
-import { reviewHref } from "@/lib/reviewNavigation";
+import { adminListLink } from "@/lib/reviewNavigation";
 import { FileText, ArrowUpDown, ArrowUp, ArrowDown, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import type { InvoiceSortKey } from "@/lib/invoiceSort";
@@ -44,16 +44,6 @@ function tercero(inv: Invoice): { name: string | null; cif: string | null } {
     ? { name: inv.receiverName, cif: inv.receiverCif }
     : { name: inv.issuerName, cif: inv.issuerCif };
 }
-
-const ACTION_LABEL: Record<string, string> = {
-  UPLOADED:  "Revisar",
-  ANALYZING: "Ver",
-  ANALYZED:  "Revisar",
-  OCR_ERROR: "Ver error",
-  VALIDATED: "Ver / Corregir",
-  REJECTED:  "Ver",
-  EXPORTED:  "Ver / Corregir",
-};
 
 /**
  * Tabla de facturas del admin. Solo pinta la pagina que le llega: filtrar,
@@ -160,6 +150,7 @@ export function InvoicesTable({
           <tbody className="divide-y divide-slate-50">
             {invoices.map((inv) => {
               const t = tercero(inv);
+              const link = adminListLink(inv.id, inv.status, listHref);
               return (
                 <tr key={inv.id} className="hover:bg-slate-50/60 transition-colors">
                   <td className="px-3 md:px-5 py-3.5">
@@ -229,16 +220,10 @@ export function InvoicesTable({
                         </>
                       ) : (
                         <Link
-                          /* Las validadas y exportadas van a la revision: es
-                             la unica pantalla donde se pueden corregir, y es a
-                             lo que se viene desde aqui. El resto, a la ficha
-                             de solo lectura. */
-                          href={inv.status === "VALIDATED" || inv.status === "EXPORTED"
-                            ? reviewHref(inv.id, { back: listHref })
-                            : `/dashboard/admin/invoices/${inv.id}`}
+                          href={link.href}
                           className="whitespace-nowrap rounded-lg bg-blue-50 px-3 py-1 text-[12px] font-semibold text-blue-600 hover:bg-blue-100 transition-colors"
                         >
-                          {ACTION_LABEL[inv.status] ?? "Ver"}
+                          {link.label}
                         </Link>
                       )}
                     </div>

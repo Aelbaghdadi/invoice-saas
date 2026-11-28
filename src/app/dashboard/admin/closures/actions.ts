@@ -75,6 +75,15 @@ export async function reopenPeriod(formData: FormData) {
   const closureId = formData.get("closureId") as string;
   if (!closureId) return { error: "Falta el ID del cierre." };
 
+  // Solo cierres de su asesoria, como closePeriod: antes se reabria cualquiera
+  // por su id. Un id que no es suyo, o que no existe, no lanza: devuelve error.
+  const closure = await prisma.periodClosure.findFirst({
+    where: { id: closureId, client: { advisoryFirmId: session.user.advisoryFirmId ?? "" } },
+    select: { reopenedAt: true },
+  });
+  if (!closure) return { error: "Cierre no encontrado." };
+  if (closure.reopenedAt) return { error: "Este periodo ya está abierto." };
+
   await prisma.periodClosure.update({
     where: { id: closureId },
     data: {
